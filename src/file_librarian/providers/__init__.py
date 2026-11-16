@@ -13,17 +13,25 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from file_librarian.config import ProviderConfig
-from file_librarian.providers.base import Provider, ProviderError
+from file_librarian.providers.base import FatalProviderError, Provider, ProviderError
 from file_librarian.providers.fake import FakeProvider
 
 ProviderFactory = Callable[[ProviderConfig], Provider]
 
+
 # Provider name -> factory. Real providers are added here as they land.
+def _anthropic(config: ProviderConfig) -> Provider:
+    from file_librarian.providers.anthropic import AnthropicProvider  # imports the SDK lazily
+
+    return AnthropicProvider(config)
+
+
 REGISTRY: dict[str, ProviderFactory] = {
     "fake": lambda _cfg: FakeProvider(echo=True),
+    "anthropic": _anthropic,
 }
 
-PLANNED = {"anthropic": "M1", "claude-code": "M2", "ollama": "M3", "openai-compat": "M3"}
+PLANNED = {"claude-code": "M2", "ollama": "M3", "openai-compat": "M3"}
 
 
 def known_providers() -> frozenset[str]:
@@ -51,6 +59,7 @@ def get_provider(config: ProviderConfig) -> Provider:
 __all__ = [
     "PLANNED",
     "REGISTRY",
+    "FatalProviderError",
     "Provider",
     "ProviderError",
     "get_provider",

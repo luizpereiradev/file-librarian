@@ -181,9 +181,11 @@ def _pipeline(config_path: Path | None, *, simulate: bool) -> None:
     if outcome.recovered:
         typer.echo(f"Recovered {outcome.recovered} move(s) interrupted by an earlier crash.")
     if simulate:
-        _print_plan(outcome.plan, outcome.scan.deferred, cfg)
+        _print_plan(outcome.plan, outcome.deferred, cfg)
     elif outcome.report is not None:
         _print_report(outcome.report, cfg)
+    if outcome.cost_usd:
+        typer.echo(f"Estimated provider cost: US$ {outcome.cost_usd:.4f}")
 
 
 def _short(path: Path, cfg: Config) -> str:
@@ -207,7 +209,7 @@ def _print_plan(plan: Plan, deferred: int, cfg: Config) -> None:
         f"Simulation: {moves} would move, {len(plan.items) - moves} would stay. Nothing changed."
     )
     if deferred:
-        typer.echo(f"{deferred} more file(s) wait for a later run (limits.max_files_per_run).")
+        typer.echo(f"{deferred} more file(s) wait for a later run (file or cost limit).")
 
 
 def _print_report(report: RunReport, cfg: Config) -> None:

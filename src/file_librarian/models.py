@@ -113,6 +113,8 @@ class Rules:
     categories: tuple[CategoryRule, ...]
     language: Language
     examples: tuple[Correction, ...] = ()
+    date_order: str = "DMY"
+    """How to read ambiguous numeric dates in documents (``naming.date_order``)."""
 
     @property
     def category_names(self) -> frozenset[str]:
