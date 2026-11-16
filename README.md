@@ -54,7 +54,11 @@ flib schedule --remove        # stop it
 only in your shell into the Keychain, and then checks that a *scheduled*
 process can read your folders. macOS may block background processes from
 Downloads; if so, it tells you exactly which program to add under System
-Settings > Privacy & Security > Full Disk Access. If the Mac is asleep at the
+Settings > Privacy & Security > Full Disk Access. That program is
+`flib-python`, flib's own copy of the Python interpreter, so the access you
+grant covers flib only and not your other Python projects. After updating
+Python or flib, `./scripts/install.sh` refreshes it (`flib schedule
+--refresh`); macOS may then ask for access again. If the Mac is asleep at the
 scheduled time, the run happens on wake. Each run writes a log next to the
 database (`~/Library/Application Support/file-librarian/logs`).
 

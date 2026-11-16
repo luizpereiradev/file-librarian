@@ -13,6 +13,13 @@ locked=$(mktemp)
 trap 'rm -f "$locked"' EXIT
 uv export --frozen --no-dev --no-emit-project --quiet -o "$locked"
 uv tool install --reinstall --overrides "$locked" .
+
+# Reinstalling recreates flib's environment, including its dedicated
+# interpreter: re-install an existing daily run so it keeps working.
+flib_bin="$(uv tool dir --bin)/flib"
+if [ -f "$HOME/Library/LaunchAgents/io.github.luizpereiradev.file-librarian.plist" ]; then
+  "$flib_bin" schedule --refresh
+fi
 echo
 echo "Installed: $(uv tool dir --bin)/flib"
 case ":$PATH:" in

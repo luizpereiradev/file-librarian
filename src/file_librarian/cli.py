@@ -392,6 +392,12 @@ def schedule(
     ] = None,
     show: Annotated[bool, typer.Option("--status", help="Show the schedule and exit.")] = False,
     remove: Annotated[bool, typer.Option("--remove", help="Stop the daily run.")] = False,
+    refresh: Annotated[
+        bool,
+        typer.Option(
+            "--refresh", help="Re-install the existing schedule as is (used after updates)."
+        ),
+    ] = False,
     save_key: Annotated[
         bool | None,
         typer.Option(
@@ -411,6 +417,14 @@ def schedule(
     if show:
         _print_schedule_status()
         return
+    current = scheduler.status() if refresh else None
+    if refresh:
+        if current is None or not current.installed:
+            typer.echo("No daily run is scheduled; nothing to refresh.")
+            return
+        config = config or scheduler.scheduled_config()
+        at = at or current.time
+        save_key, check = False, False
     path = config or default_config_path()
     cfg = _load(path)
     try:
@@ -446,6 +460,12 @@ def _print_schedule_status() -> None:
     loaded = "active" if state.loaded else "installed but not loaded (run `flib schedule` again)"
     typer.echo(f"Daily run at {state.time}: {loaded}")
     typer.echo(f"  runs: {' '.join(state.program)}")
+    if not state.interpreter_current:
+        typer.echo(
+            "warning: flib's interpreter copy is missing or out of date (Python or flib was "
+            "updated). Run `flib schedule --refresh`; macOS may ask for access again.",
+            err=True,
+        )
 
 
 def _ensure_key_for_schedule(cfg: Config, save_key: bool | None) -> None:
@@ -495,11 +515,13 @@ def _report_access(config_path: Path) -> None:
     for folder, state in report.items():
         typer.echo(f"  {folder}: {state}")
     if denied:
-        binary = os.path.realpath(sys.executable)
+        binary = scheduler.dedicated_interpreter()
         typer.echo(
             "\nmacOS blocks the scheduled run from these folders. Open System Settings > "
-            "Privacy & Security > Full Disk Access (or Files and Folders), click +, press "
-            f"Cmd+Shift+G and add:\n  {binary}\nThen run `flib schedule` again to re-check.",
+            "Privacy & Security > Full Disk Access, click +, press Cmd+Shift+G and add:\n"
+            f"  {binary}\n"
+            "This is flib's own copy of Python, so the access covers flib only, not your other "
+            "Python projects. Then run `flib schedule` again to re-check.",
             err=True,
         )
         raise typer.Exit(EXIT_ERROR)
