@@ -18,6 +18,7 @@ a symlink.
 from __future__ import annotations
 
 import os
+import re
 import stat
 import time
 from collections.abc import Callable
@@ -82,6 +83,31 @@ class ScanResult:
 Lookup = Callable[[str], FileState | None]
 
 
+# "report (1).pdf" (browsers), "report copy.pdf" / "report copy 2.pdf" (Finder).
+# "-2" is left out on purpose: it is indistinguishable from a version number.
+_COPY_SUFFIX = re.compile(r"(?: \(\d+\)| copy(?: \d+)?)$", re.IGNORECASE)
+
+
+def looks_like_a_copy(path: Path) -> bool:
+    stem = path.name.removesuffix(path.suffix) if path.suffix else path.name
+    return bool(_COPY_SUFFIX.search(stem))
+
+
+def _keep_originals(ready: list[Candidate], result: ScanResult) -> list[Candidate]:
+    """One candidate per content: no copy suffix first, then created first, then shortest."""
+    by_hash: dict[str, list[Candidate]] = {}
+    for candidate in ready:
+        by_hash.setdefault(candidate.sha256, []).append(candidate)
+    kept = []
+    for copies in by_hash.values():
+        copies.sort(
+            key=lambda c: (looks_like_a_copy(c.path), c.created, len(c.path.name), c.path.name)
+        )
+        kept.append(copies[0])
+        result.skipped.extend((c.path, SkipReason.DUPLICATE) for c in copies[1:])
+    return kept
+
+
 def _protected_ids(config: Config) -> set[tuple[int, int]]:
     """Device and inode of everything flib owns, however its path is spelled."""
     db = config.database
@@ -114,7 +140,6 @@ def scan(config: Config, lookup: Lookup, *, now: float | None = None) -> ScanRes
     result = ScanResult()
     ready: list[Candidate] = []
     protected = _protected_ids(config)
-    seen_hashes: set[str] = set()
 
     for folder in config.inputs:
         try:
@@ -219,13 +244,11 @@ def scan(config: Config, lookup: Lookup, *, now: float | None = None) -> ScanRes
             if state is not None and not retry:
                 skip(SkipReason.KNOWN)
                 continue
-            if candidate.sha256 in seen_hashes:
-                # The index is keyed by content; a second copy waits (RF-21 handles duplicates).
-                skip(SkipReason.DUPLICATE)
-                continue
-            seen_hashes.add(candidate.sha256)
             ready.append(candidate)
 
+    # The index is keyed by content: of several copies, only the original goes ahead;
+    # the others wait where they are (moving duplicates is RF-21).
+    ready = _keep_originals(ready, result)
     ready.sort(key=lambda c: (c.mtime, str(c.path)))
     result.candidates = ready[: limits.max_files_per_run]
     result.deferred = len(ready) - len(result.candidates)

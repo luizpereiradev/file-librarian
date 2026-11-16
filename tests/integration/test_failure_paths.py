@@ -239,3 +239,20 @@ def test_main_turns_unexpected_errors_into_a_report_request(
     assert exit_info.value.code == 1
     err = capsys.readouterr().err
     assert "unexpected KeyError" in err and "Please report it" in err
+
+
+def test_simulate_and_run_say_why_items_were_skipped(tmp_path: Path, downloads: Path) -> None:
+    config_file = write_config(tmp_path, downloads)
+    put(downloads, "app.dmg", b"same")
+    put(downloads, "app (1).dmg", b"same")
+    put(downloads, "movie.mkv.part", b"partial")
+    (downloads / ".DS_Store").write_bytes(b"noise")
+    sim = runner.invoke(cli.app, ["simulate", "-c", str(config_file)])
+    assert "skip    app (1).dmg  (same content as another item in this run)" in sim.stdout
+    assert "skip    movie.mkv.part  (download in progress)" in sim.stdout
+    assert ".DS_Store" not in sim.stdout
+    run = runner.invoke(cli.app, ["run", "-c", str(config_file)])
+    assert "app (1).dmg  (same content" in run.stdout
+    again = runner.invoke(cli.app, ["run", "-c", str(config_file)])
+    # The duplicate's content is now known: it is counted, not listed.
+    assert "already processed earlier were left alone" in again.stdout

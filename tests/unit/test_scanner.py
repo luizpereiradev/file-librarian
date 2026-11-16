@@ -193,3 +193,30 @@ def test_scanner_does_not_modify_anything(downloads: Path) -> None:
     before = {p: p.stat().st_mtime_ns for p in downloads.rglob("*")}
     scan(make_config(downloads), nothing_known, now=NOW)
     assert {p: p.stat().st_mtime_ns for p in downloads.rglob("*")} == before
+
+
+@pytest.mark.parametrize(
+    "names",
+    [
+        ["WhatsApp.dmg", "WhatsApp (1).dmg"],
+        ["WhatsApp (1).dmg", "WhatsApp.dmg"],  # creation order does not beat the copy suffix
+        ["report.pdf", "report copy.pdf", "report copy 2.pdf"],
+    ],
+)
+def test_duplicates_keep_the_original_copy(downloads: Path, names: list[str]) -> None:
+    for i, name in enumerate(names):
+        put(downloads, name, b"same bytes", mtime=OLD + i)
+    result = scan(make_config(downloads), nothing_known, now=NOW)
+    original = min(names, key=len)
+    assert [c.path.name for c in result.candidates] == [original]
+    assert sorted(p.name for p, r in result.skipped if r is SkipReason.DUPLICATE) == sorted(
+        n for n in names if n != original
+    )
+
+
+def test_version_numbers_are_not_mistaken_for_copies(downloads: Path) -> None:
+    put(downloads, "Tool-0.1.2.dmg", b"same", mtime=OLD)
+    put(downloads, "Tool-0.1.dmg", b"same", mtime=OLD)
+    result = scan(make_config(downloads), nothing_known, now=NOW)
+    # Neither looks like a copy: the shorter name wins the tie.
+    assert [c.path.name for c in result.candidates] == ["Tool-0.1.dmg"]

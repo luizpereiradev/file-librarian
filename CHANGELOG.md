@@ -118,6 +118,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Of several copies with the same content, the original goes ahead: a name
+  without a copy suffix (` (1)`, ` copy`) first, then the copy created first.
+  Version numbers like `-0.1.2` are not mistaken for copy suffixes.
+- `flib simulate` and `flib run` list the items they left alone and why
+  (duplicate, download in progress, still changing...). System files and
+  flib's own folders are not listed; already-processed items are counted.
 - Code and test quality pass from an independent review: a damaged Office
   file can no longer abort every run (extraction errors of any kind fall back
   to metadata, with a corruption fuzz test over every format); an invalid

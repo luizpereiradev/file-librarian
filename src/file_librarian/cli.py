@@ -26,7 +26,7 @@ from file_librarian.models import FileStatus
 from file_librarian.planner import Plan
 from file_librarian.providers import PLANNED, ProviderError, get_provider, is_implemented
 from file_librarian.runlog import write_log
-from file_librarian.scanner import ScanError
+from file_librarian.scanner import ScanError, SkipReason
 from file_librarian.search import search as run_search
 from file_librarian.search import to_json as search_json
 from file_librarian.undo import NothingToUndoError, undo_file, undo_run
@@ -181,10 +181,11 @@ def _pipeline(config_path: Path | None, *, simulate: bool) -> None:
         _fatal(str(exc))
     if outcome.recovered:
         typer.echo(f"Recovered {outcome.recovered} move(s) interrupted by an earlier crash.")
+    skipped = _skipped_lines(outcome.scan.skipped, cfg)
     if simulate:
-        _print_plan(outcome.plan, outcome.deferred, cfg)
+        _print_plan(outcome.plan, outcome.deferred, cfg, skipped)
     elif outcome.report is not None:
-        _print_report(outcome.report, cfg)
+        _print_report(outcome.report, cfg, skipped)
     if outcome.cost_usd:
         typer.echo(f"Estimated provider cost: US$ {outcome.cost_usd:.4f}")
     if outcome.cached:
@@ -198,7 +199,24 @@ def _short(path: Path, cfg: Config) -> str:
     return str(path)
 
 
-def _print_plan(plan: Plan, deferred: int, cfg: Config) -> None:
+# Skips that are noise on every run: system files and flib's own folders.
+_QUIET_SKIPS = {SkipReason.HIDDEN, SkipReason.MANAGED}
+
+
+def _skipped_lines(skipped: list[tuple[Path, SkipReason]], cfg: Config) -> list[str]:
+    """Why items were left alone. Already-processed ones are only counted."""
+    lines = [
+        f"  skip    {_short(path, cfg)}  ({reason.value})"
+        for path, reason in skipped
+        if reason not in _QUIET_SKIPS and reason is not SkipReason.KNOWN
+    ]
+    known = sum(1 for _, reason in skipped if reason is SkipReason.KNOWN)
+    if known:
+        lines.append(f"  ({known} item(s) already processed earlier were left alone)")
+    return lines
+
+
+def _print_plan(plan: Plan, deferred: int, cfg: Config, skipped: list[str]) -> None:
     if not plan.items:
         typer.echo("Nothing to do: no new files.")
     for item in plan.items:
@@ -207,6 +225,8 @@ def _print_plan(plan: Plan, deferred: int, cfg: Config) -> None:
             typer.echo(f"  keep    {source}  ({item.reason})")
         else:
             typer.echo(f"  move    {source}  ->  {_short(item.destination, cfg)}  ({item.reason})")
+    for line in skipped:
+        typer.echo(line)
     moves = len(plan.moves())
     typer.echo(
         f"Simulation: {moves} would move, {len(plan.items) - moves} would stay. Nothing changed."
@@ -215,7 +235,7 @@ def _print_plan(plan: Plan, deferred: int, cfg: Config) -> None:
         typer.echo(f"{deferred} more file(s) wait for a later run (file or cost limit).")
 
 
-def _print_report(report: RunReport, cfg: Config) -> None:
+def _print_report(report: RunReport, cfg: Config, skipped: list[str]) -> None:
     lines = []
     for item in report.items:
         source = _short(item.source, cfg)
@@ -223,6 +243,7 @@ def _print_report(report: RunReport, cfg: Config) -> None:
             lines.append(f"  moved   {source}  ->  {_short(item.destination, cfg)}")
         else:
             lines.append(f"  {item.status.value:<8}{source}  ({item.note})")
+    lines.extend(skipped)
     lines.append(
         f"Run {report.run_id}: {report.count(FileStatus.ORGANIZED, moved=True)} organized, "
         f"{report.count(FileStatus.REVIEW, moved=True)} to review, "
