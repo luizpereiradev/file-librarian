@@ -24,7 +24,10 @@ from file_librarian.lock import AlreadyRunningError, instance_lock
 from file_librarian.models import FileStatus
 from file_librarian.planner import Plan
 from file_librarian.providers import PLANNED, ProviderError, get_provider, is_implemented
+from file_librarian.runlog import write_log
 from file_librarian.scanner import ScanError
+from file_librarian.search import search as run_search
+from file_librarian.search import to_json as search_json
 from file_librarian.undo import NothingToUndoError, undo_file, undo_run
 
 EXIT_ERROR = 1
@@ -208,30 +211,57 @@ def _print_plan(plan: Plan, deferred: int, cfg: Config) -> None:
 
 
 def _print_report(report: RunReport, cfg: Config) -> None:
+    lines = []
     for item in report.items:
         source = _short(item.source, cfg)
         if item.destination is not None:
-            typer.echo(f"  moved   {source}  ->  {_short(item.destination, cfg)}")
+            lines.append(f"  moved   {source}  ->  {_short(item.destination, cfg)}")
         else:
-            typer.echo(f"  {item.status.value:<8}{source}  ({item.note})")
-    typer.echo(
+            lines.append(f"  {item.status.value:<8}{source}  ({item.note})")
+    lines.append(
         f"Run {report.run_id}: {report.count(FileStatus.ORGANIZED, moved=True)} organized, "
         f"{report.count(FileStatus.REVIEW, moved=True)} to review, "
         f"{report.count(FileStatus.SENSITIVE)} sensitive left in place, "
         f"{report.errors} failed, {report.count(FileStatus.SKIPPED)} skipped."
     )
     if report.deferred:
-        typer.echo(f"{report.deferred} more file(s) wait for the next run.")
+        lines.append(f"{report.deferred} more file(s) wait for the next run.")
+    for line in lines:
+        typer.echo(line)
+    if report.run_id is not None:
+        try:
+            log = write_log(cfg.database, report.run_id, lines)
+            typer.echo(f"Log: {log}")
+        except OSError as exc:
+            typer.echo(f"warning: could not write the run log: {exc}", err=True)
 
 
 @app.command()
 def search(
     query: Annotated[str, typer.Argument(help="What you remember about the file.")],
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON for other programs.")] = False,
+    limit: Annotated[int, typer.Option("--limit", min=1, max=500, help="Most results.")] = 20,
     config: ConfigOption = None,
 ) -> None:
     """Find organized files by name, description or tags."""
-    _not_implemented("search", "M1", "RF-13, RF-35")
+    cfg = _load(config)
+    if not cfg.database.exists():
+        hits = []
+    else:
+        with Store.open(cfg.database) as store:
+            hits = run_search(store, query, limit=limit)
+    if as_json:
+        typer.echo(search_json(hits))
+        return
+    if not hits:
+        typer.echo("No matches.")
+        return
+    for hit in hits:
+        where = hit.path if hit.exists else f"{hit.path}  (missing: moved by hand?)"
+        label = hit.category or hit.status
+        typer.echo(f"{where}\n  [{label}] was {hit.original_name}")
+        if hit.description:
+            typer.echo(f"  {hit.description}")
 
 
 @app.command()

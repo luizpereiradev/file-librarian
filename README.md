@@ -46,7 +46,7 @@ uv run flib inspect ~/Downloads/<a-file>  # read-only: hash, size and download o
 | `flib inspect FILE...` | Show hash, size and download origin | M0 |
 | `flib simulate` | Print the full plan without changing anything | M1 (available) |
 | `flib run` | Classify, rename, move and index new files | M1 (available) |
-| `flib search QUERY [--json]` | Full-text search over names, descriptions and tags | M1 |
+| `flib search QUERY [--json]` | Full-text search over names, descriptions and tags | M1 (available) |
 | `flib undo [--run ID \| --file PATH]` | Revert a run or one file | M1 (available) |
 | `flib schedule` | Install the daily launchd agent | M2 |
 | `flib reconcile` | Update the index after manual moves | M2 |
