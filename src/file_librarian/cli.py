@@ -186,6 +186,8 @@ def _pipeline(config_path: Path | None, *, simulate: bool) -> None:
         _print_report(outcome.report, cfg)
     if outcome.cost_usd:
         typer.echo(f"Estimated provider cost: US$ {outcome.cost_usd:.4f}")
+    if outcome.cached:
+        typer.echo(f"{outcome.cached} classification(s) reused from the cache at no cost.")
 
 
 def _short(path: Path, cfg: Config) -> str:

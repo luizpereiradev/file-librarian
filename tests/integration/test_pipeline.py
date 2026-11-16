@@ -48,6 +48,13 @@ def make_config(downloads: Path, **overrides: Any) -> Config:
     return parse_config(raw | overrides)
 
 
+def put_pdf(folder: Path, name: str, text: str) -> Path:
+    """A real PDF with a text layer, so the provider has content to name it from."""
+    path = make_pdf(folder / name, text)
+    os.utime(path, (OLD, OLD))
+    return path
+
+
 def put(folder: Path, name: str, content: bytes = b"data") -> Path:
     path = folder / name
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -75,7 +82,7 @@ def cfg(downloads: Path) -> Config:
 
 
 def test_run_organizes_renames_and_indexes(downloads: Path, cfg: Config) -> None:
-    put(downloads, "documento(3).pdf", b"%PDF invoice")
+    put_pdf(downloads, "documento(3).pdf", "Fatura de energia")
     provider = FakeProvider(
         {
             "documento(3).pdf": answer(
@@ -86,7 +93,7 @@ def test_run_organizes_renames_and_indexes(downloads: Path, cfg: Config) -> None
     outcome = pipeline.run(cfg, provider, simulate=False)
 
     target = downloads / "Organized" / "Finance" / "2026-10-05_electricity-invoice.pdf"
-    assert target.read_bytes() == b"%PDF invoice"
+    assert target.read_bytes().startswith(b"%PDF")
     assert not (downloads / "documento(3).pdf").exists()
     assert outcome.report is not None and outcome.report.moved == 1
     [row] = rows(cfg, "SELECT * FROM files")
@@ -178,8 +185,8 @@ def test_second_run_changes_nothing(downloads: Path, cfg: Config) -> None:
 
 def test_collisions_get_a_counter_and_never_overwrite(downloads: Path, cfg: Config) -> None:
     existing = put(downloads, "Organized/Finance/2026-10-05_bill.pdf", b"precious")
-    put(downloads, "x.pdf", b"one")
-    put(downloads, "y.pdf", b"two")
+    put_pdf(downloads, "x.pdf", "bill one")
+    put_pdf(downloads, "y.pdf", "bill two")
     same = answer("Finance", "bill", document_date=date(2026, 10, 5))
     pipeline.run(cfg, FakeProvider(default=same), simulate=False)
     folder = downloads / "Organized" / "Finance"
@@ -192,9 +199,9 @@ def test_collisions_get_a_counter_and_never_overwrite(downloads: Path, cfg: Conf
 
 
 def test_hostile_model_answers_stay_inside_output_root(downloads: Path, cfg: Config) -> None:
-    put(downloads, "a.pdf", b"a")
-    put(downloads, "b.pdf", b"b")
-    put(downloads, "c.pdf", b"c")
+    put_pdf(downloads, "a.pdf", "a")
+    put_pdf(downloads, "b.pdf", "b")
+    put_pdf(downloads, "c.pdf", "c")
     provider = FakeProvider(
         {
             "a.pdf": answer("Finance", "../../../../etc/passwd"),
@@ -336,3 +343,17 @@ def test_offline_fake_provider_works_end_to_end(downloads: Path) -> None:
     pipeline.run(config, FakeProvider(echo=True), simulate=False)
     moved = list((downloads / "Organizado" / "Outros").iterdir())
     assert len(moved) == 1 and moved[0].suffix == ".pdf"
+
+
+def test_files_without_readable_content_keep_their_name(downloads: Path, cfg: Config) -> None:
+    put(downloads, "IMG_4801.png", b"\x89PNG not really")
+    put(downloads, "video.mp4", b"\x00\x00\x00\x18ftypmp42")
+    provider = FakeProvider(
+        {
+            "IMG_4801.png": answer("Images", "beach photo"),
+            "video.mp4": answer("Other", "video without extracted content"),
+        }
+    )
+    pipeline.run(cfg, provider, simulate=False)
+    assert (downloads / "Organized" / "Images" / "IMG_4801.png").exists()
+    assert (downloads / "Organized" / "Other" / "video.mp4").exists()

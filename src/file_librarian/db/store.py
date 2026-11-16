@@ -18,7 +18,7 @@ import unicodedata
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from importlib import resources
 from pathlib import Path
 from types import TracebackType
@@ -200,6 +200,31 @@ class Store:
         ).fetchone()
         return row  # type: ignore[no-any-return]
 
+    # --- classification cache --------------------------------------------------------
+
+    def cached_answer(self, sha256: str, rules_key: str, *, max_age_days: int) -> str | None:
+        row = self.conn.execute(
+            """SELECT answer FROM classification_cache
+               WHERE sha256 = ? AND rules_key = ? AND created_at >= ?""",
+            (sha256, rules_key, _days_ago(max_age_days)),
+        ).fetchone()
+        return None if row is None else str(row[0])
+
+    def cache_answer(self, sha256: str, rules_key: str, answer_json: str) -> None:
+        self.conn.execute(
+            """INSERT INTO classification_cache (sha256, rules_key, answer, created_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(sha256, rules_key) DO UPDATE SET
+                   answer = excluded.answer, created_at = excluded.created_at""",
+            (sha256, rules_key, answer_json, _now()),
+        )
+
+    def prune_cache(self, *, max_age_days: int) -> int:
+        cur = self.conn.execute(
+            "DELETE FROM classification_cache WHERE created_at < ?", (_days_ago(max_age_days),)
+        )
+        return cur.rowcount
+
     # --- operations (the journal behind undo) ------------------------------------
 
     def add_operation(
@@ -269,6 +294,10 @@ def _rowid(cur: sqlite3.Cursor) -> int:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _days_ago(days: int) -> str:
+    return (datetime.now(UTC) - timedelta(days=days)).isoformat(timespec="seconds")
 
 
 def _split_sql(script: str) -> list[str]:

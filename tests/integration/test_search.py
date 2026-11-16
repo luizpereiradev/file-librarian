@@ -99,11 +99,11 @@ def test_hits_report_missing_files(indexed: tuple[Config, Path], downloads: Path
 def test_cli_search_text_and_json(indexed: tuple[Config, Path]) -> None:
     _, config_file = indexed
     runner = CliRunner()
-    text = runner.invoke(app, ["search", "luz", "-c", str(config_file)])
+    text = runner.invoke(app, ["search", "energia", "-c", str(config_file)])
     assert text.exit_code == 0, text.stderr
     assert "was documento(3).pdf" in text.stdout
     data = json.loads(
-        runner.invoke(app, ["search", "luz", "--json", "-c", str(config_file)]).stdout
+        runner.invoke(app, ["search", "energia", "--json", "-c", str(config_file)]).stdout
     )
     assert [d["original_name"] for d in data] == ["documento(3).pdf"]
     assert data[0]["tags"] == ["energia", "boleto"]

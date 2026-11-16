@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from file_librarian.classifier import classify_all
+from file_librarian.classifier import CACHE_DAYS, classify_all
 from file_librarian.config import Config
 from file_librarian.context import build_context
 from file_librarian.db.store import Store
@@ -32,6 +32,8 @@ class Outcome:
     cost_usd: float = 0.0
     deferred: int = 0
     """Left for the next run: over ``max_files_per_run`` or the cost cap."""
+    cached: int = 0
+    """Classifications reused from an earlier simulate or run, at no cost."""
 
 
 def rules_for(config: Config) -> Rules:
@@ -54,13 +56,17 @@ def run(config: Config, provider: Provider, *, simulate: bool, trigger: str = "m
 def _run(config: Config, provider: Provider, store: Store, *, simulate: bool, trigger: str,
          now: float | None) -> Outcome:  # fmt: skip
     recovered = 0 if simulate else recover(store)
+    store.prune_cache(max_age_days=CACHE_DAYS)
     found = scan(config, store.file_state, now=now)
     contexts = [build_context(c, config) for c in found.candidates]
-    classified = classify_all(contexts, provider, rules_for(config), config)
+    classified = classify_all(contexts, provider, rules_for(config), config, cache=store)
     planned = plan(classified.decisions, config)
     deferred = found.deferred + len(classified.deferred)
     if simulate:
-        return Outcome(found, planned, None, cost_usd=classified.cost_usd, deferred=deferred)
+        return Outcome(
+            found, planned, None, cost_usd=classified.cost_usd, deferred=deferred,
+            cached=classified.cached,
+        )  # fmt: skip
     report = execute(
         planned,
         config,
@@ -71,4 +77,6 @@ def _run(config: Config, provider: Provider, store: Store, *, simulate: bool, tr
         seen=len(found.candidates),
         deferred=deferred,
     )
-    return Outcome(found, planned, report, recovered, classified.cost_usd, deferred)
+    return Outcome(
+        found, planned, report, recovered, classified.cost_usd, deferred, classified.cached
+    )

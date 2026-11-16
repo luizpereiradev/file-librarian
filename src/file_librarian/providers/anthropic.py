@@ -90,7 +90,12 @@ Answer fields:
 - description: 1 to 3 sentences in {language} saying what the file is, with the
   names, amounts and dates someone would search for.
 - tags: up to 6 single-word or short tags in {language}.
-- confidence: from 0 to 1, how sure you are of the category.
+- confidence: from 0 to 1, how sure you are of the category. Judge it from
+  everything available: the excerpt, and also the file name, extension and
+  download source. A clear signal from the name alone (IMG_1234.png is an
+  image, Setup.dmg an installer) deserves high confidence. Use a value below
+  0.7 only when two or more categories are genuinely plausible or nothing
+  points to any.
 - document_date: the date the document itself refers to (issue date, invoice
   date) as YYYY-MM-DD, or null if the content does not show one with
   confidence. Read ambiguous numeric dates as {order}.
