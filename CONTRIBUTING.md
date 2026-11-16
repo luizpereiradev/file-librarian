@@ -67,9 +67,9 @@ Every dependency runs with access to the user's files, so the bar is high
   commit `pyproject.toml` and `uv.lock` together. Never hand-edit `uv.lock`.
 - **No new sources.** Only PyPI. Extra indexes, git or path dependencies fail
   the test suite.
-- **Releases younger than 7 days are ignored** by design. If a security fix
-  needs to skip the quarantine, say so in the pull request and use
-  `uv lock --upgrade-package <name> --exclude-newer-package <name>=false`.
+- **Releases younger than 7 days are ignored** by design, security fixes
+  included. If a fix cannot wait, follow
+  [Urgent security fixes](SECURITY.md#urgent-security-fixes) in SECURITY.md.
 - **Actions are pinned by commit SHA** with the version in a comment. Let
   Dependabot bump them; do not replace a SHA with a tag.
 

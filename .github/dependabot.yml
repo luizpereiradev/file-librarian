@@ -1,7 +1,9 @@
 # Dependabot keeps dependencies and pinned actions current.
 # A 7-day cooldown matches the `exclude-newer` quarantine in pyproject.toml:
-# brand-new releases are where hijacked versions show up first. Security
-# updates are not delayed by the cooldown.
+# brand-new releases are where hijacked versions show up first.
+# Dependabot's security updates skip its cooldown, but they still lock with uv,
+# which honors the quarantine: a fix younger than 7 days needs a per-package
+# exception in pyproject.toml (see "Urgent security fixes" in SECURITY.md).
 version: 2
 updates:
   - package-ecosystem: "uv"

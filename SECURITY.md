@@ -39,6 +39,26 @@ so they are treated as part of the attack surface:
 - **Pinned actions.** Workflows reference actions by full commit SHA, run with
   read-only permissions, and are linted by zizmor.
 
+## Urgent security fixes
+
+The quarantine also delays fixes: a patched release younger than 7 days is
+refused, including in Dependabot's security pull requests. When an advisory
+cannot wait, a maintainer lets that one package through:
+
+1. Add a temporary exception under `[tool.uv]` in `pyproject.toml`, with the
+   advisory ID and a removal date in a comment:
+
+   ```toml
+   # GHSA-xxxx-xxxx-xxxx: remove after 2026-11-30
+   exclude-newer-package = { <name> = false }
+   ```
+
+2. Run `uv lock --upgrade-package <name>`, check that only that package (and
+   anything it strictly requires) changed in `uv.lock`, and open a pull request
+   citing the advisory.
+3. Once the release is older than 7 days, remove the exception in a follow-up
+   pull request; `uv lock --check` must still pass.
+
 The full rationale is in [ADR 0003](docs/decisions/0003-supply-chain.md). If
 you suspect a compromised dependency, report it privately as above.
 

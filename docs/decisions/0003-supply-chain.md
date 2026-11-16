@@ -27,9 +27,13 @@ Layered guards, each checked automatically:
 | Unreviewed change to the above | CODEOWNERS on `.github/`, `pyproject.toml`, `uv.lock` and the safety-critical core | `.github/CODEOWNERS` |
 | New dependency without scrutiny | Written policy (CONTRIBUTING.md): justify it, prefer the standard library | review |
 
-Security advisories are not delayed: Dependabot security updates ignore the
-cooldown, and a fix can be let through the quarantine for one package with
-`uv lock --upgrade-package <name> --exclude-newer-package <name>=false`.
+The quarantine cannot tell a fix from an attack, so it also delays security
+fixes. Dependabot's security updates skip its own cooldown, but they lock with
+uv, which still refuses a release younger than 7 days. For an urgent fix the
+maintainer adds a temporary, reviewed exception for that one package
+(`exclude-newer-package = { <name> = false }` under `[tool.uv]`) and removes it
+once the release is older than the quarantine. The procedure is in
+[SECURITY.md](../../SECURITY.md#urgent-security-fixes).
 
 When releases to PyPI start (v1.0), they will use Trusted Publishing from a
 dedicated workflow with build attestations, never a long-lived token.
