@@ -31,19 +31,6 @@ from file_librarian.config import Config
 from file_librarian.models import Classification, Decision, FileContext, Rules
 from file_librarian.providers.base import FatalProviderError, Provider, ProviderError, Usage
 
-# US$ per million input / output tokens (Anthropic list prices, 2026-11).
-PRICES: dict[str, tuple[float, float]] = {
-    "claude-fable-5-2": (8.0, 40.0),
-    "claude-fable-5-1": (10.0, 50.0),
-    "claude-fable-5": (10.0, 50.0),
-    "claude-opus-5-5": (4.0, 20.0),
-    "claude-opus-5": (5.0, 25.0),
-    "claude-opus-4-8": (5.0, 25.0),
-    "claude-sonnet-5-5": (2.0, 10.0),
-    "claude-sonnet-5": (2.0, 10.0),
-    "claude-haiku-5-5": (0.10, 0.50),
-}
-UNKNOWN_PRICE = (10.0, 50.0)  # assume the most expensive when unsure
 CACHE_DAYS = 7
 PROMPT_VERSION = "2"  # bump when the prompt or answer schema changes, to invalidate the cache
 
@@ -74,12 +61,6 @@ def rules_key(provider: Provider, rules: Rules, config: Config) -> str:
     return hashlib.sha256(material.encode()).hexdigest()
 
 
-def cost_usd(usage: Usage, model: str) -> float:
-    models = usage.models or [model]
-    price_in, price_out = max((PRICES.get(m, UNKNOWN_PRICE) for m in models), default=UNKNOWN_PRICE)
-    return (usage.input_tokens * price_in + usage.output_tokens * price_out) / 1_000_000
-
-
 @dataclass(slots=True)
 class Classified:
     decisions: list[Decision] = field(default_factory=list)
@@ -103,7 +84,7 @@ def classify_all(
     settings = config.provider
     cap = config.limits.max_cost_usd_per_run
     # Local providers (no API behind them) need no rate limit.
-    interval = 0.0 if getattr(provider, "local", False) else 60.0 / settings.requests_per_minute
+    interval = 0.0 if provider.local else 60.0 / settings.requests_per_minute
     result = Classified()
     last_call: float | None = None
     key = rules_key(provider, rules, config) if cache is not None else ""
@@ -136,7 +117,7 @@ def classify_all(
             except FatalProviderError:
                 raise
             except ProviderError as exc:
-                result.cost_usd += _billed(provider, settings.model)
+                result.cost_usd += _billed(provider)
                 error = f"classification failed: {exc}"[:500]
                 if exc.retryable and attempt < settings.max_retries:
                     sleep(min(2.0**attempt, 30.0))
@@ -144,10 +125,10 @@ def classify_all(
                 result.decisions.append(Decision(ctx, error=error))
                 break
             except ValidationError as exc:
-                result.cost_usd += _billed(provider, settings.model)
+                result.cost_usd += _billed(provider)
                 result.decisions.append(Decision(ctx, error=f"invalid answer: {exc}"[:500]))
                 break
-            result.cost_usd += _billed(provider, settings.model)
+            result.cost_usd += _billed(provider)
             result.decisions.append(Decision(ctx, answer))
             if cache is not None:
                 cache.cache_answer(ctx.sha256, key, answer.model_dump_json())
@@ -155,11 +136,8 @@ def classify_all(
     return result
 
 
-def _billed(provider: Provider, model: str) -> float:
-    """Cost of the provider's last call, if it reports ``last_usage`` (optional)."""
-    usage = getattr(provider, "last_usage", None)
-    if not isinstance(usage, Usage):
-        return 0.0
-    billed = cost_usd(usage, model)
-    setattr(provider, "last_usage", Usage())  # noqa: B010 - optional provider attribute
+def _billed(provider: Provider) -> float:
+    """Cost of the provider's last call; resets it so nothing is counted twice."""
+    billed = provider.cost_usd(provider.last_usage)
+    provider.last_usage = Usage()
     return billed

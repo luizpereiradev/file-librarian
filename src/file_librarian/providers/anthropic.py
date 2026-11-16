@@ -39,6 +39,20 @@ MAX_TOKENS = 4096  # thinking is always on for current models; leave it room
 
 LANGUAGE_NAMES = {"en": "English", "pt-BR": "Brazilian Portuguese"}
 
+# US$ per million input / output tokens (Anthropic list prices, 2026-11).
+PRICES: dict[str, tuple[float, float]] = {
+    "claude-fable-5-2": (8.0, 40.0),
+    "claude-fable-5-1": (10.0, 50.0),
+    "claude-fable-5": (10.0, 50.0),
+    "claude-opus-5-5": (4.0, 20.0),
+    "claude-opus-5": (5.0, 25.0),
+    "claude-opus-4-8": (5.0, 25.0),
+    "claude-sonnet-5-5": (2.0, 10.0),
+    "claude-sonnet-5": (2.0, 10.0),
+    "claude-haiku-5-5": (0.10, 0.50),
+}
+UNKNOWN_PRICE = (10.0, 50.0)  # assume the most expensive when unsure
+
 
 def response_schema(rules: Rules) -> dict[str, Any]:
     return {
@@ -146,12 +160,19 @@ def _iso_date(value: object) -> str | None:
 
 class AnthropicProvider:
     name = "anthropic"
+    local = False
 
     def __init__(self, config: ProviderConfig, client: Any | None = None) -> None:
         self._config = config
         # Retries and timeouts are owned by the classifier, so the SDK must not retry too.
         self._client = client or anthropic.Anthropic(timeout=config.timeout_seconds, max_retries=0)
         self.last_usage = Usage()
+
+    def cost_usd(self, usage: Usage) -> float:
+        """Priced at the most expensive model that ran (fallbacks can switch models)."""
+        models = usage.models or [self._config.model]
+        price_in, price_out = max(PRICES.get(m, UNKNOWN_PRICE) for m in models)
+        return (usage.input_tokens * price_in + usage.output_tokens * price_out) / 1_000_000
 
     def classify(self, context: FileContext, rules: Rules) -> Classification:
         cfg = self._config

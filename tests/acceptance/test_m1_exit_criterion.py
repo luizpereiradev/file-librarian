@@ -25,6 +25,7 @@ from file_librarian import pipeline
 from file_librarian.config import Config, parse_config
 from file_librarian.db.store import Store
 from file_librarian.models import Classification, FileContext, Rules
+from file_librarian.providers.base import Usage
 from file_librarian.search import search
 from file_librarian.undo import undo_run
 from tests._helpers import OLD, make_docx, make_pdf, make_pptx, make_xlsx
@@ -44,6 +45,12 @@ class ByExtension:
 
     name = "acceptance"
     local = True
+
+    def __init__(self) -> None:
+        self.last_usage = Usage()
+
+    def cost_usd(self, usage: Usage) -> float:
+        return 0.0
 
     def classify(self, context: FileContext, rules: Rules) -> Classification:
         category = CATEGORY_BY_EXTENSION.get(context.extension, "Other")

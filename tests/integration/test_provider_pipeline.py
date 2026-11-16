@@ -28,6 +28,9 @@ class PricedProvider:
         self.last_usage = Usage()
         self.calls = 0
 
+    def cost_usd(self, usage: Usage) -> float:
+        return usage.input_tokens * 0.10 / 1_000_000  # Haiku input price
+
     def classify(self, context: FileContext, rules: Rules) -> Classification:
         self.calls += 1
         self.last_usage = Usage(1_000_000, 0, ["claude-haiku-5-5"])

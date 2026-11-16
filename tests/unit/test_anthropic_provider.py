@@ -12,7 +12,7 @@ import pytest
 from file_librarian.config import ProviderConfig
 from file_librarian.models import CategoryRule, FileContext, Rules
 from file_librarian.providers.anthropic import FALLBACK_BETA, AnthropicProvider
-from file_librarian.providers.base import FatalProviderError, ProviderError
+from file_librarian.providers.base import FatalProviderError, ProviderError, Usage
 
 RULES = Rules(
     categories=(CategoryRule("Finance", "bills, invoices"), CategoryRule("Other")),
@@ -121,6 +121,15 @@ def test_bad_document_dates_are_dropped_not_fatal(raw: object, expected: str | N
     p, _ = provider(reply(GOOD | {"document_date": raw}))
     answer = p.classify(CTX, RULES)
     assert (answer.document_date.isoformat() if answer.document_date else None) == expected
+
+
+def test_cost_uses_the_priciest_model_that_ran() -> None:
+    p, _ = provider(model="claude-haiku-5-5")
+    both = Usage(1_000_000, 1_000_000, ["claude-haiku-5-5", "claude-opus-5-5"])
+    assert p.cost_usd(both) == pytest.approx(4.0 + 20.0)
+    assert p.cost_usd(Usage(1_000_000, 0, [])) == pytest.approx(0.10)  # configured model
+    unknown, _ = provider(model="claude-some-future-model")
+    assert unknown.cost_usd(Usage(1_000_000, 0, [])) == pytest.approx(10.0)  # assume the worst
 
 
 def test_usage_sums_fallback_attempts() -> None:
