@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -122,7 +122,7 @@ class Rules:
     language: Language
     examples: tuple[Correction, ...] = ()
     """Past user corrections for few-shot prompting (RF-29, M2: not populated yet)."""
-    date_order: str = "DMY"
+    date_order: Literal["DMY", "MDY", "YMD"] = "DMY"
     """How to read ambiguous numeric dates in documents (``naming.date_order``)."""
 
     @property

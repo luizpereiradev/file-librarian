@@ -36,6 +36,29 @@ SNIFF_LIMIT = 1024 * 1024
 UNIT_LISTING = 100
 
 
+def build_context_safely(candidate: Candidate, config: Config) -> FileContext:
+    """``build_context``, but nothing about one item can stop the run (RF-27).
+
+    Whatever goes wrong while reading an item, it is classified from its name
+    and size alone. This is the per-item boundary the pipeline relies on; the
+    narrower handlers inside only make the recorded reason more precise.
+    """
+    try:
+        return build_context(candidate, config)
+    except Exception as exc:
+        return FileContext(
+            path=candidate.path,
+            sha256=candidate.sha256,
+            size_bytes=candidate.size_bytes,
+            extension=candidate.path.suffix.lower(),
+            mtime_ns=candidate.mtime_ns,
+            inode=candidate.inode,
+            downloaded=date.fromtimestamp(candidate.created) if candidate.created else None,
+            is_unit=candidate.is_unit,
+            metadata={"extraction_error": f"{type(exc).__name__}: {exc}"[:200]},
+        )
+
+
 def build_context(candidate: Candidate, config: Config) -> FileContext:
     path = candidate.path
     base = FileContext(
@@ -114,7 +137,7 @@ def _unit_listing(root: Path) -> tuple[list[str], dict[str, str]]:
                     value = data.get(key)
                     if isinstance(value, str):
                         info[key] = value[:200]
-        except (OSError, plistlib.InvalidFileException, ValueError):
+        except Exception:  # noqa: S110 - any damaged plist: the bundle is just listed by name
             pass
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         dirnames.sort()

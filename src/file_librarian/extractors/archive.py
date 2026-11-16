@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import tarfile
 import zipfile
+import zlib
 from pathlib import Path
 
 from file_librarian.extractors import register
@@ -34,7 +35,7 @@ class ZipListing:
         try:
             with zipfile.ZipFile(path) as zf:
                 infos = zf.infolist()
-        except (zipfile.BadZipFile, OSError, ValueError) as exc:
+        except (zipfile.BadZipFile, OSError, ValueError, NotImplementedError) as exc:
             raise ExtractionError(f"cannot read ZIP archive: {exc}") from exc
         names = [i.filename for i in infos[:MAX_ENTRIES]]
         return _format(names, len(infos) > MAX_ENTRIES, max_chars)
@@ -58,7 +59,7 @@ class TarListing:
                         more = True
                         break
                     names.append(member.name)
-        except (tarfile.TarError, OSError, EOFError, ValueError) as exc:
+        except (tarfile.TarError, zlib.error, OSError, EOFError, ValueError) as exc:
             raise ExtractionError(f"cannot read tar archive: {exc}") from exc
         return _format(names, more, max_chars)
 

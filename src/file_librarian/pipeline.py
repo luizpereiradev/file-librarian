@@ -15,7 +15,7 @@ from datetime import date
 
 from file_librarian.classifier import CACHE_DAYS, classify_all
 from file_librarian.config import Config
-from file_librarian.context import build_context
+from file_librarian.context import build_context_safely
 from file_librarian.db.store import Store
 from file_librarian.executor import RunReport, execute, recover
 from file_librarian.lock import instance_lock
@@ -74,7 +74,7 @@ def _run(
     recovered = 0 if simulate else recover(store)
     store.prune_cache(max_age_days=CACHE_DAYS)
     found = scan(config, store.file_state, now=now)
-    contexts = [build_context(c, config) for c in found.candidates]
+    contexts = [build_context_safely(c, config) for c in found.candidates]
     classified = classify_all(contexts, provider, rules_for(config), config, cache=store)
     planned = plan(
         classified.decisions, config, today=date.fromtimestamp(now) if now is not None else None
