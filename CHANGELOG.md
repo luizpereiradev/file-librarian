@@ -8,6 +8,19 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Extractors (RF-04, RF-06, RF-27): plain text, Markdown, CSV and source
+  code; DOCX, XLSX and PPTX through the standard library (streamed, size
+  capped, DTDs refused); PDF through pypdf (first 20 pages); ZIP and TAR
+  listings without extracting. Damaged, encrypted and legacy files fall back
+  to metadata and never stop a run.
+- Secret detection (RF-28): credential file names and secrets in content
+  (private keys, cloud and API tokens, JWTs, connection strings, password
+  assignments) mark a file `sensitive`; nothing is sent and the matched value
+  is never stored. Files without an extractor are scanned but never sent.
+- `context.build_context` assembles what the classifier may see, honoring
+  `never_send`, `detect_secrets` and `max_chars_per_file`; folder units send a
+  listing of names, `.app` bundles their name and version.
+- Dependency: `pypdf`.
 - Scanner (RF-01, RF-02, RF-03, RF-23): lists the top level of each input
   folder, skips hidden and system files, symlinks, special files, flib's own
   folders, `ignore` globs and in-progress downloads; waits until items are

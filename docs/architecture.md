@@ -9,8 +9,9 @@ classifier, uses AI. Each stage is a module with typed input and output
       │
  1. Scanner      scanner.py        new, stable files (by sha256); folders/.app as one unit
       │
- 2. Extractor    extractors/       FileContext: metadata, download origin, text excerpt or image;
-      │                            secret detection here: sensitive files stop at this stage
+ 2. Extractor    context.py,       FileContext: metadata, download origin, text excerpt;
+      │          extractors/,      secret detection here (sensitive.py): sensitive files stop
+      │          sensitive.py      at this stage and stay where they are
  3. Classifier   providers/        Classification (schema-validated): category, name, description,
       │                            tags, confidence; rate limits, retries, timeouts
  4. Planner      planner.py        Operations: naming pattern, rename policy, collisions,
