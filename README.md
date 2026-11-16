@@ -7,18 +7,19 @@ searchable description to a local SQLite index.
 `documento(3).pdf` becomes `Finance/2026-10-05_electricity-invoice.pdf`, and
 `flib search "electricity october"` finds it months later.
 
-**The AI only decides. Deterministic code moves files.** These are the design
-guarantees the organizing commands are built to keep from M1 on:
+**The AI only decides. Deterministic code moves files.** The organizing
+commands keep these guarantees:
 
 - nothing is deleted and nothing is overwritten;
 - every run is recorded and can be undone, except files you changed or moved
   afterwards, which are skipped and listed.
 
-> **Status: pre-alpha (M1 in progress).** Scanning, extraction, secret
-> detection, planning, moving and undo work end to end with the offline
-> `fake` provider (`provider: {name: fake, model: offline}`), which files
-> everything under the last category. The Claude provider and search are
-> still to come. See the [roadmap](#roadmap).
+> **Status: pre-alpha (M1 complete, under acceptance).** Scanning,
+> extraction, secret detection, classification with Claude, planning, moving,
+> search and undo all work. Try it offline first with
+> `provider: {name: fake, model: offline}`, which files everything under the
+> last category without calling any API. Scheduling (`flib schedule`) comes in
+> M2. See the [roadmap](#roadmap).
 
 ## Requirements
 
@@ -69,15 +70,24 @@ The API key is read from `ANTHROPIC_API_KEY`, never from the file.
 
 ## Privacy
 
-M0 sends nothing anywhere: no command talks to an AI provider yet. From M1 on,
-the design is:
+With a remote provider such as `anthropic`, this is what leaves your Mac
+for each file:
 
-- only a capped excerpt of each file (`provider.max_chars_per_file`) is sent
-  to the AI provider;
-- files matching `never_send`, or in which secrets are detected, are
-  classified from metadata only and never sent;
-- a local provider (Ollama) is planned for M3 for anyone who wants nothing to
-  leave the machine.
+- its name, extension, size, download date and the URL it was downloaded
+  from;
+- at most `provider.max_chars_per_file` characters of its text (4,000 by
+  default), or for a folder, the names of up to 100 files inside it.
+
+Two kinds of files are treated differently:
+
+- **Matching `never_send`:** only the metadata above is sent, never the
+  content.
+- **Credential names (`id_rsa`, `*.pem`…) or secrets found in the content:**
+  nothing at all is sent, the file stays where it is, and the index records
+  only that it is sensitive.
+
+The index and the logs stay on your Mac. A local provider (Ollama) is planned
+for M3, for anyone who wants nothing to leave the machine.
 
 ## Roadmap
 
