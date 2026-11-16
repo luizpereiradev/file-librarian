@@ -7,7 +7,6 @@ says which milestone and requirement it belongs to and exits with code 2.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sys
 from pathlib import Path
@@ -18,6 +17,7 @@ import typer
 from file_librarian import __version__
 from file_librarian.config import ConfigError, default_config_path, load_config
 from file_librarian.extractors.origin import download_origin
+from file_librarian.hashing import file_sha256, unit_manifest
 from file_librarian.providers import PLANNED, is_implemented
 
 EXIT_ERROR = 1
@@ -104,11 +104,17 @@ def inspect(
     """Show what flib reads from a file before any AI is involved: hash, size, download origin."""
     results = []
     for path in paths:
+        if path.is_dir():
+            manifest = unit_manifest(path)
+            digest, size, kind = manifest.digest, manifest.size_bytes, "folder unit"
+        else:
+            digest, size, kind = file_sha256(path), path.stat().st_size, "file"
         results.append(
             {
                 "path": str(path),
-                "sha256": _sha256(path) if path.is_file() else None,
-                "size_bytes": path.stat().st_size if path.is_file() else None,
+                "kind": kind,
+                "sha256": digest,
+                "size_bytes": size,
                 "source_urls": list(download_origin(path)),
             }
         )
@@ -117,23 +123,15 @@ def inspect(
         return
     for item in results:
         typer.echo(str(item["path"]))
-        typer.echo(f"  sha256: {item['sha256'] or '(directory)'}")
-        size = item["size_bytes"]
-        typer.echo(f"  size:   {size} bytes" if size is not None else "  size:   (directory)")
+        typer.echo(f"  kind:   {item['kind']}")
+        typer.echo(f"  sha256: {item['sha256']}")
+        typer.echo(f"  size:   {item['size_bytes']} bytes")
         urls = item["source_urls"]
         if isinstance(urls, list) and urls:
             for url in urls:
                 typer.echo(f"  from:   {url}")
         else:
             typer.echo("  from:   (no download origin recorded)")
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 # --- Commands still to come -----------------------------------------------------

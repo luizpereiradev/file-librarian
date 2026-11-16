@@ -19,6 +19,8 @@ from importlib import resources
 from pathlib import Path
 from types import TracebackType
 
+from file_librarian.models import FileState, FileStatus
+
 _MIGRATION_NAME = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
 BUSY_TIMEOUT_MS = 5000
 
@@ -95,6 +97,15 @@ class Store:
                 self.conn.execute("ROLLBACK")
                 raise MigrationError(f"{migration.name} failed: {exc}") from exc
         return self.schema_version
+
+    def file_state(self, sha256: str) -> FileState | None:
+        """Status and attempt count of a known file, or ``None`` if it was never seen."""
+        row = self.conn.execute(
+            "SELECT status, attempts FROM files WHERE sha256 = ?", (sha256,)
+        ).fetchone()
+        if row is None:
+            return None
+        return FileState(FileStatus(row["status"]), int(row["attempts"]))
 
     def close(self) -> None:
         self.conn.close()

@@ -8,6 +8,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Scanner (RF-01, RF-02, RF-03, RF-23): lists the top level of each input
+  folder, skips hidden and system files, symlinks, special files, flib's own
+  folders, `ignore` globs and in-progress downloads; waits until items are
+  stable; treats sub-folders and bundles as one unit identified by a manifest
+  digest; skips known hashes except files still within `max_attempts`; caps
+  each run at `max_files_per_run`, oldest first; explains how to grant macOS
+  folder access when an input cannot be read.
+- Single-instance lock (RF-34) next to the database, released automatically
+  if the process dies.
+- `limits.max_cost_usd_per_run` (default US$ 1) for the classifier to honor.
 - M0 foundation: package layout, `flib` command with every planned command
   (empty until its milestone), `flib check-config`, and `flib inspect`.
 - Configuration schema with validation and `config.example.yaml`. Only the

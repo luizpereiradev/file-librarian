@@ -37,6 +37,7 @@ limits:
   max_attempts: 3            # after this many failures a file becomes "failed"
   confidence_threshold: 0.7  # below this, the file goes to review_folder
   scanned_pdf_max_pages: 3
+  max_cost_usd_per_run: 1.00 # estimated; files left over wait for the next run (null = no cap)
 
 naming:
   pattern: "{date}_{subject}"   # e.g. 2026-11-16_electricity-invoice.pdf
