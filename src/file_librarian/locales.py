@@ -59,15 +59,74 @@ LOCALES: dict[Language, Locale] = {
         output_folder="Organizado",
         review_folder="_Revisar",
         categories=(
-            DefaultCategory("Financeiro", "boletos, notas fiscais, extratos, comprovantes"),
-            DefaultCategory("Contratos", "contratos, termos, propostas assinadas"),
+            DefaultCategory(
+                "Financeiro",
+                "boletos, faturas e contas de consumo (luz, água, internet, telefone), "
+                "extratos bancários e de cartão, comprovantes de pagamento, Pix e "
+                "transferência, notas fiscais",
+            ),
+            DefaultCategory(
+                "Impostos",
+                "declaração e recibo do Imposto de Renda, DARF, informes de rendimentos, recibos "
+                "médicos e de educação para dedução, documentos da Receita Federal",
+            ),
+            DefaultCategory(
+                "Contratos",
+                "contratos, aditivos, termos assinados, propostas comerciais, procurações, "
+                "distratos",
+            ),
+            DefaultCategory(
+                "Documentos pessoais",
+                "RG, CPF, CNH, passaporte, certidões, título de eleitor, comprovante de "
+                "residência, diplomas e históricos escolares",
+            ),
+            DefaultCategory(
+                "Saúde",
+                "exames, laudos, receitas, atestados, carteira de vacinação, guias, boletos e "
+                "reembolsos de plano de saúde",
+            ),
+            DefaultCategory(
+                "Trabalho",
+                "holerites, informes e documentos de RH, currículos, relatórios, apresentações e "
+                "planilhas profissionais",
+            ),
+            DefaultCategory(
+                "Estudos",
+                "artigos, livros, apostilas, slides de aula, trabalhos acadêmicos, certificados de "
+                "cursos",
+            ),
+            DefaultCategory(
+                "Viagens",
+                "passagens, cartões de embarque, reservas de hotel e carro, roteiros, seguro "
+                "viagem, vistos",
+            ),
+            DefaultCategory(
+                "Compras",
+                "pedidos e recibos de lojas online, termos de garantia, manuais de produtos",
+            ),
+            DefaultCategory(
+                "Casa e veículos",
+                "aluguel e condomínio, IPTU, escrituras e documentos de imóveis, IPVA, multas e "
+                "documentos do carro",
+            ),
+            DefaultCategory(
+                "Imagens", "fotos, capturas de tela, ilustrações, logotipos, wallpapers"
+            ),
+            DefaultCategory("Vídeos e áudio", "vídeos, músicas, podcasts, gravações de reunião"),
             DefaultCategory(
                 "Instaladores",
-                "aplicativos, imagens de disco e pacotes de instalação",
+                "aplicativos, imagens de disco (.dmg), pacotes de instalação (.pkg), atualizações "
+                "de software",
                 rename=False,
             ),
-            DefaultCategory("Imagens"),
-            DefaultCategory("Outros"),
+            DefaultCategory(
+                "Código e dados",
+                "projetos de software, scripts, planilhas e exportações de dados (CSV, JSON), "
+                "bancos de dados, backups",
+            ),
+            DefaultCategory(
+                "Outros", "qualquer coisa que não se encaixe claramente nas categorias acima"
+            ),
         ),
     ),
 }

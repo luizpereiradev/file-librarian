@@ -8,6 +8,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `language: pt-BR` defaults to 15 categories, each with a hint that settles
+  common overlaps (payslips in Trabalho, tax receipts in Impostos):
+  Financeiro, Impostos, Contratos, Documentos pessoais, Saúde, Trabalho,
+  Estudos, Viagens, Compras, Casa e veículos, Imagens, Vídeos e áudio,
+  Instaladores, Código e dados and Outros.
 - M1 exit criterion as an automated acceptance test (50 varied items,
   including a sub-folder, a `.app` and credentials: organized, searched and
   undone with every byte accounted for) and a manual checklist with the real

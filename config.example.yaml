@@ -6,7 +6,9 @@
 # Language of generated names and descriptions, and of the default folder and
 # category names below: en | pt-BR. Anything you set explicitly wins.
 #   en    -> ~/Downloads/Organized, _Review, Finance, Contracts, Installers, Images, Other
-#   pt-BR -> ~/Downloads/Organizado, _Revisar, Financeiro, Contratos, Instaladores, Imagens, Outros
+#   pt-BR -> ~/Downloads/Organizado, _Revisar, and 15 categories: Financeiro, Impostos,
+#            Contratos, Documentos pessoais, Saúde, Trabalho, Estudos, Viagens, Compras,
+#            Casa e veículos, Imagens, Vídeos e áudio, Instaladores, Código e dados, Outros
 language: en
 
 # Folders to keep organized.

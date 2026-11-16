@@ -126,3 +126,13 @@ def test_env_var_selects_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     path.write_text(yaml.safe_dump(minimal()), encoding="utf-8")
     monkeypatch.setenv("FLIB_CONFIG", str(path))
     assert load_config().provider.name == "fake"
+
+
+def test_portuguese_default_categories_are_complete() -> None:
+    cfg = parse_config({"language": "pt-BR", "provider": {"name": "fake", "model": "x"}})
+    names = [c.name for c in cfg.categories]
+    assert len(names) == 15
+    assert names[-1] == "Outros"  # the catch-all stays last
+    assert {"Impostos", "Saúde", "Documentos pessoais", "Código e dados"} <= set(names)
+    assert all(c.hint for c in cfg.categories)
+    assert [c.name for c in cfg.categories if not c.rename] == ["Instaladores"]
