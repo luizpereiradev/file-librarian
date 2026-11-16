@@ -318,7 +318,7 @@ def test_recover_resolves_interrupted_moves(downloads: Path, cfg: Config) -> Non
         first.destination.parent.mkdir(parents=True)
         done_src.rename(first.destination)
         assert recover(store) == 2
-        ops = {Path(o["src_path"]).name: o["status"] for o in store.operations()}
+        ops = {o.src_path.name: o.status.value for o in store.operations()}
     assert ops == {
         "moved.pdf": OperationStatus.DONE.value,
         "stuck.pdf": OperationStatus.FAILED.value,

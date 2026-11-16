@@ -59,6 +59,72 @@ def load_migrations() -> list[Migration]:
     return found
 
 
+@dataclass(frozen=True, slots=True)
+class FileRow:
+    """A row of ``files`` as read back."""
+
+    id: int
+    sha256: str
+    original_name: str
+    original_path: Path
+    current_name: str
+    current_path: Path
+    status: FileStatus
+    category: str | None
+    description: str | None
+    tags: list[str]
+    attempts: int
+    processed_at: str
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> FileRow:
+        try:
+            tags = [str(t) for t in json.loads(row["tags"] or "[]")]
+        except (ValueError, TypeError):
+            tags = []
+        return cls(
+            id=int(row["id"]),
+            sha256=str(row["sha256"]),
+            original_name=str(row["original_name"]),
+            original_path=Path(row["original_path"]),
+            current_name=str(row["current_name"]),
+            current_path=Path(row["current_path"]),
+            status=FileStatus(row["status"]),
+            category=row["category"],
+            description=row["description"],
+            tags=tags,
+            attempts=int(row["attempts"]),
+            processed_at=str(row["processed_at"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class OperationRow:
+    """A journal entry of ``operations`` as read back."""
+
+    id: int
+    run_id: int
+    file_id: int
+    src_path: Path
+    dst_path: Path
+    status: OperationStatus
+    src_identity: tuple[int, int] | None
+    """The source's (st_dev, st_ino) when journaled; ``None`` for older rows."""
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> OperationRow:
+        dev, ino = row["src_dev"], row["src_ino"]
+        return cls(
+            id=int(row["id"]),
+            run_id=int(row["run_id"]),
+            file_id=int(row["file_id"]),
+            src_path=Path(row["src_path"]),
+            dst_path=Path(row["dst_path"]),
+            status=OperationStatus(row["status"]),
+            src_identity=None if dev is None or ino is None else (int(dev), int(ino)),
+        )
+
+
 class Store:
     """An open database. Use as a context manager."""
 
@@ -188,17 +254,26 @@ class Store:
             (error[:500], file_id),
         )
 
-    def file_by_id(self, file_id: int) -> sqlite3.Row:
+    def file_by_id(self, file_id: int) -> FileRow:
         row = self.conn.execute("SELECT * FROM files WHERE id = ?", (file_id,)).fetchone()
         if row is None:
             raise LookupError(f"no file with id {file_id}")
-        return row  # type: ignore[no-any-return]
+        return FileRow.from_row(row)
 
-    def file_by_current_path(self, path: Path) -> sqlite3.Row | None:
+    def file_by_current_path(self, path: Path) -> FileRow | None:
         row = self.conn.execute(
             "SELECT * FROM files WHERE current_path = ?", (normalize(str(path)),)
         ).fetchone()
-        return row  # type: ignore[no-any-return]
+        return None if row is None else FileRow.from_row(row)
+
+    def search_files(self, fts_query: str, *, limit: int) -> list[FileRow]:
+        """Rows matching an FTS5 query, best first (names weigh more than descriptions)."""
+        rows = self.conn.execute(
+            """SELECT f.* FROM files_fts JOIN files f ON f.id = files_fts.rowid
+               WHERE files_fts MATCH ? ORDER BY bm25(files_fts, 3.0, 3.0, 1.0, 2.0) LIMIT ?""",
+            (fts_query, limit),
+        ).fetchall()
+        return [FileRow.from_row(r) for r in rows]
 
     # --- classification cache --------------------------------------------------------
 
@@ -251,8 +326,8 @@ class Store:
             )
 
     def operations(
-        self, *, run_id: int | None = None, status: str | None = None
-    ) -> list[sqlite3.Row]:
+        self, *, run_id: int | None = None, status: OperationStatus | None = None
+    ) -> list[OperationRow]:
         sql = "SELECT * FROM operations WHERE 1 = 1"
         args: list[object] = []
         if run_id is not None:
@@ -260,16 +335,16 @@ class Store:
             args.append(run_id)
         if status is not None:
             sql += " AND status = ?"
-            args.append(status)
-        return list(self.conn.execute(sql + " ORDER BY id", args))
+            args.append(status.value)
+        return [OperationRow.from_row(r) for r in self.conn.execute(sql + " ORDER BY id", args)]
 
-    def last_done_operation(self, file_id: int) -> sqlite3.Row | None:
+    def last_done_operation(self, file_id: int) -> OperationRow | None:
         row = self.conn.execute(
             """SELECT * FROM operations WHERE file_id = ? AND status = 'done'
                ORDER BY id DESC LIMIT 1""",
             (file_id,),
         ).fetchone()
-        return row  # type: ignore[no-any-return]
+        return None if row is None else OperationRow.from_row(row)
 
     def close(self) -> None:
         self.conn.close()

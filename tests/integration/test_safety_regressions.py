@@ -151,7 +151,7 @@ def test_recover_after_crash_on_a_counter_name(
     with Store.open(config.database) as store:
         assert executor.recover(store) == 1
         [op] = store.operations()
-        assert (op["status"], Path(op["dst_path"]).name) == ("done", "scan-2.pdf")
+        assert (op.status.value, op.dst_path.name) == ("done", "scan-2.pdf")
         report = undo_run(store)
     assert [src for _, src in report.restored] == [mine]
     assert mine.read_bytes() == b"mine"
@@ -252,9 +252,9 @@ def test_recover_recognises_a_moved_file_edited_after_the_crash(
     with Store.open(config.database) as store:
         assert executor.recover(store) == 1
         [op] = store.operations()
-        row = store.file_by_id(int(op["file_id"]))
-    assert op["status"] == "done"
-    assert (row["status"], row["current_path"]) == ("organized", str(moved))
+        row = store.file_by_id(op.file_id)
+    assert op.status.value == "done"
+    assert (row.status.value, row.current_path) == ("organized", moved)
 
 
 @pytest.mark.parametrize("name", [" . .pdf", " ..txt", " .. .x"])

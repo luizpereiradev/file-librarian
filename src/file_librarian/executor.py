@@ -175,29 +175,27 @@ def _fail(store: Store, op_id: int, file_id: int, src: Path, error: str) -> Item
 
 def recover(store: Store) -> int:
     """Resolve journal entries left ``planned`` by a crash. Returns how many."""
-    pending = store.operations(status=OperationStatus.PLANNED.value)
+    pending = store.operations(status=OperationStatus.PLANNED)
     for op in pending:
-        op_id, file_id = int(op["id"]), int(op["file_id"])
-        dst = Path(op["dst_path"])
-        row = store.file_by_id(file_id)
+        row = store.file_by_id(op.file_id)
         # Done if the journaled destination is the very inode we moved (a rename keeps
         # it, even if the file was edited since), or holds exactly the content we moved.
-        if _same_inode(dst, op["src_dev"], op["src_ino"]) or same_content(dst, str(row["sha256"])):
+        if _same_inode(op.dst_path, op.src_identity) or same_content(op.dst_path, row.sha256):
             with store.transaction():
-                store.set_operation(op_id, OperationStatus.DONE)
-                store.set_file_location(file_id, dst, FileStatus(row["status"]))
+                store.set_operation(op.id, OperationStatus.DONE)
+                store.set_file_location(op.file_id, op.dst_path, row.status)
         else:
             with store.transaction():
-                store.set_operation(op_id, OperationStatus.FAILED)
-                store.mark_file_failed(file_id, "interrupted before the move finished")
+                store.set_operation(op.id, OperationStatus.FAILED)
+                store.mark_file_failed(op.file_id, "interrupted before the move finished")
     return len(pending)
 
 
-def _same_inode(path: Path, dev: int | None, ino: int | None) -> bool:
-    if dev is None or ino is None:
+def _same_inode(path: Path, identity: tuple[int, int] | None) -> bool:
+    if identity is None:
         return False
     try:
         st = os.lstat(path)
     except OSError:
         return False
-    return (st.st_dev, st.st_ino) == (dev, ino)
+    return (st.st_dev, st.st_ino) == identity

@@ -17,9 +17,6 @@ from dataclasses import asdict, dataclass
 
 from file_librarian.db.store import Store
 
-# Weights per indexed column: original_name, current_name, description, tags.
-_BM25 = "bm25(files_fts, 3.0, 3.0, 1.0, 2.0)"
-
 
 @dataclass(frozen=True, slots=True)
 class SearchHit:
@@ -45,30 +42,19 @@ def search(store: Store, text: str, *, limit: int = 20) -> list[SearchHit]:
     query = fts_query(text)
     if query is None:
         return []
-    rows = store.conn.execute(
-        f"""SELECT f.* FROM files_fts JOIN files f ON f.id = files_fts.rowid
-            WHERE files_fts MATCH ? ORDER BY {_BM25} LIMIT ?""",  # noqa: S608 - constant
-        (query, limit),
-    ).fetchall()
-    hits = []
-    for row in rows:
-        try:
-            tags = [str(t) for t in json.loads(row["tags"] or "[]")]
-        except (ValueError, TypeError):
-            tags = []
-        hits.append(
-            SearchHit(
-                path=row["current_path"],
-                original_name=row["original_name"],
-                category=row["category"],
-                description=row["description"],
-                tags=tags,
-                status=row["status"],
-                processed_at=row["processed_at"],
-                exists=os.path.lexists(row["current_path"]),
-            )
+    return [
+        SearchHit(
+            path=str(row.current_path),
+            original_name=row.original_name,
+            category=row.category,
+            description=row.description,
+            tags=row.tags,
+            status=row.status.value,
+            processed_at=row.processed_at,
+            exists=os.path.lexists(row.current_path),
         )
-    return hits
+        for row in store.search_files(query, limit=limit)
+    ]
 
 
 def to_json(hits: list[SearchHit]) -> str:
