@@ -182,6 +182,21 @@ class McpConfig(_Section):
     read_only: bool = False
 
 
+class ScheduleConfig(_Section):
+    time: str = "12:30"
+    """Local time of the daily run, HH:MM (24-hour). Applied by ``flib schedule``."""
+
+    @field_validator("time")
+    @classmethod
+    def _hh_mm(cls, value: str) -> str:
+        hour, _, minute = value.partition(":")
+        if not (hour.isdigit() and minute.isdigit() and len(minute) == 2):
+            raise ValueError("schedule.time must look like 12:30")
+        if not (0 <= int(hour) <= 23 and 0 <= int(minute) <= 59):
+            raise ValueError("schedule.time must be a valid 24-hour time")
+        return f"{int(hour):02d}:{minute}"
+
+
 def default_database_path() -> Path:
     """The database lives outside the organized folders so it is never moved by mistake."""
     return Path.home() / "Library" / "Application Support" / APP_NAME / "library.db"
@@ -211,6 +226,7 @@ class Config(_Section):
     never_send: list[str] = Field(default_factory=list)
     sensitive: SensitiveConfig = SensitiveConfig()
     mcp: McpConfig = McpConfig()
+    schedule: ScheduleConfig = ScheduleConfig()
 
     @model_validator(mode="before")
     @classmethod

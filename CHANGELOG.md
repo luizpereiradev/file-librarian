@@ -8,6 +8,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `flib schedule` (RF-19): installs a launchd agent that runs `flib run`
+  daily at `schedule.time` (default 12:30) or `--at HH:MM`, with
+  `--status` and `--remove`. It offers to store an API key that is only in
+  the shell environment in the Keychain, warns when run from a development
+  checkout, and checks folder access from a one-shot launchd agent, so the
+  macOS privacy block that silently affects background processes is caught
+  at setup with instructions. Runs started by the schedule are recorded with
+  trigger `schedule`. Tests use a fake `launchctl`; no real agent is loaded.
 - `scripts/install.sh` installs the `flib` command with `uv tool install`,
   pinned to the versions in `uv.lock` (a plain `uv tool install .` would
   resolve the newest versions and skip the 7-day quarantine).

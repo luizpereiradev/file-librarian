@@ -33,21 +33,35 @@ def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(socket, "getaddrinfo", guard)
 
 
+def _shim(folder: Path, name: str, script: str) -> Path:
+    """An executable ``name`` in ``folder`` that runs ``tests/<script>`` with this Python."""
+    target = Path(__file__).with_name(script)
+    shim = folder / name
+    shim.write_text(f'#!/bin/sh\nexec {sys.executable} {target} "$@"\n', encoding="utf-8")
+    shim.chmod(0o755)
+    return shim
+
+
 @pytest.fixture(autouse=True)
 def fake_keychain(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
 ) -> Path:
     """Every test talks to a throwaway keychain, never the user's login Keychain."""
     folder = tmp_path_factory.mktemp("keychain")
-    script = folder / "security"
-    script.write_text(
-        f'#!/bin/sh\nexec {sys.executable} {Path(__file__).with_name("fake_security.py")} "$@"\n',
-        encoding="utf-8",
-    )
-    script.chmod(0o755)
+    script = _shim(folder, "security", "fake_security.py")
     monkeypatch.setenv("FAKE_KEYCHAIN", str(folder / "items.json"))
     monkeypatch.setattr("file_librarian.keychain.SECURITY", str(script))
     return folder / "items.json"
+
+
+@pytest.fixture(autouse=True)
+def fake_launchd(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Every test talks to a fake launchctl; no real agent is ever loaded."""
+    folder = tmp_path_factory.mktemp("launchd")
+    script = _shim(folder, "launchctl", "fake_launchctl.py")
+    monkeypatch.setenv("FAKE_LAUNCHD", str(folder / "loaded.json"))
+    monkeypatch.setattr("file_librarian.scheduler.LAUNCHCTL", str(script))
+    return folder / "loaded.json"
 
 
 @pytest.fixture(autouse=True)

@@ -85,5 +85,8 @@ never_send:                  # classified from metadata only, never sent to the 
 sensitive:
   detect_secrets: true       # private keys, tokens, credentials found in content
 
+schedule:
+  time: "12:30"              # daily run, 24-hour local time; applied by `flib schedule`
+
 mcp:                         # not active yet: the MCP server comes in M2 (RF-22)
   read_only: false           # true disables recategorize_file and undo
