@@ -8,6 +8,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `flib simulate`, `flib run` and `flib undo` (RF-09, RF-10, RF-11, RF-12,
+  RF-16, RF-17, RF-31, RF-32). The planner turns classifications into
+  destinations that are always a configured folder under `output_root`;
+  unknown categories and low confidence go to the review folder unrenamed;
+  names follow `naming.pattern`, keep the extension and get a `-N` suffix on
+  collisions; folder units and `rename: false` categories keep their names.
+  The executor journals every move before making it, refuses to move items
+  changed since the scan, creates folders without following symlinks and
+  moves with `renamex_np(RENAME_EXCL)`, so nothing is ever overwritten.
+  Interrupted moves are resolved at the start of the next run. Undo checks
+  each item's content hash and that its original path is free, and lists
+  what it skipped.
+- The `fake` provider classifies everything into the last category offline,
+  so the whole pipeline can be tried without an API key.
 - Extractors (RF-04, RF-06, RF-27): plain text, Markdown, CSV and source
   code; DOCX, XLSX and PPTX through the standard library (streamed, size
   capped, DTDs refused); PDF through pypdf (first 20 pages); ZIP and TAR
@@ -45,6 +59,19 @@ All notable changes to this project are documented here. The format follows
 
 ### Security
 
+- Mover hardening from an adversarial review: paths are compared after
+  resolving symlinks and folding case and Unicode, and the scanner skips
+  flib's own database, journal, lock and library by device and inode, so a
+  differently spelled path can no longer make flib move its own database; one
+  odd item (a blank name, a category path that is a file) no longer aborts the
+  run; a second copy of the same content in one run is left in place instead
+  of sharing an index row; every rename attempt is journaled before it runs
+  and crash recovery verifies content before marking a move done; index and
+  journal writes are grouped in transactions; a replaced file (new inode) or a
+  folder changed deep inside is not moved; Finder's `.DS_Store` no longer
+  blocks undoing a folder; empty files, files next to a `.part`/`.crdownload`
+  and files with the hidden flag are skipped; `undo` finishes interrupted
+  moves first and never steps back to an older run by itself.
 - Supply-chain guards (ADR 0003): 7-day quarantine for new releases,
   Dependabot with cooldown, `uv audit` and dependency review in a Security
   workflow, actions pinned by commit SHA, zizmor workflow linting, CODEOWNERS,

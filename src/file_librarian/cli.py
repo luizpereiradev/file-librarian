@@ -14,11 +14,18 @@ from typing import Annotated, NoReturn
 
 import typer
 
-from file_librarian import __version__
-from file_librarian.config import ConfigError, default_config_path, load_config
+from file_librarian import __version__, pipeline
+from file_librarian.config import Config, ConfigError, default_config_path, load_config
+from file_librarian.db.store import Store
+from file_librarian.executor import RunReport, recover
 from file_librarian.extractors.origin import download_origin
 from file_librarian.hashing import file_sha256, unit_manifest
-from file_librarian.providers import PLANNED, is_implemented
+from file_librarian.lock import AlreadyRunningError, instance_lock
+from file_librarian.models import FileStatus
+from file_librarian.planner import Plan
+from file_librarian.providers import PLANNED, ProviderError, get_provider, is_implemented
+from file_librarian.scanner import ScanError
+from file_librarian.undo import NothingToUndoError, undo_file, undo_run
 
 EXIT_ERROR = 1
 EXIT_NOT_IMPLEMENTED = 2
@@ -140,13 +147,81 @@ def inspect(
 @app.command()
 def run(config: ConfigOption = None) -> None:
     """Organize the input folders now: classify, rename, move and index new files."""
-    _not_implemented("run", "M1", "RF-01..RF-18")
+    _pipeline(config, simulate=False)
 
 
 @app.command()
 def simulate(config: ConfigOption = None) -> None:
     """Print the full plan without changing anything."""
-    _not_implemented("simulate", "M1", "RF-16")
+    _pipeline(config, simulate=True)
+
+
+def _fatal(message: str) -> NoReturn:
+    typer.echo(f"error: {message}", err=True)
+    raise typer.Exit(EXIT_ERROR)
+
+
+def _load(config: Path | None) -> Config:
+    try:
+        return load_config(config)
+    except ConfigError as exc:
+        _fatal(str(exc))
+
+
+def _pipeline(config_path: Path | None, *, simulate: bool) -> None:
+    cfg = _load(config_path)
+    try:
+        provider = get_provider(cfg.provider)
+        outcome = pipeline.run(cfg, provider, simulate=simulate)
+    except (ProviderError, ScanError, AlreadyRunningError) as exc:
+        _fatal(str(exc))
+    if outcome.recovered:
+        typer.echo(f"Recovered {outcome.recovered} move(s) interrupted by an earlier crash.")
+    if simulate:
+        _print_plan(outcome.plan, outcome.scan.deferred, cfg)
+    elif outcome.report is not None:
+        _print_report(outcome.report, cfg)
+
+
+def _short(path: Path, cfg: Config) -> str:
+    for root in (cfg.output_root, *cfg.inputs):
+        if path.is_relative_to(root):
+            return str(path.relative_to(root))
+    return str(path)
+
+
+def _print_plan(plan: Plan, deferred: int, cfg: Config) -> None:
+    if not plan.items:
+        typer.echo("Nothing to do: no new files.")
+    for item in plan.items:
+        source = _short(item.context.path, cfg)
+        if item.destination is None:
+            typer.echo(f"  keep    {source}  ({item.reason})")
+        else:
+            typer.echo(f"  move    {source}  ->  {_short(item.destination, cfg)}  ({item.reason})")
+    moves = len(plan.moves())
+    typer.echo(
+        f"Simulation: {moves} would move, {len(plan.items) - moves} would stay. Nothing changed."
+    )
+    if deferred:
+        typer.echo(f"{deferred} more file(s) wait for a later run (limits.max_files_per_run).")
+
+
+def _print_report(report: RunReport, cfg: Config) -> None:
+    for item in report.items:
+        source = _short(item.source, cfg)
+        if item.destination is not None:
+            typer.echo(f"  moved   {source}  ->  {_short(item.destination, cfg)}")
+        else:
+            typer.echo(f"  {item.status.value:<8}{source}  ({item.note})")
+    typer.echo(
+        f"Run {report.run_id}: {report.count(FileStatus.ORGANIZED, moved=True)} organized, "
+        f"{report.count(FileStatus.REVIEW, moved=True)} to review, "
+        f"{report.count(FileStatus.SENSITIVE)} sensitive left in place, "
+        f"{report.errors} failed, {report.count(FileStatus.SKIPPED)} skipped."
+    )
+    if report.deferred:
+        typer.echo(f"{report.deferred} more file(s) wait for the next run.")
 
 
 @app.command()
@@ -168,7 +243,22 @@ def undo(
     config: ConfigOption = None,
 ) -> None:
     """Revert the last run, a given run, or a single file."""
-    _not_implemented("undo", "M1", "RF-17")
+    if file is not None and run_id is not None:
+        _fatal("use either --file or --run, not both")
+    cfg = _load(config)
+    try:
+        with instance_lock(cfg.database), Store.open(cfg.database) as store:
+            recovered = recover(store)  # finish the journal before reading it
+            report = undo_file(store, file) if file is not None else undo_run(store, run_id)
+    except (NothingToUndoError, AlreadyRunningError) as exc:
+        _fatal(str(exc))
+    if recovered:
+        typer.echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
+    for dst, src in report.restored:
+        typer.echo(f"  restored  {_short(dst, cfg)}  ->  {src}")
+    for path, reason in report.skipped:
+        typer.echo(f"  skipped   {_short(path, cfg)}  ({reason})")
+    typer.echo(f"Undo: {len(report.restored)} restored, {len(report.skipped)} skipped.")
 
 
 @app.command()

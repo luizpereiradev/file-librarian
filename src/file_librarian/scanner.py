@@ -26,12 +26,15 @@ from enum import StrEnum
 from fnmatch import fnmatchcase
 from pathlib import Path
 
-from file_librarian.config import Config
+from file_librarian.config import Config, is_within
 from file_librarian.hashing import file_sha256, unit_manifest
+from file_librarian.lock import lock_path
 from file_librarian.models import FileState, FileStatus
 
 # Browsers write in-progress downloads under these names (Safari's are folders).
 IN_PROGRESS_PATTERNS = ("*.crdownload", "*.part", "*.partial", "*.download", "*.opdownload")
+# A final-name placeholder next to one of these is still downloading (Firefox, aria2...).
+PARTIAL_SIBLINGS = (".part", ".crdownload", ".aria2", ".download", ".opdownload")
 
 
 class ScanError(RuntimeError):
@@ -49,6 +52,8 @@ class SkipReason(StrEnum):
     UNSTABLE = "still changing"
     KNOWN = "already processed"
     UNREADABLE = "unreadable"
+    EMPTY = "empty file"
+    DUPLICATE = "same content as another item in this run"
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +63,12 @@ class Candidate:
     size_bytes: int
     mtime: float
     is_unit: bool
+    mtime_ns: int = 0
+    """The item's own mtime at scan time; the executor refuses to move it if this changed."""
+    created: float = 0.0
+    """Birth time on macOS, used as the download date."""
+    inode: int = 0
+    """Checked again before moving, so a replaced file is never moved under the old hash."""
 
 
 @dataclass(slots=True)
@@ -77,8 +88,30 @@ def _matches(name: str, patterns: Iterable[str]) -> bool:
     return any(fnmatchcase(folded, pattern.casefold()) for pattern in patterns)
 
 
-def _is_within(path: Path, folder: Path) -> bool:
-    return path == folder or path.is_relative_to(folder)
+def _protected_ids(config: Config) -> set[tuple[int, int]]:
+    """Device and inode of everything flib owns, however its path is spelled."""
+    db = config.database
+    paths = [
+        config.output_root,
+        db,
+        db.parent,
+        db.with_name(db.name + "-wal"),
+        db.with_name(db.name + "-shm"),
+        db.with_name(db.name + "-journal"),
+        lock_path(db),
+    ]
+    ids = set()
+    for path in paths:
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        ids.add((st.st_dev, st.st_ino))
+    return ids
+
+
+def _birth(st: os.stat_result) -> float:
+    return float(getattr(st, "st_birthtime", st.st_mtime))
 
 
 def scan(config: Config, lookup: Lookup, *, now: float | None = None) -> ScanResult:
@@ -86,6 +119,8 @@ def scan(config: Config, lookup: Lookup, *, now: float | None = None) -> ScanRes
     limits = config.limits
     result = ScanResult()
     ready: list[Candidate] = []
+    protected = _protected_ids(config)
+    seen_hashes: set[str] = set()
 
     for folder in config.inputs:
         try:
@@ -99,6 +134,7 @@ def scan(config: Config, lookup: Lookup, *, now: float | None = None) -> ScanRes
         except FileNotFoundError as exc:
             raise ScanError(f"input folder does not exist: {folder}") from exc
 
+        names = {e.name.casefold() for e in entries}
         for entry in entries:
             path = Path(entry.path)
 
@@ -111,10 +147,20 @@ def scan(config: Config, lookup: Lookup, *, now: float | None = None) -> ScanRes
             if entry.is_symlink():
                 skip(SkipReason.SYMLINK)
                 continue
-            if _is_within(path, config.output_root):
+            try:
+                ident = entry.stat(follow_symlinks=False)
+            except OSError:
+                skip(SkipReason.UNREADABLE)
+                continue
+            if ident.st_flags & stat.UF_HIDDEN:
+                skip(SkipReason.HIDDEN)
+                continue
+            if (ident.st_dev, ident.st_ino) in protected or is_within(path, config.output_root):
                 skip(SkipReason.MANAGED)
                 continue
-            if _matches(entry.name, IN_PROGRESS_PATTERNS):
+            if _matches(entry.name, IN_PROGRESS_PATTERNS) or any(
+                f"{entry.name}{suffix}".casefold() in names for suffix in PARTIAL_SIBLINGS
+            ):
                 skip(SkipReason.IN_PROGRESS)
                 continue
             if _matches(entry.name, config.ignore):
@@ -132,9 +178,19 @@ def scan(config: Config, lookup: Lookup, *, now: float | None = None) -> ScanRes
                         skip(SkipReason.UNSTABLE)
                         continue
                     candidate = Candidate(
-                        path, manifest.digest, manifest.size_bytes, st.st_mtime, is_unit=True
+                        path,
+                        manifest.digest,
+                        manifest.size_bytes,
+                        st.st_mtime,
+                        is_unit=True,
+                        mtime_ns=st.st_mtime_ns,
+                        inode=st.st_ino,
+                        created=_birth(st),
                     )
                 elif stat.S_ISREG(st.st_mode):
+                    if st.st_size == 0:
+                        skip(SkipReason.EMPTY)
+                        continue
                     if now - st.st_mtime < limits.stable_seconds:
                         skip(SkipReason.UNSTABLE)
                         continue
@@ -143,7 +199,16 @@ def scan(config: Config, lookup: Lookup, *, now: float | None = None) -> ScanRes
                     if (after.st_size, after.st_mtime_ns) != (st.st_size, st.st_mtime_ns):
                         skip(SkipReason.UNSTABLE)
                         continue
-                    candidate = Candidate(path, digest, st.st_size, st.st_mtime, is_unit=False)
+                    candidate = Candidate(
+                        path,
+                        digest,
+                        st.st_size,
+                        st.st_mtime,
+                        is_unit=False,
+                        mtime_ns=st.st_mtime_ns,
+                        inode=st.st_ino,
+                        created=_birth(st),
+                    )
                 else:
                     skip(SkipReason.SPECIAL)
                     continue
@@ -160,6 +225,11 @@ def scan(config: Config, lookup: Lookup, *, now: float | None = None) -> ScanRes
             if state is not None and not retry:
                 skip(SkipReason.KNOWN)
                 continue
+            if candidate.sha256 in seen_hashes:
+                # The index is keyed by content; a second copy waits (RF-21 handles duplicates).
+                skip(SkipReason.DUPLICATE)
+                continue
+            seen_hashes.add(candidate.sha256)
             ready.append(candidate)
 
     ready.sort(key=lambda c: (c.mtime, str(c.path)))

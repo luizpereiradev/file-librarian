@@ -77,8 +77,20 @@ def _normalize_path(value: Path) -> Path:
 AbsolutePath = Annotated[Path, AfterValidator(_normalize_path)]
 
 
-def _is_within(path: Path, folder: Path) -> bool:
-    return path == folder or path.is_relative_to(folder)
+def canonical(path: Path) -> Path:
+    """The path as macOS sees it: symlinks resolved, case and Unicode form folded.
+
+    Two spellings of the same folder (``~/downloads`` vs ``~/Downloads``, NFD vs
+    NFC, through a symlink) give the same result. Use it only to compare paths.
+    """
+    real = Path(os.path.realpath(path))
+    return Path(*(folder_key(part) for part in real.parts))
+
+
+def is_within(path: Path, folder: Path) -> bool:
+    """``path`` is ``folder`` or inside it, comparing the way macOS does."""
+    a, b = canonical(path), canonical(folder)
+    return a == b or a.is_relative_to(b)
 
 
 class _Section(BaseModel):
@@ -226,16 +238,16 @@ class Config(_Section):
     def _check_paths(self) -> Config:
         home = Path.home()
         for folder in self.inputs:
-            if folder == Path(folder.anchor) or folder == home:
+            if canonical(folder) in {canonical(Path(folder.anchor)), canonical(home)}:
                 raise ValueError(f"input {folder} is too broad; pick specific folders")
-            if _is_within(folder, self.output_root):
+            if is_within(folder, self.output_root):
                 raise ValueError(f"input {folder} must not be inside output_root")
         for i, a in enumerate(self.inputs):
             for b in self.inputs[i + 1 :]:
-                if _is_within(a, b) or _is_within(b, a):
+                if is_within(a, b) or is_within(b, a):
                     raise ValueError(f"inputs must not overlap: {a} and {b}")
-        if _is_within(self.database, self.output_root) or any(
-            _is_within(self.database, folder) for folder in self.inputs
+        if is_within(self.database, self.output_root) or any(
+            is_within(self.database, folder) for folder in self.inputs
         ):
             raise ValueError("database must be outside the input folders and output_root")
         return self
