@@ -8,6 +8,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `flib search QUERY [--json] [--limit N]` (RF-13, RF-35): full-text search
+  over names, descriptions and tags, accent-insensitive, every word must
+  match as a prefix, ranked with names first; query syntax in the input is
+  treated as plain text; missing files are flagged.
+- A log file per run next to the database (RF-18), owner-only, newest 100 kept.
 - `flib simulate`, `flib run` and `flib undo` (RF-09, RF-10, RF-11, RF-12,
   RF-16, RF-17, RF-31, RF-32). The planner turns classifications into
   destinations that are always a configured folder under `output_root`;
