@@ -22,7 +22,9 @@ All notable changes to this project are documented here. The format follows
   from billed usage; files over the cap wait for the next run and are not
   counted as failures.
 - `provider.effort` (default `low`); the example configuration uses
-  `claude-opus-5-5`.
+  `claude-haiku-5-5`, the cheapest current Claude model, which has no
+  server-side refusal fallback (a declined file is marked failed and
+  retried on later runs).
 - Dependency: `anthropic` (SDK 2.7.0).
 - `flib search QUERY [--json] [--limit N]` (RF-13, RF-35): full-text search
   over names, descriptions and tags, accent-insensitive, every word must

@@ -2,8 +2,8 @@
 
 The automated test `tests/acceptance/test_m1_exit_criterion.py` checks the M1
 exit criterion offline. This is the same check with Claude, run by a
-maintainer before calling M1 done. It costs a few cents with the default
-model and never touches your real Downloads folder.
+maintainer before calling M1 done. It costs well under one cent with the
+default model and never touches your real Downloads folder.
 
 ## 1. Build a test folder
 
@@ -32,9 +32,9 @@ output_root: /tmp/flib-acceptance/inbox/Organizado
 database: /tmp/flib-acceptance/library.db
 provider:
   name: anthropic
-  model: claude-opus-5-5
+  model: claude-haiku-5-5
 limits:
-  max_cost_usd_per_run: 0.50
+  max_cost_usd_per_run: 0.10
 ```
 
 ## 3. Run, search, undo
