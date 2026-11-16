@@ -21,8 +21,11 @@ Before opening a pull request, run the same checks as CI:
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy          # strict, over src/ and tests/
-uv run pytest
+uv run coverage run -m pytest && uv run coverage report   # fails under 93% branch coverage
 ```
+
+A new branch of behaviour, especially a failure path, comes with a test.
+`coverage report` lists the missing lines.
 
 `uv run ruff format .` fixes formatting; `uv run ruff check --fix .` fixes most lint findings.
 

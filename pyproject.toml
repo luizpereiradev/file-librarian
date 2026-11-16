@@ -42,6 +42,7 @@ flib = "file_librarian.cli:main"
 
 [dependency-groups]
 dev = [
+    "coverage>=7",
     "mypy>=1.11",
     "pytest>=8.0",
     "ruff>=0.6",
@@ -80,6 +81,15 @@ strict = true
 mypy_path = "src"
 files = ["src", "tests"]
 plugins = ["pydantic.mypy"]
+
+[tool.coverage.run]
+branch = true
+source = ["file_librarian"]
+
+[tool.coverage.report]
+fail_under = 93
+show_missing = true
+skip_covered = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
