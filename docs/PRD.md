@@ -412,12 +412,12 @@ O maior risco é a IA errar sem ninguém ver, e por isso a reversão e a pasta `
 | Permissões de privacidade do macOS bloqueando o acesso às pastas de entrada na execução agendada | `flib schedule` testa o acesso e orienta a liberar a permissão; sem acesso, a execução falha com mensagem clara e código de saída diferente de zero |
 | Pasta de entrada ou de destino dentro do iCloud Drive | Arquivos só na nuvem são pulados; movimentação entre volumes confere o hash antes de remover a origem |
 
-Decisões em aberto (as marcadas foram tomadas no M0):
+Decisões tomadas antes do M1:
 
 - [x] Licença: MIT
 - [x] Versão mínima do macOS: só a versão atual (ADR 0002)
 - [x] Destino dos arquivos: subpasta dentro de Downloads, com nome conforme o idioma
-- [ ] Guardar ou não um trecho do texto extraído no banco (melhora a busca, aumenta o tamanho e a exposição de conteúdo)
-- [ ] Teto de custo aceitável por execução diária
-- [ ] Subpastas em Downloads: mover inteiras para uma categoria ou apenas ignorar (o rascunho assume mover inteiras)
-- [ ] Destino dos arquivos sensíveis: ficam onde estão ou vão para uma pasta própria
+- [x] Trecho do texto extraído no banco: não guardar; o índice tem só nomes, descrição e tags
+- [x] Teto de custo por execução diária: US$ 1, configurável; o que sobrar fica para o dia seguinte
+- [x] Subpastas em Downloads: mover inteiras para uma categoria (padrão folders: as_unit)
+- [x] Arquivos sensíveis: ficam onde estão, sem envio e sem descrição, registrados como sensitive

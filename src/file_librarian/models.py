@@ -49,6 +49,14 @@ class RunTrigger(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class FileState:
+    """What the index knows about a content hash."""
+
+    status: FileStatus
+    attempts: int
+
+
+@dataclass(frozen=True, slots=True)
 class FileContext:
     """Everything the classifier may know about one file (or one folder/.app unit)."""
 

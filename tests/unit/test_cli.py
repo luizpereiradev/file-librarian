@@ -73,14 +73,16 @@ def test_check_config_warns_about_planned_provider() -> None:
     assert "planned for M1" in result.stderr
 
 
-def test_inspect_directory_has_no_size(downloads: Path) -> None:
+def test_inspect_directory_reports_unit_size(downloads: Path) -> None:
     folder = downloads / "project"
     folder.mkdir()
+    (folder / "a.txt").write_text("abc", encoding="utf-8")
     result = runner.invoke(app, ["inspect", "--json", str(folder)])
     assert result.exit_code == 0, result.stderr
     [item] = json.loads(result.stdout)
-    assert item["size_bytes"] is None
-    assert item["sha256"] is None
+    assert item["kind"] == "folder unit"
+    assert item["size_bytes"] == 3
+    assert len(item["sha256"]) == 64
 
 
 def test_check_config_invalid(tmp_path: Path) -> None:

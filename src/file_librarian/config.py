@@ -111,6 +111,8 @@ class LimitsConfig(_Section):
     max_attempts: PositiveInt = 3
     confidence_threshold: Fraction = 0.7
     scanned_pdf_max_pages: PositiveInt = 3
+    max_cost_usd_per_run: Annotated[float, Field(gt=0)] | None = 1.0
+    """Stop sending files once the estimated provider cost reaches this; ``None`` = no cap."""
 
 
 class NamingConfig(_Section):
