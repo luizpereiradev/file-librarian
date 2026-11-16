@@ -8,6 +8,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `flib reconcile` (RF-20): the index follows files moved, renamed or deleted
+  by hand. Files are found again by content (only same-size files are
+  hashed; folder units by manifest) under the library and the input folders.
+  Moving a file to another category folder, or renaming it, is recorded as a
+  correction for the classifier to learn from (RF-29); a file moved back to
+  Downloads is left alone; one found nowhere is marked `missing` until it
+  turns up again. Nothing on disk changes. Migration 0004 records whether a
+  row is a folder unit.
 - `flib schedule` (RF-19): installs a launchd agent that runs `flib run`
   daily at `schedule.time` (default 12:30) or `--at HH:MM`, with
   `--status` and `--remove`. It offers to store an API key that is only in

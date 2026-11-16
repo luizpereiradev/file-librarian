@@ -140,6 +140,7 @@ class FileRecord:
     status: FileStatus
     extension: str = ""
     size_bytes: int = 0
+    is_unit: bool = False
     source_url: str | None = None
     category: str | None = None
     description: str | None = None

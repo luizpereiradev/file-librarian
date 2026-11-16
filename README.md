@@ -84,7 +84,7 @@ easiest choice for them. Set `api_key_source` to `environment`, `keychain` or
 | `flib search QUERY [--json]` | Full-text search over names, descriptions and tags | M1 (available) |
 | `flib undo [--run ID \| --file PATH]` | Revert a run or one file | M1 (available) |
 | `flib schedule [--at HH:MM \| --status \| --remove]` | Run every day via launchd, with an access check | M2 (available) |
-| `flib reconcile` | Update the index after manual moves | M2 |
+| `flib reconcile` | Update the index after you move, rename or delete files by hand | M2 (available) |
 | `flib init` | Guided first run on a sample | M2 |
 | `flib mcp` | Local MCP server for AI assistants | M2 |
 | `flib reprocess` | Reclassify after a rules change | M3 |
