@@ -303,7 +303,11 @@ def test_recover_resolves_interrupted_moves(downloads: Path, cfg: Config) -> Non
             assert item.destination is not None
             record = file_record(item, FileStatus.ORGANIZED, "fake", "m")
             file_id = store.upsert_file(record, run_id=run_id)
-            store.add_operation(run_id, file_id, item.context.path, item.destination)
+            st = item.context.path.stat()
+            identity = (st.st_dev, st.st_ino)
+            store.add_operation(
+                run_id, file_id, item.context.path, item.destination, identity=identity
+            )
         # Simulate a crash after the first rename only.
         first = planned.items[0]
         assert first.destination is not None

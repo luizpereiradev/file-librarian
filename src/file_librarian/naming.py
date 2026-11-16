@@ -63,7 +63,12 @@ def safe_component(name: str) -> str:
     name = "".join(
         "-" if ch in "/:\\" or unicodedata.category(ch).startswith("C") else ch for ch in name
     )
-    return name.strip().lstrip(".").strip()
+    # Repeat until stable: " . .pdf" must not end up as the hidden ".pdf".
+    previous = None
+    while name != previous:
+        previous = name
+        name = name.strip().lstrip(".")
+    return name
 
 
 def with_counter(name: str, n: int) -> str:

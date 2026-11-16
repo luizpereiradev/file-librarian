@@ -113,13 +113,14 @@ def _apply(item: PlannedItem, config: Config, store: Store, run_id: int, provide
         store.upsert_file(file_record(item, item.status, provider, model, error), run_id=run_id)
         return ItemResult(ctx.path, item.status, None, item.reason)
 
-    if not _unchanged(ctx):
+    identity = _unchanged(ctx)
+    if identity is None:
         return ItemResult(ctx.path, FileStatus.SKIPPED, None, "changed since the scan; next run")
 
     destination = item.destination
     with store.transaction():
         file_id = store.upsert_file(file_record(item, item.status, provider, model), run_id=run_id)
-        op_id = store.add_operation(run_id, file_id, ctx.path, destination)
+        op_id = store.add_operation(run_id, file_id, ctx.path, destination, identity=identity)
     try:
         ensure_folder(destination.parent, inside=config.output_root)
         destination = _move(ctx.path, destination, store, op_id)
@@ -133,21 +134,23 @@ def _apply(item: PlannedItem, config: Config, store: Store, run_id: int, provide
     return ItemResult(ctx.path, item.status, destination, item.reason)
 
 
-def _unchanged(ctx: FileContext) -> bool:
-    """The item is still the very one that was scanned and classified."""
+def _unchanged(ctx: FileContext) -> tuple[int, int] | None:
+    """(st_dev, st_ino) if the item is still the very one scanned and classified."""
     try:
         st = os.lstat(ctx.path)
     except OSError:
-        return False
+        return None
     if (st.st_ino, st.st_mtime_ns) != (ctx.inode, ctx.mtime_ns):
-        return False
+        return None
     if ctx.is_unit:
         # A file deep inside a folder can change without touching the folder's mtime.
         try:
-            return unit_manifest(ctx.path).digest == ctx.sha256
+            same = unit_manifest(ctx.path).digest == ctx.sha256
         except OSError:
-            return False
-    return st.st_size == ctx.size_bytes
+            return None
+    else:
+        same = st.st_size == ctx.size_bytes
+    return (st.st_dev, st.st_ino) if same else None
 
 
 def _move(src: Path, dst: Path, store: Store, op_id: int) -> Path:
@@ -177,8 +180,9 @@ def recover(store: Store) -> int:
         op_id, file_id = int(op["id"]), int(op["file_id"])
         dst = Path(op["dst_path"])
         row = store.file_by_id(file_id)
-        # Done only if the journaled destination holds exactly the content we moved.
-        if same_content(dst, str(row["sha256"])):
+        # Done if the journaled destination is the very inode we moved (a rename keeps
+        # it, even if the file was edited since), or holds exactly the content we moved.
+        if _same_inode(dst, op["src_dev"], op["src_ino"]) or same_content(dst, str(row["sha256"])):
             with store.transaction():
                 store.set_operation(op_id, OperationStatus.DONE)
                 store.set_file_location(file_id, dst, FileStatus(row["status"]))
@@ -187,6 +191,16 @@ def recover(store: Store) -> int:
                 store.set_operation(op_id, OperationStatus.FAILED)
                 store.mark_file_failed(file_id, "interrupted before the move finished")
     return len(pending)
+
+
+def _same_inode(path: Path, dev: int | None, ino: int | None) -> bool:
+    if dev is None or ino is None:
+        return False
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return (st.st_dev, st.st_ino) == (dev, ino)
 
 
 def same_content(path: Path, sha256: str) -> bool:

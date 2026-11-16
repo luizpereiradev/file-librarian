@@ -139,7 +139,10 @@ class Store:
         )
 
     def last_run_with_operations(self) -> int | None:
-        row = self.conn.execute("SELECT MAX(run_id) FROM operations").fetchone()
+        """The newest run that actually moved something (done or since undone)."""
+        row = self.conn.execute(
+            "SELECT MAX(run_id) FROM operations WHERE status IN ('done', 'undone')"
+        ).fetchone()
         return None if row is None or row[0] is None else int(row[0])
 
     # --- files ----------------------------------------------------------------
@@ -199,11 +202,15 @@ class Store:
 
     # --- operations (the journal behind undo) ------------------------------------
 
-    def add_operation(self, run_id: int, file_id: int, src: Path, dst: Path) -> int:
+    def add_operation(
+        self, run_id: int, file_id: int, src: Path, dst: Path, *, identity: tuple[int, int]
+    ) -> int:
+        """Journal a move. ``identity`` is the source's (st_dev, st_ino)."""
         cur = self.conn.execute(
-            """INSERT INTO operations (run_id, file_id, src_path, dst_path, status, created_at)
-               VALUES (?, ?, ?, ?, 'planned', ?)""",
-            (run_id, file_id, str(src), str(dst), _now()),
+            """INSERT INTO operations (run_id, file_id, src_path, dst_path, status, created_at,
+                                      src_dev, src_ino)
+               VALUES (?, ?, ?, ?, 'planned', ?, ?, ?)""",
+            (run_id, file_id, str(src), str(dst), _now(), identity[0], identity[1]),
         )
         return _rowid(cur)
 

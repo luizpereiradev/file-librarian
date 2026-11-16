@@ -229,3 +229,50 @@ def test_repeated_undo_does_not_unwind_older_runs(downloads: Path) -> None:
         with pytest.raises(NothingToUndoError, match="--run"):
             undo_run(store)
     assert (downloads / "Organized" / "Finance" / "first.pdf").exists()
+
+
+# Re-review --------------------------------------------------------------------------------
+
+
+def test_recover_recognises_a_moved_file_edited_after_the_crash(
+    downloads: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = cfg(downloads)
+    put(downloads, "notes.txt", b"original")
+
+    def move_then_crash(src: Path, dst: Path) -> None:
+        move_no_replace(src, dst)
+        raise Crash
+
+    with monkeypatch.context() as patch, pytest.raises(Crash):
+        patch.setattr("file_librarian.executor.move_no_replace", move_then_crash)
+        pipeline.run(config, FakeProvider(default=answer("Other", confidence=0.75)), simulate=False)
+    moved = downloads / "Organized" / "Other" / "notes.txt"
+    moved.write_bytes(b"original, then annotated")  # same inode, new content
+
+    with Store.open(config.database) as store:
+        assert executor.recover(store) == 1
+        [op] = store.operations()
+        row = store.file_by_id(int(op["file_id"]))
+    assert op["status"] == "done"
+    assert (row["status"], row["current_path"]) == ("organized", str(moved))
+
+
+@pytest.mark.parametrize("name", [" . .pdf", " ..txt", " .. .x"])
+def test_names_never_become_hidden(downloads: Path, name: str) -> None:
+    put(downloads, name, name.encode())
+    pipeline.run(cfg(downloads), FakeProvider(default=answer("Taxes")), simulate=False)
+    [moved] = (downloads / "Organized" / "_Review").iterdir()
+    assert not moved.name.startswith(".")
+
+
+def test_plain_undo_skips_runs_whose_moves_all_failed(downloads: Path) -> None:
+    config = cfg(downloads)
+    put(downloads, "first.pdf", b"1")
+    pipeline.run(config, FakeProvider(default=answer(confidence=0.75)), simulate=False)
+    put(downloads, "Organized/Images", b"not a folder")
+    put(downloads, "pic.png", b"2")
+    pipeline.run(config, FakeProvider(default=answer("Images")), simulate=False)
+    with Store.open(config.database) as store:
+        report = undo_run(store)
+    assert [src.name for _, src in report.restored] == ["first.pdf"]

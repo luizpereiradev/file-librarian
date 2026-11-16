@@ -164,7 +164,7 @@ def _destination(
     if folder_name not in allowed:
         raise UnsafeDestinationError(f"folder {folder_name!r} is not configured")
     safe = safe_component(file_name)
-    if not safe.strip(" .\u00a0") or safe in {".", ".."}:
+    if not safe.strip(" .\u00a0") or safe.startswith("."):
         # A name that sanitizes to nothing (" ", "..."): give it a neutral one.
         safe = f"unnamed-{ctx.sha256[:8]}{split_name(file_name)[1]}"
     folder = config.output_root / folder_name
