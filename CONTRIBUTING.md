@@ -11,7 +11,7 @@ You need the current major release of macOS and
 
 ```sh
 git clone https://github.com/luizpereiradev/file-librarian.git && cd file-librarian
-uv sync              # creates .venv with the package and dev tools
+uv sync              # creates .venv with the package and dev tools (use `uv run flib ...`)
 uv run pytest        # all tests, offline, in temporary folders
 ```
 
@@ -52,6 +52,7 @@ The code mirrors the pipeline; read [docs/architecture.md](docs/architecture.md)
 - **Tests never use the network or your files.** Use `FakeProvider` with fixed
   answers. The suite blocks network connections and DNS and points `HOME` at a
   temporary folder, so anything built from `~` or `Path.home()` stays there.
+  The macOS Keychain is replaced by a throwaway fake (`tests/fake_security.py`).
   Never hard-code an absolute path to a real folder in a test.
 - **No personal files.** Fixtures are synthetic. Generate them in code when you can.
 - **The model returns data, code acts.** Providers never touch the file

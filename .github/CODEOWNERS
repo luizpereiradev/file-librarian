@@ -7,6 +7,7 @@
 /.github/                                @luizpereiradev
 /pyproject.toml                          @luizpereiradev
 /uv.lock                                 @luizpereiradev
+/scripts/                                @luizpereiradev
 /tests/conftest.py                       @luizpereiradev
 /tests/unit/test_supply_chain.py         @luizpereiradev
 

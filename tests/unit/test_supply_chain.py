@@ -122,12 +122,19 @@ def test_workflow_token_is_read_only_by_default(workflow: Path) -> None:
     )
 
 
+def test_install_script_uses_the_lockfile() -> None:
+    script = (REPO_ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
+    assert "uv export --frozen" in script
+    assert "--overrides" in script
+
+
 def test_guards_are_owned() -> None:
     owners = (GITHUB / "CODEOWNERS").read_text(encoding="utf-8")
     for path in (
         "/.github/",
         "/pyproject.toml",
         "/uv.lock",
+        "/scripts/",
         "/tests/conftest.py",
         "/tests/unit/test_supply_chain.py",
         "/SECURITY.md",

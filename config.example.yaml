@@ -32,7 +32,10 @@ provider:
   requests_per_minute: 30
   max_retries: 3
   timeout_seconds: 60
-  # The API key is read from ANTHROPIC_API_KEY, never from this file.
+  # Where the API key comes from (never from this file):
+  #   auto: ANTHROPIC_API_KEY, then the macOS Keychain (`flib key set`), then env_file
+  api_key_source: auto       # auto | environment | keychain | env_file
+  # env_file: ~/.config/file-librarian/.env   # a file with ANTHROPIC_API_KEY=..., mode 600
 
 limits:
   max_files_per_run: 200

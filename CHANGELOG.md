@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `scripts/install.sh` installs the `flib` command with `uv tool install`,
+  pinned to the versions in `uv.lock` (a plain `uv tool install .` would
+  resolve the newest versions and skip the 7-day quarantine).
+- API key from the macOS Keychain: `flib key set`, `flib key status` and
+  `flib key delete`. `provider.api_key_source: auto` (default) tries the
+  environment, then the Keychain, then an optional `provider.env_file`;
+  `check-config` shows which source is used and warns about a `.env` file
+  other users can read. Keys are passed to `security` on stdin and never
+  printed.
 - Classification cache (migration 0003): answers are kept for 7 days per
   content hash and rules (provider, model, effort, categories and hints,
   language, prompt version), so `flib run` right after `flib simulate` reuses
