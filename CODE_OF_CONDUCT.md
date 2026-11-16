@@ -12,8 +12,8 @@ tolerated.
 ## Reporting
 
 Report unacceptable behavior privately to the maintainer,
-[@luizpereiradev](https://github.com/luizpereiradev), using the contact on
-their GitHub profile; do not use a public issue. Reports are handled
+[@luizpereiradev](https://github.com/luizpereiradev), by email at
+**luiz@nerv3.com.br**; do not use a public issue. Reports are handled
 privately, and the maintainer will respect the privacy and safety of the
 reporter. Enforcement follows the
 [Contributor Covenant enforcement guidelines](https://www.contributor-covenant.org/version/2/1/code_of_conduct/#enforcement-guidelines).
