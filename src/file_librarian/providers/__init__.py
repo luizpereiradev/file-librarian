@@ -20,7 +20,7 @@ ProviderFactory = Callable[[ProviderConfig], Provider]
 
 # Provider name -> factory. Real providers are added here as they land.
 REGISTRY: dict[str, ProviderFactory] = {
-    "fake": lambda _cfg: FakeProvider(),
+    "fake": lambda _cfg: FakeProvider(echo=True),
 }
 
 PLANNED = {"anthropic": "M1", "claude-code": "M2", "ollama": "M3", "openai-compat": "M3"}

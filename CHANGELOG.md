@@ -8,6 +8,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `flib simulate`, `flib run` and `flib undo` (RF-09, RF-10, RF-11, RF-12,
+  RF-16, RF-17, RF-31, RF-32). The planner turns classifications into
+  destinations that are always a configured folder under `output_root`;
+  unknown categories and low confidence go to the review folder unrenamed;
+  names follow `naming.pattern`, keep the extension and get a `-N` suffix on
+  collisions; folder units and `rename: false` categories keep their names.
+  The executor journals every move before making it, refuses to move items
+  changed since the scan, creates folders without following symlinks and
+  moves with `renamex_np(RENAME_EXCL)`, so nothing is ever overwritten.
+  Interrupted moves are resolved at the start of the next run. Undo checks
+  each item's content hash and that its original path is free, and lists
+  what it skipped.
+- The `fake` provider classifies everything into the last category offline,
+  so the whole pipeline can be tried without an API key.
 - Extractors (RF-04, RF-06, RF-27): plain text, Markdown, CSV and source
   code; DOCX, XLSX and PPTX through the standard library (streamed, size
   capped, DTDs refused); PDF through pypdf (first 20 pages); ZIP and TAR

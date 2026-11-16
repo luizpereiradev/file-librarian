@@ -64,6 +64,8 @@ class FileContext:
     sha256: str
     size_bytes: int
     extension: str
+    mtime_ns: int = 0
+    downloaded: date | None = None
     source_urls: tuple[str, ...] = ()
     text: str | None = None
     image_paths: tuple[Path, ...] = ()
@@ -114,6 +116,27 @@ class Rules:
     @property
     def category_names(self) -> frozenset[str]:
         return frozenset(c.name for c in self.categories)
+
+
+@dataclass(frozen=True, slots=True)
+class FileRecord:
+    """One row of the ``files`` table as the executor writes it."""
+
+    sha256: str
+    original_path: Path
+    current_path: Path
+    status: FileStatus
+    extension: str = ""
+    size_bytes: int = 0
+    source_url: str | None = None
+    category: str | None = None
+    description: str | None = None
+    tags: tuple[str, ...] = ()
+    confidence: float | None = None
+    attempts: int = 0
+    last_error: str | None = None
+    provider: str | None = None
+    model: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

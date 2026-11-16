@@ -58,6 +58,10 @@ class Candidate:
     size_bytes: int
     mtime: float
     is_unit: bool
+    mtime_ns: int = 0
+    """The item's own mtime at scan time; the executor refuses to move it if this changed."""
+    created: float = 0.0
+    """Birth time on macOS, used as the download date."""
 
 
 @dataclass(slots=True)
@@ -79,6 +83,10 @@ def _matches(name: str, patterns: Iterable[str]) -> bool:
 
 def _is_within(path: Path, folder: Path) -> bool:
     return path == folder or path.is_relative_to(folder)
+
+
+def _birth(st: os.stat_result) -> float:
+    return float(getattr(st, "st_birthtime", st.st_mtime))
 
 
 def scan(config: Config, lookup: Lookup, *, now: float | None = None) -> ScanResult:
@@ -132,7 +140,13 @@ def scan(config: Config, lookup: Lookup, *, now: float | None = None) -> ScanRes
                         skip(SkipReason.UNSTABLE)
                         continue
                     candidate = Candidate(
-                        path, manifest.digest, manifest.size_bytes, st.st_mtime, is_unit=True
+                        path,
+                        manifest.digest,
+                        manifest.size_bytes,
+                        st.st_mtime,
+                        is_unit=True,
+                        mtime_ns=st.st_mtime_ns,
+                        created=_birth(st),
                     )
                 elif stat.S_ISREG(st.st_mode):
                     if now - st.st_mtime < limits.stable_seconds:
@@ -143,7 +157,15 @@ def scan(config: Config, lookup: Lookup, *, now: float | None = None) -> ScanRes
                     if (after.st_size, after.st_mtime_ns) != (st.st_size, st.st_mtime_ns):
                         skip(SkipReason.UNSTABLE)
                         continue
-                    candidate = Candidate(path, digest, st.st_size, st.st_mtime, is_unit=False)
+                    candidate = Candidate(
+                        path,
+                        digest,
+                        st.st_size,
+                        st.st_mtime,
+                        is_unit=False,
+                        mtime_ns=st.st_mtime_ns,
+                        created=_birth(st),
+                    )
                 else:
                     skip(SkipReason.SPECIAL)
                     continue

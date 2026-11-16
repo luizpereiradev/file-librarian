@@ -43,10 +43,7 @@ def test_help_lists_every_command() -> None:
 @pytest.mark.parametrize(
     ("args", "requirement"),
     [
-        (["run"], "M1"),
-        (["simulate"], "RF-16"),
         (["search", "lease contract"], "RF-13"),
-        (["undo"], "RF-17"),
         (["schedule"], "RF-19"),
         (["reconcile"], "RF-20"),
         (["init"], "RF-38"),
@@ -104,3 +101,41 @@ def test_inspect_shows_origin(downloads: Path) -> None:
     [item] = json.loads(result.stdout)
     assert item["source_urls"] == [url]
     assert len(item["sha256"]) == 64
+
+
+def test_simulate_run_and_undo_end_to_end(downloads: Path, tmp_path: Path) -> None:
+    import os
+    import time
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        f"inputs: [{downloads}]\nprovider: {{name: fake, model: offline}}\n", encoding="utf-8"
+    )
+    path = downloads / "notes.txt"
+    path.write_text("meeting notes", encoding="utf-8")
+    old = time.time() - 3600
+    os.utime(path, (old, old))
+
+    sim = runner.invoke(app, ["simulate", "-c", str(cfg)])
+    assert sim.exit_code == 0, sim.stderr
+    assert "would move" in sim.stdout and path.exists()
+
+    run = runner.invoke(app, ["run", "-c", str(cfg)])
+    assert run.exit_code == 0, run.stderr
+    assert "1 organized" in run.stdout
+    assert not path.exists()
+
+    undo = runner.invoke(app, ["undo", "-c", str(cfg)])
+    assert undo.exit_code == 0, undo.stderr
+    assert "1 restored" in undo.stdout
+    assert path.read_text(encoding="utf-8") == "meeting notes"
+
+    again = runner.invoke(app, ["undo", "-c", str(cfg)])
+    assert again.exit_code == 1
+    assert "nothing left to undo" in again.stderr
+
+
+def test_run_with_unimplemented_provider_fails_cleanly(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["run", "-c", str(REPO_ROOT / "config.example.yaml")])
+    assert result.exit_code == 1
+    assert "planned for M1" in result.stderr

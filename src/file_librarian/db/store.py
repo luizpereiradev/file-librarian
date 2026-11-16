@@ -11,15 +11,17 @@
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 import unicodedata
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
 from types import TracebackType
 
-from file_librarian.models import FileState, FileStatus
+from file_librarian.models import FileRecord, FileState, FileStatus, OperationStatus
 
 _MIGRATION_NAME = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
 BUSY_TIMEOUT_MS = 5000
@@ -107,6 +109,126 @@ class Store:
             return None
         return FileState(FileStatus(row["status"]), int(row["attempts"]))
 
+    # --- runs -----------------------------------------------------------------
+
+    def start_run(self, mode: str, trigger: str) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO runs (mode, trigger, started_at) VALUES (?, ?, ?)",
+            (mode, trigger, _now()),
+        )
+        return _rowid(cur)
+
+    def finish_run(self, run_id: int, *, seen: int, moved: int, review: int, errors: int) -> None:
+        self.conn.execute(
+            """UPDATE runs SET finished_at = ?, files_seen = ?, files_moved = ?,
+                              files_review = ?, errors = ? WHERE id = ?""",
+            (_now(), seen, moved, review, errors, run_id),
+        )
+
+    def last_run_with_moves(self) -> int | None:
+        row = self.conn.execute(
+            """SELECT run_id FROM operations WHERE status = 'done'
+               ORDER BY run_id DESC LIMIT 1"""
+        ).fetchone()
+        return None if row is None else int(row[0])
+
+    # --- files ----------------------------------------------------------------
+
+    def upsert_file(self, record: FileRecord, *, run_id: int) -> int:
+        """Insert or update the row for ``record.sha256``; returns its id."""
+        r = record
+        self.conn.execute(
+            """INSERT INTO files (sha256, original_name, original_path, current_name,
+                   current_path, extension, size_bytes, source_url, category, description,
+                   tags, confidence, status, attempts, last_error, provider, model, run_id,
+                   processed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(sha256) DO UPDATE SET
+                   current_name = excluded.current_name, current_path = excluded.current_path,
+                   category = excluded.category, description = excluded.description,
+                   tags = excluded.tags, confidence = excluded.confidence,
+                   status = excluded.status, attempts = files.attempts + excluded.attempts,
+                   last_error = excluded.last_error, provider = excluded.provider,
+                   model = excluded.model, run_id = excluded.run_id,
+                   processed_at = excluded.processed_at""",
+            (
+                r.sha256, normalize(r.original_path.name), normalize(str(r.original_path)),
+                normalize(r.current_path.name), normalize(str(r.current_path)), r.extension,
+                r.size_bytes, r.source_url, r.category, r.description,
+                json.dumps(list(r.tags), ensure_ascii=False), r.confidence, r.status.value,
+                r.attempts, r.last_error, r.provider, r.model, run_id, _now(),
+            ),
+        )  # fmt: skip
+        row = self.conn.execute("SELECT id FROM files WHERE sha256 = ?", (r.sha256,)).fetchone()
+        return int(row[0])
+
+    def set_file_location(self, file_id: int, path: Path, status: FileStatus) -> None:
+        self.conn.execute(
+            "UPDATE files SET current_name = ?, current_path = ?, status = ? WHERE id = ?",
+            (normalize(path.name), normalize(str(path)), status.value, file_id),
+        )
+
+    def mark_file_failed(self, file_id: int, error: str) -> None:
+        self.conn.execute(
+            """UPDATE files SET status = 'failed', attempts = attempts + 1, last_error = ?
+               WHERE id = ?""",
+            (error[:500], file_id),
+        )
+
+    def file_by_id(self, file_id: int) -> sqlite3.Row:
+        row = self.conn.execute("SELECT * FROM files WHERE id = ?", (file_id,)).fetchone()
+        if row is None:
+            raise LookupError(f"no file with id {file_id}")
+        return row  # type: ignore[no-any-return]
+
+    def file_by_current_path(self, path: Path) -> sqlite3.Row | None:
+        row = self.conn.execute(
+            "SELECT * FROM files WHERE current_path = ?", (normalize(str(path)),)
+        ).fetchone()
+        return row  # type: ignore[no-any-return]
+
+    # --- operations (the journal behind undo) ------------------------------------
+
+    def add_operation(self, run_id: int, file_id: int, src: Path, dst: Path) -> int:
+        cur = self.conn.execute(
+            """INSERT INTO operations (run_id, file_id, src_path, dst_path, status, created_at)
+               VALUES (?, ?, ?, ?, 'planned', ?)""",
+            (run_id, file_id, str(src), str(dst), _now()),
+        )
+        return _rowid(cur)
+
+    def set_operation(self, op_id: int, status: OperationStatus, dst: Path | None = None) -> None:
+        if dst is None:
+            self.conn.execute(
+                "UPDATE operations SET status = ? WHERE id = ?", (status.value, op_id)
+            )
+        else:
+            self.conn.execute(
+                "UPDATE operations SET status = ?, dst_path = ? WHERE id = ?",
+                (status.value, str(dst), op_id),
+            )
+
+    def operations(
+        self, *, run_id: int | None = None, status: str | None = None
+    ) -> list[sqlite3.Row]:
+        sql = "SELECT * FROM operations WHERE 1 = 1"
+        args: list[object] = []
+        if run_id is not None:
+            sql += " AND run_id = ?"
+            args.append(run_id)
+        if status is not None:
+            sql += " AND status = ?"
+            args.append(status)
+        return list(self.conn.execute(sql + " ORDER BY id", args))
+
+    def last_done_operation(self, file_id: int) -> sqlite3.Row | None:
+        row = self.conn.execute(
+            """SELECT * FROM operations WHERE file_id = ? AND status = 'done'
+               ORDER BY id DESC LIMIT 1""",
+            (file_id,),
+        ).fetchone()
+        return row  # type: ignore[no-any-return]
+
     def close(self) -> None:
         self.conn.close()
 
@@ -120,6 +242,16 @@ class Store:
         tb: TracebackType | None,
     ) -> None:
         self.close()
+
+
+def _rowid(cur: sqlite3.Cursor) -> int:
+    if cur.lastrowid is None:
+        raise RuntimeError("insert did not return a row id")
+    return cur.lastrowid
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _split_sql(script: str) -> list[str]:
