@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- M1 exit criterion as an automated acceptance test (50 varied items,
+  including a sub-folder, a `.app` and credentials: organized, searched and
+  undone with every byte accounted for) and a manual checklist with the real
+  provider in `docs/acceptance.md`.
 - `anthropic` provider (RF-07, RF-08): structured output against a per-request
   JSON schema with the configured categories as an enum, no sampling
   parameters, refusal checks and server-side `fallbacks: "default"` where
