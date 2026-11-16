@@ -35,8 +35,21 @@ Rules for every provider:
 - **Return data only.** Never read, move or write files, and never return paths.
 - **Validate with `Classification`.** Its schema rejects extra keys and
   out-of-range values. The classifier also rejects categories not in `rules`.
-- **Raise `ProviderError`** on failure. Retries, rate limits and the `failed`
-  status are handled by the classifier, not by you.
+- **Raise the right error.** The classifier owns retries, rate limits, the
+  cost cap and the `failed` status; it decides from what you raise:
+  - `ProviderError("...", retryable=True)` for transient trouble (rate limit,
+    overload, timeout, connection): retried with exponential backoff;
+  - `ProviderError("...")` when this file cannot be classified (bad request,
+    refusal, invalid answer): the file is marked failed and retried on later
+    runs up to `max_attempts`;
+  - `FatalProviderError("...")` when nothing can work (bad credentials,
+    unknown model): the run stops before anything moves.
+- **Report what you were billed.** Set `self.last_usage = Usage(input_tokens,
+  output_tokens, [models])` after every call, including failed ones, so
+  `limits.max_cost_usd_per_run` holds. Add the model's price to
+  `classifier.PRICES`; unknown models are costed at the highest known price.
+- **Local providers** (no API behind them) set the class attribute
+  `local = True` to skip request-per-minute spacing.
 - **Send only what is in `context`.** It is already capped at
   `max_chars_per_file`, and sensitive files never reach you.
 - **Repeatability comes from the schema, not from sampling settings.** Use the
@@ -46,6 +59,8 @@ Rules for every provider:
   models reject non-default values with HTTP 400, so the `anthropic` provider
   sends none and relies on structured outputs (`output_config.format`).
 - **Read secrets from environment variables**, never from the config file.
+- **Disable your SDK's own retries** (for example `max_retries=0`) so the
+  classifier's backoff and rate limit are the only ones.
 - Treat file text as untrusted data: put it in a clearly delimited block of the
   prompt and tell the model it is content to describe, not instructions.
 

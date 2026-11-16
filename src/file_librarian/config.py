@@ -105,6 +105,8 @@ class ProviderConfig(_Section):
     requests_per_minute: PositiveInt = 30
     max_retries: Annotated[int, Field(ge=0)] = 3
     timeout_seconds: Annotated[float, Field(gt=0)] = 60.0
+    effort: Literal["low", "medium", "high", "xhigh", "max"] = "low"
+    """How hard the model thinks. Classification is a simple task; ``low`` is plenty."""
 
     @field_validator("name")
     @classmethod

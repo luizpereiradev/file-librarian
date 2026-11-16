@@ -8,6 +8,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `anthropic` provider (RF-07, RF-08): structured output against a per-request
+  JSON schema with the configured categories as an enum, no sampling
+  parameters, refusal checks and server-side `fallbacks: "default"` where
+  supported; file content is passed as delimited untrusted data. Bad
+  credentials or an unknown model stop the run before anything moves.
+- Classifier (RF-30): requests-per-minute spacing, retries with exponential
+  backoff for transient errors, and `limits.max_cost_usd_per_run` enforced
+  from billed usage; files over the cap wait for the next run and are not
+  counted as failures.
+- `provider.effort` (default `low`); the example configuration uses
+  `claude-opus-5-5`.
+- Dependency: `anthropic` (SDK 2.7.0).
 - `flib search QUERY [--json] [--limit N]` (RF-13, RF-35): full-text search
   over names, descriptions and tags, accent-insensitive, every word must
   match as a prefix, ranked with names first; query syntax in the input is

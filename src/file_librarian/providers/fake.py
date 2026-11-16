@@ -17,6 +17,7 @@ from file_librarian.providers.base import ProviderError
 
 class FakeProvider:
     name = "fake"
+    local = True  # no API behind it: no rate limit
 
     def __init__(
         self,

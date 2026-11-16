@@ -10,16 +10,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pydantic import ValidationError
-
+from file_librarian.classifier import classify_all
 from file_librarian.config import Config
 from file_librarian.context import build_context
 from file_librarian.db.store import Store
 from file_librarian.executor import RunReport, execute, recover
 from file_librarian.lock import instance_lock
-from file_librarian.models import CategoryRule, FileContext, Rules
-from file_librarian.planner import Decision, Plan, plan
-from file_librarian.providers.base import Provider, ProviderError
+from file_librarian.models import CategoryRule, Rules
+from file_librarian.planner import Plan, plan
+from file_librarian.providers.base import Provider
 from file_librarian.scanner import ScanResult, scan
 
 
@@ -30,26 +29,17 @@ class Outcome:
     report: RunReport | None
     """``None`` for a simulation."""
     recovered: int = 0
+    cost_usd: float = 0.0
+    deferred: int = 0
+    """Left for the next run: over ``max_files_per_run`` or the cost cap."""
 
 
 def rules_for(config: Config) -> Rules:
     return Rules(
         categories=tuple(CategoryRule(c.name, c.hint) for c in config.categories),
         language=config.language,
+        date_order=config.naming.date_order,
     )
-
-
-def classify(contexts: list[FileContext], provider: Provider, rules: Rules) -> list[Decision]:
-    decisions = []
-    for ctx in contexts:
-        if ctx.sensitive:
-            decisions.append(Decision(ctx))
-            continue
-        try:
-            decisions.append(Decision(ctx, provider.classify(ctx, rules)))
-        except (ProviderError, ValidationError) as exc:
-            decisions.append(Decision(ctx, error=f"classification failed: {exc}"[:500]))
-    return decisions
 
 
 def run(config: Config, provider: Provider, *, simulate: bool, trigger: str = "manual",
@@ -66,10 +56,11 @@ def _run(config: Config, provider: Provider, store: Store, *, simulate: bool, tr
     recovered = 0 if simulate else recover(store)
     found = scan(config, store.file_state, now=now)
     contexts = [build_context(c, config) for c in found.candidates]
-    decisions = classify(contexts, provider, rules_for(config))
-    planned = plan(decisions, config)
+    classified = classify_all(contexts, provider, rules_for(config), config)
+    planned = plan(classified.decisions, config)
+    deferred = found.deferred + len(classified.deferred)
     if simulate:
-        return Outcome(found, planned, None)
+        return Outcome(found, planned, None, cost_usd=classified.cost_usd, deferred=deferred)
     report = execute(
         planned,
         config,
@@ -78,6 +69,6 @@ def _run(config: Config, provider: Provider, store: Store, *, simulate: bool, tr
         provider=provider.name,
         model=config.provider.model,
         seen=len(found.candidates),
-        deferred=found.deferred,
+        deferred=deferred,
     )
-    return Outcome(found, planned, report, recovered)
+    return Outcome(found, planned, report, recovered, classified.cost_usd, deferred)
