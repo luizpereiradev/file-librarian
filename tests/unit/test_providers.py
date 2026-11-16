@@ -53,3 +53,10 @@ def test_registry() -> None:
 def test_classification_schema_rejects_bad_answers(bad: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         Classification.model_validate(ANSWER.model_dump() | bad)
+
+
+def test_config_and_registry_agree_on_provider_names() -> None:
+    from file_librarian.config import PROVIDER_NAMES
+    from file_librarian.providers import known_providers
+
+    assert known_providers() == PROVIDER_NAMES

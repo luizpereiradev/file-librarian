@@ -91,6 +91,15 @@ class Classification(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
+class Decision:
+    """The classifier's outcome for one item (stage 3 output, planner input)."""
+
+    context: FileContext
+    classification: Classification | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class CategoryRule:
     name: str
     hint: str | None = None

@@ -29,10 +29,10 @@ from file_librarian.fsops import (
     ensure_folder,
     move_no_replace,
 )
-from file_librarian.hashing import file_sha256, unit_manifest
+from file_librarian.hashing import same_content, unit_manifest
 from file_librarian.models import FileContext, FileRecord, FileStatus, OperationStatus
-from file_librarian.naming import with_counter
-from file_librarian.planner import MAX_COUNTER, Plan, PlannedItem
+from file_librarian.naming import candidate_names
+from file_librarian.planner import Plan, PlannedItem
 
 
 @dataclass(slots=True)
@@ -154,15 +154,15 @@ def _unchanged(ctx: FileContext) -> tuple[int, int] | None:
 
 
 def _move(src: Path, dst: Path, store: Store, op_id: int) -> Path:
-    candidate = dst
-    for n in range(2, MAX_COUNTER + 2):
+    for name in candidate_names(dst.name):
+        candidate = dst.with_name(name)
         # Journal the exact name before trying it, so recovery looks in the right place.
         store.set_operation(op_id, OperationStatus.PLANNED, candidate)
         try:
             move_no_replace(src, candidate)
             return candidate
         except DestinationExistsError:
-            candidate = dst.with_name(with_counter(dst.name, n))
+            continue
     raise DestinationExistsError(f"no free name for {dst}")
 
 
@@ -201,15 +201,3 @@ def _same_inode(path: Path, dev: int | None, ino: int | None) -> bool:
     except OSError:
         return False
     return (st.st_dev, st.st_ino) == (dev, ino)
-
-
-def same_content(path: Path, sha256: str) -> bool:
-    """``path`` exists, is not a symlink, and hashes to ``sha256``."""
-    try:
-        if not os.path.lexists(path) or path.is_symlink():
-            return False
-        if path.is_dir():
-            return unit_manifest(path).digest == sha256
-        return file_sha256(path) == sha256
-    except OSError:
-        return False

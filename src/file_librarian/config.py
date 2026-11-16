@@ -34,6 +34,9 @@ APP_NAME = "file-librarian"
 CONFIG_ENV_VAR = "FLIB_CONFIG"
 
 NAMING_PLACEHOLDERS = frozenset({"date", "subject"})
+# Every provider name a configuration may use. Kept here, not imported from
+# providers/, so config does not depend on provider code; a test keeps the two in step.
+PROVIDER_NAMES = frozenset({"anthropic", "fake", "claude-code", "ollama", "openai-compat"})
 
 Fraction = Annotated[float, Field(ge=0.0, le=1.0)]
 PositiveInt = Annotated[int, Field(gt=0)]
@@ -111,9 +114,7 @@ class ProviderConfig(_Section):
     @field_validator("name")
     @classmethod
     def _known_provider(cls, value: str) -> str:
-        from file_librarian.providers import known_providers  # avoid an import cycle
-
-        known = known_providers()
+        known = PROVIDER_NAMES
         if value not in known:
             raise ValueError(f"unknown provider {value!r} (known: {', '.join(sorted(known))})")
         return value

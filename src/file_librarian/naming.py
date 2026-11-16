@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Iterator
 from datetime import date
 from pathlib import PurePath
 
@@ -69,6 +70,16 @@ def safe_component(name: str) -> str:
         previous = name
         name = name.strip().lstrip(".")
     return name
+
+
+MAX_COUNTER = 999
+
+
+def candidate_names(name: str) -> Iterator[str]:
+    """``name``, then ``name-2`` ... ``name-999``: the order collisions are resolved in."""
+    yield name
+    for n in range(2, MAX_COUNTER + 1):
+        yield with_counter(name, n)
 
 
 def with_counter(name: str, n: int) -> str:

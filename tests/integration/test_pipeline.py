@@ -15,8 +15,8 @@ from file_librarian.config import Config, parse_config
 from file_librarian.db.store import Store
 from file_librarian.executor import execute, file_record, recover
 from file_librarian.lock import AlreadyRunningError, instance_lock
-from file_librarian.models import Classification, FileStatus, OperationStatus
-from file_librarian.planner import Decision, plan
+from file_librarian.models import Classification, Decision, FileStatus, OperationStatus
+from file_librarian.planner import plan
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.undo import NothingToUndoError, undo_file, undo_run
 from tests._helpers import OLD, OLD_DATE, make_docx, make_pdf

@@ -65,3 +65,15 @@ def unit_manifest(root: Path) -> UnitManifest:
             entries += 1
             newest = max(newest, st.st_mtime)
     return UnitManifest(digest.hexdigest(), entries, size, newest)
+
+
+def same_content(path: Path, sha256: str) -> bool:
+    """``path`` exists, is not a symlink, and hashes to ``sha256``."""
+    try:
+        if not os.path.lexists(path) or path.is_symlink():
+            return False
+        if path.is_dir():
+            return unit_manifest(path).digest == sha256
+        return file_sha256(path) == sha256
+    except OSError:
+        return False

@@ -25,19 +25,8 @@ from datetime import date
 from pathlib import Path
 
 from file_librarian.config import Config, folder_key
-from file_librarian.models import Classification, FileContext, FileStatus
-from file_librarian.naming import build_name, safe_component, split_name, with_counter
-
-MAX_COUNTER = 999
-
-
-@dataclass(frozen=True, slots=True)
-class Decision:
-    """The classifier's outcome for one item."""
-
-    context: FileContext
-    classification: Classification | None = None
-    error: str | None = None
+from file_librarian.models import Classification, Decision, FileContext, FileStatus
+from file_librarian.naming import build_name, candidate_names, safe_component, split_name
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,15 +60,11 @@ class _Names:
 
     def claim(self, folder: Path, name: str) -> str:
         taken = self._taken.setdefault(folder, self._on_disk(folder))
-        candidate = name
-        n = 2
-        while folder_key(candidate) in taken:
-            if n > MAX_COUNTER:
-                raise UnsafeDestinationError(f"no free name for {name} in {folder}")
-            candidate = with_counter(name, n)
-            n += 1
-        taken.add(folder_key(candidate))
-        return candidate
+        for candidate in candidate_names(name):
+            if folder_key(candidate) not in taken:
+                taken.add(folder_key(candidate))
+                return candidate
+        raise UnsafeDestinationError(f"no free name for {name} in {folder}")
 
     @staticmethod
     def _on_disk(folder: Path) -> set[str]:

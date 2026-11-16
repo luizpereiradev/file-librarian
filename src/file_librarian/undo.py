@@ -16,8 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from file_librarian.db.store import Store
-from file_librarian.executor import same_content
 from file_librarian.fsops import DestinationExistsError, move_no_replace
+from file_librarian.hashing import same_content
 from file_librarian.models import FileStatus, OperationStatus
 
 
