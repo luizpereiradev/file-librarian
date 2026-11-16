@@ -53,6 +53,26 @@ The code mirrors the pipeline; read [docs/architecture.md](docs/architecture.md)
 - **Current macOS only.** Only the latest major macOS release is supported, and
   changes for other platforms will not be accepted in v1.
 
+## Dependencies
+
+Every dependency runs with access to the user's files, so the bar is high
+([ADR 0003](docs/decisions/0003-supply-chain.md)):
+
+- **Prefer the standard library.** A new dependency needs a reason in the pull
+  request: what it does that a few lines of our own code cannot.
+- **Check what you add.** Exact name (typosquats are common), an active
+  project with more than one maintainer when possible, a license compatible
+  with MIT, and few transitive dependencies.
+- **Use uv, commit the lock.** `uv add <package>` (or `uv add --dev`), then
+  commit `pyproject.toml` and `uv.lock` together. Never hand-edit `uv.lock`.
+- **No new sources.** Only PyPI. Extra indexes, git or path dependencies fail
+  the test suite.
+- **Releases younger than 7 days are ignored** by design. If a security fix
+  needs to skip the quarantine, say so in the pull request and use
+  `uv lock --upgrade-package <name> --exclude-newer-package <name>=false`.
+- **Actions are pinned by commit SHA** with the version in a comment. Let
+  Dependabot bump them; do not replace a SHA with a tag.
+
 ## Issues and pull requests
 
 - A feature issue cites the requirement ID from the PRD (`RF-xx`). Small,

@@ -1,0 +1,7 @@
+# Changes to the supply chain and to the safety-critical core need the maintainer's review.
+/.github/                                @luizpereiradev
+/pyproject.toml                          @luizpereiradev
+/uv.lock                                 @luizpereiradev
+/src/file_librarian/executor.py          @luizpereiradev
+/src/file_librarian/planner.py           @luizpereiradev
+/src/file_librarian/db/migrations/       @luizpereiradev

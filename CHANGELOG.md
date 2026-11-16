@@ -19,3 +19,10 @@ All notable changes to this project are documented here. The format follows
 - Provider interface with an offline `FakeProvider`; extractor interface and registry.
 - CI on macOS: lint, format, type check and tests.
 - Contributor documents, extension guides and ADRs 0001–0002.
+
+### Security
+
+- Supply-chain guards (ADR 0003): 7-day quarantine for new releases,
+  Dependabot with cooldown, `uv audit` and dependency review in a Security
+  workflow, actions pinned by commit SHA, zizmor workflow linting, CODEOWNERS,
+  and tests that fail on unpinned actions or non-PyPI sources.
