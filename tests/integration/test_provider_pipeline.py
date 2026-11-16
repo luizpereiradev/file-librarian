@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import time
 from pathlib import Path
 
 import pytest
@@ -13,9 +12,9 @@ from file_librarian.config import Config, parse_config
 from file_librarian.db.store import Store
 from file_librarian.models import Classification, FileContext, Rules
 from file_librarian.providers.base import FatalProviderError, Usage
+from tests._helpers import OLD
 
 pytestmark = pytest.mark.integration
-OLD = time.time() - 3600
 
 
 class PricedProvider:

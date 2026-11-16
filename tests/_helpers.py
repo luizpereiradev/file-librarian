@@ -5,10 +5,18 @@ from __future__ import annotations
 import ctypes
 import ctypes.util
 import os
+import time
 import zipfile
+from datetime import date
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# A modification time well past `stable_seconds`, shared by every test module.
+# On APFS, setting it with os.utime also moves the file's birth time, which flib
+# uses as the download date: derive expected dates from OLD_DATE, not today.
+OLD = time.time() - 3 * 3600
+OLD_DATE = date.fromtimestamp(OLD)
 
 _XATTR_NOFOLLOW = 0x0001
 

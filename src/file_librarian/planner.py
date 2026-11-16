@@ -91,12 +91,14 @@ class _Names:
             raise UnsafeDestinationError(f"{folder} exists and is not a folder") from exc
 
 
-def plan(decisions: list[Decision], config: Config) -> Plan:
+def plan(decisions: list[Decision], config: Config, *, today: date | None = None) -> Plan:
+    """Plan every decision. ``today`` names files that carry no other date."""
     result = Plan()
     names = _Names()
+    today = today or date.today()
     for decision in decisions:
         try:
-            item = _plan_one(decision, config, names)
+            item = _plan_one(decision, config, names, today)
         except (UnsafeDestinationError, OSError) as exc:
             # One odd item must never stop the run: it stays where it is.
             item = PlannedItem(
@@ -106,7 +108,7 @@ def plan(decisions: list[Decision], config: Config) -> Plan:
     return result
 
 
-def _plan_one(decision: Decision, config: Config, names: _Names) -> PlannedItem:
+def _plan_one(decision: Decision, config: Config, names: _Names, today: date) -> PlannedItem:
     ctx = decision.context
     if ctx.sensitive:
         reason = ctx.metadata.get("sensitive", "sensitive content")
@@ -132,7 +134,7 @@ def _plan_one(decision: Decision, config: Config, names: _Names) -> PlannedItem:
         and category.rename
         and answer.confidence >= config.naming.rename_confidence_threshold
     ):
-        when = answer.document_date or ctx.downloaded or date.today()
+        when = answer.document_date or ctx.downloaded or today
         new_name = build_name(original, answer.suggested_name, when, config.naming)
     chosen = new_name or original
     destination = _destination(config, category.name, chosen, names, ctx)

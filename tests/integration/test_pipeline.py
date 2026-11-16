@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import sqlite3
-import time
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -20,11 +19,9 @@ from file_librarian.models import Classification, FileStatus, OperationStatus
 from file_librarian.planner import Decision, plan
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.undo import NothingToUndoError, undo_file, undo_run
-from tests._helpers import make_docx, make_pdf
+from tests._helpers import OLD, OLD_DATE, make_docx, make_pdf
 
 pytestmark = pytest.mark.integration
-
-OLD = time.time() - 3600
 
 
 def answer(
@@ -212,9 +209,9 @@ def test_hostile_model_answers_stay_inside_output_root(downloads: Path, cfg: Con
     pipeline.run(cfg, provider, simulate=False)
     output = downloads / "Organized"
     moved = {p.relative_to(output).as_posix() for p in output.rglob("*.pdf")}
-    today = date.today().isoformat()
+    downloaded = OLD_DATE.isoformat()  # no document date: the download (birth) date is used
     assert moved == {
-        f"Finance/{today}_etc-passwd.pdf",  # path pieces flattened into one safe name
+        f"Finance/{downloaded}_etc-passwd.pdf",  # path pieces flattened into one safe name
         "_Review/b.pdf",  # unknown category
         "Finance/c.pdf",  # unusable name: original kept
     }

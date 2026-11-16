@@ -113,6 +113,16 @@ def test_valid_answer_and_normalization() -> None:
     assert (p.last_usage.input_tokens, p.last_usage.output_tokens) == (500, 50)
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("2026-10-05", "2026-10-05"), ("2026-31-10", None), ("2026-02-30", None), (20261005, None)],
+)
+def test_bad_document_dates_are_dropped_not_fatal(raw: object, expected: str | None) -> None:
+    p, _ = provider(reply(GOOD | {"document_date": raw}))
+    answer = p.classify(CTX, RULES)
+    assert (answer.document_date.isoformat() if answer.document_date else None) == expected
+
+
 def test_usage_sums_fallback_attempts() -> None:
     iterations = [
         SimpleNamespace(input_tokens=100, output_tokens=0, model="claude-opus-5-5"),

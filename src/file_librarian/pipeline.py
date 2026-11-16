@@ -9,6 +9,7 @@ to the last write.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
 from file_librarian.classifier import CACHE_DAYS, classify_all
 from file_librarian.config import Config
@@ -60,7 +61,9 @@ def _run(config: Config, provider: Provider, store: Store, *, simulate: bool, tr
     found = scan(config, store.file_state, now=now)
     contexts = [build_context(c, config) for c in found.candidates]
     classified = classify_all(contexts, provider, rules_for(config), config, cache=store)
-    planned = plan(classified.decisions, config)
+    planned = plan(
+        classified.decisions, config, today=date.fromtimestamp(now) if now is not None else None
+    )
     deferred = found.deferred + len(classified.deferred)
     if simulate:
         return Outcome(

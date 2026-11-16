@@ -22,6 +22,7 @@ login profile, resolved by the SDK; it is never read from the config file.
 from __future__ import annotations
 
 import json
+from datetime import date
 from typing import Any
 
 import anthropic
@@ -129,9 +130,18 @@ def _normalize(data: dict[str, Any]) -> dict[str, Any]:
     data["tags"] = tags[:10]
     data["suggested_name"] = str(data.get("suggested_name", "")).strip()[:200] or "untitled"
     data["description"] = str(data.get("description", "")).strip()[:600] or "No description."
-    date = data.get("document_date")
-    data["document_date"] = date if isinstance(date, str) and len(date) == 10 else None
+    data["document_date"] = _iso_date(data.get("document_date"))
     return data
+
+
+def _iso_date(value: object) -> str | None:
+    """A valid YYYY-MM-DD, or None: a bad optional date must not cost the whole answer."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(value.strip()[:10]).isoformat()
+    except ValueError:
+        return None
 
 
 class AnthropicProvider:

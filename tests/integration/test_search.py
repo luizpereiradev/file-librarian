@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import stat
-import time
 from pathlib import Path
 from typing import Any
 
@@ -20,9 +19,9 @@ from file_librarian.models import Classification
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.runlog import KEEP, logs_dir, write_log
 from file_librarian.search import fts_query, search
+from tests._helpers import OLD
 
 pytestmark = pytest.mark.integration
-OLD = time.time() - 3600
 
 
 def answer(category: str, name: str, description: str, tags: list[str]) -> Classification:

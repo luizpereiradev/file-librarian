@@ -14,7 +14,6 @@ import hashlib
 import os
 import plistlib
 import tarfile
-import time
 import zipfile
 from collections import Counter
 from pathlib import Path
@@ -28,10 +27,9 @@ from file_librarian.db.store import Store
 from file_librarian.models import Classification, FileContext, Rules
 from file_librarian.search import search
 from file_librarian.undo import undo_run
-from tests._helpers import make_docx, make_pdf, make_pptx, make_xlsx
+from tests._helpers import OLD, make_docx, make_pdf, make_pptx, make_xlsx
 
 pytestmark = pytest.mark.integration
-OLD = time.time() - 3 * 3600
 
 CATEGORY_BY_EXTENSION = {
     ".pdf": "Finance", ".docx": "Contracts", ".xlsx": "Finance", ".pptx": "Other",

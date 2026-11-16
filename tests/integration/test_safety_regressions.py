@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import os
 import stat
-import time
 from pathlib import Path
 from typing import Any
 
@@ -21,9 +20,9 @@ from file_librarian.models import Classification
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.scanner import SkipReason, scan
 from file_librarian.undo import NothingToUndoError, undo_run
+from tests._helpers import OLD
 
 pytestmark = pytest.mark.integration
-OLD = time.time() - 3600
 
 
 def answer(
