@@ -109,6 +109,10 @@ class ProviderConfig(_Section):
     max_retries: Annotated[int, Field(ge=0)] = 3
     timeout_seconds: Annotated[float, Field(gt=0)] = 60.0
     effort: Literal["low", "medium", "high", "xhigh", "max"] = "low"
+    api_key_source: Literal["auto", "environment", "keychain", "env_file"] = "auto"
+    """Where the API key comes from; ``auto`` tries environment, Keychain, then env_file."""
+    env_file: AbsolutePath | None = None
+    """A ``.env`` file with ``ANTHROPIC_API_KEY=...``, used by ``auto`` and ``env_file``."""
     """How hard the model thinks. Classification is a simple task; ``low`` is plenty."""
 
     @field_validator("name")

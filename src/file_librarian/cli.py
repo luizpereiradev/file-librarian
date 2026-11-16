@@ -15,7 +15,7 @@ from typing import Annotated, NoReturn
 
 import typer
 
-from file_librarian import __version__, pipeline
+from file_librarian import __version__, credentials, keychain, pipeline
 from file_librarian.config import Config, ConfigError, default_config_path, load_config
 from file_librarian.db.store import Store
 from file_librarian.executor import RunReport, recover
@@ -98,6 +98,16 @@ def check_config(config: ConfigOption = None) -> None:
     typer.echo(f"  review_folder: {cfg.review_folder}")
     typer.echo(f"  categories: {', '.join(c.name for c in cfg.categories)}")
     typer.echo(f"  provider: {cfg.provider.name} ({cfg.provider.model})")
+    if cfg.provider.name == "anthropic":
+        found = credentials.resolve(cfg.provider)
+        typer.echo(
+            f"  api key: {found.source} ({found.hint})"
+            if found.value
+            else "  api key: not found (run `flib key set`, or set ANTHROPIC_API_KEY)"
+        )
+    env_file = cfg.provider.env_file
+    if env_file is not None and env_file.exists() and not credentials.env_file_is_private(env_file):
+        typer.echo(f"warning: {env_file} is readable by other users; run chmod 600 on it", err=True)
     if not is_implemented(cfg.provider.name):
         milestone = PLANNED.get(cfg.provider.name, "a later milestone")
         typer.echo(
@@ -143,6 +153,48 @@ def inspect(
                 typer.echo(f"  from:   {url}")
         else:
             typer.echo("  from:   (no download origin recorded)")
+
+
+# --- API key ---------------------------------------------------------------------------
+
+key_app = typer.Typer(
+    help="Store the Anthropic API key in the macOS Keychain.", no_args_is_help=True
+)
+app.add_typer(key_app, name="key")
+
+
+@key_app.command("set")
+def key_set() -> None:
+    """Save the API key in the Keychain (asked for, never shown)."""
+    value = typer.prompt("Anthropic API key", hide_input=True).strip()
+    if not value.startswith("sk-ant-"):
+        typer.echo("warning: Anthropic keys usually start with sk-ant-", err=True)
+    try:
+        keychain.write(value)
+    except (keychain.KeychainError, ValueError) as exc:
+        _fatal(str(exc))
+    typer.echo(f"Saved in the Keychain (service {keychain.SERVICE!r}). Scheduled runs will use it.")
+
+
+@key_app.command("status")
+def key_status(config: ConfigOption = None) -> None:
+    """Show where the key would come from, without showing the key."""
+    cfg = _load(config)
+    found = credentials.resolve(cfg.provider)
+    if found.value is None:
+        typer.echo("No API key found (environment, Keychain, env_file). Run `flib key set`.")
+        raise typer.Exit(EXIT_ERROR)
+    typer.echo(f"Using the key from: {found.source} ({found.hint})")
+
+
+@key_app.command("delete")
+def key_delete() -> None:
+    """Remove the API key from the Keychain."""
+    try:
+        removed = keychain.delete()
+    except keychain.KeychainError as exc:
+        _fatal(str(exc))
+    typer.echo("Removed from the Keychain." if removed else "There was no key in the Keychain.")
 
 
 # --- Organizing, searching and undoing ----------------------------------------------

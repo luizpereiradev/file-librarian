@@ -28,16 +28,34 @@ commands keep these guarantees:
   installs Python 3.11+ for you
 - An Anthropic API key for the default provider (from M1)
 
-## Try it in 5 minutes
+## Install
 
 ```sh
 git clone https://github.com/luizpereiradev/file-librarian.git && cd file-librarian
-uv sync                                   # installs Python 3.11 and dependencies if needed
+./scripts/install.sh                      # installs `flib` with the locked dependency versions
 mkdir -p ~/.config/file-librarian
 cp config.example.yaml ~/.config/file-librarian/config.yaml
-uv run flib check-config                  # validates your configuration
-uv run flib inspect ~/Downloads/<a-file>  # read-only: hash, size and download origin
+flib key set                              # stores your Anthropic API key in the macOS Keychain
+flib check-config                         # validates the configuration and finds the key
+flib simulate                             # shows what would happen; nothing moves
 ```
+
+Then `flib run` organizes for real, and `flib undo` reverts the last run.
+
+To try it without an API key, set `provider: {name: fake, model: offline}`:
+everything is filed under the last category, offline.
+
+### Where the API key comes from
+
+`provider.api_key_source: auto` (the default) uses the first it finds:
+
+1. `ANTHROPIC_API_KEY` in the environment;
+2. the macOS Keychain (`flib key set`; `flib key status` shows which is used);
+3. the `.env` file named by `provider.env_file`, if you set one.
+
+Scheduled runs don't see your shell's environment, so the Keychain is the
+easiest choice for them. Set `api_key_source` to `environment`, `keychain` or
+`env_file` to use only one place.
 
 ## Commands
 

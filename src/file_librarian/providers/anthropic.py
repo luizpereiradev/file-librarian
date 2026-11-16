@@ -15,8 +15,9 @@
   overload, timeouts and connection errors are retryable; anything else fails
   only this file.
 
-The API key comes from the environment (``ANTHROPIC_API_KEY``) or an ``ant``
-login profile, resolved by the SDK; it is never read from the config file.
+The API key comes from ``credentials.resolve``: the environment, the macOS
+Keychain or a configured ``.env`` file (``provider.api_key_source``), falling
+back to the SDK's own resolution. It is never stored in the config file.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from typing import Any
 import anthropic
 from pydantic import ValidationError
 
+from file_librarian import credentials
 from file_librarian.config import ProviderConfig
 from file_librarian.models import Classification, FileContext, Rules
 from file_librarian.providers.base import FatalProviderError, ProviderError, Usage
@@ -164,8 +166,17 @@ class AnthropicProvider:
 
     def __init__(self, config: ProviderConfig, client: Any | None = None) -> None:
         self._config = config
-        # Retries and timeouts are owned by the classifier, so the SDK must not retry too.
-        self._client = client or anthropic.Anthropic(timeout=config.timeout_seconds, max_retries=0)
+        if client is None:
+            key = credentials.resolve(config).value
+            # Retries and timeouts are owned by the classifier, so the SDK must not retry too.
+            if key:
+                client = anthropic.Anthropic(
+                    api_key=key, timeout=config.timeout_seconds, max_retries=0
+                )
+            else:
+                # No key found: the SDK's own resolution still applies (e.g. `ant auth login`).
+                client = anthropic.Anthropic(timeout=config.timeout_seconds, max_retries=0)
+        self._client = client
         self.last_usage = Usage()
 
     def cost_usd(self, usage: Usage) -> float:
