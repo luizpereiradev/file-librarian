@@ -33,11 +33,25 @@ from tests._helpers import OLD, make_docx, make_pdf, make_pptx, make_xlsx
 pytestmark = pytest.mark.integration
 
 CATEGORY_BY_EXTENSION = {
-    ".pdf": "Finance", ".docx": "Contracts", ".xlsx": "Finance", ".pptx": "Other",
-    ".png": "Images", ".jpg": "Images", ".dmg": "Installers", ".pkg": "Installers",
-    ".app": "Installers", ".zip": "Other", ".gz": "Other", ".txt": "Other", ".md": "Other",
-    ".csv": "Finance", ".doc": "Contracts", ".mp4": "Other", ".py": "Other", "": "Other",
-}  # fmt: skip
+    ".pdf": "Finance",
+    ".docx": "Contracts",
+    ".xlsx": "Finance",
+    ".pptx": "Other",
+    ".png": "Images",
+    ".jpg": "Images",
+    ".dmg": "Installers",
+    ".pkg": "Installers",
+    ".app": "Installers",
+    ".zip": "Other",
+    ".gz": "Other",
+    ".txt": "Other",
+    ".md": "Other",
+    ".csv": "Finance",
+    ".doc": "Contracts",
+    ".mp4": "Other",
+    ".py": "Other",
+    "": "Other",
+}
 
 
 class ByExtension:
@@ -48,17 +62,22 @@ class ByExtension:
 
     def __init__(self) -> None:
         self.last_usage = Usage()
+        self.sent: list[FileContext] = []
 
     def cost_usd(self, usage: Usage) -> float:
         return 0.0
 
     def classify(self, context: FileContext, rules: Rules) -> Classification:
+        self.sent.append(context)
         category = CATEGORY_BY_EXTENSION.get(context.extension, "Other")
         confidence = 0.6 if "unsure" in context.path.name else 0.92
         return Classification(
             category=category,
             suggested_name=f"{context.path.stem} document",
-            description=f"Acceptance corpus item {context.path.name} about {category.lower()}.",
+            # Echo the excerpt, as a real model would summarise it: a secret that
+            # reached the provider would end up in the index and be searchable.
+            description=f"Item {context.path.name} about {category.lower()}: "
+            f"{(context.text or '')[:200]}",
             tags=[category.lower(), "acceptance"],
             confidence=confidence,
         )
@@ -156,7 +175,8 @@ def test_m1_exit_criterion(downloads: Path, config: Config, fake_home: Path) -> 
     before_bytes = contents(downloads)
 
     # Organize.
-    outcome = pipeline.run(config, ByExtension(), simulate=False)
+    provider = ByExtension()
+    outcome = pipeline.run(config, provider, simulate=False)
     report = outcome.report
     assert report is not None
     assert report.errors == 0
@@ -165,7 +185,11 @@ def test_m1_exit_criterion(downloads: Path, config: Config, fake_home: Path) -> 
     assert contents(downloads) == before_bytes
     stray = [p for p in fake_home.rglob("*") if p.is_file() and not p.is_relative_to(downloads)]
     assert not [p for p in stray if "Library" not in p.parts]
-    # Credentials stayed exactly where they were; everything else moved.
+    # Credentials were never sent, and stayed exactly where they were; everything else moved.
+    sent = {c.path.name for c in provider.sent}
+    assert len(sent) == 48
+    assert not {"aws-notes.txt", "id_ed25519"} & sent
+    assert not any("AKIA" in (c.text or "") for c in provider.sent)
     left = sorted(p.name for p in downloads.iterdir() if p.name != "Organized")
     assert left == ["aws-notes.txt", "id_ed25519"]
     organized = downloads / "Organized"
@@ -180,8 +204,12 @@ def test_m1_exit_criterion(downloads: Path, config: Config, fake_home: Path) -> 
     # Searchable.
     with Store.open(config.database) as store:
         assert [h.original_name for h in search(store, "Tool.app")] == ["Tool.app"]
-        assert len(search(store, "acceptance finance", limit=100)) >= 10
-        assert search(store, "AKIA") == []  # secrets are never described
+        finance = {
+            n for n in sent if CATEGORY_BY_EXTENSION.get(Path(n).suffix.lower()) == "Finance"
+        }
+        assert {h.original_name for h in search(store, "about finance", limit=100)} == finance
+        assert search(store, "fatura energia")  # words from inside the documents
+        assert search(store, "AKIA") == []  # the secret never reached the index
 
         # Undone without loss.
         undo = undo_run(store)

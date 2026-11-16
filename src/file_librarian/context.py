@@ -53,8 +53,7 @@ def build_context(candidate: Candidate, config: Config) -> FileContext:
 
     if candidate.is_unit:
         names, info = _unit_listing(path)
-        risky = sorted({n for n in names if sensitive_name(Path(n).name)})
-        if detect and risky:
+        if detect and any(sensitive_name(Path(n).name) for n in names):
             return replace(base, sensitive=True, metadata={"sensitive": "credential files"})
         return replace(base, text=_describe_unit(names, info, config), metadata=info)
 

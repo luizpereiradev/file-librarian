@@ -13,10 +13,15 @@ import pytest
 from file_librarian import pipeline
 from file_librarian.config import Config, parse_config
 from file_librarian.db.store import Store
-from file_librarian.executor import execute, file_record, recover
+from file_librarian.executor import execute, recover
+from file_librarian.fsops import move_no_replace
 from file_librarian.lock import AlreadyRunningError, instance_lock
-from file_librarian.models import Classification, Decision, FileStatus, OperationStatus
-from file_librarian.planner import plan
+from file_librarian.models import (
+    Classification,
+    FileStatus,
+    OperationStatus,
+    RunTrigger,
+)
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.undo import NothingToUndoError, undo_file, undo_run
 from tests._helpers import OLD, OLD_DATE, make_docx, make_pdf
@@ -234,7 +239,7 @@ def test_file_changed_after_scan_is_left_alone(downloads: Path, cfg: Config) -> 
     path.write_bytes(b"v2 edited")
     with Store.open(cfg.database) as store:
         report = execute(
-            outcome.plan, cfg, store, trigger="manual", provider="fake", model="m", seen=1
+            outcome.plan, cfg, store, trigger=RunTrigger.MANUAL, provider="fake", model="m", seen=1
         )
     assert path.read_bytes() == b"v2 edited"
     assert report.items[0].status is FileStatus.SKIPPED
@@ -295,37 +300,39 @@ def test_undo_single_file_and_nothing_to_undo(downloads: Path, cfg: Config) -> N
     assert (downloads / "Organized" / "Finance" / "b.pdf").exists()
 
 
-def test_recover_resolves_interrupted_moves(downloads: Path, cfg: Config) -> None:
-    done_src = put(downloads, "moved.pdf")
-    stuck_src = put(downloads, "stuck.pdf", b"s")
-    found = pipeline.run(cfg, FakeProvider(default=answer("Finance", "x", 0.75)), simulate=True)
-    decisions = [Decision(i.context, i.classification) for i in found.plan.items]
-    planned = plan(decisions, cfg)
+class Crash(BaseException):
+    """Stands in for a power cut: not an Exception, so nothing in flib catches it."""
+
+
+@pytest.mark.parametrize("moment", ["after the rename", "before the rename"])
+def test_recover_resolves_a_crash_mid_move(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch, moment: str
+) -> None:
+    source = put(downloads, "bill.pdf", b"mine")
+
+    def crash(src: Path, dst: Path) -> None:
+        if moment == "after the rename":
+            move_no_replace(src, dst)
+        raise Crash
+
+    with monkeypatch.context() as patch, pytest.raises(Crash):
+        patch.setattr("file_librarian.executor.move_no_replace", crash)
+        pipeline.run(cfg, FakeProvider(default=answer("Finance", "x", 0.75)), simulate=False)
+
     with Store.open(cfg.database) as store:
-        run_id = store.start_run("run", "manual")
-        for item in planned.items:
-            assert item.destination is not None
-            record = file_record(item, FileStatus.ORGANIZED, "fake", "m")
-            file_id = store.upsert_file(record, run_id=run_id)
-            st = item.context.path.stat()
-            identity = (st.st_dev, st.st_ino)
-            store.add_operation(
-                run_id, file_id, item.context.path, item.destination, identity=identity
-            )
-        # Simulate a crash after the first rename only.
-        first = planned.items[0]
-        assert first.destination is not None
-        first.destination.parent.mkdir(parents=True)
-        done_src.rename(first.destination)
-        assert recover(store) == 2
-        ops = {o.src_path.name: o.status.value for o in store.operations()}
-    assert ops == {
-        "moved.pdf": OperationStatus.DONE.value,
-        "stuck.pdf": OperationStatus.FAILED.value,
-    }
-    assert stuck_src.exists()
-    statuses = {r["original_name"]: r["status"] for r in rows(cfg, "SELECT * FROM files")}
-    assert statuses == {"moved.pdf": "organized", "stuck.pdf": "failed"}
+        [op] = store.operations()
+        assert op.status is OperationStatus.PLANNED  # the crash left it unresolved
+        assert recover(store) == 1
+        [op] = store.operations()
+        row = store.file_by_id(op.file_id)
+    if moment == "after the rename":
+        assert op.status is OperationStatus.DONE
+        assert (row.status, row.current_path) == (FileStatus.ORGANIZED, op.dst_path)
+        assert op.dst_path.read_bytes() == b"mine"
+    else:
+        assert op.status is OperationStatus.FAILED
+        assert (row.status, row.attempts) == (FileStatus.FAILED, 1)
+        assert source.read_bytes() == b"mine"
 
 
 def test_runs_are_exclusive(downloads: Path, cfg: Config) -> None:

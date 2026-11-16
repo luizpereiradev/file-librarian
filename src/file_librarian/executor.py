@@ -30,7 +30,14 @@ from file_librarian.fsops import (
     move_no_replace,
 )
 from file_librarian.hashing import same_content, unit_manifest
-from file_librarian.models import FileContext, FileRecord, FileStatus, OperationStatus
+from file_librarian.models import (
+    FileContext,
+    FileRecord,
+    FileStatus,
+    OperationStatus,
+    RunMode,
+    RunTrigger,
+)
 from file_librarian.naming import candidate_names
 from file_librarian.planner import Plan, PlannedItem
 
@@ -65,9 +72,18 @@ class RunReport:
         return self.count(FileStatus.FAILED)
 
 
-def execute(plan: Plan, config: Config, store: Store, *, trigger: str, provider: str, model: str,
-            seen: int, deferred: int = 0) -> RunReport:  # fmt: skip
-    run_id = store.start_run("run", trigger)
+def execute(
+    plan: Plan,
+    config: Config,
+    store: Store,
+    *,
+    trigger: RunTrigger,
+    provider: str,
+    model: str,
+    seen: int,
+    deferred: int = 0,
+) -> RunReport:
+    run_id = store.start_run(RunMode.RUN, trigger)
     report = RunReport(run_id, deferred=deferred)
     for item in plan.items:
         report.items.append(_apply(item, config, store, run_id, provider, model))
@@ -81,8 +97,9 @@ def execute(plan: Plan, config: Config, store: Store, *, trigger: str, provider:
     return report
 
 
-def file_record(item: PlannedItem, status: FileStatus, provider: str, model: str,
-            error: str | None = None) -> FileRecord:  # fmt: skip
+def file_record(
+    item: PlannedItem, status: FileStatus, provider: str, model: str, error: str | None = None
+) -> FileRecord:
     ctx = item.context
     # Only files that were classified get a description; only organized ones a category.
     answer = item.classification if status in {FileStatus.ORGANIZED, FileStatus.REVIEW} else None
@@ -105,8 +122,9 @@ def file_record(item: PlannedItem, status: FileStatus, provider: str, model: str
     )
 
 
-def _apply(item: PlannedItem, config: Config, store: Store, run_id: int, provider: str,
-           model: str) -> ItemResult:  # fmt: skip
+def _apply(
+    item: PlannedItem, config: Config, store: Store, run_id: int, provider: str, model: str
+) -> ItemResult:
     ctx = item.context
     if item.destination is None:
         error = item.reason if item.status is FileStatus.FAILED else None

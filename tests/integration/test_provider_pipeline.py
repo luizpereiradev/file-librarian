@@ -45,9 +45,12 @@ def setup(downloads: Path, n: int, **limits: object) -> Config:
         path.write_text(f"file {i}", encoding="utf-8")
         os.utime(path, (OLD - i, OLD - i))
     return parse_config(
-        {"inputs": [str(downloads)], "provider": {"name": "fake", "model": "claude-haiku-5-5"},
-         "limits": limits}
-    )  # fmt: skip
+        {
+            "inputs": [str(downloads)],
+            "provider": {"name": "fake", "model": "claude-haiku-5-5"},
+            "limits": limits,
+        }
+    )
 
 
 def test_fatal_provider_error_moves_nothing_and_marks_nothing(downloads: Path) -> None:

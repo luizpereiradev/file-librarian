@@ -23,7 +23,14 @@ from importlib import resources
 from pathlib import Path
 from types import TracebackType
 
-from file_librarian.models import FileRecord, FileState, FileStatus, OperationStatus
+from file_librarian.models import (
+    FileRecord,
+    FileState,
+    FileStatus,
+    OperationStatus,
+    RunMode,
+    RunTrigger,
+)
 
 _MIGRATION_NAME = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
 BUSY_TIMEOUT_MS = 5000
@@ -190,10 +197,10 @@ class Store:
 
     # --- runs -----------------------------------------------------------------
 
-    def start_run(self, mode: str, trigger: str) -> int:
+    def start_run(self, mode: RunMode, trigger: RunTrigger) -> int:
         cur = self.conn.execute(
             "INSERT INTO runs (mode, trigger, started_at) VALUES (?, ?, ?)",
-            (mode, trigger, _now()),
+            (mode.value, trigger.value, _now()),
         )
         return _rowid(cur)
 

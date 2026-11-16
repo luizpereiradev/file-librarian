@@ -118,6 +118,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Code and test quality pass from an independent review: a damaged Office
+  file can no longer abort every run (extraction errors of any kind fall back
+  to metadata, with a corruption fuzz test over every format); an invalid
+  document date from the model no longer discards the whole answer; the
+  provider contract (`local`, `last_usage`, `cost_usd`) is declared and
+  type-checked and pricing lives with each provider; store reads return
+  typed rows; layering follows the pipeline; config options that are not
+  active yet are marked as such; tests no longer depend on the time of day;
+  failure paths of the executor, undo and CLI are tested, and CI enforces 93%
+  branch coverage.
 - Files are renamed only when the model could read their content; images,
   video, installers and other metadata-only files keep their original name
   instead of getting one invented from the old name.

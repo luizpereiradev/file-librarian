@@ -1,4 +1,4 @@
-"""Read where a file was downloaded from (RF-25). M0 prototype.
+"""Read where a file was downloaded from (RF-25).
 
 When a browser saves a download, macOS stores the source in the extended
 attribute ``com.apple.metadata:kMDItemWhereFroms``: a binary property list
@@ -17,6 +17,7 @@ import errno
 import os
 import plistlib
 import sys
+from functools import cache
 from pathlib import Path
 
 WHERE_FROMS = "com.apple.metadata:kMDItemWhereFroms"
@@ -27,6 +28,7 @@ _MAX_URLS = 5
 _MAX_URL_LENGTH = 2048
 
 
+@cache
 def _libc() -> ctypes.CDLL:
     lib = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
     lib.getxattr.argtypes = [

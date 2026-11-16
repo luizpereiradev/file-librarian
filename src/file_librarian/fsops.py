@@ -17,6 +17,7 @@ import ctypes.util
 import errno
 import os
 import stat
+from functools import cache
 from pathlib import Path
 
 _RENAME_EXCL = 0x00000004
@@ -30,6 +31,7 @@ class CrossVolumeError(OSError):
     pass
 
 
+@cache
 def _libc() -> ctypes.CDLL:
     lib = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
     lib.renamex_np.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]

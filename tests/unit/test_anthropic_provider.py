@@ -36,8 +36,13 @@ GOOD = {
 }
 
 
-def reply(data: Any, *, stop: str = "end_turn", usage: tuple[int, int] = (1000, 100),
-          iterations: list[Any] | None = None) -> SimpleNamespace:  # fmt: skip
+def reply(
+    data: Any,
+    *,
+    stop: str = "end_turn",
+    usage: tuple[int, int] = (1000, 100),
+    iterations: list[Any] | None = None,
+) -> SimpleNamespace:
     text = data if isinstance(data, str) else json.dumps(data)
     return SimpleNamespace(
         stop_reason=stop,

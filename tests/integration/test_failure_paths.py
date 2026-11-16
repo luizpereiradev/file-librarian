@@ -14,7 +14,7 @@ from file_librarian import cli, pipeline
 from file_librarian.config import Config, parse_config
 from file_librarian.db.store import Store
 from file_librarian.fsops import CrossVolumeError, DestinationExistsError, move_no_replace
-from file_librarian.models import Classification, FileStatus, OperationStatus
+from file_librarian.models import Classification, FileStatus, OperationStatus, RunMode, RunTrigger
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.undo import NothingToUndoError, undo_file, undo_run
 from tests._helpers import OLD
@@ -104,7 +104,7 @@ def test_file_deleted_after_planning_is_skipped(downloads: Path, cfg: Config) ->
 
     with Store.open(cfg.database) as store:
         report = execute(
-            planned.plan, cfg, store, trigger="manual", provider="f", model="m", seen=1
+            planned.plan, cfg, store, trigger=RunTrigger.MANUAL, provider="f", model="m", seen=1
         )
         assert store.operations() == []
     assert report.items[0].status is FileStatus.SKIPPED
@@ -164,7 +164,7 @@ def test_undo_file_errors(downloads: Path, cfg: Config) -> None:
 def test_transaction_rolls_back_on_error(tmp_path: Path) -> None:
     with Store.open(tmp_path / "db" / "l.db") as store:
         with pytest.raises(RuntimeError), store.transaction():
-            store.start_run("run", "manual")
+            store.start_run(RunMode.RUN, RunTrigger.MANUAL)
             raise RuntimeError("crash mid-transaction")
         assert store.conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
 

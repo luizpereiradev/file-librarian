@@ -69,7 +69,6 @@ class FileContext:
     downloaded: date | None = None
     source_urls: tuple[str, ...] = ()
     text: str | None = None
-    image_paths: tuple[Path, ...] = ()
     is_unit: bool = False
     sensitive: bool = False
     metadata: dict[str, str] = field(default_factory=dict)
@@ -122,6 +121,7 @@ class Rules:
     categories: tuple[CategoryRule, ...]
     language: Language
     examples: tuple[Correction, ...] = ()
+    """Past user corrections for few-shot prompting (RF-29, M2: not populated yet)."""
     date_order: str = "DMY"
     """How to read ambiguous numeric dates in documents (``naming.date_order``)."""
 

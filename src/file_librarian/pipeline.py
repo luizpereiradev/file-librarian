@@ -1,9 +1,11 @@
 """The whole run, stage by stage: scan, context, classify, plan, execute.
 
 ``run`` is what ``flib run`` and ``flib simulate`` call, and what the tests
-drive with a fake provider. Simulation stops after planning and writes
-nothing. A real run holds the instance lock from the first read of the index
-to the last write.
+drive with a fake provider. A simulation stops after planning: it moves
+nothing and records no run or file state, but it does keep the
+classifications it paid for in the cache, so the ``flib run`` that follows
+reuses them. A real run holds the instance lock from the first read of the
+index to the last write.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from file_librarian.context import build_context
 from file_librarian.db.store import Store
 from file_librarian.executor import RunReport, execute, recover
 from file_librarian.lock import instance_lock
-from file_librarian.models import CategoryRule, Rules
+from file_librarian.models import CategoryRule, Rules, RunTrigger
 from file_librarian.planner import Plan, plan
 from file_librarian.providers.base import Provider
 from file_librarian.scanner import ScanResult, scan
@@ -45,8 +47,14 @@ def rules_for(config: Config) -> Rules:
     )
 
 
-def run(config: Config, provider: Provider, *, simulate: bool, trigger: str = "manual",
-        now: float | None = None) -> Outcome:  # fmt: skip
+def run(
+    config: Config,
+    provider: Provider,
+    *,
+    simulate: bool,
+    trigger: RunTrigger = RunTrigger.MANUAL,
+    now: float | None = None,
+) -> Outcome:
     if simulate:
         with Store.open(config.database) as store:
             return _run(config, provider, store, simulate=True, trigger=trigger, now=now)
@@ -54,8 +62,15 @@ def run(config: Config, provider: Provider, *, simulate: bool, trigger: str = "m
         return _run(config, provider, store, simulate=False, trigger=trigger, now=now)
 
 
-def _run(config: Config, provider: Provider, store: Store, *, simulate: bool, trigger: str,
-         now: float | None) -> Outcome:  # fmt: skip
+def _run(
+    config: Config,
+    provider: Provider,
+    store: Store,
+    *,
+    simulate: bool,
+    trigger: RunTrigger,
+    now: float | None,
+) -> Outcome:
     recovered = 0 if simulate else recover(store)
     store.prune_cache(max_age_days=CACHE_DAYS)
     found = scan(config, store.file_state, now=now)
@@ -67,9 +82,13 @@ def _run(config: Config, provider: Provider, store: Store, *, simulate: bool, tr
     deferred = found.deferred + len(classified.deferred)
     if simulate:
         return Outcome(
-            found, planned, None, cost_usd=classified.cost_usd, deferred=deferred,
+            found,
+            planned,
+            None,
+            cost_usd=classified.cost_usd,
+            deferred=deferred,
             cached=classified.cached,
-        )  # fmt: skip
+        )
     report = execute(
         planned,
         config,

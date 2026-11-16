@@ -16,7 +16,7 @@ from file_librarian import executor, pipeline
 from file_librarian.config import ConfigError, parse_config
 from file_librarian.db.store import Store
 from file_librarian.fsops import move_no_replace
-from file_librarian.models import Classification
+from file_librarian.models import Classification, RunTrigger
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.scanner import SkipReason, scan
 from file_librarian.undo import NothingToUndoError, undo_run
@@ -182,8 +182,9 @@ def test_folder_changed_deep_inside_after_scan_is_not_moved(downloads: Path) -> 
     deep.write_bytes(b"v2 longer")
     os.utime(downloads / "Project" / "sub", (OLD, OLD))
     with Store.open(config.database) as store:
-        report = executor.execute(planned.plan, config, store, trigger="manual", provider="f",
-                                  model="m", seen=1)  # fmt: skip
+        report = executor.execute(
+            planned.plan, config, store, trigger=RunTrigger.MANUAL, provider="f", model="m", seen=1
+        )
     assert report.items[0].status.value == "skipped"
     assert (downloads / "Project").exists()
 
@@ -212,8 +213,9 @@ def test_replaced_file_with_same_size_and_mtime_is_not_moved(downloads: Path) ->
     path.unlink()
     put(downloads, "a.pdf", b"BBBB")  # new inode, same size and mtime
     with Store.open(config.database) as store:
-        report = executor.execute(planned.plan, config, store, trigger="manual", provider="f",
-                                  model="m", seen=1)  # fmt: skip
+        report = executor.execute(
+            planned.plan, config, store, trigger=RunTrigger.MANUAL, provider="f", model="m", seen=1
+        )
     assert report.items[0].status.value == "skipped"
 
 
