@@ -44,6 +44,7 @@ def build_context(candidate: Candidate, config: Config) -> FileContext:
         size_bytes=candidate.size_bytes,
         extension=path.suffix.lower(),
         mtime_ns=candidate.mtime_ns,
+        inode=candidate.inode,
         downloaded=date.fromtimestamp(candidate.created) if candidate.created else None,
         source_urls=download_origin(path),
         is_unit=candidate.is_unit,

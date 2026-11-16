@@ -59,6 +59,19 @@ All notable changes to this project are documented here. The format follows
 
 ### Security
 
+- Mover hardening from an adversarial review: paths are compared after
+  resolving symlinks and folding case and Unicode, and the scanner skips
+  flib's own database, journal, lock and library by device and inode, so a
+  differently spelled path can no longer make flib move its own database; one
+  odd item (a blank name, a category path that is a file) no longer aborts the
+  run; a second copy of the same content in one run is left in place instead
+  of sharing an index row; every rename attempt is journaled before it runs
+  and crash recovery verifies content before marking a move done; index and
+  journal writes are grouped in transactions; a replaced file (new inode) or a
+  folder changed deep inside is not moved; Finder's `.DS_Store` no longer
+  blocks undoing a folder; empty files, files next to a `.part`/`.crdownload`
+  and files with the hidden flag are skipped; `undo` finishes interrupted
+  moves first and never steps back to an older run by itself.
 - Supply-chain guards (ADR 0003): 7-day quarantine for new releases,
   Dependabot with cooldown, `uv audit` and dependency review in a Security
   workflow, actions pinned by commit SHA, zizmor workflow linting, CODEOWNERS,

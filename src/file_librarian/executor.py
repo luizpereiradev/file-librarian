@@ -29,7 +29,8 @@ from file_librarian.fsops import (
     ensure_folder,
     move_no_replace,
 )
-from file_librarian.models import FileRecord, FileStatus, OperationStatus
+from file_librarian.hashing import file_sha256, unit_manifest
+from file_librarian.models import FileContext, FileRecord, FileStatus, OperationStatus
 from file_librarian.naming import with_counter
 from file_librarian.planner import MAX_COUNTER, Plan, PlannedItem
 
@@ -112,31 +113,48 @@ def _apply(item: PlannedItem, config: Config, store: Store, run_id: int, provide
         store.upsert_file(file_record(item, item.status, provider, model, error), run_id=run_id)
         return ItemResult(ctx.path, item.status, None, item.reason)
 
-    try:
-        st = os.lstat(ctx.path)
-    except FileNotFoundError:
-        return ItemResult(ctx.path, FileStatus.SKIPPED, None, "gone before it could be moved")
-    if st.st_mtime_ns != ctx.mtime_ns or (not ctx.is_unit and st.st_size != ctx.size_bytes):
+    if not _unchanged(ctx):
         return ItemResult(ctx.path, FileStatus.SKIPPED, None, "changed since the scan; next run")
 
-    file_id = store.upsert_file(file_record(item, item.status, provider, model), run_id=run_id)
     destination = item.destination
-    op_id = store.add_operation(run_id, file_id, ctx.path, destination)
+    with store.transaction():
+        file_id = store.upsert_file(file_record(item, item.status, provider, model), run_id=run_id)
+        op_id = store.add_operation(run_id, file_id, ctx.path, destination)
     try:
         ensure_folder(destination.parent, inside=config.output_root)
-        destination = _move(ctx.path, destination)
+        destination = _move(ctx.path, destination, store, op_id)
     except CrossVolumeError:
         return _fail(store, op_id, file_id, ctx.path, "destination is on another volume (RF-33)")
     except (OSError, ValueError) as exc:
         return _fail(store, op_id, file_id, ctx.path, f"move failed: {exc}")
-    store.set_operation(op_id, OperationStatus.DONE, destination)
-    store.set_file_location(file_id, destination, item.status)
+    with store.transaction():
+        store.set_operation(op_id, OperationStatus.DONE, destination)
+        store.set_file_location(file_id, destination, item.status)
     return ItemResult(ctx.path, item.status, destination, item.reason)
 
 
-def _move(src: Path, dst: Path) -> Path:
+def _unchanged(ctx: FileContext) -> bool:
+    """The item is still the very one that was scanned and classified."""
+    try:
+        st = os.lstat(ctx.path)
+    except OSError:
+        return False
+    if (st.st_ino, st.st_mtime_ns) != (ctx.inode, ctx.mtime_ns):
+        return False
+    if ctx.is_unit:
+        # A file deep inside a folder can change without touching the folder's mtime.
+        try:
+            return unit_manifest(ctx.path).digest == ctx.sha256
+        except OSError:
+            return False
+    return st.st_size == ctx.size_bytes
+
+
+def _move(src: Path, dst: Path, store: Store, op_id: int) -> Path:
     candidate = dst
     for n in range(2, MAX_COUNTER + 2):
+        # Journal the exact name before trying it, so recovery looks in the right place.
+        store.set_operation(op_id, OperationStatus.PLANNED, candidate)
         try:
             move_no_replace(src, candidate)
             return candidate
@@ -146,8 +164,9 @@ def _move(src: Path, dst: Path) -> Path:
 
 
 def _fail(store: Store, op_id: int, file_id: int, src: Path, error: str) -> ItemResult:
-    store.set_operation(op_id, OperationStatus.FAILED)
-    store.mark_file_failed(file_id, error)
+    with store.transaction():
+        store.set_operation(op_id, OperationStatus.FAILED)
+        store.mark_file_failed(file_id, error)
     return ItemResult(src, FileStatus.FAILED, None, error)
 
 
@@ -155,12 +174,28 @@ def recover(store: Store) -> int:
     """Resolve journal entries left ``planned`` by a crash. Returns how many."""
     pending = store.operations(status=OperationStatus.PLANNED.value)
     for op in pending:
-        src, dst = Path(op["src_path"]), Path(op["dst_path"])
-        if os.path.lexists(dst) and not os.path.lexists(src):
-            store.set_operation(int(op["id"]), OperationStatus.DONE)
-            row = store.file_by_id(int(op["file_id"]))
-            store.set_file_location(int(op["file_id"]), dst, FileStatus(row["status"]))
+        op_id, file_id = int(op["id"]), int(op["file_id"])
+        dst = Path(op["dst_path"])
+        row = store.file_by_id(file_id)
+        # Done only if the journaled destination holds exactly the content we moved.
+        if same_content(dst, str(row["sha256"])):
+            with store.transaction():
+                store.set_operation(op_id, OperationStatus.DONE)
+                store.set_file_location(file_id, dst, FileStatus(row["status"]))
         else:
-            store.set_operation(int(op["id"]), OperationStatus.FAILED)
-            store.mark_file_failed(int(op["file_id"]), "interrupted before the move finished")
+            with store.transaction():
+                store.set_operation(op_id, OperationStatus.FAILED)
+                store.mark_file_failed(file_id, "interrupted before the move finished")
     return len(pending)
+
+
+def same_content(path: Path, sha256: str) -> bool:
+    """``path`` exists, is not a symlink, and hashes to ``sha256``."""
+    try:
+        if not os.path.lexists(path) or path.is_symlink():
+            return False
+        if path.is_dir():
+            return unit_manifest(path).digest == sha256
+        return file_sha256(path) == sha256
+    except OSError:
+        return False

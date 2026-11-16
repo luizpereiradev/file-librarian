@@ -192,9 +192,9 @@ def test_collisions_get_a_counter_and_never_overwrite(downloads: Path, cfg: Conf
 
 
 def test_hostile_model_answers_stay_inside_output_root(downloads: Path, cfg: Config) -> None:
-    put(downloads, "a.pdf")
-    put(downloads, "b.pdf")
-    put(downloads, "c.pdf")
+    put(downloads, "a.pdf", b"a")
+    put(downloads, "b.pdf", b"b")
+    put(downloads, "c.pdf", b"c")
     provider = FakeProvider(
         {
             "a.pdf": answer("Finance", "../../../../etc/passwd"),

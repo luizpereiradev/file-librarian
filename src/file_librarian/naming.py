@@ -67,6 +67,9 @@ def safe_component(name: str) -> str:
 
 
 def with_counter(name: str, n: int) -> str:
-    """``report.pdf`` -> ``report-2.pdf``."""
+    """``report.pdf`` -> ``report-2.pdf``, still within 255 bytes."""
     stem, extension = split_name(name)
-    return f"{stem}-{n}{extension}"
+    suffix = f"-{n}{extension}"
+    while stem and len((stem + suffix).encode("utf-8")) > _MAX_NAME_BYTES:
+        stem = stem[:-1]
+    return f"{stem}{suffix}"

@@ -16,8 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from file_librarian.db.store import Store
+from file_librarian.executor import same_content
 from file_librarian.fsops import DestinationExistsError, move_no_replace
-from file_librarian.hashing import file_sha256, unit_manifest
 from file_librarian.models import FileStatus, OperationStatus
 
 
@@ -32,14 +32,16 @@ class UndoReport:
 
 
 def undo_run(store: Store, run_id: int | None = None) -> UndoReport:
-    run_id = run_id if run_id is not None else store.last_run_with_moves()
+    explicit = run_id is not None
+    run_id = run_id if run_id is not None else store.last_run_with_operations()
     if run_id is None:
-        if store.operations():
-            raise NothingToUndoError("nothing left to undo: every move was already undone")
         raise NothingToUndoError("no run has moved anything yet")
     ops = store.operations(run_id=run_id, status=OperationStatus.DONE.value)
     if not ops:
-        raise NothingToUndoError(f"run {run_id} has nothing left to undo")
+        hint = "" if explicit else "; to go further back, name a run with --run ID"
+        # Never step back to an older run on its own: repeating `undo` must not
+        # quietly unwind yesterday's work too.
+        raise NothingToUndoError(f"run {run_id} has nothing left to undo{hint}")
     report = UndoReport()
     for op in reversed(ops):
         _undo_one(store, op, report)
@@ -58,26 +60,13 @@ def undo_file(store: Store, path: Path) -> UndoReport:
     return report
 
 
-def _same_content(path: Path, sha256: str) -> bool:
-    if path.is_symlink():
-        return False
-    if path.is_dir():
-        return unit_manifest(path).digest == sha256
-    return file_sha256(path) == sha256
-
-
 def _undo_one(store: Store, op: sqlite3.Row, report: UndoReport) -> None:
     src, dst = Path(op["src_path"]), Path(op["dst_path"])
     row = store.file_by_id(int(op["file_id"]))
     if not os.path.lexists(dst):
         report.skipped.append((dst, "no longer there (moved or deleted by hand)"))
         return
-    try:
-        same = _same_content(dst, str(row["sha256"]))
-    except OSError as exc:
-        report.skipped.append((dst, f"unreadable: {exc.strerror or exc}"))
-        return
-    if not same:
+    if not same_content(dst, str(row["sha256"])):
         report.skipped.append((dst, "changed since it was moved"))
         return
     if not src.parent.is_dir():

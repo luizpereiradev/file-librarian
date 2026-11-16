@@ -24,7 +24,7 @@ from pathlib import Path
 
 from file_librarian.config import Config, folder_key
 from file_librarian.models import Classification, FileContext, FileStatus
-from file_librarian.naming import build_name, safe_component, with_counter
+from file_librarian.naming import build_name, safe_component, split_name, with_counter
 
 MAX_COUNTER = 999
 
@@ -85,13 +85,22 @@ class _Names:
             return {folder_key(p.name) for p in folder.iterdir()}
         except FileNotFoundError:
             return set()
+        except NotADirectoryError as exc:
+            raise UnsafeDestinationError(f"{folder} exists and is not a folder") from exc
 
 
 def plan(decisions: list[Decision], config: Config) -> Plan:
     result = Plan()
     names = _Names()
     for decision in decisions:
-        result.items.append(_plan_one(decision, config, names))
+        try:
+            item = _plan_one(decision, config, names)
+        except (UnsafeDestinationError, OSError) as exc:
+            # One odd item must never stop the run: it stays where it is.
+            item = PlannedItem(
+                decision.context, FileStatus.FAILED, None, f"cannot plan: {exc}"[:300]
+            )
+        result.items.append(item)
     return result
 
 
@@ -123,7 +132,7 @@ def _plan_one(decision: Decision, config: Config, names: _Names) -> PlannedItem:
         when = answer.document_date or ctx.downloaded or date.today()
         new_name = build_name(original, answer.suggested_name, when, config.naming)
     chosen = new_name or original
-    destination = _destination(config, category.name, chosen, names)
+    destination = _destination(config, category.name, chosen, names, ctx)
     return PlannedItem(
         ctx,
         FileStatus.ORGANIZED,
@@ -137,7 +146,7 @@ def _plan_one(decision: Decision, config: Config, names: _Names) -> PlannedItem:
 def _to_review(
     ctx: FileContext, answer: Classification, config: Config, names: _Names, reason: str
 ) -> PlannedItem:
-    destination = _destination(config, config.review_folder, ctx.path.name, names)
+    destination = _destination(config, config.review_folder, ctx.path.name, names, ctx)
     return PlannedItem(
         ctx,
         FileStatus.REVIEW,
@@ -148,13 +157,16 @@ def _to_review(
     )
 
 
-def _destination(config: Config, folder_name: str, file_name: str, names: _Names) -> Path:
+def _destination(
+    config: Config, folder_name: str, file_name: str, names: _Names, ctx: FileContext
+) -> Path:
     allowed = {c.name for c in config.categories} | {config.review_folder}
     if folder_name not in allowed:
         raise UnsafeDestinationError(f"folder {folder_name!r} is not configured")
     safe = safe_component(file_name)
-    if not safe or safe in {".", ".."}:
-        raise UnsafeDestinationError(f"unusable file name {file_name!r}")
+    if not safe.strip(" .\u00a0") or safe in {".", ".."}:
+        # A name that sanitizes to nothing (" ", "..."): give it a neutral one.
+        safe = f"unnamed-{ctx.sha256[:8]}{split_name(file_name)[1]}"
     folder = config.output_root / folder_name
     final = folder / names.claim(folder, safe)
     if final.parent != folder or not final.is_relative_to(config.output_root):

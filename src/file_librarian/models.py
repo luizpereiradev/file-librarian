@@ -65,6 +65,7 @@ class FileContext:
     size_bytes: int
     extension: str
     mtime_ns: int = 0
+    inode: int = 0
     downloaded: date | None = None
     source_urls: tuple[str, ...] = ()
     text: str | None = None

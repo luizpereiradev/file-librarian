@@ -43,6 +43,24 @@ model.
   share a single-instance lock. The database runs in WAL mode so MCP reads
   never block a run.
 
+## Known limits
+
+Found in the safety review of M1 and accepted for now:
+
+- **Same-user races.** Between checking a category folder and renaming into
+  it, another process running as you could swap the folder for a symlink.
+  Closing that needs `renameatx_np` relative to a directory opened with
+  `O_NOFOLLOW`; it requires an attacker already running as you.
+- **One lock per database.** Two configurations with different databases
+  but the same input folders are not excluded from each other. A race there
+  ends in a failed move, never a lost file.
+- **Environmental failures use attempts.** A move that fails because the
+  destination is on another volume or a category folder is a symlink counts
+  as a failed attempt; after `max_attempts` the file is left alone until the
+  index row is cleared.
+- **Duplicates wait.** A second copy with the same content as one processed
+  in the same run stays in place (moving duplicates is RF-21).
+
 ## Data
 
 One SQLite file, outside the organized folders (default

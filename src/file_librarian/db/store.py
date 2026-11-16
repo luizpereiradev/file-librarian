@@ -15,6 +15,8 @@ import json
 import re
 import sqlite3
 import unicodedata
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib import resources
@@ -109,6 +111,17 @@ class Store:
             return None
         return FileState(FileStatus(row["status"]), int(row["attempts"]))
 
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Group writes so a crash leaves all of them or none."""
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except BaseException:
+            self.conn.execute("ROLLBACK")
+            raise
+        self.conn.execute("COMMIT")
+
     # --- runs -----------------------------------------------------------------
 
     def start_run(self, mode: str, trigger: str) -> int:
@@ -125,12 +138,9 @@ class Store:
             (_now(), seen, moved, review, errors, run_id),
         )
 
-    def last_run_with_moves(self) -> int | None:
-        row = self.conn.execute(
-            """SELECT run_id FROM operations WHERE status = 'done'
-               ORDER BY run_id DESC LIMIT 1"""
-        ).fetchone()
-        return None if row is None else int(row[0])
+    def last_run_with_operations(self) -> int | None:
+        row = self.conn.execute("SELECT MAX(run_id) FROM operations").fetchone()
+        return None if row is None or row[0] is None else int(row[0])
 
     # --- files ----------------------------------------------------------------
 

@@ -17,7 +17,7 @@ import typer
 from file_librarian import __version__, pipeline
 from file_librarian.config import Config, ConfigError, default_config_path, load_config
 from file_librarian.db.store import Store
-from file_librarian.executor import RunReport
+from file_librarian.executor import RunReport, recover
 from file_librarian.extractors.origin import download_origin
 from file_librarian.hashing import file_sha256, unit_manifest
 from file_librarian.lock import AlreadyRunningError, instance_lock
@@ -248,9 +248,12 @@ def undo(
     cfg = _load(config)
     try:
         with instance_lock(cfg.database), Store.open(cfg.database) as store:
+            recovered = recover(store)  # finish the journal before reading it
             report = undo_file(store, file) if file is not None else undo_run(store, run_id)
     except (NothingToUndoError, AlreadyRunningError) as exc:
         _fatal(str(exc))
+    if recovered:
+        typer.echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
     for dst, src in report.restored:
         typer.echo(f"  restored  {_short(dst, cfg)}  ->  {src}")
     for path, reason in report.skipped:
