@@ -78,6 +78,9 @@ def build_context(candidate: Candidate, config: Config) -> FileContext:
         metadata["extraction_error"] = str(exc)[:200]
     except OSError as exc:
         metadata["extraction_error"] = f"unreadable: {exc.strerror or exc}"[:200]
+    except Exception as exc:
+        # This is the boundary that keeps one damaged file from stopping every run (RF-27).
+        metadata["extraction_error"] = f"{type(exc).__name__}: {exc}"[:200]
 
     if detect and text:
         kinds = find_secrets(text)

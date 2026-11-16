@@ -335,4 +335,13 @@ def main() -> None:
     if sys.platform != "darwin":
         typer.echo("file-librarian supports macOS only.", err=True)
         raise SystemExit(EXIT_ERROR)
-    app()
+    try:
+        app()
+    except Exception as exc:
+        typer.echo(
+            f"error: unexpected {type(exc).__name__}: {exc}\n"
+            "This is a bug. Please report it with `flib --version` and the steps that led here: "
+            "https://github.com/luizpereiradev/file-librarian/issues",
+            err=True,
+        )
+        raise SystemExit(EXIT_ERROR) from exc
