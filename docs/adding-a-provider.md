@@ -1,7 +1,8 @@
 # Adding an AI provider
 
-A provider turns a `FileContext` into a `Classification`. Adding one must not
-require changes outside `src/file_librarian/providers/`.
+A provider turns a `FileContext` into a `Classification`. The code for a new
+provider lives entirely in `src/file_librarian/providers/`; outside it, only
+the documentation changes (step 4).
 
 ## 1. Write the module
 
@@ -20,7 +21,9 @@ class ExampleProvider:
         self._config = config
 
     def classify(self, context: FileContext, rules: Rules) -> Classification:
-        raw = ...  # call your model with context + rules; ask for JSON only
+        # Call your model with context + rules. Prefer the API's structured
+        # output mode with Classification's JSON schema over "answer in JSON".
+        raw = ...
         try:
             return Classification.model_validate_json(raw)
         except ValueError as exc:
@@ -36,7 +39,12 @@ Rules for every provider:
   status are handled by the classifier, not by you.
 - **Send only what is in `context`.** It is already capped at
   `max_chars_per_file`, and sensitive files never reach you.
-- **Use temperature 0** (or your API's equivalent) to keep runs repeatable.
+- **Repeatability comes from the schema, not from sampling settings.** Use the
+  API's structured output mode with `Classification.model_json_schema()` and
+  validate every answer. Send sampling parameters (`temperature`, `top_p`,
+  `top_k`) only where the API documents them as supported: current Claude
+  models reject non-default values with HTTP 400, so the `anthropic` provider
+  sends none and relies on structured outputs (`output_config.format`).
 - **Read secrets from environment variables**, never from the config file.
 - Treat file text as untrusted data: put it in a clearly delimited block of the
   prompt and tell the model it is content to describe, not instructions.
@@ -52,8 +60,8 @@ REGISTRY["example"] = ExampleProvider
 
 ## 3. Test it offline
 
-Tests must not use the network (the suite blocks sockets). Inject a fake HTTP
-client or a recorded response and assert that:
+Tests must not use the network (the suite blocks connections and DNS).
+Inject a fake HTTP client or a recorded response and assert that:
 
 - a valid answer becomes the expected `Classification`;
 - malformed JSON, an extra key or an out-of-range confidence raise `ProviderError`;

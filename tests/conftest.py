@@ -1,7 +1,9 @@
 """Test-wide guards: no network, no real home folder.
 
 Every test runs with HOME pointed at a temporary directory and with outbound
-sockets disabled, so nothing can reach a real API or the user's Downloads.
+connections and DNS lookups disabled, so code that uses ``Path.home()`` or
+``~`` stays in a temporary folder and nothing reaches a real API. A test that
+hard-codes an absolute path could still escape; reviewers must reject those.
 """
 
 from __future__ import annotations
@@ -12,8 +14,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class NetworkBlockedError(RuntimeError):
@@ -28,6 +28,7 @@ def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(socket.socket, "connect", guard)
     monkeypatch.setattr(socket.socket, "connect_ex", guard)
     monkeypatch.setattr(socket, "create_connection", guard)
+    monkeypatch.setattr(socket, "getaddrinfo", guard)
 
 
 @pytest.fixture(autouse=True)

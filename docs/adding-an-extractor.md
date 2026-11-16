@@ -1,6 +1,7 @@
 # Adding an extractor
 
-An extractor turns one file format into plain text for the classifier.
+An extractor turns one file format into plain text for the classifier (the
+pipeline stage that calls the AI provider; it lands in M1).
 
 ## 1. Write the module
 
@@ -40,11 +41,11 @@ Rules for every extractor:
 
 ## 2. Register it
 
-Add the module name to `BUILTIN` in `extractors/__init__.py`, so it is imported
-on the first lookup:
+Append the module name to `BUILTIN` in `extractors/__init__.py`, so it is
+imported on the first lookup. Keep the names that are already there:
 
 ```python
-BUILTIN: tuple[str, ...] = ("markdown",)
+BUILTIN: tuple[str, ...] = (..., "markdown")
 ```
 
 ## 3. Test it

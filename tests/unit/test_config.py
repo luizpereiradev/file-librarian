@@ -8,7 +8,7 @@ import yaml
 
 from file_librarian.config import ConfigError, load_config, parse_config
 from file_librarian.locales import LOCALES
-from tests.conftest import REPO_ROOT
+from tests._helpers import REPO_ROOT
 
 
 def minimal() -> dict[str, Any]:
@@ -71,10 +71,30 @@ def test_defaults_fill_optional_sections() -> None:
     ("patch", "message"),
     [
         ({"categories": []}, "categories"),
-        ({"categories": [{"name": "A"}, {"name": "A"}]}, "duplicate category"),
+        ({"categories": [{"name": "A"}, {"name": "A"}]}, "same folder"),
+        ({"categories": [{"name": "Finance"}, {"name": "finance"}]}, "same folder"),
+        ({"categories": [{"name": "Finanças"}, {"name": "Financ\u0327as"}]}, "same folder"),
+        ({"categories": [{"name": "a\x00b"}]}, "control"),
+        ({"categories": [{"name": "x\ny"}]}, "control"),
+        ({"categories": [{"name": ".hidden"}]}, "start with '.'"),
+        ({"review_folder": "../../../etc"}, "plain folder name"),
+        ({"review_folder": "/abs/review"}, "plain folder name"),
+        ({"review_folder": "_Review", "categories": [{"name": "_review"}]}, "same folder"),
+        ({"naming": {"pattern": "../../{subject}"}}, "file name, not a path"),
+        ({"naming": {"pattern": "{subject}/{date}"}}, "file name, not a path"),
+        ({"naming": {"pattern": "{subject}_{bogus}"}}, "unknown placeholder"),
+        ({"naming": {"pattern": "{subject!r}"}}, "no format spec"),
+        ({"inputs": ["~/Downloads", "/"]}, "too broad"),
+        ({"inputs": ["~"]}, "too broad"),
+        ({"inputs": ["~/Downloads", "~/Downloads/sub"]}, "overlap"),
+        ({"output_root": "~"}, "inside output_root"),
+        ({"output_root": "relative/dir"}, "absolute path"),
+        ({"database": "~/Downloads/library.db"}, "database must be outside"),
+        ({"database": "~/Downloads/Organized/lib.db"}, "database must be outside"),
+        ({"provider": {"name": "nope", "model": "x"}}, "unknown provider"),
         ({"categories": [{"name": "../etc"}]}, "plain folder name"),
-        ({"review_folder": "Finance"}, "must not also be a category"),
-        ({"output_root": "~/Downloads"}, "must not be an input folder"),
+        ({"review_folder": "Finance"}, "same folder"),
+        ({"output_root": "~/Downloads"}, "inside output_root"),
         ({"limits": {"confidence_threshold": 1.5}}, "confidence_threshold"),
         ({"naming": {"pattern": "{date}"}}, "{subject}"),
         ({"folders": "flatten"}, "folders"),

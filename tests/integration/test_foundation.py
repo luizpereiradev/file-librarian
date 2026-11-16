@@ -8,7 +8,7 @@ import pytest
 
 from file_librarian.config import load_config
 from file_librarian.db import Store
-from tests.conftest import REPO_ROOT
+from tests._helpers import REPO_ROOT
 
 
 @pytest.mark.integration

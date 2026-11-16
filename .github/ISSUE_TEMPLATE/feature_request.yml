@@ -6,7 +6,7 @@ body:
     id: requirement
     attributes:
       label: Requirement ID
-      description: The PRD requirement this belongs to (e.g. RF-14), or "new" if none fits.
+      description: The requirement this belongs to, from docs/requirements.md (e.g. RF-14), or "new" if none fits.
     validations:
       required: true
   - type: textarea

@@ -8,8 +8,8 @@ import pytest
 from typer.testing import CliRunner
 
 from file_librarian.cli import EXIT_NOT_IMPLEMENTED, app
-from file_librarian.extractors.origin import WHERE_FROMS, write_xattr
-from tests.conftest import REPO_ROOT
+from file_librarian.extractors.origin import WHERE_FROMS
+from tests._helpers import REPO_ROOT, write_xattr
 
 runner = CliRunner()
 
@@ -65,6 +65,22 @@ def test_check_config_ok() -> None:
     result = runner.invoke(app, ["check-config", "-c", str(REPO_ROOT / "config.example.yaml")])
     assert result.exit_code == 0, result.stderr
     assert "Finance" in result.stdout
+
+
+def test_check_config_warns_about_planned_provider() -> None:
+    result = runner.invoke(app, ["check-config", "-c", str(REPO_ROOT / "config.example.yaml")])
+    assert result.exit_code == 0
+    assert "planned for M1" in result.stderr
+
+
+def test_inspect_directory_has_no_size(downloads: Path) -> None:
+    folder = downloads / "project"
+    folder.mkdir()
+    result = runner.invoke(app, ["inspect", "--json", str(folder)])
+    assert result.exit_code == 0, result.stderr
+    [item] = json.loads(result.stdout)
+    assert item["size_bytes"] is None
+    assert item["sha256"] is None
 
 
 def test_check_config_invalid(tmp_path: Path) -> None:
