@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from file_librarian.classifier import classify_all, cost_usd
+from file_librarian.classifier import classify_all
 from file_librarian.config import parse_config
 from file_librarian.models import CategoryRule, Classification, FileContext, Rules
 from file_librarian.providers.base import FatalProviderError, ProviderError, Usage
@@ -22,12 +22,16 @@ def ctx(name: str, *, sensitive: bool = False) -> FileContext:
 
 class ScriptedProvider:
     name = "scripted"
+    local = False
 
     def __init__(self, script: list[Any], usage: Usage | None = None) -> None:
         self.script = script
         self.usage = usage or Usage(1_000_000, 0, ["claude-haiku-5-5"])  # US$ 0.10 per call
         self.calls: list[str] = []
         self.last_usage = Usage()
+
+    def cost_usd(self, usage: Usage) -> float:
+        return usage.input_tokens * 0.10 / 1_000_000  # Haiku input price
 
     def classify(self, context: FileContext, rules: Rules) -> Classification:
         self.calls.append(context.path.name)
@@ -117,9 +121,3 @@ def test_no_cap() -> None:
     prov = ScriptedProvider([])
     result, _ = run([ctx(n) for n in "abcde"], prov, config(limits={"max_cost_usd_per_run": None}))
     assert len(prov.calls) == 5 and result.deferred == []
-
-
-def test_cost_estimate_uses_the_priciest_model_that_ran() -> None:
-    usage = Usage(1_000_000, 1_000_000, ["claude-haiku-5-5", "claude-opus-5-5"])
-    assert cost_usd(usage, "claude-haiku-5-5") == pytest.approx(4.0 + 20.0)
-    assert cost_usd(Usage(1_000_000, 0, []), "some-new-model") == pytest.approx(10.0)

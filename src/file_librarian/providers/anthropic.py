@@ -22,6 +22,7 @@ login profile, resolved by the SDK; it is never read from the config file.
 from __future__ import annotations
 
 import json
+from datetime import date
 from typing import Any
 
 import anthropic
@@ -37,6 +38,20 @@ FALLBACK_MODELS = ("claude-opus-5", "claude-fable-5", "claude-mythos-5", "claude
 MAX_TOKENS = 4096  # thinking is always on for current models; leave it room
 
 LANGUAGE_NAMES = {"en": "English", "pt-BR": "Brazilian Portuguese"}
+
+# US$ per million input / output tokens (Anthropic list prices, 2026-11).
+PRICES: dict[str, tuple[float, float]] = {
+    "claude-fable-5-2": (8.0, 40.0),
+    "claude-fable-5-1": (10.0, 50.0),
+    "claude-fable-5": (10.0, 50.0),
+    "claude-opus-5-5": (4.0, 20.0),
+    "claude-opus-5": (5.0, 25.0),
+    "claude-opus-4-8": (5.0, 25.0),
+    "claude-sonnet-5-5": (2.0, 10.0),
+    "claude-sonnet-5": (2.0, 10.0),
+    "claude-haiku-5-5": (0.10, 0.50),
+}
+UNKNOWN_PRICE = (10.0, 50.0)  # assume the most expensive when unsure
 
 
 def response_schema(rules: Rules) -> dict[str, Any]:
@@ -90,7 +105,12 @@ Answer fields:
 - description: 1 to 3 sentences in {language} saying what the file is, with the
   names, amounts and dates someone would search for.
 - tags: up to 6 single-word or short tags in {language}.
-- confidence: from 0 to 1, how sure you are of the category.
+- confidence: from 0 to 1, how sure you are of the category. Judge it from
+  everything available: the excerpt, and also the file name, extension and
+  download source. A clear signal from the name alone (IMG_1234.png is an
+  image, Setup.dmg an installer) deserves high confidence. Use a value below
+  0.7 only when two or more categories are genuinely plausible or nothing
+  points to any.
 - document_date: the date the document itself refers to (issue date, invoice
   date) as YYYY-MM-DD, or null if the content does not show one with
   confidence. Read ambiguous numeric dates as {order}.
@@ -124,19 +144,35 @@ def _normalize(data: dict[str, Any]) -> dict[str, Any]:
     data["tags"] = tags[:10]
     data["suggested_name"] = str(data.get("suggested_name", "")).strip()[:200] or "untitled"
     data["description"] = str(data.get("description", "")).strip()[:600] or "No description."
-    date = data.get("document_date")
-    data["document_date"] = date if isinstance(date, str) and len(date) == 10 else None
+    data["document_date"] = _iso_date(data.get("document_date"))
     return data
+
+
+def _iso_date(value: object) -> str | None:
+    """A valid YYYY-MM-DD, or None: a bad optional date must not cost the whole answer."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return date.fromisoformat(value.strip()[:10]).isoformat()
+    except ValueError:
+        return None
 
 
 class AnthropicProvider:
     name = "anthropic"
+    local = False
 
     def __init__(self, config: ProviderConfig, client: Any | None = None) -> None:
         self._config = config
         # Retries and timeouts are owned by the classifier, so the SDK must not retry too.
         self._client = client or anthropic.Anthropic(timeout=config.timeout_seconds, max_retries=0)
         self.last_usage = Usage()
+
+    def cost_usd(self, usage: Usage) -> float:
+        """Priced at the most expensive model that ran (fallbacks can switch models)."""
+        models = usage.models or [self._config.model]
+        price_in, price_out = max(PRICES.get(m, UNKNOWN_PRICE) for m in models)
+        return (usage.input_tokens * price_in + usage.output_tokens * price_out) / 1_000_000
 
     def classify(self, context: FileContext, rules: Rules) -> Classification:
         cfg = self._config

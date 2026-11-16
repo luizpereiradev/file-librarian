@@ -39,7 +39,7 @@ limits:
   stable_seconds: 60         # size and mtime unchanged for this long
   max_attempts: 3            # after this many failures a file becomes "failed"
   confidence_threshold: 0.7  # below this, the file goes to review_folder
-  scanned_pdf_max_pages: 3
+  scanned_pdf_max_pages: 3   # not active yet: scanned PDFs to a vision model come in M2
   max_cost_usd_per_run: 1.00 # estimated; files left over wait for the next run (null = no cap)
 
 naming:
@@ -64,7 +64,7 @@ naming:
 
 folders: as_unit             # sub-folders and .app bundles: as_unit (move whole) | ignore
 
-finder_tags:
+finder_tags:                 # not active yet: Finder tags come in M2 (RF-36)
   enabled: true              # tag = category name
 
 ignore:
@@ -82,5 +82,5 @@ never_send:                  # classified from metadata only, never sent to the 
 sensitive:
   detect_secrets: true       # private keys, tokens, credentials found in content
 
-mcp:
+mcp:                         # not active yet: the MCP server comes in M2 (RF-22)
   read_only: false           # true disables recategorize_file and undo

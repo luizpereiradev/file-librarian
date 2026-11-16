@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from file_librarian.config import ProviderConfig
 from file_librarian.models import CategoryRule, Classification, FileContext, Rules
 from file_librarian.providers import Provider, ProviderError, get_provider
+from file_librarian.providers.base import Usage
 from file_librarian.providers.fake import FakeProvider
 
 RULES = Rules(categories=(CategoryRule("Finance"), CategoryRule("Other")), language="en")
@@ -53,3 +54,17 @@ def test_registry() -> None:
 def test_classification_schema_rejects_bad_answers(bad: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         Classification.model_validate(ANSWER.model_dump() | bad)
+
+
+def test_fake_provider_meets_the_full_contract() -> None:
+    fake = FakeProvider(echo=True)
+    assert isinstance(fake, Provider)
+    assert fake.local is True
+    assert fake.cost_usd(Usage(10**9, 10**9, [])) == 0.0
+
+
+def test_config_and_registry_agree_on_provider_names() -> None:
+    from file_librarian.config import PROVIDER_NAMES
+    from file_librarian.providers import known_providers
+
+    assert known_providers() == PROVIDER_NAMES

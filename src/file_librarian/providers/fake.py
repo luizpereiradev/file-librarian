@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from file_librarian.models import Classification, FileContext, Rules
-from file_librarian.providers.base import ProviderError
+from file_librarian.providers.base import ProviderError, Usage
 
 
 class FakeProvider:
@@ -30,6 +30,10 @@ class FakeProvider:
         self._default = default
         self._echo = echo
         self.calls: list[FileContext] = []
+        self.last_usage = Usage()
+
+    def cost_usd(self, usage: Usage) -> float:
+        return 0.0
 
     def classify(self, context: FileContext, rules: Rules) -> Classification:
         self.calls.append(context)

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import sqlite3
-import time
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -14,17 +13,20 @@ import pytest
 from file_librarian import pipeline
 from file_librarian.config import Config, parse_config
 from file_librarian.db.store import Store
-from file_librarian.executor import execute, file_record, recover
+from file_librarian.executor import execute, recover
+from file_librarian.fsops import move_no_replace
 from file_librarian.lock import AlreadyRunningError, instance_lock
-from file_librarian.models import Classification, FileStatus, OperationStatus
-from file_librarian.planner import Decision, plan
+from file_librarian.models import (
+    Classification,
+    FileStatus,
+    OperationStatus,
+    RunTrigger,
+)
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.undo import NothingToUndoError, undo_file, undo_run
-from tests._helpers import make_docx, make_pdf
+from tests._helpers import OLD, OLD_DATE, make_docx, make_pdf
 
 pytestmark = pytest.mark.integration
-
-OLD = time.time() - 3600
 
 
 def answer(
@@ -46,6 +48,13 @@ def make_config(downloads: Path, **overrides: Any) -> Config:
         "provider": {"name": "fake", "model": "fixed"},
     }
     return parse_config(raw | overrides)
+
+
+def put_pdf(folder: Path, name: str, text: str) -> Path:
+    """A real PDF with a text layer, so the provider has content to name it from."""
+    path = make_pdf(folder / name, text)
+    os.utime(path, (OLD, OLD))
+    return path
 
 
 def put(folder: Path, name: str, content: bytes = b"data") -> Path:
@@ -75,7 +84,7 @@ def cfg(downloads: Path) -> Config:
 
 
 def test_run_organizes_renames_and_indexes(downloads: Path, cfg: Config) -> None:
-    put(downloads, "documento(3).pdf", b"%PDF invoice")
+    put_pdf(downloads, "documento(3).pdf", "Fatura de energia")
     provider = FakeProvider(
         {
             "documento(3).pdf": answer(
@@ -86,7 +95,7 @@ def test_run_organizes_renames_and_indexes(downloads: Path, cfg: Config) -> None
     outcome = pipeline.run(cfg, provider, simulate=False)
 
     target = downloads / "Organized" / "Finance" / "2026-10-05_electricity-invoice.pdf"
-    assert target.read_bytes() == b"%PDF invoice"
+    assert target.read_bytes().startswith(b"%PDF")
     assert not (downloads / "documento(3).pdf").exists()
     assert outcome.report is not None and outcome.report.moved == 1
     [row] = rows(cfg, "SELECT * FROM files")
@@ -178,8 +187,8 @@ def test_second_run_changes_nothing(downloads: Path, cfg: Config) -> None:
 
 def test_collisions_get_a_counter_and_never_overwrite(downloads: Path, cfg: Config) -> None:
     existing = put(downloads, "Organized/Finance/2026-10-05_bill.pdf", b"precious")
-    put(downloads, "x.pdf", b"one")
-    put(downloads, "y.pdf", b"two")
+    put_pdf(downloads, "x.pdf", "bill one")
+    put_pdf(downloads, "y.pdf", "bill two")
     same = answer("Finance", "bill", document_date=date(2026, 10, 5))
     pipeline.run(cfg, FakeProvider(default=same), simulate=False)
     folder = downloads / "Organized" / "Finance"
@@ -192,9 +201,9 @@ def test_collisions_get_a_counter_and_never_overwrite(downloads: Path, cfg: Conf
 
 
 def test_hostile_model_answers_stay_inside_output_root(downloads: Path, cfg: Config) -> None:
-    put(downloads, "a.pdf", b"a")
-    put(downloads, "b.pdf", b"b")
-    put(downloads, "c.pdf", b"c")
+    put_pdf(downloads, "a.pdf", "a")
+    put_pdf(downloads, "b.pdf", "b")
+    put_pdf(downloads, "c.pdf", "c")
     provider = FakeProvider(
         {
             "a.pdf": answer("Finance", "../../../../etc/passwd"),
@@ -205,9 +214,9 @@ def test_hostile_model_answers_stay_inside_output_root(downloads: Path, cfg: Con
     pipeline.run(cfg, provider, simulate=False)
     output = downloads / "Organized"
     moved = {p.relative_to(output).as_posix() for p in output.rglob("*.pdf")}
-    today = date.today().isoformat()
+    downloaded = OLD_DATE.isoformat()  # no document date: the download (birth) date is used
     assert moved == {
-        f"Finance/{today}_etc-passwd.pdf",  # path pieces flattened into one safe name
+        f"Finance/{downloaded}_etc-passwd.pdf",  # path pieces flattened into one safe name
         "_Review/b.pdf",  # unknown category
         "Finance/c.pdf",  # unusable name: original kept
     }
@@ -230,7 +239,7 @@ def test_file_changed_after_scan_is_left_alone(downloads: Path, cfg: Config) -> 
     path.write_bytes(b"v2 edited")
     with Store.open(cfg.database) as store:
         report = execute(
-            outcome.plan, cfg, store, trigger="manual", provider="fake", model="m", seen=1
+            outcome.plan, cfg, store, trigger=RunTrigger.MANUAL, provider="fake", model="m", seen=1
         )
     assert path.read_bytes() == b"v2 edited"
     assert report.items[0].status is FileStatus.SKIPPED
@@ -291,37 +300,39 @@ def test_undo_single_file_and_nothing_to_undo(downloads: Path, cfg: Config) -> N
     assert (downloads / "Organized" / "Finance" / "b.pdf").exists()
 
 
-def test_recover_resolves_interrupted_moves(downloads: Path, cfg: Config) -> None:
-    done_src = put(downloads, "moved.pdf")
-    stuck_src = put(downloads, "stuck.pdf", b"s")
-    found = pipeline.run(cfg, FakeProvider(default=answer("Finance", "x", 0.75)), simulate=True)
-    decisions = [Decision(i.context, i.classification) for i in found.plan.items]
-    planned = plan(decisions, cfg)
+class Crash(BaseException):
+    """Stands in for a power cut: not an Exception, so nothing in flib catches it."""
+
+
+@pytest.mark.parametrize("moment", ["after the rename", "before the rename"])
+def test_recover_resolves_a_crash_mid_move(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch, moment: str
+) -> None:
+    source = put(downloads, "bill.pdf", b"mine")
+
+    def crash(src: Path, dst: Path) -> None:
+        if moment == "after the rename":
+            move_no_replace(src, dst)
+        raise Crash
+
+    with monkeypatch.context() as patch, pytest.raises(Crash):
+        patch.setattr("file_librarian.executor.move_no_replace", crash)
+        pipeline.run(cfg, FakeProvider(default=answer("Finance", "x", 0.75)), simulate=False)
+
     with Store.open(cfg.database) as store:
-        run_id = store.start_run("run", "manual")
-        for item in planned.items:
-            assert item.destination is not None
-            record = file_record(item, FileStatus.ORGANIZED, "fake", "m")
-            file_id = store.upsert_file(record, run_id=run_id)
-            st = item.context.path.stat()
-            identity = (st.st_dev, st.st_ino)
-            store.add_operation(
-                run_id, file_id, item.context.path, item.destination, identity=identity
-            )
-        # Simulate a crash after the first rename only.
-        first = planned.items[0]
-        assert first.destination is not None
-        first.destination.parent.mkdir(parents=True)
-        done_src.rename(first.destination)
-        assert recover(store) == 2
-        ops = {Path(o["src_path"]).name: o["status"] for o in store.operations()}
-    assert ops == {
-        "moved.pdf": OperationStatus.DONE.value,
-        "stuck.pdf": OperationStatus.FAILED.value,
-    }
-    assert stuck_src.exists()
-    statuses = {r["original_name"]: r["status"] for r in rows(cfg, "SELECT * FROM files")}
-    assert statuses == {"moved.pdf": "organized", "stuck.pdf": "failed"}
+        [op] = store.operations()
+        assert op.status is OperationStatus.PLANNED  # the crash left it unresolved
+        assert recover(store) == 1
+        [op] = store.operations()
+        row = store.file_by_id(op.file_id)
+    if moment == "after the rename":
+        assert op.status is OperationStatus.DONE
+        assert (row.status, row.current_path) == (FileStatus.ORGANIZED, op.dst_path)
+        assert op.dst_path.read_bytes() == b"mine"
+    else:
+        assert op.status is OperationStatus.FAILED
+        assert (row.status, row.attempts) == (FileStatus.FAILED, 1)
+        assert source.read_bytes() == b"mine"
 
 
 def test_runs_are_exclusive(downloads: Path, cfg: Config) -> None:
@@ -336,3 +347,17 @@ def test_offline_fake_provider_works_end_to_end(downloads: Path) -> None:
     pipeline.run(config, FakeProvider(echo=True), simulate=False)
     moved = list((downloads / "Organizado" / "Outros").iterdir())
     assert len(moved) == 1 and moved[0].suffix == ".pdf"
+
+
+def test_files_without_readable_content_keep_their_name(downloads: Path, cfg: Config) -> None:
+    put(downloads, "IMG_4801.png", b"\x89PNG not really")
+    put(downloads, "video.mp4", b"\x00\x00\x00\x18ftypmp42")
+    provider = FakeProvider(
+        {
+            "IMG_4801.png": answer("Images", "beach photo"),
+            "video.mp4": answer("Other", "video without extracted content"),
+        }
+    )
+    pipeline.run(cfg, provider, simulate=False)
+    assert (downloads / "Organized" / "Images" / "IMG_4801.png").exists()
+    assert (downloads / "Organized" / "Other" / "video.mp4").exists()

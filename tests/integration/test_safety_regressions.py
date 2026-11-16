@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import os
 import stat
-import time
 from pathlib import Path
 from typing import Any
 
@@ -17,13 +16,13 @@ from file_librarian import executor, pipeline
 from file_librarian.config import ConfigError, parse_config
 from file_librarian.db.store import Store
 from file_librarian.fsops import move_no_replace
-from file_librarian.models import Classification
+from file_librarian.models import Classification, RunTrigger
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.scanner import SkipReason, scan
 from file_librarian.undo import NothingToUndoError, undo_run
+from tests._helpers import OLD
 
 pytestmark = pytest.mark.integration
-OLD = time.time() - 3600
 
 
 def answer(
@@ -152,7 +151,7 @@ def test_recover_after_crash_on_a_counter_name(
     with Store.open(config.database) as store:
         assert executor.recover(store) == 1
         [op] = store.operations()
-        assert (op["status"], Path(op["dst_path"]).name) == ("done", "scan-2.pdf")
+        assert (op.status.value, op.dst_path.name) == ("done", "scan-2.pdf")
         report = undo_run(store)
     assert [src for _, src in report.restored] == [mine]
     assert mine.read_bytes() == b"mine"
@@ -183,8 +182,9 @@ def test_folder_changed_deep_inside_after_scan_is_not_moved(downloads: Path) -> 
     deep.write_bytes(b"v2 longer")
     os.utime(downloads / "Project" / "sub", (OLD, OLD))
     with Store.open(config.database) as store:
-        report = executor.execute(planned.plan, config, store, trigger="manual", provider="f",
-                                  model="m", seen=1)  # fmt: skip
+        report = executor.execute(
+            planned.plan, config, store, trigger=RunTrigger.MANUAL, provider="f", model="m", seen=1
+        )
     assert report.items[0].status.value == "skipped"
     assert (downloads / "Project").exists()
 
@@ -213,8 +213,9 @@ def test_replaced_file_with_same_size_and_mtime_is_not_moved(downloads: Path) ->
     path.unlink()
     put(downloads, "a.pdf", b"BBBB")  # new inode, same size and mtime
     with Store.open(config.database) as store:
-        report = executor.execute(planned.plan, config, store, trigger="manual", provider="f",
-                                  model="m", seen=1)  # fmt: skip
+        report = executor.execute(
+            planned.plan, config, store, trigger=RunTrigger.MANUAL, provider="f", model="m", seen=1
+        )
     assert report.items[0].status.value == "skipped"
 
 
@@ -253,9 +254,9 @@ def test_recover_recognises_a_moved_file_edited_after_the_crash(
     with Store.open(config.database) as store:
         assert executor.recover(store) == 1
         [op] = store.operations()
-        row = store.file_by_id(int(op["file_id"]))
-    assert op["status"] == "done"
-    assert (row["status"], row["current_path"]) == ("organized", str(moved))
+        row = store.file_by_id(op.file_id)
+    assert op.status.value == "done"
+    assert (row.status.value, row.current_path) == ("organized", moved)
 
 
 @pytest.mark.parametrize("name", [" . .pdf", " ..txt", " .. .x"])

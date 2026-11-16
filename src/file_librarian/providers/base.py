@@ -37,6 +37,14 @@ class Usage:
 @runtime_checkable
 class Provider(Protocol):
     name: str
+    local: bool
+    """True when no remote API is behind it: no requests-per-minute spacing."""
+    last_usage: Usage
+    """Set after every ``classify`` call, failed ones included; the classifier resets it."""
+
+    def cost_usd(self, usage: Usage) -> float:
+        """What ``usage`` cost in US dollars, for ``limits.max_cost_usd_per_run``."""
+        ...
 
     def classify(self, context: FileContext, rules: Rules) -> Classification:
         """Return a schema-valid classification for one file.

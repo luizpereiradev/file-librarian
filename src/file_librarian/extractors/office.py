@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 import zipfile
+import zlib
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 from xml.etree.ElementTree import Element, ParseError, XMLPullParser
@@ -25,6 +26,18 @@ from file_librarian.extractors import register
 from file_librarian.extractors.base import ExtractionError
 
 MAX_PART_BYTES = 32 * 1024 * 1024
+# What a damaged or truncated OOXML file raises while we stream it.
+# NotImplementedError: zipfile's answer to a corrupted version or compression field.
+_DAMAGED = (
+    ParseError,
+    zipfile.BadZipFile,
+    zlib.error,
+    EOFError,
+    OSError,
+    RuntimeError,
+    ValueError,
+    NotImplementedError,
+)
 MAX_PARTS = 500
 _CHUNK = 64 * 1024
 
@@ -99,7 +112,7 @@ def _members(path: Path) -> list[str]:
     try:
         with zipfile.ZipFile(path) as zf:
             names = zf.namelist()
-    except (zipfile.BadZipFile, OSError) as exc:
+    except _DAMAGED as exc:
         raise ExtractionError("not a readable Office file (damaged or password-protected)") from exc
     if len(names) > 10_000:
         raise ExtractionError("too many parts for an Office file")
@@ -120,7 +133,7 @@ class DocxExtractor:
         parts = [n for n in names if n == "word/document.xml"]
         try:
             return _collect(path, parts, {"t"}, {"p", "br", "tab"}, max_chars)
-        except (ParseError, zipfile.BadZipFile, OSError, RuntimeError) as exc:
+        except _DAMAGED as exc:
             raise ExtractionError(f"cannot read document: {exc}") from exc
 
 
@@ -131,7 +144,7 @@ class PptxExtractor:
         names = _members(path)
         try:
             return _collect(path, _numbered(names, "ppt/slides/slide"), {"t"}, {"p"}, max_chars)
-        except (ParseError, zipfile.BadZipFile, OSError, RuntimeError) as exc:
+        except _DAMAGED as exc:
             raise ExtractionError(f"cannot read presentation: {exc}") from exc
 
 
@@ -145,7 +158,7 @@ class XlsxExtractor:
                 sheet_names = _sheet_names(zf) if "xl/workbook.xml" in names else []
             header = f"Sheets: {', '.join(sheet_names)}\n" if sheet_names else ""
             body = _collect(path, ["xl/sharedStrings.xml"], {"t"}, {"si"}, max_chars)
-        except (ParseError, zipfile.BadZipFile, OSError, RuntimeError) as exc:
+        except _DAMAGED as exc:
             raise ExtractionError(f"cannot read spreadsheet: {exc}") from exc
         text = (header + (body or "")).strip()
         return text[:max_chars] or None

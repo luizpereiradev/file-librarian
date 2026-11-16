@@ -8,7 +8,9 @@ This is where the model's answer stops being trusted. For each item:
   ``confidence_threshold``, goes to the review folder with its original name;
 - otherwise the file goes to its category folder, renamed only when the
   category allows it, confidence reaches ``rename_confidence_threshold`` and
-  the suggestion yields a usable name. Folder units keep their name.
+  the suggestion yields a usable name. Files whose content the model could
+  not read (images, video, installers) and folder units keep their name:
+  a name invented from the old name alone is worse than the original.
 
 Every destination is ``output_root / <configured folder> / <safe name>``;
 ``_destination`` re-checks that before returning it. Names are unique against
@@ -23,19 +25,8 @@ from datetime import date
 from pathlib import Path
 
 from file_librarian.config import Config, folder_key
-from file_librarian.models import Classification, FileContext, FileStatus
-from file_librarian.naming import build_name, safe_component, split_name, with_counter
-
-MAX_COUNTER = 999
-
-
-@dataclass(frozen=True, slots=True)
-class Decision:
-    """The classifier's outcome for one item."""
-
-    context: FileContext
-    classification: Classification | None = None
-    error: str | None = None
+from file_librarian.models import Classification, Decision, FileContext, FileStatus
+from file_librarian.naming import build_name, candidate_names, safe_component, split_name
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,15 +60,11 @@ class _Names:
 
     def claim(self, folder: Path, name: str) -> str:
         taken = self._taken.setdefault(folder, self._on_disk(folder))
-        candidate = name
-        n = 2
-        while folder_key(candidate) in taken:
-            if n > MAX_COUNTER:
-                raise UnsafeDestinationError(f"no free name for {name} in {folder}")
-            candidate = with_counter(name, n)
-            n += 1
-        taken.add(folder_key(candidate))
-        return candidate
+        for candidate in candidate_names(name):
+            if folder_key(candidate) not in taken:
+                taken.add(folder_key(candidate))
+                return candidate
+        raise UnsafeDestinationError(f"no free name for {name} in {folder}")
 
     @staticmethod
     def _on_disk(folder: Path) -> set[str]:
@@ -89,12 +76,14 @@ class _Names:
             raise UnsafeDestinationError(f"{folder} exists and is not a folder") from exc
 
 
-def plan(decisions: list[Decision], config: Config) -> Plan:
+def plan(decisions: list[Decision], config: Config, *, today: date | None = None) -> Plan:
+    """Plan every decision. ``today`` names files that carry no other date."""
     result = Plan()
     names = _Names()
+    today = today or date.today()
     for decision in decisions:
         try:
-            item = _plan_one(decision, config, names)
+            item = _plan_one(decision, config, names, today)
         except (UnsafeDestinationError, OSError) as exc:
             # One odd item must never stop the run: it stays where it is.
             item = PlannedItem(
@@ -104,7 +93,7 @@ def plan(decisions: list[Decision], config: Config) -> Plan:
     return result
 
 
-def _plan_one(decision: Decision, config: Config, names: _Names) -> PlannedItem:
+def _plan_one(decision: Decision, config: Config, names: _Names, today: date) -> PlannedItem:
     ctx = decision.context
     if ctx.sensitive:
         reason = ctx.metadata.get("sensitive", "sensitive content")
@@ -126,10 +115,11 @@ def _plan_one(decision: Decision, config: Config, names: _Names) -> PlannedItem:
     new_name = None
     if (
         not ctx.is_unit
+        and ctx.text  # a new name needs evidence from the content, not just the old name
         and category.rename
         and answer.confidence >= config.naming.rename_confidence_threshold
     ):
-        when = answer.document_date or ctx.downloaded or date.today()
+        when = answer.document_date or ctx.downloaded or today
         new_name = build_name(original, answer.suggested_name, when, config.naming)
     chosen = new_name or original
     destination = _destination(config, category.name, chosen, names, ctx)

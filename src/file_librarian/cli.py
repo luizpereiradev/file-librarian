@@ -1,8 +1,9 @@
 """The ``flib`` command line.
 
-M0 ships the full command surface with empty commands, so the interface can be
-reviewed before the pipeline exists. A command that is not implemented yet
-says which milestone and requirement it belongs to and exits with code 2.
+Each command loads and validates the configuration, then calls one module:
+``pipeline`` for ``run``/``simulate``, ``undo``, ``search``. Commands of later
+milestones exist already and exit with code 2, naming their milestone and
+requirement, so the interface can be reviewed before they land.
 """
 
 from __future__ import annotations
@@ -78,7 +79,7 @@ def _root(
     pass
 
 
-# --- Commands available in M0 -------------------------------------------------
+# --- Inspection ------------------------------------------------------------------
 
 
 @app.command("check-config")
@@ -144,7 +145,7 @@ def inspect(
             typer.echo("  from:   (no download origin recorded)")
 
 
-# --- Commands still to come -----------------------------------------------------
+# --- Organizing, searching and undoing ----------------------------------------------
 
 
 @app.command()
@@ -186,6 +187,8 @@ def _pipeline(config_path: Path | None, *, simulate: bool) -> None:
         _print_report(outcome.report, cfg)
     if outcome.cost_usd:
         typer.echo(f"Estimated provider cost: US$ {outcome.cost_usd:.4f}")
+    if outcome.cached:
+        typer.echo(f"{outcome.cached} classification(s) reused from the cache at no cost.")
 
 
 def _short(path: Path, cfg: Config) -> str:
@@ -333,4 +336,13 @@ def main() -> None:
     if sys.platform != "darwin":
         typer.echo("file-librarian supports macOS only.", err=True)
         raise SystemExit(EXIT_ERROR)
-    app()
+    try:
+        app()
+    except Exception as exc:
+        typer.echo(
+            f"error: unexpected {type(exc).__name__}: {exc}\n"
+            "This is a bug. Please report it with `flib --version` and the steps that led here: "
+            "https://github.com/luizpereiradev/file-librarian/issues",
+            err=True,
+        )
+        raise SystemExit(EXIT_ERROR) from exc

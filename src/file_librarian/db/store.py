@@ -18,12 +18,19 @@ import unicodedata
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from importlib import resources
 from pathlib import Path
 from types import TracebackType
 
-from file_librarian.models import FileRecord, FileState, FileStatus, OperationStatus
+from file_librarian.models import (
+    FileRecord,
+    FileState,
+    FileStatus,
+    OperationStatus,
+    RunMode,
+    RunTrigger,
+)
 
 _MIGRATION_NAME = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
 BUSY_TIMEOUT_MS = 5000
@@ -57,6 +64,72 @@ def load_migrations() -> list[Migration]:
         if migration.version != expected:
             raise MigrationError(f"migrations must be numbered 1..N without gaps: {migration.name}")
     return found
+
+
+@dataclass(frozen=True, slots=True)
+class FileRow:
+    """A row of ``files`` as read back."""
+
+    id: int
+    sha256: str
+    original_name: str
+    original_path: Path
+    current_name: str
+    current_path: Path
+    status: FileStatus
+    category: str | None
+    description: str | None
+    tags: list[str]
+    attempts: int
+    processed_at: str
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> FileRow:
+        try:
+            tags = [str(t) for t in json.loads(row["tags"] or "[]")]
+        except (ValueError, TypeError):
+            tags = []
+        return cls(
+            id=int(row["id"]),
+            sha256=str(row["sha256"]),
+            original_name=str(row["original_name"]),
+            original_path=Path(row["original_path"]),
+            current_name=str(row["current_name"]),
+            current_path=Path(row["current_path"]),
+            status=FileStatus(row["status"]),
+            category=row["category"],
+            description=row["description"],
+            tags=tags,
+            attempts=int(row["attempts"]),
+            processed_at=str(row["processed_at"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class OperationRow:
+    """A journal entry of ``operations`` as read back."""
+
+    id: int
+    run_id: int
+    file_id: int
+    src_path: Path
+    dst_path: Path
+    status: OperationStatus
+    src_identity: tuple[int, int] | None
+    """The source's (st_dev, st_ino) when journaled; ``None`` for older rows."""
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> OperationRow:
+        dev, ino = row["src_dev"], row["src_ino"]
+        return cls(
+            id=int(row["id"]),
+            run_id=int(row["run_id"]),
+            file_id=int(row["file_id"]),
+            src_path=Path(row["src_path"]),
+            dst_path=Path(row["dst_path"]),
+            status=OperationStatus(row["status"]),
+            src_identity=None if dev is None or ino is None else (int(dev), int(ino)),
+        )
 
 
 class Store:
@@ -124,10 +197,10 @@ class Store:
 
     # --- runs -----------------------------------------------------------------
 
-    def start_run(self, mode: str, trigger: str) -> int:
+    def start_run(self, mode: RunMode, trigger: RunTrigger) -> int:
         cur = self.conn.execute(
             "INSERT INTO runs (mode, trigger, started_at) VALUES (?, ?, ?)",
-            (mode, trigger, _now()),
+            (mode.value, trigger.value, _now()),
         )
         return _rowid(cur)
 
@@ -188,17 +261,51 @@ class Store:
             (error[:500], file_id),
         )
 
-    def file_by_id(self, file_id: int) -> sqlite3.Row:
+    def file_by_id(self, file_id: int) -> FileRow:
         row = self.conn.execute("SELECT * FROM files WHERE id = ?", (file_id,)).fetchone()
         if row is None:
             raise LookupError(f"no file with id {file_id}")
-        return row  # type: ignore[no-any-return]
+        return FileRow.from_row(row)
 
-    def file_by_current_path(self, path: Path) -> sqlite3.Row | None:
+    def file_by_current_path(self, path: Path) -> FileRow | None:
         row = self.conn.execute(
             "SELECT * FROM files WHERE current_path = ?", (normalize(str(path)),)
         ).fetchone()
-        return row  # type: ignore[no-any-return]
+        return None if row is None else FileRow.from_row(row)
+
+    def search_files(self, fts_query: str, *, limit: int) -> list[FileRow]:
+        """Rows matching an FTS5 query, best first (names weigh more than descriptions)."""
+        rows = self.conn.execute(
+            """SELECT f.* FROM files_fts JOIN files f ON f.id = files_fts.rowid
+               WHERE files_fts MATCH ? ORDER BY bm25(files_fts, 3.0, 3.0, 1.0, 2.0) LIMIT ?""",
+            (fts_query, limit),
+        ).fetchall()
+        return [FileRow.from_row(r) for r in rows]
+
+    # --- classification cache --------------------------------------------------------
+
+    def cached_answer(self, sha256: str, rules_key: str, *, max_age_days: int) -> str | None:
+        row = self.conn.execute(
+            """SELECT answer FROM classification_cache
+               WHERE sha256 = ? AND rules_key = ? AND created_at >= ?""",
+            (sha256, rules_key, _days_ago(max_age_days)),
+        ).fetchone()
+        return None if row is None else str(row[0])
+
+    def cache_answer(self, sha256: str, rules_key: str, answer_json: str) -> None:
+        self.conn.execute(
+            """INSERT INTO classification_cache (sha256, rules_key, answer, created_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(sha256, rules_key) DO UPDATE SET
+                   answer = excluded.answer, created_at = excluded.created_at""",
+            (sha256, rules_key, answer_json, _now()),
+        )
+
+    def prune_cache(self, *, max_age_days: int) -> int:
+        cur = self.conn.execute(
+            "DELETE FROM classification_cache WHERE created_at < ?", (_days_ago(max_age_days),)
+        )
+        return cur.rowcount
 
     # --- operations (the journal behind undo) ------------------------------------
 
@@ -226,8 +333,8 @@ class Store:
             )
 
     def operations(
-        self, *, run_id: int | None = None, status: str | None = None
-    ) -> list[sqlite3.Row]:
+        self, *, run_id: int | None = None, status: OperationStatus | None = None
+    ) -> list[OperationRow]:
         sql = "SELECT * FROM operations WHERE 1 = 1"
         args: list[object] = []
         if run_id is not None:
@@ -235,16 +342,16 @@ class Store:
             args.append(run_id)
         if status is not None:
             sql += " AND status = ?"
-            args.append(status)
-        return list(self.conn.execute(sql + " ORDER BY id", args))
+            args.append(status.value)
+        return [OperationRow.from_row(r) for r in self.conn.execute(sql + " ORDER BY id", args)]
 
-    def last_done_operation(self, file_id: int) -> sqlite3.Row | None:
+    def last_done_operation(self, file_id: int) -> OperationRow | None:
         row = self.conn.execute(
             """SELECT * FROM operations WHERE file_id = ? AND status = 'done'
                ORDER BY id DESC LIMIT 1""",
             (file_id,),
         ).fetchone()
-        return row  # type: ignore[no-any-return]
+        return None if row is None else OperationRow.from_row(row)
 
     def close(self) -> None:
         self.conn.close()
@@ -269,6 +376,10 @@ def _rowid(cur: sqlite3.Cursor) -> int:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def _days_ago(days: int) -> str:
+    return (datetime.now(UTC) - timedelta(days=days)).isoformat(timespec="seconds")
 
 
 def _split_sql(script: str) -> list[str]:

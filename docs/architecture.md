@@ -18,7 +18,7 @@ classifier, uses AI. Each stage is a module with typed input and output
       │                            low confidence → review folder.   `flib simulate` stops here
  5. Executor     executor.py       single-instance lock; record "planned" → move → mark "done"
       │
- 6. Indexer      db/, search.py    file record, FTS index, Finder tag
+ 6. Indexer      db/, search.py    file record, FTS index (Finder tags in M2)
 ```
 
 ## The one rule
@@ -69,7 +69,7 @@ One SQLite file, outside the organized folders (default
 | Table | Holds |
 | --- | --- |
 | `files` | one row per file: original and current name/path, hash, origin, category, description, tags, status, attempts |
-| `runs` | one row per run or simulation, with counts |
+| `runs` | one row per `flib run`, with counts (simulations record none) |
 | `operations` | the journal behind `flib undo` |
 | `corrections` | user recategorizations and renames, reused as examples |
 | `files_fts` | FTS5 index over names, description and tags; accents ignored |

@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
-from fnmatch import fnmatchcase
+
+from file_librarian.globs import matches_any
 
 SENSITIVE_NAMES = (
     "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*", "*.pem", "*.p8",
@@ -49,13 +50,8 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )  # fmt: skip
 
 
-def _matches(name: str, patterns: Iterable[str]) -> bool:
-    folded = name.casefold()
-    return any(fnmatchcase(folded, p.casefold()) for p in patterns)
-
-
 def sensitive_name(name: str) -> bool:
-    return _matches(name, SENSITIVE_NAMES)
+    return matches_any(name, SENSITIVE_NAMES)
 
 
 def find_secrets(text: str) -> list[str]:
@@ -65,4 +61,4 @@ def find_secrets(text: str) -> list[str]:
 
 def withheld_by_config(name: str, never_send: Iterable[str]) -> bool:
     """Files the user chose to classify from metadata only."""
-    return _matches(name, never_send)
+    return matches_any(name, never_send)

@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Classification cache (migration 0003): answers are kept for 7 days per
+  content hash and rules (provider, model, effort, categories and hints,
+  language, prompt version), so `flib run` right after `flib simulate` reuses
+  them at no cost. Changing a category or hint invalidates the cache.
 - `language: pt-BR` defaults to 15 categories, each with a hint that settles
   common overlaps (payslips in Trabalho, tax receipts in Impostos):
   Financeiro, Impostos, Contratos, Documentos pessoais, Saúde, Trabalho,
@@ -114,6 +118,22 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Code and test quality pass from an independent review: a damaged Office
+  file can no longer abort every run (extraction errors of any kind fall back
+  to metadata, with a corruption fuzz test over every format); an invalid
+  document date from the model no longer discards the whole answer; the
+  provider contract (`local`, `last_usage`, `cost_usd`) is declared and
+  type-checked and pricing lives with each provider; store reads return
+  typed rows; layering follows the pipeline; config options that are not
+  active yet are marked as such; tests no longer depend on the time of day;
+  failure paths of the executor, undo and CLI are tested, and CI enforces 93%
+  branch coverage.
+- Files are renamed only when the model could read their content; images,
+  video, installers and other metadata-only files keep their original name
+  instead of getting one invented from the old name.
+- The classification prompt asks the model to judge confidence from the file
+  name and source as well as the content. On the acceptance corpus with
+  Claude Haiku 5.5, items sent to review fell from 17 to 12 of 48.
 - `flib check-config` warns when the configured provider is not implemented yet.
 - `flib inspect` no longer reports a size for directories.
 - CI tests Python 3.11 through 3.15; superseded pull request runs are cancelled,

@@ -11,14 +11,20 @@ Create `src/file_librarian/providers/<name>.py` (use `_` for `-` in the module n
 ```python
 from file_librarian.config import ProviderConfig
 from file_librarian.models import Classification, FileContext, Rules
-from file_librarian.providers.base import ProviderError
+from file_librarian.providers.base import ProviderError, Usage
 
 
 class ExampleProvider:
     name = "example"
+    local = False  # True only if no remote API is behind it
 
     def __init__(self, config: ProviderConfig) -> None:
         self._config = config
+        self.last_usage = Usage()
+
+    def cost_usd(self, usage: Usage) -> float:
+        # Your API's prices; price unknown models at your most expensive one.
+        return (usage.input_tokens * 1.0 + usage.output_tokens * 5.0) / 1_000_000
 
     def classify(self, context: FileContext, rules: Rules) -> Classification:
         # Call your model with context + rules. Prefer the API's structured
@@ -44,12 +50,15 @@ Rules for every provider:
     runs up to `max_attempts`;
   - `FatalProviderError("...")` when nothing can work (bad credentials,
     unknown model): the run stops before anything moves.
-- **Report what you were billed.** Set `self.last_usage = Usage(input_tokens,
-  output_tokens, [models])` after every call, including failed ones, so
-  `limits.max_cost_usd_per_run` holds. Add the model's price to
-  `classifier.PRICES`; unknown models are costed at the highest known price.
-- **Local providers** (no API behind them) set the class attribute
-  `local = True` to skip request-per-minute spacing.
+- **Implement the whole `Provider` protocol** (`providers/base.py`); mypy
+  checks it. Besides `classify`:
+  - set `self.last_usage = Usage(input_tokens, output_tokens, [models])`
+    after every call, failed ones included, so `limits.max_cost_usd_per_run`
+    holds;
+  - `cost_usd(usage)` turns that into dollars, with your provider's own price
+    table kept in your module;
+  - `local = True` only when no remote API is behind it (skips the
+    requests-per-minute spacing).
 - **Send only what is in `context`.** It is already capped at
   `max_chars_per_file`, and sensitive files never reach you.
 - **Repeatability comes from the schema, not from sampling settings.** Use the

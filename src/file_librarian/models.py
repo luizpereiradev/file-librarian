@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -69,7 +69,6 @@ class FileContext:
     downloaded: date | None = None
     source_urls: tuple[str, ...] = ()
     text: str | None = None
-    image_paths: tuple[Path, ...] = ()
     is_unit: bool = False
     sensitive: bool = False
     metadata: dict[str, str] = field(default_factory=dict)
@@ -88,6 +87,15 @@ class Classification(BaseModel):
     )
     confidence: float = Field(ge=0.0, le=1.0)
     document_date: date | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Decision:
+    """The classifier's outcome for one item (stage 3 output, planner input)."""
+
+    context: FileContext
+    classification: Classification | None = None
+    error: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +121,8 @@ class Rules:
     categories: tuple[CategoryRule, ...]
     language: Language
     examples: tuple[Correction, ...] = ()
-    date_order: str = "DMY"
+    """Past user corrections for few-shot prompting (RF-29, M2: not populated yet)."""
+    date_order: Literal["DMY", "MDY", "YMD"] = "DMY"
     """How to read ambiguous numeric dates in documents (``naming.date_order``)."""
 
     @property

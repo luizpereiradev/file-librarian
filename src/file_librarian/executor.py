@@ -29,10 +29,17 @@ from file_librarian.fsops import (
     ensure_folder,
     move_no_replace,
 )
-from file_librarian.hashing import file_sha256, unit_manifest
-from file_librarian.models import FileContext, FileRecord, FileStatus, OperationStatus
-from file_librarian.naming import with_counter
-from file_librarian.planner import MAX_COUNTER, Plan, PlannedItem
+from file_librarian.hashing import same_content, unit_manifest
+from file_librarian.models import (
+    FileContext,
+    FileRecord,
+    FileStatus,
+    OperationStatus,
+    RunMode,
+    RunTrigger,
+)
+from file_librarian.naming import candidate_names
+from file_librarian.planner import Plan, PlannedItem
 
 
 @dataclass(slots=True)
@@ -65,9 +72,18 @@ class RunReport:
         return self.count(FileStatus.FAILED)
 
 
-def execute(plan: Plan, config: Config, store: Store, *, trigger: str, provider: str, model: str,
-            seen: int, deferred: int = 0) -> RunReport:  # fmt: skip
-    run_id = store.start_run("run", trigger)
+def execute(
+    plan: Plan,
+    config: Config,
+    store: Store,
+    *,
+    trigger: RunTrigger,
+    provider: str,
+    model: str,
+    seen: int,
+    deferred: int = 0,
+) -> RunReport:
+    run_id = store.start_run(RunMode.RUN, trigger)
     report = RunReport(run_id, deferred=deferred)
     for item in plan.items:
         report.items.append(_apply(item, config, store, run_id, provider, model))
@@ -81,8 +97,9 @@ def execute(plan: Plan, config: Config, store: Store, *, trigger: str, provider:
     return report
 
 
-def file_record(item: PlannedItem, status: FileStatus, provider: str, model: str,
-            error: str | None = None) -> FileRecord:  # fmt: skip
+def file_record(
+    item: PlannedItem, status: FileStatus, provider: str, model: str, error: str | None = None
+) -> FileRecord:
     ctx = item.context
     # Only files that were classified get a description; only organized ones a category.
     answer = item.classification if status in {FileStatus.ORGANIZED, FileStatus.REVIEW} else None
@@ -105,8 +122,9 @@ def file_record(item: PlannedItem, status: FileStatus, provider: str, model: str
     )
 
 
-def _apply(item: PlannedItem, config: Config, store: Store, run_id: int, provider: str,
-           model: str) -> ItemResult:  # fmt: skip
+def _apply(
+    item: PlannedItem, config: Config, store: Store, run_id: int, provider: str, model: str
+) -> ItemResult:
     ctx = item.context
     if item.destination is None:
         error = item.reason if item.status is FileStatus.FAILED else None
@@ -154,15 +172,15 @@ def _unchanged(ctx: FileContext) -> tuple[int, int] | None:
 
 
 def _move(src: Path, dst: Path, store: Store, op_id: int) -> Path:
-    candidate = dst
-    for n in range(2, MAX_COUNTER + 2):
+    for name in candidate_names(dst.name):
+        candidate = dst.with_name(name)
         # Journal the exact name before trying it, so recovery looks in the right place.
         store.set_operation(op_id, OperationStatus.PLANNED, candidate)
         try:
             move_no_replace(src, candidate)
             return candidate
         except DestinationExistsError:
-            candidate = dst.with_name(with_counter(dst.name, n))
+            continue
     raise DestinationExistsError(f"no free name for {dst}")
 
 
@@ -175,41 +193,27 @@ def _fail(store: Store, op_id: int, file_id: int, src: Path, error: str) -> Item
 
 def recover(store: Store) -> int:
     """Resolve journal entries left ``planned`` by a crash. Returns how many."""
-    pending = store.operations(status=OperationStatus.PLANNED.value)
+    pending = store.operations(status=OperationStatus.PLANNED)
     for op in pending:
-        op_id, file_id = int(op["id"]), int(op["file_id"])
-        dst = Path(op["dst_path"])
-        row = store.file_by_id(file_id)
+        row = store.file_by_id(op.file_id)
         # Done if the journaled destination is the very inode we moved (a rename keeps
         # it, even if the file was edited since), or holds exactly the content we moved.
-        if _same_inode(dst, op["src_dev"], op["src_ino"]) or same_content(dst, str(row["sha256"])):
+        if _same_inode(op.dst_path, op.src_identity) or same_content(op.dst_path, row.sha256):
             with store.transaction():
-                store.set_operation(op_id, OperationStatus.DONE)
-                store.set_file_location(file_id, dst, FileStatus(row["status"]))
+                store.set_operation(op.id, OperationStatus.DONE)
+                store.set_file_location(op.file_id, op.dst_path, row.status)
         else:
             with store.transaction():
-                store.set_operation(op_id, OperationStatus.FAILED)
-                store.mark_file_failed(file_id, "interrupted before the move finished")
+                store.set_operation(op.id, OperationStatus.FAILED)
+                store.mark_file_failed(op.file_id, "interrupted before the move finished")
     return len(pending)
 
 
-def _same_inode(path: Path, dev: int | None, ino: int | None) -> bool:
-    if dev is None or ino is None:
+def _same_inode(path: Path, identity: tuple[int, int] | None) -> bool:
+    if identity is None:
         return False
     try:
         st = os.lstat(path)
     except OSError:
         return False
-    return (st.st_dev, st.st_ino) == (dev, ino)
-
-
-def same_content(path: Path, sha256: str) -> bool:
-    """``path`` exists, is not a symlink, and hashes to ``sha256``."""
-    try:
-        if not os.path.lexists(path) or path.is_symlink():
-            return False
-        if path.is_dir():
-            return unit_manifest(path).digest == sha256
-        return file_sha256(path) == sha256
-    except OSError:
-        return False
+    return (st.st_dev, st.st_ino) == identity

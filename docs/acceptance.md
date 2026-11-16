@@ -2,8 +2,11 @@
 
 The automated test `tests/acceptance/test_m1_exit_criterion.py` checks the M1
 exit criterion offline. This is the same check with Claude, run by a
-maintainer before calling M1 done. It costs well under one cent with the
-default model and never touches your real Downloads folder.
+maintainer before calling M1 done. With the default model it costs about one
+US cent (measured on 2026-11-16: US$ 0.0116 for the 48 classified items) and
+never touches your real Downloads folder. `flib simulate` caches its
+classifications, so the `flib run` that follows reuses them instead of paying
+again.
 
 ## 1. Build a test folder
 

@@ -20,13 +20,13 @@ from __future__ import annotations
 import os
 import stat
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from fnmatch import fnmatchcase
 from pathlib import Path
 
 from file_librarian.config import Config, is_within
+from file_librarian.globs import matches_any
 from file_librarian.hashing import file_sha256, unit_manifest
 from file_librarian.lock import lock_path
 from file_librarian.models import FileState, FileStatus
@@ -80,12 +80,6 @@ class ScanResult:
 
 
 Lookup = Callable[[str], FileState | None]
-
-
-def _matches(name: str, patterns: Iterable[str]) -> bool:
-    # APFS is case-insensitive by default, so globs are too.
-    folded = name.casefold()
-    return any(fnmatchcase(folded, pattern.casefold()) for pattern in patterns)
 
 
 def _protected_ids(config: Config) -> set[tuple[int, int]]:
@@ -158,12 +152,12 @@ def scan(config: Config, lookup: Lookup, *, now: float | None = None) -> ScanRes
             if (ident.st_dev, ident.st_ino) in protected or is_within(path, config.output_root):
                 skip(SkipReason.MANAGED)
                 continue
-            if _matches(entry.name, IN_PROGRESS_PATTERNS) or any(
+            if matches_any(entry.name, IN_PROGRESS_PATTERNS) or any(
                 f"{entry.name}{suffix}".casefold() in names for suffix in PARTIAL_SIBLINGS
             ):
                 skip(SkipReason.IN_PROGRESS)
                 continue
-            if _matches(entry.name, config.ignore):
+            if matches_any(entry.name, config.ignore):
                 skip(SkipReason.IGNORED)
                 continue
 
