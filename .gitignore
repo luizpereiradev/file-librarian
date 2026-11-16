@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local configuration and data: never commit personal files or keys
+config.yaml
+*.db
+*.db-wal
+*.db-shm
+.env*
+
+# macOS
+.DS_Store

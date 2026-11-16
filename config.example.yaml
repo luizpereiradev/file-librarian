@@ -1,0 +1,82 @@
+# file-librarian configuration.
+# Copy to ~/.config/file-librarian/config.yaml (or point $FLIB_CONFIG at it)
+# and check it with: flib check-config
+# An invalid file stops the run before any file is touched.
+
+# Language of generated names and descriptions, and of the default folder and
+# category names below: en | pt-BR. Anything you set explicitly wins.
+#   en    -> ~/Downloads/Organized, _Review, Finance, Contracts, Installers, Images, Other
+#   pt-BR -> ~/Downloads/Organizado, _Revisar, Financeiro, Contratos, Instaladores, Imagens, Outros
+language: en
+
+# Folders to keep organized.
+inputs:
+  - ~/Downloads
+
+# Where category folders are created. Default depends on language.
+# output_root: ~/Downloads/Organized
+
+# Low-confidence files land here for you to decide. Default depends on language.
+# review_folder: _Review
+
+# SQLite index. Kept outside the organized folders so it is never moved.
+# database: ~/Library/Application Support/file-librarian/library.db
+
+provider:
+  name: anthropic            # anthropic (M1) | claude-code (M2) | ollama, openai-compat (M3)
+  model: claude-sonnet-5-5   # any model your provider offers
+  max_chars_per_file: 4000   # only this much text is ever sent
+  requests_per_minute: 30
+  max_retries: 3
+  timeout_seconds: 60
+  # The API key is read from ANTHROPIC_API_KEY, never from this file.
+
+limits:
+  max_files_per_run: 200
+  stable_seconds: 60         # size and mtime unchanged for this long
+  max_attempts: 3            # after this many failures a file becomes "failed"
+  confidence_threshold: 0.7  # below this, the file goes to review_folder
+  scanned_pdf_max_pages: 3
+
+naming:
+  pattern: "{date}_{subject}"   # e.g. 2026-11-16_electricity-invoice.pdf
+  date_order: DMY               # how to read ambiguous dates in documents: DMY | MDY | YMD
+  max_length: 80
+  rename_confidence_threshold: 0.8
+
+# Closed list: the AI can only pick one of these. Omit it to use the defaults
+# of your language. Setting it replaces the defaults entirely.
+# "hint" goes into the prompt and is the main lever to fix wrong classifications.
+# categories:
+#   - name: Finance
+#     hint: invoices, bills, bank statements, receipts, tax documents
+#   - name: Contracts
+#     hint: contracts, terms, signed proposals
+#   - name: Installers
+#     hint: applications, disk images and installer packages
+#     rename: false          # keep the original name
+#   - name: Images
+#   - name: Other
+
+folders: as_unit             # sub-folders and .app bundles: as_unit (move whole) | ignore
+
+finder_tags:
+  enabled: true              # tag = category name
+
+ignore:
+  - "*.crdownload"
+  - "*.part"
+  - ".DS_Store"
+  - ".localized"
+  - "._*"
+
+never_send:                  # classified from metadata only, never sent to the provider
+  - "*.pem"
+  - "*.key"
+  - ".env*"
+
+sensitive:
+  detect_secrets: true       # private keys, tokens, credentials found in content
+
+mcp:
+  read_only: false           # true disables recategorize_file and undo

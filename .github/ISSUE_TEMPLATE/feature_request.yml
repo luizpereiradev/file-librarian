@@ -1,0 +1,27 @@
+name: Feature request
+description: Propose a feature or an improvement
+labels: [enhancement]
+body:
+  - type: input
+    id: requirement
+    attributes:
+      label: Requirement ID
+      description: The PRD requirement this belongs to (e.g. RF-14), or "new" if none fits.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you are trying to do and what gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: How it could work. Note that only the current major release of macOS is supported.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
