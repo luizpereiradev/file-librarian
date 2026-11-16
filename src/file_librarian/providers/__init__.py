@@ -26,6 +26,15 @@ REGISTRY: dict[str, ProviderFactory] = {
 PLANNED = {"anthropic": "M1", "claude-code": "M2", "ollama": "M3", "openai-compat": "M3"}
 
 
+def known_providers() -> frozenset[str]:
+    """Every name the configuration accepts: implemented and planned providers."""
+    return frozenset({*REGISTRY, *PLANNED})
+
+
+def is_implemented(name: str) -> bool:
+    return name in REGISTRY
+
+
 def get_provider(config: ProviderConfig) -> Provider:
     factory = REGISTRY.get(config.name)
     if factory is not None:
@@ -39,4 +48,12 @@ def get_provider(config: ProviderConfig) -> Provider:
     raise ProviderError(f"unknown provider {config.name!r} (known: {known})")
 
 
-__all__ = ["REGISTRY", "Provider", "ProviderError", "get_provider"]
+__all__ = [
+    "PLANNED",
+    "REGISTRY",
+    "Provider",
+    "ProviderError",
+    "get_provider",
+    "is_implemented",
+    "known_providers",
+]

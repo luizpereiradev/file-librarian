@@ -2,16 +2,24 @@
 
 An invalid configuration aborts the run before any file is touched. Every
 section mirrors a block of ``config.example.yaml``; keep the two in sync.
+
+This module is the first line of the project's main safety rule: files only
+ever move into folders under ``output_root``. Folder names and the naming
+pattern are therefore validated strictly here, so later stages can rely on
+them; the planner still checks every destination again.
 """
 
 from __future__ import annotations
 
 import os
+import string
+import unicodedata
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import yaml
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -25,12 +33,52 @@ from file_librarian.locales import DEFAULT_LANGUAGE, LOCALES, Language
 APP_NAME = "file-librarian"
 CONFIG_ENV_VAR = "FLIB_CONFIG"
 
+NAMING_PLACEHOLDERS = frozenset({"date", "subject"})
+
 Fraction = Annotated[float, Field(ge=0.0, le=1.0)]
 PositiveInt = Annotated[int, Field(gt=0)]
 
 
 class ConfigError(Exception):
     """The configuration file is missing, unreadable or invalid."""
+
+
+def folder_key(name: str) -> str:
+    """How macOS compares names on a default (case-insensitive) APFS volume."""
+    return unicodedata.normalize("NFC", name).casefold()
+
+
+def _safe_folder_name(value: str) -> str:
+    """A single path component that cannot escape or hide: no separators, no dot names."""
+    value = unicodedata.normalize("NFC", value)
+    if value != value.strip():
+        raise ValueError("must not start or end with spaces")
+    if any(ch in value for ch in "/:\\"):
+        raise ValueError("must be a plain folder name (no '/', ':' or '\\')")
+    if any(unicodedata.category(ch).startswith("C") for ch in value):
+        raise ValueError("must not contain control or invisible characters")
+    if value.startswith("."):
+        raise ValueError("must not start with '.'")
+    return value
+
+
+SafeFolderName = Annotated[
+    str, Field(min_length=1, max_length=64), AfterValidator(_safe_folder_name)
+]
+
+
+def _normalize_path(value: Path) -> Path:
+    path = Path(os.path.normpath(value.expanduser()))
+    if not path.is_absolute():
+        raise ValueError(f"must be an absolute path or start with '~': {value}")
+    return path
+
+
+AbsolutePath = Annotated[Path, AfterValidator(_normalize_path)]
+
+
+def _is_within(path: Path, folder: Path) -> bool:
+    return path == folder or path.is_relative_to(folder)
 
 
 class _Section(BaseModel):
@@ -45,6 +93,16 @@ class ProviderConfig(_Section):
     requests_per_minute: PositiveInt = 30
     max_retries: Annotated[int, Field(ge=0)] = 3
     timeout_seconds: Annotated[float, Field(gt=0)] = 60.0
+
+    @field_validator("name")
+    @classmethod
+    def _known_provider(cls, value: str) -> str:
+        from file_librarian.providers import known_providers  # avoid an import cycle
+
+        known = known_providers()
+        if value not in known:
+            raise ValueError(f"unknown provider {value!r} (known: {', '.join(sorted(known))})")
+        return value
 
 
 class LimitsConfig(_Section):
@@ -63,25 +121,32 @@ class NamingConfig(_Section):
 
     @field_validator("pattern")
     @classmethod
-    def _pattern_has_subject(cls, value: str) -> str:
-        if "{subject}" not in value:
+    def _pattern_is_a_file_name(cls, value: str) -> str:
+        try:
+            parts = list(string.Formatter().parse(value))
+        except ValueError as exc:
+            raise ValueError(f"naming.pattern is not a valid pattern: {exc}") from exc
+        fields = {name for _, name, _, _ in parts if name is not None}
+        unknown = fields - NAMING_PLACEHOLDERS
+        if unknown:
+            allowed = ", ".join(f"{{{p}}}" for p in sorted(NAMING_PLACEHOLDERS))
+            raise ValueError(f"naming.pattern: unknown placeholder(s) {unknown}; use {allowed}")
+        if "subject" not in fields:
             raise ValueError("naming.pattern must contain {subject}")
+        if any(spec or conv for _, name, spec, conv in parts if name is not None):
+            raise ValueError("naming.pattern placeholders take no format spec or conversion")
+        literal = "".join(text for text, _, _, _ in parts)
+        if any(ch in literal for ch in "/:\\") or ".." in literal:
+            raise ValueError("naming.pattern must produce a file name, not a path")
+        if any(unicodedata.category(ch).startswith("C") for ch in literal):
+            raise ValueError("naming.pattern must not contain control characters")
         return value
 
 
 class Category(_Section):
-    name: str = Field(min_length=1, max_length=64)
+    name: SafeFolderName
     hint: str | None = None
     rename: bool = True
-
-    @field_validator("name")
-    @classmethod
-    def _name_is_a_safe_folder(cls, value: str) -> str:
-        if value != value.strip():
-            raise ValueError("category name must not start or end with spaces")
-        if "/" in value or ":" in value or value.startswith("."):
-            raise ValueError("category name must be a plain folder name (no '/', ':', leading '.')")
-        return value
 
 
 class FinderTagsConfig(_Section):
@@ -110,10 +175,10 @@ def default_config_path() -> Path:
 
 class Config(_Section):
     language: Language = DEFAULT_LANGUAGE
-    inputs: list[Path] = Field(min_length=1)
-    output_root: Path
-    review_folder: str = Field(min_length=1)
-    database: Path = Field(default_factory=default_database_path)
+    inputs: list[AbsolutePath] = Field(min_length=1)
+    output_root: AbsolutePath
+    review_folder: SafeFolderName
+    database: AbsolutePath = Field(default_factory=default_database_path)
     provider: ProviderConfig
     limits: LimitsConfig = LimitsConfig()
     naming: NamingConfig = NamingConfig()
@@ -141,27 +206,36 @@ class Config(_Section):
         data.setdefault("categories", [c.as_dict() for c in locale.categories])
         return data
 
-    @field_validator("inputs", mode="after")
-    @classmethod
-    def _expand_inputs(cls, value: list[Path]) -> list[Path]:
-        return [p.expanduser() for p in value]
-
-    @field_validator("output_root", "database", mode="after")
-    @classmethod
-    def _expand_path(cls, value: Path) -> Path:
-        return value.expanduser()
+    @model_validator(mode="after")
+    def _check_folder_names(self) -> Config:
+        seen: dict[str, str] = {}
+        for name in [*(c.name for c in self.categories), self.review_folder]:
+            key = folder_key(name)
+            if key in seen:
+                what = "review_folder" if name == self.review_folder else "category"
+                raise ValueError(
+                    f"{what} {name!r} is the same folder as {seen[key]!r} on macOS "
+                    "(names are compared ignoring case and Unicode form)"
+                )
+            seen[key] = name
+        return self
 
     @model_validator(mode="after")
-    def _check_consistency(self) -> Config:
-        names = [c.name for c in self.categories]
-        duplicates = sorted({n for n in names if names.count(n) > 1})
-        if duplicates:
-            raise ValueError(f"duplicate category names: {', '.join(duplicates)}")
-        if self.review_folder in names:
-            raise ValueError(f"review_folder {self.review_folder!r} must not also be a category")
+    def _check_paths(self) -> Config:
+        home = Path.home()
         for folder in self.inputs:
-            if folder == self.output_root:
-                raise ValueError(f"output_root must not be an input folder itself: {folder}")
+            if folder == Path(folder.anchor) or folder == home:
+                raise ValueError(f"input {folder} is too broad; pick specific folders")
+            if _is_within(folder, self.output_root):
+                raise ValueError(f"input {folder} must not be inside output_root")
+        for i, a in enumerate(self.inputs):
+            for b in self.inputs[i + 1 :]:
+                if _is_within(a, b) or _is_within(b, a):
+                    raise ValueError(f"inputs must not overlap: {a} and {b}")
+        if _is_within(self.database, self.output_root) or any(
+            _is_within(self.database, folder) for folder in self.inputs
+        ):
+            raise ValueError("database must be outside the input folders and output_root")
         return self
 
     def category(self, name: str) -> Category | None:

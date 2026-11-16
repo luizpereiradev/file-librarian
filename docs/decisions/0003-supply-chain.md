@@ -42,8 +42,11 @@ dedicated workflow with build attestations, never a long-lived token.
 
 - New upstream releases arrive about a week late. Acceptable for a tool that
   should change slowly.
-- Adding an index, a git dependency or an unpinned action fails the test
-  suite, so it cannot slip in unnoticed; it needs a new ADR.
+- Adding an index, a git dependency, an unpinned action, a checkout that keeps
+  credentials or a `pull_request_target`/`workflow_run` trigger fails the test
+  suite. The tests are not tamper-proof: a pull request could weaken a test and
+  the rule it checks together. That is why CODEOWNERS covers the tests, the
+  workflows and this ADR, and why `main` requires review before merging.
 - `uv audit` is still a preview feature of uv and is enabled explicitly; if
   its interface changes, the Security workflow fails loudly rather than
   silently passing.

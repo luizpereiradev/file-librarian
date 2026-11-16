@@ -5,7 +5,8 @@ attribute ``com.apple.metadata:kMDItemWhereFroms``: a binary property list
 holding a list of strings, usually ``[download URL, referring page URL]``.
 
 Python's ``os.getxattr`` does not exist on macOS, so this calls libc directly
-through ctypes; no extra dependency is needed.
+through ctypes; no extra dependency is needed. This module only reads; it
+never writes metadata.
 """
 
 from __future__ import annotations
@@ -37,15 +38,6 @@ def _libc() -> ctypes.CDLL:
         ctypes.c_int,
     ]
     lib.getxattr.restype = ctypes.c_ssize_t
-    lib.setxattr.argtypes = [
-        ctypes.c_char_p,
-        ctypes.c_char_p,
-        ctypes.c_void_p,
-        ctypes.c_size_t,
-        ctypes.c_uint32,
-        ctypes.c_int,
-    ]
-    lib.setxattr.restype = ctypes.c_int
     return lib
 
 
@@ -68,17 +60,6 @@ def read_xattr(path: Path, name: str) -> bytes | None:
         err = ctypes.get_errno()
         raise OSError(err, os.strerror(err), str(path))
     return buf.raw[:read]
-
-
-def write_xattr(path: Path, name: str, value: bytes) -> None:
-    """Set an extended attribute. Used by tests to build synthetic downloads."""
-    if sys.platform != "darwin":
-        raise OSError(errno.ENOTSUP, "extended attributes are only supported on macOS")
-    lib = _libc()
-    rc = lib.setxattr(os.fsencode(path), name.encode(), value, len(value), 0, _XATTR_NOFOLLOW)
-    if rc != 0:
-        err = ctypes.get_errno()
-        raise OSError(err, os.strerror(err), str(path))
 
 
 def parse_where_froms(raw: bytes) -> tuple[str, ...]:

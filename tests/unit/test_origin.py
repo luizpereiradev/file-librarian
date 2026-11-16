@@ -7,14 +7,14 @@ from file_librarian.extractors.origin import (
     WHERE_FROMS,
     download_origin,
     parse_where_froms,
-    write_xattr,
 )
+from tests._helpers import write_xattr
 
 URL = "https://example.com/files/invoice-2026-10.pdf"
 REFERRER = "https://example.com/account/billing"
 
 
-def make_download(folder: Path, value: object) -> Path:
+def make_download(folder: Path, value: list[str]) -> Path:
     path = folder / "documento(3).pdf"
     path.write_bytes(b"%PDF-1.4 synthetic")
     write_xattr(path, WHERE_FROMS, plistlib.dumps(value, fmt=plistlib.FMT_BINARY))

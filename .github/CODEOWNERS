@@ -1,7 +1,15 @@
-# Changes to the supply chain and to the safety-critical core need the maintainer's review.
+# Changes here need the maintainer's review once branch rules require code owners.
+# The whole package is owned while the safety-critical code is still taking shape.
+
+/src/file_librarian/                     @luizpereiradev
+
+# Supply chain, CI and the tests that guard them
 /.github/                                @luizpereiradev
 /pyproject.toml                          @luizpereiradev
 /uv.lock                                 @luizpereiradev
-/src/file_librarian/executor.py          @luizpereiradev
-/src/file_librarian/planner.py           @luizpereiradev
-/src/file_librarian/db/migrations/       @luizpereiradev
+/tests/conftest.py                       @luizpereiradev
+/tests/unit/test_supply_chain.py         @luizpereiradev
+
+# Security policy and architecture decisions
+/SECURITY.md                             @luizpereiradev
+/docs/decisions/                         @luizpereiradev

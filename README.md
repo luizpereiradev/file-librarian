@@ -7,17 +7,23 @@ searchable description to a local SQLite index.
 `documento(3).pdf` becomes `Finance/2026-10-05_electricity-invoice.pdf`, and
 `flib search "electricity october"` finds it months later.
 
-**The AI only decides. Deterministic code moves files.** Nothing is deleted,
-nothing is overwritten, and every operation can be undone.
+**The AI only decides. Deterministic code moves files.** These are the design
+guarantees the organizing commands are built to keep from M1 on:
+
+- nothing is deleted and nothing is overwritten;
+- every run is recorded and can be undone, except files you changed or moved
+  afterwards, which are skipped and listed.
 
 > **Status: pre-alpha (milestone M0).** The command surface, configuration,
 > database schema and download-origin reader exist; organizing files does not
-> yet. See the [roadmap](#roadmap).
+> yet, so none of the guarantees above are exercised today. See the
+> [roadmap](#roadmap).
 
 ## Requirements
 
 - The current major release of macOS (the only supported platform)
-- Python 3.11+
+- [uv](https://docs.astral.sh/uv/) 0.13 or newer (`brew install uv`); it
+  installs Python 3.11+ for you
 - An Anthropic API key for the default provider (from M1)
 
 ## Try it in 5 minutes
@@ -28,7 +34,7 @@ uv sync                                   # installs Python 3.11 and dependencie
 mkdir -p ~/.config/file-librarian
 cp config.example.yaml ~/.config/file-librarian/config.yaml
 uv run flib check-config                  # validates your configuration
-uv run flib inspect ~/Downloads/*.pdf     # hash, size and where each file was downloaded from
+uv run flib inspect ~/Downloads/<a-file>  # read-only: hash, size and download origin
 ```
 
 ## Commands
@@ -62,10 +68,15 @@ The API key is read from `ANTHROPIC_API_KEY`, never from the file.
 
 ## Privacy
 
-Only a capped excerpt of each file (`provider.max_chars_per_file`) is sent to
-the AI provider. Files matching `never_send`, or in which secrets are
-detected, are classified from metadata only and never sent. A local provider
-(Ollama) is planned for M3.
+M0 sends nothing anywhere: no command talks to an AI provider yet. From M1 on,
+the design is:
+
+- only a capped excerpt of each file (`provider.max_chars_per_file`) is sent
+  to the AI provider;
+- files matching `never_send`, or in which secrets are detected, are
+  classified from metadata only and never sent;
+- a local provider (Ollama) is planned for M3 for anyone who wants nothing to
+  leave the machine.
 
 ## Roadmap
 
@@ -79,9 +90,11 @@ detected, are classified from metadata only and never sent. A local provider
 
 ## Contributing
 
-Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and
-[docs/architecture.md](docs/architecture.md). Adding an AI provider or a file
-format has its own guide in [docs/](docs/).
+Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md),
+[docs/architecture.md](docs/architecture.md) and the
+[requirements](docs/requirements.md). Adding an AI provider or a file format
+has its own guide in [docs/](docs/). Questions go to
+[Discussions](https://github.com/luizpereiradev/file-librarian/discussions).
 
 ## License
 

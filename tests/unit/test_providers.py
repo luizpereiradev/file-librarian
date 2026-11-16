@@ -36,8 +36,8 @@ def test_registry() -> None:
     assert get_provider(ProviderConfig(name="fake", model="x")).name == "fake"
     with pytest.raises(ProviderError, match="planned for M1"):
         get_provider(ProviderConfig(name="anthropic", model="x"))
-    with pytest.raises(ProviderError, match="unknown provider"):
-        get_provider(ProviderConfig(name="nope", model="x"))
+    with pytest.raises(ValidationError, match="unknown provider"):
+        ProviderConfig(name="nope", model="x")
 
 
 @pytest.mark.parametrize(

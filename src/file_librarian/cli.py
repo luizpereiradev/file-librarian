@@ -18,6 +18,7 @@ import typer
 from file_librarian import __version__
 from file_librarian.config import ConfigError, default_config_path, load_config
 from file_librarian.extractors.origin import download_origin
+from file_librarian.providers import PLANNED, is_implemented
 
 EXIT_ERROR = 1
 EXIT_NOT_IMPLEMENTED = 2
@@ -86,6 +87,13 @@ def check_config(config: ConfigOption = None) -> None:
     typer.echo(f"  review_folder: {cfg.review_folder}")
     typer.echo(f"  categories: {', '.join(c.name for c in cfg.categories)}")
     typer.echo(f"  provider: {cfg.provider.name} ({cfg.provider.model})")
+    if not is_implemented(cfg.provider.name):
+        milestone = PLANNED.get(cfg.provider.name, "a later milestone")
+        typer.echo(
+            f"warning: provider {cfg.provider.name!r} is planned for {milestone}; "
+            "classification commands will not run until then.",
+            err=True,
+        )
 
 
 @app.command()
@@ -100,7 +108,7 @@ def inspect(
             {
                 "path": str(path),
                 "sha256": _sha256(path) if path.is_file() else None,
-                "size_bytes": path.stat().st_size,
+                "size_bytes": path.stat().st_size if path.is_file() else None,
                 "source_urls": list(download_origin(path)),
             }
         )
@@ -110,7 +118,8 @@ def inspect(
     for item in results:
         typer.echo(str(item["path"]))
         typer.echo(f"  sha256: {item['sha256'] or '(directory)'}")
-        typer.echo(f"  size:   {item['size_bytes']} bytes")
+        size = item["size_bytes"]
+        typer.echo(f"  size:   {size} bytes" if size is not None else "  size:   (directory)")
         urls = item["source_urls"]
         if isinstance(urls, list) and urls:
             for url in urls:

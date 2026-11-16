@@ -26,3 +26,21 @@ All notable changes to this project are documented here. The format follows
   Dependabot with cooldown, `uv audit` and dependency review in a Security
   workflow, actions pinned by commit SHA, zizmor workflow linting, CODEOWNERS,
   and tests that fail on unpinned actions or non-PyPI sources.
+- Stricter configuration validation: folder names cannot contain path
+  separators, control characters or a leading dot; categories and the review
+  folder are compared the way macOS compares names (case and Unicode form);
+  `naming.pattern` accepts only `{date}` and `{subject}` and must produce a file
+  name; inputs cannot be `/`, your home folder, overlapping or inside
+  `output_root`; the database must live outside inputs and `output_root`;
+  unknown providers are rejected.
+
+### Changed
+
+- `flib check-config` warns when the configured provider is not implemented yet.
+- `flib inspect` no longer reports a size for directories.
+- CI tests Python 3.11 through 3.15; superseded pull request runs are cancelled,
+  runs on `main` and the weekly audit are not.
+- mypy checks `tests/` too; ruff runs the bandit (`S`) rules.
+- Requirements are available in English in `docs/requirements.md`.
+
+[Unreleased]: https://github.com/luizpereiradev/file-librarian/commits/main
