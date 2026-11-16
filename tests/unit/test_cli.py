@@ -43,7 +43,6 @@ def test_help_lists_every_command() -> None:
 @pytest.mark.parametrize(
     ("args", "requirement"),
     [
-        (["schedule"], "RF-19"),
         (["reconcile"], "RF-20"),
         (["init"], "RF-38"),
         (["mcp"], "RF-22"),

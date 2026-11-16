@@ -42,6 +42,22 @@ flib simulate                             # shows what would happen; nothing mov
 
 Then `flib run` organizes for real, and `flib undo` reverts the last run.
 
+### Run it every day
+
+```sh
+flib schedule                 # daily at schedule.time (12:30 by default); --at 21:00 to change
+flib schedule --status        # when it runs and whether it is active
+flib schedule --remove        # stop it
+```
+
+`flib schedule` installs a launchd agent, offers to move an API key that is
+only in your shell into the Keychain, and then checks that a *scheduled*
+process can read your folders. macOS may block background processes from
+Downloads; if so, it tells you exactly which program to add under System
+Settings > Privacy & Security > Full Disk Access. If the Mac is asleep at the
+scheduled time, the run happens on wake. Each run writes a log next to the
+database (`~/Library/Application Support/file-librarian/logs`).
+
 To try it without an API key, set `provider: {name: fake, model: offline}`:
 everything is filed under the last category, offline.
 
@@ -67,7 +83,7 @@ easiest choice for them. Set `api_key_source` to `environment`, `keychain` or
 | `flib run` | Classify, rename, move and index new files | M1 (available) |
 | `flib search QUERY [--json]` | Full-text search over names, descriptions and tags | M1 (available) |
 | `flib undo [--run ID \| --file PATH]` | Revert a run or one file | M1 (available) |
-| `flib schedule` | Install the daily launchd agent | M2 |
+| `flib schedule [--at HH:MM \| --status \| --remove]` | Run every day via launchd, with an access check | M2 (available) |
 | `flib reconcile` | Update the index after manual moves | M2 |
 | `flib init` | Guided first run on a sample | M2 |
 | `flib mcp` | Local MCP server for AI assistants | M2 |

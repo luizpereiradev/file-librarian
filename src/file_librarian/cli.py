@@ -9,23 +9,30 @@ requirement, so the interface can be reviewed before they land.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Annotated, NoReturn
 
 import typer
 
-from file_librarian import __version__, credentials, keychain, pipeline
-from file_librarian.config import Config, ConfigError, default_config_path, load_config
+from file_librarian import __version__, credentials, keychain, pipeline, scheduler
+from file_librarian.config import (
+    Config,
+    ConfigError,
+    ScheduleConfig,
+    default_config_path,
+    load_config,
+)
 from file_librarian.db.store import Store
 from file_librarian.executor import RunReport, recover
 from file_librarian.extractors.origin import download_origin
 from file_librarian.hashing import file_sha256, unit_manifest
 from file_librarian.lock import AlreadyRunningError, instance_lock
-from file_librarian.models import FileStatus
+from file_librarian.models import FileStatus, RunTrigger
 from file_librarian.planner import Plan
 from file_librarian.providers import PLANNED, ProviderError, get_provider, is_implemented
-from file_librarian.runlog import write_log
+from file_librarian.runlog import logs_dir, write_log
 from file_librarian.scanner import ScanError, SkipReason
 from file_librarian.search import search as run_search
 from file_librarian.search import to_json as search_json
@@ -201,9 +208,14 @@ def key_delete() -> None:
 
 
 @app.command()
-def run(config: ConfigOption = None) -> None:
+def run(
+    config: ConfigOption = None,
+    trigger: Annotated[
+        RunTrigger, typer.Option("--trigger", hidden=True, help="Who started the run.")
+    ] = RunTrigger.MANUAL,
+) -> None:
     """Organize the input folders now: classify, rename, move and index new files."""
-    _pipeline(config, simulate=False)
+    _pipeline(config, simulate=False, trigger=trigger)
 
 
 @app.command()
@@ -224,11 +236,13 @@ def _load(config: Path | None) -> Config:
         _fatal(str(exc))
 
 
-def _pipeline(config_path: Path | None, *, simulate: bool) -> None:
+def _pipeline(
+    config_path: Path | None, *, simulate: bool, trigger: RunTrigger = RunTrigger.MANUAL
+) -> None:
     cfg = _load(config_path)
     try:
         provider = get_provider(cfg.provider)
-        outcome = pipeline.run(cfg, provider, simulate=simulate)
+        outcome = pipeline.run(cfg, provider, simulate=simulate, trigger=trigger)
     except (ProviderError, ScanError, AlreadyRunningError) as exc:
         _fatal(str(exc))
     if outcome.recovered:
@@ -370,9 +384,140 @@ def undo(
 
 
 @app.command()
-def schedule(config: ConfigOption = None) -> None:
-    """Install the daily run as a launchd agent and check folder access."""
-    _not_implemented("schedule", "M2", "RF-19")
+def schedule(
+    config: ConfigOption = None,
+    at: Annotated[
+        str | None, typer.Option("--at", help="Time of day, HH:MM (default: schedule.time).")
+    ] = None,
+    show: Annotated[bool, typer.Option("--status", help="Show the schedule and exit.")] = False,
+    remove: Annotated[bool, typer.Option("--remove", help="Stop the daily run.")] = False,
+    save_key: Annotated[
+        bool | None,
+        typer.Option(
+            "--save-key/--no-save-key",
+            help="Copy ANTHROPIC_API_KEY from this shell to the Keychain (default: ask).",
+        ),
+    ] = None,
+    check: Annotated[
+        bool, typer.Option("--check/--no-check", help="Test folder access as launchd will.")
+    ] = True,
+) -> None:
+    """Run flib every day at a fixed time (a launchd agent), and check it can work."""
+    if remove:
+        removed = scheduler.remove()
+        typer.echo("Daily run removed." if removed else "No daily run was scheduled.")
+        return
+    if show:
+        _print_schedule_status()
+        return
+    path = config or default_config_path()
+    cfg = _load(path)
+    try:
+        when = ScheduleConfig(time=at).time if at else cfg.schedule.time
+    except ValueError:
+        _fatal("--at must be a 24-hour time like 12:30")
+    if not scheduler.is_installed_tool():
+        typer.echo(
+            "warning: flib is running from a development environment; the schedule will "
+            "depend on this folder. Install it with ./scripts/install.sh and run "
+            "`flib schedule` again from the installed command.",
+            err=True,
+        )
+    _ensure_key_for_schedule(cfg, save_key)
+    try:
+        installed = scheduler.install(when, path.resolve(), logs_dir(cfg.database))
+    except scheduler.ScheduleError as exc:
+        _fatal(str(exc))
+    typer.echo(f"Daily run scheduled at {when} ({installed}).")
+    typer.echo("If the Mac is asleep then, it runs on wake. `flib schedule --remove` stops it.")
+    if check:
+        _report_access(path.resolve())
+
+
+def _print_schedule_status() -> None:
+    try:
+        state = scheduler.status()
+    except scheduler.ScheduleError as exc:
+        _fatal(str(exc))
+    if not state.installed:
+        typer.echo("No daily run is scheduled. Run `flib schedule` to set one up.")
+        return
+    loaded = "active" if state.loaded else "installed but not loaded (run `flib schedule` again)"
+    typer.echo(f"Daily run at {state.time}: {loaded}")
+    typer.echo(f"  runs: {' '.join(state.program)}")
+
+
+def _ensure_key_for_schedule(cfg: Config, save_key: bool | None) -> None:
+    if cfg.provider.name != "anthropic":
+        return
+    found = credentials.resolve(cfg.provider)
+    if found.value is None:
+        typer.echo(
+            "warning: no API key found; the daily run will fail until you run `flib key set`.",
+            err=True,
+        )
+        return
+    if found.source != "environment":
+        return  # Keychain or env_file: launchd can read those
+    try:
+        in_keychain = keychain.read() is not None
+    except keychain.KeychainError:
+        in_keychain = False
+    if in_keychain:
+        return
+    if save_key is None:
+        save_key = typer.confirm(
+            "The API key is only in this shell's environment, which the daily run cannot "
+            "see. Save it to the macOS Keychain?",
+            default=True,
+        )
+    if save_key:
+        try:
+            keychain.write(found.value)
+            typer.echo("API key saved to the Keychain.")
+        except (keychain.KeychainError, ValueError) as exc:
+            typer.echo(f"warning: could not save the key: {exc}", err=True)
+    else:
+        typer.echo(
+            "warning: the daily run will not find the API key; see `flib key set`.", err=True
+        )
+
+
+def _report_access(config_path: Path) -> None:
+    typer.echo("Checking folder access as the scheduled run will see it...")
+    try:
+        report = scheduler.check_access(config_path)
+    except scheduler.ScheduleError as exc:
+        typer.echo(f"warning: {exc}", err=True)
+        return
+    denied = {folder: state for folder, state in report.items() if state != "ok"}
+    for folder, state in report.items():
+        typer.echo(f"  {folder}: {state}")
+    if denied:
+        binary = os.path.realpath(sys.executable)
+        typer.echo(
+            "\nmacOS blocks the scheduled run from these folders. Open System Settings > "
+            "Privacy & Security > Full Disk Access (or Files and Folders), click +, press "
+            f"Cmd+Shift+G and add:\n  {binary}\nThen run `flib schedule` again to re-check.",
+            err=True,
+        )
+        raise typer.Exit(EXIT_ERROR)
+    typer.echo("Access OK: the daily run can read every input folder.")
+
+
+@app.command("check-access", hidden=True)
+def check_access(
+    out: Annotated[Path, typer.Option("--out", help="Where to write the JSON report.")],
+    config: ConfigOption = None,
+) -> None:
+    """Used by `flib schedule`: report whether this process can list the input folders."""
+    try:
+        report = scheduler.probe_inputs(load_config(config).inputs)
+    except ConfigError as exc:
+        report = {"config": f"error: {exc}"}
+    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(report, fh)
 
 
 @app.command()
