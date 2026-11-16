@@ -116,6 +116,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Security
 
+- The daily run uses `flib-python`, a copy of the interpreter inside flib's
+  own environment, instead of the uv-managed Python that every project using
+  that version shares. macOS grants folder access per executable, so Full
+  Disk Access now covers flib only. `flib schedule --refresh` re-creates the
+  copy (keeping the time); `scripts/install.sh` runs it after reinstalling,
+  and `flib schedule --status` warns when the copy is out of date.
 - Mover hardening from an adversarial review: paths are compared after
   resolving symlinks and folding case and Unicode, and the scanner skips
   flib's own database, journal, lock and library by device and inode, so a

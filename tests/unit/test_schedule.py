@@ -13,7 +13,7 @@ from file_librarian import keychain, scheduler
 from file_librarian.cli import app
 from file_librarian.config import load_config
 from file_librarian.db.store import Store
-from tests._helpers import OLD
+from tests._helpers import OLD, REPO_ROOT
 
 runner = CliRunner()
 KEY = "sk-ant-" + "sched-" + "k" * 20
@@ -42,9 +42,13 @@ def test_schedule_installs_a_daily_agent(config_file: Path, fake_launchd: Path) 
     assert "Daily run scheduled at 09:05" in result.stdout
     data = plistlib.loads(scheduler.plist_path().read_bytes())
     assert data["StartCalendarInterval"] == {"Hour": 9, "Minute": 5}
+    interpreter = scheduler.dedicated_interpreter()
     assert data["ProgramArguments"] == [
-        sys.executable, "-m", "file_librarian", "run", "--trigger", "schedule"
+        str(interpreter), "-m", "file_librarian", "run", "--trigger", "schedule"
     ]  # fmt: skip
+    # flib's own copy of the interpreter: a real file, not the shared one or a link to it.
+    assert interpreter.name == "flib-python" and not interpreter.is_symlink()
+    assert interpreter.read_bytes() == Path(os.path.realpath(sys.executable)).read_bytes()
     assert data["EnvironmentVariables"]["FLIB_CONFIG"] == str(config_file.resolve())
     assert "ANTHROPIC_API_KEY" not in data["EnvironmentVariables"]  # never in the plist
     assert list(loaded(fake_launchd)) == [scheduler.LABEL]
@@ -180,3 +184,49 @@ def test_check_access_with_a_broken_config(tmp_path: Path) -> None:
     out = tmp_path / "report.json"
     assert runner.invoke(app, ["check-access", "--out", str(out), "-c", str(bad)]).exit_code == 0
     assert json.loads(out.read_text())["config"].startswith("error:")
+
+
+def test_access_instructions_name_the_dedicated_interpreter(
+    config_file: Path, downloads: Path
+) -> None:
+    keychain.write(KEY)
+    downloads.chmod(0o000)
+    try:
+        result = runner.invoke(app, ["schedule", "-c", str(config_file)])
+    finally:
+        downloads.chmod(0o755)
+    assert str(scheduler.dedicated_interpreter()) in result.stderr
+    assert "covers flib only" in result.stderr
+    assert os.path.realpath(sys.executable) not in result.stderr
+
+
+def test_status_warns_when_the_interpreter_copy_is_stale(config_file: Path) -> None:
+    keychain.write(KEY)
+    runner.invoke(app, ["schedule", "-c", str(config_file), "--no-check"])
+    scheduler.dedicated_interpreter().write_bytes(b"old python")
+    status = runner.invoke(app, ["schedule", "--status"])
+    assert "out of date" in status.stderr and "--refresh" in status.stderr
+
+
+def test_refresh_keeps_the_time_and_recopies(config_file: Path) -> None:
+    keychain.write(KEY)
+    runner.invoke(app, ["schedule", "-c", str(config_file), "--at", "07:45", "--no-check"])
+    scheduler.dedicated_interpreter().unlink()  # what a reinstall does
+    refreshed = runner.invoke(app, ["schedule", "--refresh"])
+    assert refreshed.exit_code == 0, refreshed.stderr
+    assert "scheduled at 07:45" in refreshed.stdout
+    assert scheduler.interpreter_is_current()
+    data = plistlib.loads(scheduler.plist_path().read_bytes())
+    assert data["EnvironmentVariables"]["FLIB_CONFIG"] == str(config_file.resolve())
+
+
+def test_refresh_without_a_schedule_does_nothing() -> None:
+    result = runner.invoke(app, ["schedule", "--refresh"])
+    assert result.exit_code == 0 and "nothing to refresh" in result.stdout
+    assert not scheduler.plist_path().exists()
+
+
+def test_install_script_refreshes_an_existing_schedule() -> None:
+    script = (REPO_ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
+    assert "schedule --refresh" in script
+    assert scheduler.LABEL in script

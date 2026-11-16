@@ -61,6 +61,15 @@ def fake_launchd(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.M
     script = _shim(folder, "launchctl", "fake_launchctl.py")
     monkeypatch.setenv("FAKE_LAUNCHD", str(folder / "loaded.json"))
     monkeypatch.setattr("file_librarian.scheduler.LAUNCHCTL", str(script))
+    # The dedicated interpreter goes into a throwaway environment that reuses this
+    # one's packages, never into the developer's .venv.
+    env = folder / "env"
+    (env / "bin").mkdir(parents=True)
+    (env / "pyvenv.cfg").write_text(
+        (Path(sys.prefix) / "pyvenv.cfg").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    (env / "lib").symlink_to(Path(sys.prefix) / "lib")
+    monkeypatch.setattr("file_librarian.scheduler.ENV_ROOT", env)
     return folder / "loaded.json"
 
 

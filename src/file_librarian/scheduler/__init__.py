@@ -12,6 +12,16 @@ apply per binary and are silent for background agents. It loads a one-shot
 agent that runs ``check-access`` in exactly the scheduled context and reports
 back through a file.
 
+**A dedicated interpreter.** macOS grants folder access per executable, and
+the Python inside a uv environment is a link to an interpreter shared by every
+project using that Python version. Granting Full Disk Access to it would open
+your files to all of them. So the agent runs ``flib-python``: a real copy of
+the interpreter placed inside flib's own environment (``<env>/bin``), where
+Python recognises the environment by itself. Access granted to it covers flib
+only. ``prepare_interpreter`` refreshes the copy when the interpreter changes;
+reinstalling flib recreates the environment, so ``scripts/install.sh`` runs
+``flib schedule --refresh`` afterwards.
+
 All ``launchctl`` calls go through ``LAUNCHCTL`` (tests swap in a fake).
 """
 
@@ -20,6 +30,7 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import shutil
 import subprocess
 import sys
 import time
@@ -30,6 +41,9 @@ LABEL = "io.github.luizpereiradev.file-librarian"
 CHECK_LABEL = f"{LABEL}.check"
 LAUNCHCTL = "/bin/launchctl"
 SAFE_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+INTERPRETER_NAME = "flib-python"
+ENV_ROOT: Path | None = None
+"""The environment the dedicated interpreter goes into; ``None`` = this one (tests override)."""
 
 
 class ScheduleError(RuntimeError):
@@ -42,6 +56,8 @@ class Status:
     loaded: bool
     time: str | None
     program: list[str]
+    interpreter_current: bool = True
+    """False when the copy no longer matches the interpreter flib runs on."""
 
 
 def agents_dir() -> Path:
@@ -52,9 +68,40 @@ def plist_path(label: str = LABEL) -> Path:
     return agents_dir() / f"{label}.plist"
 
 
+def dedicated_interpreter() -> Path:
+    return (ENV_ROOT or Path(sys.prefix)) / "bin" / INTERPRETER_NAME
+
+
+def _source_interpreter() -> Path:
+    return Path(os.path.realpath(sys.executable))
+
+
+def interpreter_is_current() -> bool:
+    target = dedicated_interpreter()
+    try:
+        return target.read_bytes() == _source_interpreter().read_bytes()
+    except OSError:
+        return False
+
+
+def prepare_interpreter() -> Path:
+    """Create or refresh flib's own copy of the interpreter; returns its path."""
+    if ENV_ROOT is None and sys.prefix == sys.base_prefix:
+        raise ScheduleError(
+            "flib is not running from its own environment; install it with ./scripts/install.sh"
+        )
+    target = dedicated_interpreter()
+    if not interpreter_is_current():
+        tmp = target.with_name(f".{INTERPRETER_NAME}.tmp")
+        shutil.copy2(_source_interpreter(), tmp)
+        tmp.chmod(0o755)
+        tmp.replace(target)
+    return target
+
+
 def program() -> list[str]:
-    """How the agent starts flib: this very interpreter, so it matches what was installed."""
-    return [sys.executable, "-m", "file_librarian"]
+    """How the agent starts flib: the dedicated interpreter (see the module docstring)."""
+    return [str(dedicated_interpreter()), "-m", "file_librarian"]
 
 
 def is_installed_tool() -> bool:
@@ -107,6 +154,7 @@ def _write_plist(path: Path, data: dict[str, object]) -> None:
 
 def install(at: str, config_path: Path, logs: Path) -> Path:
     logs.mkdir(parents=True, exist_ok=True, mode=0o700)
+    prepare_interpreter()
     path = plist_path()
     _write_plist(path, build_plist(at, config_path, logs))
     _load(path, LABEL)
@@ -131,11 +179,23 @@ def status() -> Status:
     interval = data.get("StartCalendarInterval", {})
     at = f"{interval.get('Hour', 0):02d}:{interval.get('Minute', 0):02d}"
     loaded = _launchctl("print", f"{_domain()}/{LABEL}").returncode == 0
-    return Status(True, loaded, at, list(data.get("ProgramArguments", [])))
+    return Status(
+        True, loaded, at, list(data.get("ProgramArguments", [])), interpreter_is_current()
+    )
+
+
+def scheduled_config() -> Path | None:
+    """The configuration path the installed agent uses, if any."""
+    path = plist_path()
+    if not path.exists():
+        return None
+    value = plistlib.loads(path.read_bytes()).get("EnvironmentVariables", {}).get("FLIB_CONFIG")
+    return Path(value) if value else None
 
 
 def check_access(config_path: Path, *, timeout: float = 20.0) -> dict[str, str]:
     """Run ``check-access`` as a launchd agent and return {folder: "ok" | error}."""
+    prepare_interpreter()
     path = plist_path(CHECK_LABEL)
     result_file = path.with_suffix(".result.json")
     result_file.unlink(missing_ok=True)
