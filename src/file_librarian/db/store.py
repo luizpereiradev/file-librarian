@@ -82,6 +82,8 @@ class FileRow:
     tags: list[str]
     attempts: int
     processed_at: str
+    size_bytes: int | None
+    is_unit: bool
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> FileRow:
@@ -102,6 +104,8 @@ class FileRow:
             tags=tags,
             attempts=int(row["attempts"]),
             processed_at=str(row["processed_at"]),
+            size_bytes=None if row["size_bytes"] is None else int(row["size_bytes"]),
+            is_unit=bool(row["is_unit"]),
         )
 
 
@@ -227,8 +231,8 @@ class Store:
             """INSERT INTO files (sha256, original_name, original_path, current_name,
                    current_path, extension, size_bytes, source_url, category, description,
                    tags, confidence, status, attempts, last_error, provider, model, run_id,
-                   processed_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   processed_at, is_unit)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(sha256) DO UPDATE SET
                    current_name = excluded.current_name, current_path = excluded.current_path,
                    category = excluded.category, description = excluded.description,
@@ -242,7 +246,7 @@ class Store:
                 normalize(r.current_path.name), normalize(str(r.current_path)), r.extension,
                 r.size_bytes, r.source_url, r.category, r.description,
                 json.dumps(list(r.tags), ensure_ascii=False), r.confidence, r.status.value,
-                r.attempts, r.last_error, r.provider, r.model, run_id, _now(),
+                r.attempts, r.last_error, r.provider, r.model, run_id, _now(), int(r.is_unit),
             ),
         )  # fmt: skip
         row = self.conn.execute("SELECT id FROM files WHERE sha256 = ?", (r.sha256,)).fetchone()
@@ -252,6 +256,30 @@ class Store:
         self.conn.execute(
             "UPDATE files SET current_name = ?, current_path = ?, status = ? WHERE id = ?",
             (normalize(path.name), normalize(str(path)), status.value, file_id),
+        )
+
+    def all_files(self) -> list[FileRow]:
+        return [FileRow.from_row(r) for r in self.conn.execute("SELECT * FROM files ORDER BY id")]
+
+    def relocate_file(
+        self, file_id: int, path: Path, status: FileStatus, category: str | None
+    ) -> None:
+        """Point a row at where the file really is now (``flib reconcile``)."""
+        self.conn.execute(
+            """UPDATE files SET current_name = ?, current_path = ?, status = ?, category = ?
+               WHERE id = ?""",
+            (normalize(path.name), normalize(str(path)), status.value, category, file_id),
+        )
+
+    def set_file_status(self, file_id: int, status: FileStatus) -> None:
+        self.conn.execute("UPDATE files SET status = ? WHERE id = ?", (status.value, file_id))
+
+    def add_correction(self, file_id: int, field: str, old: str | None, new: str) -> None:
+        """A change the user made by hand; the classifier learns from these (RF-29)."""
+        self.conn.execute(
+            """INSERT INTO corrections (file_id, field, old_value, new_value, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (file_id, field, old, new, _now()),
         )
 
     def mark_file_failed(self, file_id: int, error: str) -> None:

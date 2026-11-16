@@ -32,6 +32,7 @@ from file_librarian.lock import AlreadyRunningError, instance_lock
 from file_librarian.models import FileStatus, RunTrigger
 from file_librarian.planner import Plan
 from file_librarian.providers import PLANNED, ProviderError, get_provider, is_implemented
+from file_librarian.reconcile import reconcile as run_reconcile
 from file_librarian.runlog import logs_dir, write_log
 from file_librarian.scanner import ScanError, SkipReason
 from file_librarian.search import search as run_search
@@ -522,8 +523,25 @@ def check_access(
 
 @app.command()
 def reconcile(config: ConfigOption = None) -> None:
-    """Update the index for files moved or deleted by hand."""
-    _not_implemented("reconcile", "M2", "RF-20")
+    """Update the index for files moved, renamed or deleted by hand. Moves nothing."""
+    cfg = _load(config)
+    try:
+        with instance_lock(cfg.database), Store.open(cfg.database) as store:
+            report = run_reconcile(cfg, store)
+    except AlreadyRunningError as exc:
+        _fatal(str(exc))
+    for old, new in report.moved:
+        typer.echo(f"  moved   {_short(old, cfg)}  ->  {_short(new, cfg)}")
+    for path, old_category, new_category in report.recategorized:
+        typer.echo(f"  learned {_short(path, cfg)}: {old_category or '-'} -> {new_category}")
+    for path in report.found_again:
+        typer.echo(f"  found   {_short(path, cfg)}")
+    for path in report.missing:
+        typer.echo(f"  missing {_short(path, cfg)}")
+    typer.echo(
+        f"Reconcile: {report.checked} checked, {len(report.moved)} moved by hand, "
+        f"{len(report.found_again)} found again, {len(report.missing)} missing."
+    )
 
 
 @app.command()

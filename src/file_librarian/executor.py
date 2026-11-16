@@ -110,6 +110,7 @@ def file_record(
         status=status,
         extension=ctx.extension,
         size_bytes=ctx.size_bytes,
+        is_unit=ctx.is_unit,
         source_url=ctx.source_urls[0] if ctx.source_urls else None,
         category=answer.category if answer and status is FileStatus.ORGANIZED else None,
         description=answer.description if answer else None,
