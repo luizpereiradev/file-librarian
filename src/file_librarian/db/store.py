@@ -121,6 +121,8 @@ class OperationRow:
     status: OperationStatus
     src_identity: tuple[int, int] | None
     """The source's (st_dev, st_ino) when journaled; ``None`` for older rows."""
+    finder_tag: str | None = None
+    """The Finder tag this move added, which undo removes; ``None`` if none."""
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> OperationRow:
@@ -133,6 +135,7 @@ class OperationRow:
             dst_path=Path(row["dst_path"]),
             status=OperationStatus(row["status"]),
             src_identity=None if dev is None or ino is None else (int(dev), int(ino)),
+            finder_tag=row["finder_tag"],
         )
 
 
@@ -359,6 +362,9 @@ class Store:
                 "UPDATE operations SET status = ?, dst_path = ? WHERE id = ?",
                 (status.value, str(dst), op_id),
             )
+
+    def set_operation_tag(self, op_id: int, tag: str) -> None:
+        self.conn.execute("UPDATE operations SET finder_tag = ? WHERE id = ?", (tag, op_id))
 
     def operations(
         self, *, run_id: int | None = None, status: OperationStatus | None = None

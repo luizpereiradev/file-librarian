@@ -5,7 +5,8 @@ reverts the last operation on one file. Before moving anything back, each
 item must still be the same content that was moved (same SHA-256, or the same
 manifest digest for a folder unit), and its original path must be free.
 Anything else is skipped and listed, never forced. Restored files are marked
-``skipped`` in the index, so the next run leaves them where you put them.
+``skipped`` in the index, so the next run leaves them where you put them, and
+lose the Finder tag the move added (if any), keeping every other tag.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from file_librarian.db.store import OperationRow, Store
+from file_librarian.finder_tags import untag_restored
 from file_librarian.fsops import DestinationExistsError, move_no_replace
 from file_librarian.hashing import same_content
 from file_librarian.models import FileStatus, OperationStatus
@@ -28,6 +30,8 @@ class NothingToUndoError(LookupError):
 class UndoReport:
     restored: list[tuple[Path, Path]] = field(default_factory=list)
     skipped: list[tuple[Path, str]] = field(default_factory=list)
+    warnings: list[tuple[Path, str]] = field(default_factory=list)
+    """Restored, but something minor went wrong (a Finder tag left behind)."""
 
 
 def undo_run(store: Store, run_id: int | None = None) -> UndoReport:
@@ -83,3 +87,5 @@ def _undo_one(store: Store, op: OperationRow, report: UndoReport) -> None:
         store.set_operation(op.id, OperationStatus.UNDONE)
         store.set_file_location(op.file_id, src, FileStatus.SKIPPED)
     report.restored.append((dst, src))
+    if op.finder_tag is not None and (warning := untag_restored(src, op.finder_tag)):
+        report.warnings.append((src, warning))

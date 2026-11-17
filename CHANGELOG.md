@@ -8,6 +8,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Finder tags (RF-36): after a move into a category folder, the item gets
+  the category name as a Finder tag (`com.apple.metadata:_kMDItemUserTags`).
+  The user's own tags and colors are kept, a tag already there is not
+  duplicated (Finder ignores case), and a folder unit is tagged on the
+  folder itself; files sent to `_Review` get no tag. Migration 0005 records
+  on each journal entry the tag the move added, so `flib undo` removes that
+  tag and nothing else. A tag that cannot be written or removed is a
+  warning in the output and the run log, never a failed move; tags
+  `flib` cannot parse are left untouched. `finder_tags.enabled: false` stops
+  new tags (existing ones stay). Simulations write no tags.
 - `flib reconcile` (RF-20): the index follows files moved, renamed or deleted
   by hand. Files are found again by content (only same-size files are
   hashed; folder units by manifest) under the library and the input folders.

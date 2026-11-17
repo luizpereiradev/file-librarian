@@ -308,6 +308,8 @@ def _print_report(report: RunReport, cfg: Config, skipped: list[str]) -> None:
         source = _short(item.source, cfg)
         if item.destination is not None:
             lines.append(f"  moved   {source}  ->  {_short(item.destination, cfg)}")
+            if item.warning:
+                lines.append(f"  warning {_short(item.destination, cfg)}  ({item.warning})")
         else:
             lines.append(f"  {item.status.value:<8}{source}  ({item.note})")
     lines.extend(skipped)
@@ -381,6 +383,8 @@ def undo(
         typer.echo(f"  restored  {_short(dst, cfg)}  ->  {src}")
     for path, reason in report.skipped:
         typer.echo(f"  skipped   {_short(path, cfg)}  ({reason})")
+    for path, warning in report.warnings:
+        typer.echo(f"  warning   {_short(path, cfg)}  ({warning})")
     typer.echo(f"Undo: {len(report.restored)} restored, {len(report.skipped)} skipped.")
 
 
