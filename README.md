@@ -15,7 +15,7 @@ commands keep these guarantees:
   afterwards, which are skipped and listed.
 - nothing is downloaded from iCloud: files that exist only in the cloud, and
   folders with any such file inside, are skipped and listed until you
-  download them.
+  download them. `flib reconcile` and `flib inspect` do not read them either.
 
 > **Status: pre-alpha (M1 complete, under acceptance).** Scanning,
 > extraction, secret detection, classification with Claude, planning, moving,
@@ -85,13 +85,13 @@ easiest choice for them. Set `api_key_source` to `environment`, `keychain` or
 | Command | What it does | Milestone |
 | --- | --- | --- |
 | `flib check-config` | Validate the configuration without touching files | M0 |
-| `flib inspect FILE...` | Show hash, size and download origin | M0 |
+| `flib inspect FILE...` | Show hash, size and download origin (not the hash of a file only in iCloud) | M0 |
 | `flib simulate` | Print the full plan without changing anything | M1 (available) |
 | `flib run` | Classify, rename, move and index new files | M1 (available) |
 | `flib search QUERY [--json]` | Full-text search over names, descriptions and tags | M1 (available) |
 | `flib undo [--run ID \| --file PATH]` | Revert a run or one file | M1 (available) |
 | `flib schedule [--at HH:MM \| --status \| --remove]` | Run every day via launchd, with an access check | M2 (available) |
-| `flib reconcile` | Update the index after you move, rename or delete files by hand | M2 (available) |
+| `flib reconcile` | Update the index after you move, rename or delete files by hand; files only in iCloud are left unchecked | M2 (available) |
 | `flib fix PATH [--category NAME] [--name NAME]` | Correct one file's category or name; flib learns from it | M2 (available) |
 | `flib init` | Guided first run on a sample | M2 |
 | `flib mcp` | Local MCP server for AI assistants | M2 |
