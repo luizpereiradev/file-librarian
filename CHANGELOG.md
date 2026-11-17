@@ -274,7 +274,8 @@ All notable changes to this project are documented here. The format follows
   Claude Haiku 5.5, items sent to review fell from 17 to 12 of 48.
 - `flib check-config` warns when the configured provider is not implemented yet.
 - `flib inspect` no longer reports a size for directories.
-- CI tests Python 3.11 through 3.15; superseded pull request runs are cancelled,
+- CI tests Python 3.11 through 3.15 on `main` and the oldest and newest on
+  pull requests, behind one required `CI passed` check; superseded pull request runs are cancelled,
   runs on `main` and the weekly audit are not.
 - mypy checks `tests/` too; ruff runs the bandit (`S`) rules.
 - Requirements are available in English in `docs/requirements.md`.
