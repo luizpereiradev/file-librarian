@@ -45,8 +45,15 @@ body:
     validations:
       required: true
   - type: textarea
-    id: logs
+    id: doctor
     attributes:
-      label: Logs
-      description: From M3 on, attach the output of `flib doctor` (names and paths redacted).
-      render: text
+      label: Diagnostics (`flib doctor`)
+      description: |
+        Run `flib doctor` and attach the file it prints (or paste `flib doctor --stdout --format markdown`).
+        It holds the flib, Python and macOS versions, how flib was installed, the configuration,
+        where the API key comes from (only the word: environment, keychain, env_file or none; never
+        the key), the schedule's state, database counts and the last run logs. File names become
+        `<file-N>.ext`, folders `<home>`, `<input-1>`, `<output>`, `<dir-N>`; secrets and e-mail
+        addresses are replaced too. Please read it before attaching it.
+    validations:
+      required: false

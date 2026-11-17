@@ -8,6 +8,22 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `flib doctor` writes one redacted diagnostics report to attach to a bug
+  report (RF-39) and prints its path: flib, Python and macOS versions, the
+  install kind (uv tool or development checkout), whether the MCP extra is
+  installed, the configuration (validated, folders as `<input-1>`, `<output>`,
+  category hints and personal patterns replaced), where the API key comes
+  from as one word (the key itself never appears, not even its last
+  characters), the schedule's state, the database's schema version and counts
+  by status, the last runs and the last run logs. In the logs, every file name
+  becomes `<file-N>` plus its extension (the same name, the same number),
+  folders become placeholders, and secrets (the patterns of secret detection),
+  e-mail addresses, URLs and quoted text are replaced; category names stay. A
+  section that fails shows its error instead of stopping the report. It goes
+  to flib's logs folder (owner-only, last ten kept); `--stdout` prints it,
+  `--output PATH` writes it elsewhere, `--format markdown` makes it
+  paste-ready, `--logs N` sets how many run logs. The bug report template
+  asks for it.
 - `flib check-config` warns when an option that is accepted but not active
   yet is set to anything but its default, so nobody thinks it works. The
   list lives in `config.INACTIVE_OPTIONS`; every option in the configuration

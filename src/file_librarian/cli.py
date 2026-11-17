@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 from typing import Annotated, NoReturn, cast
@@ -1006,9 +1007,52 @@ def reprocess(config: ConfigOption = None) -> None:
 
 
 @app.command()
-def doctor(config: ConfigOption = None) -> None:
-    """Collect logs with names and paths redacted, ready to attach to an issue."""
-    _not_implemented("doctor", "M3", "RF-39")
+def doctor(
+    config: ConfigOption = None,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            "-o",
+            help="Write the report here [default: a new doctor-<time> file in flib's logs folder].",
+            dir_okay=False,
+        ),
+    ] = None,
+    to_stdout: Annotated[
+        bool, typer.Option("--stdout", help="Print the report instead of writing a file.")
+    ] = False,
+    fmt: Annotated[
+        str,
+        typer.Option("--format", help="text or markdown (paste-ready for a GitHub issue)."),
+    ] = "text",
+    run_logs: Annotated[
+        int, typer.Option("--logs", min=0, help="How many recent run logs to include.")
+    ] = 5,
+) -> None:
+    """Write a diagnostics report for a bug report, with names, paths and secrets redacted.
+
+    It holds versions, the configuration (no API key, not even part of it), the
+    schedule, database counts and the last run logs. Read it before you attach it.
+    """
+    from file_librarian import doctor as diagnostics
+
+    if fmt not in ("text", "markdown"):
+        _fatal(f"--format must be text or markdown, not {fmt!r}")
+    report_format = cast(diagnostics.Format, fmt)
+    report = diagnostics.build_report(
+        diagnostics.Options(config_path=config, run_logs=run_logs), report_format
+    )
+    if to_stdout:
+        typer.echo(report, nl=False)
+        return
+    path = output or diagnostics.default_report_path(config, report_format)
+    try:
+        diagnostics.write_report(path, report)
+    except OSError as exc:
+        _fatal(f"cannot write {path}: {exc}; try --stdout or --output")
+    typer.echo(f"Report written to {path}")
+    typer.echo("Read it, then attach it to the issue. To show it in Finder:")
+    typer.echo(f"  open -R {shlex.quote(str(path))}")
 
 
 def main() -> None:
