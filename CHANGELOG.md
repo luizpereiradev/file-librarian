@@ -18,8 +18,12 @@ All notable changes to this project are documented here. The format follows
   files show no description, tags or download origin. Write tools take the
   instance lock only for the call and fail at once while a run holds it; an
   idle server holds no lock. `mcp.read_only: true` hides the write tools. The
-  README shows how to add it to Claude Code and Claude Desktop. New runtime
-  dependency: the official MCP Python SDK (`mcp`, MIT).
+  README shows how to add it to Claude Code and Claude Desktop. The server
+  is optional: the official MCP Python SDK (`mcp`, MIT) is the `mcp` extra
+  and adds 16 packages on macOS. `./scripts/install.sh` asks whether to add
+  it (default no; `--with-mcp` / `--without-mcp` to choose without asking),
+  and an update keeps it once installed. Without it, `flib mcp` says how to
+  enable it. `uv sync` installs it for development and CI.
 - `flib fix PATH [--category NAME] [--name NAME]` and learning from
   corrections (RF-29). The file moves through the journal as its own run, so
   `flib undo` reverts it (an undone fix restores the old category and stops

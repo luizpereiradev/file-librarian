@@ -462,16 +462,21 @@ version = "0.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
-    { name = "mcp" },
     { name = "pydantic" },
     { name = "pypdf" },
     { name = "pyyaml" },
     { name = "typer" },
 ]
 
+[package.optional-dependencies]
+mcp = [
+    { name = "mcp" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "coverage" },
+    { name = "file-librarian", extra = ["mcp"] },
     { name = "mypy" },
     { name = "pytest" },
     { name = "ruff" },
@@ -481,16 +486,18 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=1" },
-    { name = "mcp", specifier = ">=2.3.0" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.3" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pypdf", specifier = ">=5" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "typer", specifier = ">=0.12" },
 ]
+provides-extras = ["mcp"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "coverage", specifier = ">=7" },
+    { name = "file-librarian", extras = ["mcp"] },
     { name = "mypy", specifier = ">=1.11" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "ruff", specifier = ">=0.6" },

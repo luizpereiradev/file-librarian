@@ -329,6 +329,17 @@ def test_flib_mcp_serves_the_loaded_config(
     assert loaded.inputs == [downloads]
 
 
+def test_flib_mcp_without_the_optional_sdk(
+    downloads: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(sys.modules, "file_librarian.mcp_server", None)  # import fails
+    result = CliRunner().invoke(app, ["mcp", "-c", str(_config_file(tmp_path, downloads))])
+    assert result.exit_code == 1
+    assert "./scripts/install.sh --with-mcp" in result.stderr
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert "Traceback" not in result.stderr
+
+
 def test_flib_mcp_refuses_a_bad_config(tmp_path: Path) -> None:
     bad = tmp_path / "config.yaml"
     bad.write_text("provider: {name: nope}\n", encoding="utf-8")

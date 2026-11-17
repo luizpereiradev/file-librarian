@@ -96,7 +96,9 @@ is `PRAGMA user_version`. Names and paths are stored in Unicode NFC.
 ## The MCP server
 
 `flib mcp` (`mcp_server.py`) is another front end over the same modules, built
-on the official MCP Python SDK and served over stdio:
+on the official MCP Python SDK and served over stdio. The SDK is the optional
+`mcp` extra (`./scripts/install.sh --with-mcp`); only this command imports it,
+and without it the command explains how to enable it:
 
 | Tool | Reuses |
 | --- | --- |

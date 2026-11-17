@@ -35,7 +35,8 @@ commands keep these guarantees:
 
 ```sh
 git clone https://github.com/luizpereiradev/file-librarian.git && cd file-librarian
-./scripts/install.sh                      # installs `flib` with the locked dependency versions
+./scripts/install.sh                      # installs `flib` with the locked dependency versions;
+                                          # asks whether to add the optional MCP server
 mkdir -p ~/.config/file-librarian
 cp config.example.yaml ~/.config/file-librarian/config.yaml
 flib key set                              # stores your Anthropic API key in the macOS Keychain
@@ -147,19 +148,30 @@ network and reads the same database as `flib search`.
 | `recategorize_file` | Move a file to another configured category and/or rename it, like `flib fix` |
 | `undo` | Revert a run or the last move of one file, like `flib undo` |
 
+**1. Enable it.** The MCP server is optional, because its SDK adds 16
+packages that the rest of flib does not need. Answer yes when
+`./scripts/install.sh` asks, or run it again with the flag:
+
+```sh
+./scripts/install.sh --with-mcp
+```
+
+Later updates keep it; `--without-mcp` removes it. Without it, `flib mcp`
+says how to enable it.
+
 Results carry metadata and descriptions, never file content; sensitive files
 show no description, tags or origin. The write tools go through the same
 journal as the CLI, so `flib undo` reverts what an assistant did, and they
 refuse to run while a run is in progress. Set `mcp.read_only: true` to offer
 only the two read tools.
 
-**Claude Code:**
+**2. Add it to Claude Code:**
 
 ```sh
 claude mcp add --scope user file-librarian -- ~/.local/bin/flib mcp
 ```
 
-**Claude Desktop:** add this to
+**Or to Claude Desktop:** add this to
 `~/Library/Application Support/Claude/claude_desktop_config.json` and restart
 it. Desktop does not expand `~` or read your shell's `PATH`, so give the
 absolute path that `./scripts/install.sh` printed:

@@ -24,12 +24,16 @@ classifiers = [
 ]
 dependencies = [
     "anthropic>=1",
-    "mcp>=2.3",
     "pydantic>=2.7",
     "pypdf>=5",
     "pyyaml>=6.0",
     "typer>=0.12",
 ]
+
+[project.optional-dependencies]
+# `flib mcp`, the MCP server for Claude and other assistants. Optional because
+# the SDK brings its HTTP stack along: `./scripts/install.sh --with-mcp`.
+mcp = ["mcp>=2.3"]
 
 [project.urls]
 Homepage = "https://github.com/luizpereiradev/file-librarian"
@@ -43,6 +47,7 @@ flib = "file_librarian.cli:main"
 
 [dependency-groups]
 dev = [
+    "file-librarian[mcp]",  # tests and mypy cover the MCP server
     "coverage>=7",
     "mypy>=1.11",
     "pytest>=8.0",
