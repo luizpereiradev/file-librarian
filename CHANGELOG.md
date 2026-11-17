@@ -8,6 +8,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Search filters (RF-14): `flib search` takes `--category` (any case),
+  `--ext` (with or without the dot), both repeatable or comma-separated, and
+  `--since`/`--until` (`YYYY-MM-DD`, inclusive, local time) on the day flib
+  last processed the file. Filters combine with the query and with each
+  other, and work without a query, listing matches newest first. Bad values
+  stop with a clear message. The MCP `search_files` tool takes the same
+  filters (`categories`, `extensions`, `since`, `until`), and its `query` is
+  now optional when a filter is given.
 - `flib doctor` writes one redacted diagnostics report to attach to a bug
   report (RF-39) and prints its path: flib, Python and macOS versions, the
   install kind (uv tool or development checkout), whether the MCP extra is

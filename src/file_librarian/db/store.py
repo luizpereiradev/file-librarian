@@ -15,7 +15,7 @@ import json
 import re
 import sqlite3
 import unicodedata
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -365,14 +365,60 @@ class Store:
         ).fetchone()
         return None if row is None else FileRow.from_row(row)
 
-    def search_files(self, fts_query: str, *, limit: int) -> list[FileRow]:
-        """Rows matching an FTS5 query, best first (names weigh more than descriptions)."""
+    def search_files(
+        self,
+        fts_query: str | None,
+        *,
+        categories: Sequence[str] = (),
+        extensions: Sequence[str] = (),
+        since: str | None = None,
+        until: str | None = None,
+        limit: int,
+    ) -> list[FileRow]:
+        """Rows matching an FTS5 query and the filters.
+
+        With a query, best first (names weigh more than descriptions); without
+        one, newest ``processed_at`` first. ``since`` is inclusive and ``until``
+        exclusive, both UTC ISO text like ``processed_at``. Filter values are
+        always bound as parameters.
+        """
+        where: list[str] = []
+        params: list[object] = []
+        if fts_query is not None:
+            where.append("files_fts MATCH ?")
+            params.append(fts_query)
+        if categories:
+            where.append(f"f.category IN ({', '.join('?' * len(categories))})")
+            params.extend(categories)
+        if extensions:
+            where.append(f"lower(f.extension) IN ({', '.join('?' * len(extensions))})")
+            params.extend(extensions)
+        if since is not None:
+            where.append("f.processed_at >= ?")
+            params.append(since)
+        if until is not None:
+            where.append("f.processed_at < ?")
+            params.append(until)
+        if fts_query is not None:
+            source = "files_fts JOIN files f ON f.id = files_fts.rowid"
+            order = "bm25(files_fts, 3.0, 3.0, 1.0, 2.0)"
+        else:
+            source = "files f"
+            order = "f.processed_at DESC, f.id DESC"
+        condition = " AND ".join(where) or "1"
+        # Only fixed SQL fragments and placeholders are joined; every value is bound.
         rows = self.conn.execute(
-            """SELECT f.* FROM files_fts JOIN files f ON f.id = files_fts.rowid
-               WHERE files_fts MATCH ? ORDER BY bm25(files_fts, 3.0, 3.0, 1.0, 2.0) LIMIT ?""",
-            (fts_query, limit),
+            f"SELECT f.* FROM {source} WHERE {condition} ORDER BY {order} LIMIT ?",  # noqa: S608
+            (*params, limit),
         ).fetchall()
         return [FileRow.from_row(r) for r in rows]
+
+    def categories(self) -> list[str]:
+        """Every category some indexed file has."""
+        rows = self.conn.execute(
+            "SELECT DISTINCT category FROM files WHERE category IS NOT NULL ORDER BY category"
+        )
+        return [str(r[0]) for r in rows]
 
     # --- classification cache --------------------------------------------------------
 

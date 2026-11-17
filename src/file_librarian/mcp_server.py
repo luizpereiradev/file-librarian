@@ -47,7 +47,7 @@ from file_librarian.fix import FixError, fix_file
 from file_librarian.lock import AlreadyRunningError, instance_lock
 from file_librarian.models import FileStatus, RunTrigger
 from file_librarian.reconcile import in_cloud_only
-from file_librarian.search import SearchHit
+from file_librarian.search import SearchError, SearchFilters, SearchHit, make_filters, split_values
 from file_librarian.search import search as run_search
 from file_librarian.undo import NothingToUndoError, UndoReport, undo_file, undo_run
 
@@ -71,7 +71,8 @@ WRITE_TOOLS = ("recategorize_file", "undo")
 
 SEARCH_FILES = (
     "Find files in the user's organized Downloads by what they remember: words from the "
-    "name, the description or the tags. Returns where each file is now, its category and "
+    "name, the description or the tags, narrowed by category, extension or the period flib "
+    "processed it in. Returns where each file is now, its category and "
     "a short description written by an AI. Never file content."
 )
 GET_FILE = (
@@ -185,15 +186,42 @@ def build_server(config: Config) -> MCPServer:
     @server.tool(annotations=reading, description=SEARCH_FILES)
     def search_files(
         query: str = Field(
+            default="",
             description="Words the user remembers: part of a name, a topic, a tag. "
-            "Accents are ignored and every word must match.",
+            "Accents are ignored and every word must match. May be empty when a filter is "
+            "given; then the newest matches come first.",
+        ),
+        # Field() describes the parameter for the client; the default itself is None.
+        categories: list[str] | None = Field(  # noqa: B008
+            default=None,
+            description=f"Only files in any of these categories (any case): {categories}.",
+        ),
+        extensions: list[str] | None = Field(  # noqa: B008
+            default=None,
+            description='Only files with any of these extensions, like "pdf" or ".pdf".',
+        ),
+        since: str | None = Field(
+            default=None,
+            description="Only files flib processed on or after this day (YYYY-MM-DD, the "
+            "user's local time).",
+        ),
+        until: str | None = Field(
+            default=None,
+            description="Only files flib processed on or before this day (YYYY-MM-DD).",
         ),
         limit: int = Field(default=20, ge=1, le=MAX_RESULTS, description="Most results."),
     ) -> SearchResult:
+        configured = [c.name for c in config.categories]
+        has_filters = bool(split_values(categories) or split_values(extensions) or since or until)
+        if not query.strip() and not has_filters:
+            raise ToolError("give a query, a filter (categories, extensions, since, until) or both")
         if not config.database.exists():
+            _filters(configured, categories, extensions, since, until)
             return SearchResult(files=[])
         with Store.open(config.database) as store:
-            hits = run_search(store, query, limit=limit)
+            known = configured + store.categories()
+            filters = _filters(known, categories, extensions, since, until)
+            hits = run_search(store, query, filters=filters, limit=limit)
         return SearchResult(files=[_summary(hit) for hit in hits])
 
     @server.tool(annotations=reading, description=GET_FILE)
@@ -298,6 +326,25 @@ def _indexed(config: Config, path: str) -> FileRow:
     if row is None:
         raise ToolError(f"{path} is not in flib's index (see search_files)")
     return row
+
+
+def _filters(
+    known: list[str],
+    categories: list[str] | None,
+    extensions: list[str] | None,
+    since: str | None,
+    until: str | None,
+) -> SearchFilters:
+    try:
+        return make_filters(
+            categories=categories,
+            extensions=extensions,
+            since=since,
+            until=until,
+            known_categories=known,
+        )
+    except SearchError as exc:
+        raise ToolError(str(exc)) from exc
 
 
 def _summary(hit: SearchHit) -> FileSummary:

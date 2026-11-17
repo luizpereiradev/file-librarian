@@ -111,7 +111,10 @@ def test_every_tool_has_a_description_and_schemas(cfg: Config) -> None:
         assert tool.output_schema["type"] == "object"
         for spec in tool.input_schema["properties"].values():
             assert spec["description"]
-    assert tools["search_files"].input_schema["required"] == ["query"]
+    assert "required" not in tools["search_files"].input_schema  # a filter alone is enough
+    filters = tools["search_files"].input_schema["properties"]
+    assert {"categories", "extensions", "since", "until"} <= set(filters)
+    assert "Finance" in filters["categories"]["description"]
     assert tools["search_files"].annotations.read_only_hint is True
     assert tools["undo"].annotations.read_only_hint is False
     # The configured categories are named, so the assistant does not have to guess.
@@ -132,7 +135,9 @@ def test_read_only_hides_the_write_tools(downloads: Path) -> None:
 
 def test_bad_arguments_are_rejected_by_the_schema(cfg: Config) -> None:
     assert "limit" in error_text(call(cfg, "search_files", query="x", limit=0))
-    assert "query" in error_text(call(cfg, "search_files"))
+    assert "give a query" in error_text(call(cfg, "search_files"))
+    assert "not a date" in error_text(call(cfg, "search_files", since="yesterday"))
+    assert "unknown category" in error_text(call(cfg, "search_files", categories=["Nope"]))
 
 
 # --- Reading ---------------------------------------------------------------------------
@@ -141,6 +146,22 @@ def test_bad_arguments_are_rejected_by_the_schema(cfg: Config) -> None:
 def test_search_before_any_run_finds_nothing(cfg: Config) -> None:
     assert ok(call(cfg, "search_files", query="bill")) == {"files": []}
     assert not cfg.database.exists()  # a read never creates the library
+
+
+def test_search_filters(downloads: Path, cfg: Config) -> None:
+    organize(
+        downloads,
+        cfg,
+        {
+            "bill.txt": (b"electricity bill", answer("Finance")),
+            "notes.md": (b"meeting notes", answer("Other")),
+        },
+    )
+    by_category = ok(call(cfg, "search_files", categories=["finance"]))["files"]
+    assert [h["original_name"] for h in by_category] == ["bill.txt"]
+    by_ext = ok(call(cfg, "search_files", query="document", extensions=["md"]))["files"]
+    assert [h["original_name"] for h in by_ext] == ["notes.md"]
+    assert ok(call(cfg, "search_files", extensions=["txt"], until="2000-01-01"))["files"] == []
 
 
 def test_search_and_get_file(downloads: Path, cfg: Config) -> None:
