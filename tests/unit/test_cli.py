@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from file_librarian import config as config_module
 from file_librarian.cli import EXIT_NOT_IMPLEMENTED, app
 from file_librarian.extractors.origin import WHERE_FROMS
 from tests._helpers import REPO_ROOT, mark_cloud_only, write_xattr
@@ -66,6 +67,21 @@ def test_check_config_warns_about_planned_provider(tmp_path: Path) -> None:
     result = runner.invoke(app, ["check-config", "-c", str(cfg)])
     assert result.exit_code == 0
     assert "planned for M3" in result.stderr
+
+
+def test_check_config_warns_about_inactive_option(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(config_module, "INACTIVE_OPTIONS", {"limits.stable_seconds": "M9"})
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("provider: {name: fake, model: x}\n", encoding="utf-8")
+    quiet = runner.invoke(app, ["check-config", "-c", str(cfg)])
+    assert quiet.exit_code == 0
+    assert "does nothing yet" not in quiet.stderr
+    cfg.write_text("provider: {name: fake, model: x}\nlimits: {stable_seconds: 5}\n", "utf-8")
+    result = runner.invoke(app, ["check-config", "-c", str(cfg)])
+    assert result.exit_code == 0
+    assert "limits.stable_seconds is planned for M9 and does nothing yet" in result.stderr
 
 
 def test_inspect_directory_reports_unit_size(downloads: Path) -> None:

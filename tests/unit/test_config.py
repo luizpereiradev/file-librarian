@@ -6,7 +6,14 @@ from typing import Any
 import pytest
 import yaml
 
-from file_librarian.config import ConfigError, load_config, parse_config
+from file_librarian import config as config_module
+from file_librarian.config import (
+    INACTIVE_OPTIONS,
+    ConfigError,
+    inactive_options_set,
+    load_config,
+    parse_config,
+)
 from file_librarian.locales import LOCALES
 from tests._helpers import REPO_ROOT
 
@@ -136,3 +143,27 @@ def test_portuguese_default_categories_are_complete() -> None:
     assert {"Impostos", "Saúde", "Documentos pessoais", "Código e dados"} <= set(names)
     assert all(c.hint for c in cfg.categories)
     assert [c.name for c in cfg.categories if not c.rename] == ["Instaladores"]
+
+
+def test_inactive_options_name_real_fields() -> None:
+    # A typo in INACTIVE_OPTIONS raises here instead of in check-config, and every
+    # inactive option defaults to "off", so an untouched config gets no warning.
+    assert all(milestone for milestone in INACTIVE_OPTIONS.values())
+    assert inactive_options_set(parse_config(minimal())) == []
+
+
+def test_inactive_options_warn_only_when_changed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        config_module, "INACTIVE_OPTIONS", {"limits.stable_seconds": "M9", "folders": "M8"}
+    )
+    assert inactive_options_set(parse_config(minimal())) == []
+    changed = parse_config(minimal() | {"limits": {"stable_seconds": 5}, "folders": "ignore"})
+    assert inactive_options_set(changed) == [("folders", "M8"), ("limits.stable_seconds", "M9")]
+
+
+def test_inactive_options_default_factory(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config_module, "INACTIVE_OPTIONS", {"ignore": "M9"})
+    assert inactive_options_set(parse_config(minimal())) == []
+    assert inactive_options_set(parse_config(minimal() | {"ignore": ["*.tmp"]})) == [
+        ("ignore", "M9")
+    ]

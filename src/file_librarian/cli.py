@@ -24,6 +24,7 @@ from file_librarian.config import (
     ProviderConfig,
     ScheduleConfig,
     default_config_path,
+    inactive_options_set,
     load_config,
 )
 from file_librarian.db.store import Store
@@ -128,6 +129,12 @@ def check_config(config: ConfigOption = None) -> None:
         typer.echo(
             f"warning: provider {cfg.provider.name!r} is planned for {milestone}; "
             "classification commands will not run until then.",
+            err=True,
+        )
+    for option, milestone in inactive_options_set(cfg):
+        typer.echo(
+            f"warning: {option} is planned for {milestone} and does nothing yet; "
+            "your value is accepted but ignored.",
             err=True,
         )
 

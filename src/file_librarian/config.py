@@ -297,6 +297,33 @@ class Config(_Section):
         return next((c for c in self.categories if c.name == name), None)
 
 
+# Options the configuration accepts but no code reads yet, as dotted paths
+# (``"limits.some_option"``) mapped to the milestone that activates them.
+# ``flib check-config`` warns when one is set to anything but its default. The PR
+# that activates an option removes it from here. Planned providers are tracked in
+# ``providers.PLANNED`` instead.
+INACTIVE_OPTIONS: dict[str, str] = {}
+
+
+def _option_value_and_default(config: Config, dotted: str) -> tuple[Any, Any]:
+    *sections, field = dotted.split(".")
+    section: BaseModel = config
+    for name in sections:
+        section = getattr(section, name)
+    info = type(section).model_fields[field]
+    return getattr(section, field), info.get_default(call_default_factory=True)
+
+
+def inactive_options_set(config: Config) -> list[tuple[str, str]]:
+    """Each inactive option set to a non-default value, with the milestone that activates it."""
+    found = []
+    for dotted, milestone in sorted(INACTIVE_OPTIONS.items()):
+        value, default = _option_value_and_default(config, dotted)
+        if value != default:
+            found.append((dotted, milestone))
+    return found
+
+
 def _moved_keys(data: dict[str, Any]) -> dict[str, Any]:
     """Accept keys that moved, so an older configuration keeps working.
 
