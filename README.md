@@ -37,16 +37,43 @@ commands keep these guarantees:
 
 ```sh
 git clone https://github.com/luizpereiradev/file-librarian.git && cd file-librarian
-./scripts/install.sh                      # installs `flib` with the locked dependency versions;
-                                          # asks whether to add the optional MCP server
-mkdir -p ~/.config/file-librarian
-cp config.example.yaml ~/.config/file-librarian/config.yaml
-flib key set                              # stores your Anthropic API key in the macOS Keychain
-flib check-config                         # validates the configuration and finds the key
-flib simulate                             # shows what would happen; nothing moves
+./scripts/install.sh      # installs `flib` with the locked dependency versions;
+                          # asks whether to add the optional MCP server
+flib init                 # a few questions, a trial on copies of your files, the daily run
 ```
 
-Then `flib run` organizes for real, and `flib undo` reverts the last run.
+`flib init` asks for the language, the folder to organize and where organized
+files go, the provider and, with `anthropic`, whether to turn on
+[vision](#images-and-scanned-pdfs-vision) (default no).
+Every question has a default, so pressing Enter all the way gives a working
+setup (`flib init --yes` takes them all without asking):
+
+- **Provider:** `claude-code` when Claude Code is installed and logged in
+  (nothing more to set up), otherwise `anthropic`, and then it offers to store
+  your API key in the Keychain (typed hidden, never shown).
+- **Configuration:** written to `~/.config/file-librarian/config.yaml` (or
+  `--config PATH`), readable only by you. If one exists, it is kept unless you
+  confirm replacing it (`--force` replaces it without asking).
+- **Trial:** your most recent items (30 by default, `--sample N`; `0` skips
+  it) are *copied* to a temporary folder and classified there with a
+  throwaway index. You see what would move where, what would go to review and
+  the estimated cost. Nothing in your folders moves, and your real index is
+  not touched; the copies are deleted afterwards. Hidden, sensitive,
+  `never_send`, iCloud-only and large (over 20 MB) items are left out.
+- **Daily run:** it offers to schedule it, as `flib schedule` does.
+
+Then `flib simulate` shows the plan for your real folder, `flib run`
+organizes for real, and `flib undo` reverts the last run.
+
+To set it up by hand instead:
+
+```sh
+mkdir -p ~/.config/file-librarian
+cp config.example.yaml ~/.config/file-librarian/config.yaml
+flib key set              # stores your Anthropic API key in the macOS Keychain
+flib check-config         # validates the configuration and finds the key
+flib simulate             # shows what would happen; nothing moves
+```
 
 ### Run it every day
 
@@ -131,7 +158,7 @@ folders (`~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`,
 | `flib schedule [--at HH:MM \| --status \| --remove]` | Run every day via launchd, with an access check | M2 (available) |
 | `flib reconcile` | Update the index after you move, rename or delete files by hand; files only in iCloud are left unchecked | M2 (available) |
 | `flib fix PATH [--category NAME] [--name NAME]` | Correct one file's category or name; flib learns from it | M2 (available) |
-| `flib init` | Guided first run on a sample | M2 |
+| `flib init [--yes] [--sample N] [--force]` | Guided setup with a trial on copies of recent files | M2 (available) |
 | `flib mcp` | Local MCP server for AI assistants ([Use it from Claude](#use-it-from-claude)) | M2 (available) |
 | `flib reprocess` | Reclassify after a rules change | M3 |
 | `flib doctor` | Redacted logs for bug reports | M3 |

@@ -8,18 +8,20 @@ requirement, so the interface can be reviewed before they land.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import sys
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import Annotated, NoReturn, cast
 
 import typer
 
-from file_librarian import __version__, credentials, keychain, pipeline, scheduler
+from file_librarian import __version__, credentials, keychain, onboarding, pipeline, scheduler
 from file_librarian.config import (
     Config,
     ConfigError,
+    ProviderConfig,
     ScheduleConfig,
     default_config_path,
     load_config,
@@ -29,6 +31,7 @@ from file_librarian.executor import RunReport, recover
 from file_librarian.extractors.origin import download_origin
 from file_librarian.fix import FixError, fix_file
 from file_librarian.hashing import file_sha256, unit_manifest
+from file_librarian.locales import LOCALES, Language
 from file_librarian.lock import AlreadyRunningError, instance_lock
 from file_librarian.models import FileStatus, RunTrigger
 from file_librarian.planner import Plan
@@ -219,14 +222,22 @@ app.add_typer(key_app, name="key")
 @key_app.command("set")
 def key_set() -> None:
     """Save the API key in the Keychain (asked for, never shown)."""
+    problem = _save_key()
+    if problem is not None:
+        _fatal(problem)
+
+
+def _save_key() -> str | None:
+    """Ask for the API key without echoing it and store it; the error, if any."""
     value = typer.prompt("Anthropic API key", hide_input=True).strip()
     if not value.startswith("sk-ant-"):
         typer.echo("warning: Anthropic keys usually start with sk-ant-", err=True)
     try:
         keychain.write(value)
     except (keychain.KeychainError, ValueError) as exc:
-        _fatal(str(exc))
+        return str(exc)
     typer.echo(f"Saved in the Keychain (service {keychain.SERVICE!r}). Scheduled runs will use it.")
+    return None
 
 
 @key_app.command("status")
@@ -515,6 +526,16 @@ def schedule(
         when = ScheduleConfig(time=at).time if at else cfg.schedule.time
     except ValueError:
         _fatal("--at must be a 24-hour time like 12:30")
+    try:
+        _install_schedule(path, cfg, when, save_key)
+    except scheduler.ScheduleError as exc:
+        _fatal(str(exc))
+    if check and not _report_access(path.resolve()):
+        raise typer.Exit(EXIT_ERROR)
+
+
+def _install_schedule(path: Path, cfg: Config, when: str, save_key: bool | None) -> None:
+    """Install the daily agent for the configuration at ``path``; raises ``ScheduleError``."""
     if not scheduler.is_installed_tool():
         typer.echo(
             "warning: flib is running from a development environment; the schedule will "
@@ -524,14 +545,9 @@ def schedule(
         )
     _ensure_key_for_schedule(cfg, save_key)
     _ensure_claude_for_schedule(cfg)
-    try:
-        installed = scheduler.install(when, path.resolve(), logs_dir(cfg.database))
-    except scheduler.ScheduleError as exc:
-        _fatal(str(exc))
+    installed = scheduler.install(when, path.resolve(), logs_dir(cfg.database))
     typer.echo(f"Daily run scheduled at {when} ({installed}).")
     typer.echo("If the Mac is asleep then, it runs on wake. `flib schedule --remove` stops it.")
-    if check:
-        _report_access(path.resolve())
 
 
 def _print_schedule_status() -> None:
@@ -612,13 +628,14 @@ def _ensure_claude_for_schedule(cfg: Config) -> None:
     )
 
 
-def _report_access(config_path: Path) -> None:
+def _report_access(config_path: Path) -> bool:
+    """Run the access check and explain any denial; ``False`` when macOS blocks a folder."""
     typer.echo("Checking folder access as the scheduled run will see it...")
     try:
         report = scheduler.check_access(config_path)
     except scheduler.ScheduleError as exc:
         typer.echo(f"warning: {exc}", err=True)
-        return
+        return True
     denied = {folder: state for folder, state in report.items() if state != "ok"}
     for folder, state in report.items():
         typer.echo(f"  {folder}: {state}")
@@ -632,8 +649,9 @@ def _report_access(config_path: Path) -> None:
             "Python projects. Then run `flib schedule` again to re-check.",
             err=True,
         )
-        raise typer.Exit(EXIT_ERROR)
+        return False
     typer.echo("Access OK: the daily run can read every input folder.")
+    return True
 
 
 @app.command("check-access", hidden=True)
@@ -677,10 +695,286 @@ def reconcile(config: ConfigOption = None) -> None:
     )
 
 
+# --- First run -------------------------------------------------------------------------
+
+VISION_NOTE = (
+    "Vision lets the model look at photos, screenshots and scanned PDFs. What is sent: "
+    "the image shrunk to 1568 px with its EXIF and GPS metadata removed, or the first 3 "
+    "pages of a PDF with no text. About US$0.0005 per image and US$0.001 per scanned PDF "
+    "on the default model. Off, they are classified from their name and metadata."
+)
+
+
+class _Asker:
+    """Typer prompts or, with ``--yes``, their defaults, printed so the transcript reads alike."""
+
+    def __init__(self, yes: bool) -> None:
+        self.yes = yes
+
+    def text(self, question: str, default: str) -> str:
+        if self.yes:
+            typer.echo(f"{question} [{default}]: {default}")
+            return default
+        answer = str(typer.prompt(question, default=default)).strip()
+        return answer or default
+
+    def choice(self, question: str, options: list[str], default: str) -> str:
+        if self.yes:
+            typer.echo(f"{question} ({', '.join(options)}) [{default}]: {default}")
+            return default
+        while True:
+            answer = self.text(f"{question} ({', '.join(options)})", default)
+            if answer in options:
+                return answer
+            typer.echo(f"error: choose one of {', '.join(options)}.", err=True)
+
+    def confirm(self, question: str, default: bool) -> bool:
+        if self.yes:
+            hint = "[Y/n]" if default else "[y/N]"
+            typer.echo(f"{question} {hint}: {'y' if default else 'n'}")
+            return default
+        return typer.confirm(question, default=default)
+
+
 @app.command()
-def init(config: ConfigOption = None) -> None:
-    """Guided first run on a sample of files copied to a temporary folder."""
-    _not_implemented("init", "M2", "RF-38")
+def init(
+    config: ConfigOption = None,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Accept every default without asking.")
+    ] = False,
+    force: Annotated[
+        bool, typer.Option("--force", help="Replace an existing configuration without asking.")
+    ] = False,
+    sample: Annotated[
+        int,
+        typer.Option(
+            "--sample", min=0, max=200, help="Recent items to try it on; 0 skips the trial."
+        ),
+    ] = onboarding.DEFAULT_SAMPLE,
+) -> None:
+    """Set flib up step by step, then try it on copies of your recent files.
+
+    Nothing in your folders moves: the trial runs on copies in a temporary
+    folder, with a throwaway index.
+    """
+    ask = _Asker(yes)
+    path = config or default_config_path()
+    typer.echo("Setting up file-librarian. Press Enter to take the suggestion in brackets.\n")
+    overwrite = force or (
+        path.exists()
+        and ask.confirm(f"A configuration already exists at {path}. Replace it?", default=False)
+    )
+    if path.exists() and not overwrite:
+        typer.echo(f"Keeping {path}.")
+    else:
+        answers = _ask_answers(ask)
+        onboarding.write_config(path, onboarding.render_config(answers))
+        typer.echo(f"\nWrote {path} (only you can read it). `flib check-config` validates it.")
+    cfg = _load(path)
+    typer.echo("")
+    if _provider_ready(cfg, ask) and sample:
+        _trial(cfg, sample, ask)
+    else:
+        typer.echo("Skipping the trial. `flib simulate` shows the plan once flib can run.")
+    typer.echo("")
+    _offer_schedule(path, cfg, ask)
+    typer.echo(
+        "\nNext:\n"
+        "  flib simulate   the plan for your real folders; nothing moves\n"
+        "  flib run        organize now; `flib undo` reverts it\n"
+        "Optional: let Claude search your library through the MCP server; enable it with "
+        "`./scripts/install.sh --with-mcp` from the file-librarian folder."
+    )
+
+
+def _ask_answers(ask: _Asker) -> onboarding.Answers:
+    language = cast(
+        Language,
+        ask.choice(
+            "Language of names, descriptions and folders",
+            list(LOCALES),
+            onboarding.detect_language(),
+        ),
+    )
+    while True:
+        answers = _ask_folders(ask, language)
+        try:
+            onboarding.check_answers(answers)
+            break
+        except ConfigError as exc:
+            if ask.yes:
+                _fatal(str(exc))
+            typer.echo(f"error: {exc}\nLet's try the folders again.", err=True)
+    provider, command = _ask_provider(ask)
+    vision = False
+    if provider == "anthropic":
+        typer.echo(VISION_NOTE)
+        vision = ask.confirm("Send images and scanned PDFs to the model?", default=False)
+    else:
+        typer.echo("Images and scanned PDFs are classified from their name and metadata.")
+    return dataclasses.replace(answers, provider=provider, vision=vision, command=command)
+
+
+def _user_path(raw: str) -> Path:
+    return Path(os.path.normpath(Path(raw).expanduser()))
+
+
+def _ask_folders(ask: _Asker, language: Language) -> onboarding.Answers:
+    while True:
+        folder = _user_path(
+            ask.text("Folder to organize", onboarding.display_path(Path.home() / "Downloads"))
+        )
+        if folder.is_dir():
+            break
+        if ask.yes:
+            _fatal(f"{folder} is not a folder; run `flib init` without --yes to pick another")
+        typer.echo(f"error: {folder} is not a folder.", err=True)
+    out = ask.text(
+        "Where organized files go",
+        onboarding.display_path(onboarding.default_output_root(folder, language)),
+    )
+    review = ask.text("Folder in it for files to review", LOCALES[language].review_folder)
+    return onboarding.Answers(language, folder, _user_path(out), review, "anthropic")
+
+
+def _ask_provider(ask: _Asker) -> tuple[str, Path | None]:
+    """The provider, and the ``claude`` to pin when the daily run would not find it.
+
+    Claude Code is the default when it is installed and logged in: nothing to set up.
+    """
+    from file_librarian.providers import claude_code
+
+    probe = ProviderConfig(name="claude-code", model=onboarding.DEFAULT_MODELS["claude-code"])
+    executable = claude_code.find_claude(probe)
+    ready = executable is not None and claude_code.logged_in(executable) is True
+    if executable is None:
+        state = "not found"
+    else:
+        state = "found, logged in" if ready else "found, not logged in"
+    typer.echo(
+        "\nWhich AI classifies your files?\n"
+        f"  claude-code  your Claude subscription through Claude Code ({state}); no API key\n"
+        "  anthropic    the Anthropic API with an API key, billed per use "
+        "(a fraction of a cent per file)"
+    )
+    default = "claude-code" if ready else "anthropic"
+    name = ask.choice("Provider", ["claude-code", "anthropic"], default)
+    if name != "claude-code" or executable is None:
+        return name, None
+    # launchd's PATH is minimal: pin an executable the daily run would not find by itself.
+    hidden = claude_code.find_claude(probe, search_path=scheduler.SAFE_PATH) is None
+    return name, executable if hidden else None
+
+
+def _provider_ready(cfg: Config, ask: _Asker) -> bool:
+    """Whether the provider can classify now, offering to store a missing API key."""
+    name = cfg.provider.name
+    if name == "anthropic":
+        found = credentials.resolve(cfg.provider)
+        if found.value is not None:
+            typer.echo(f"API key: found in the {found.source} ({found.hint}).")
+            return True
+        if not ask.yes and ask.confirm(
+            "No Anthropic API key found. Store one in the macOS Keychain now?", default=True
+        ):
+            problem = _save_key()
+            if problem is None:
+                return True
+            typer.echo(f"warning: {problem}", err=True)
+        typer.echo("warning: no API key yet; run `flib key set` to add one.", err=True)
+        return False
+    if name == "claude-code":
+        from file_librarian.providers import claude_code
+
+        executable = claude_code.find_claude(cfg.provider)
+        if executable is None:
+            typer.echo(
+                "warning: Claude Code was not found; install it or set provider.command.",
+                err=True,
+            )
+            return False
+        if claude_code.logged_in(executable) is False:
+            typer.echo(
+                f"warning: Claude Code is not logged in; {claude_code.LOGIN_HINT}.", err=True
+            )
+            return False
+        return True
+    if not is_implemented(name):
+        typer.echo(f"warning: provider {name!r} is not available yet.", err=True)
+        return False
+    return True
+
+
+def _trial(cfg: Config, size: int, ask: _Asker) -> None:
+    picked = onboarding.pick_sample(cfg, size)
+    where = ", ".join(onboarding.display_path(p) for p in cfg.inputs)
+    if not picked:
+        typer.echo(
+            f"No files to try it on in {where}: it is empty, or holds only hidden, sensitive "
+            "or large items. `flib simulate` shows the plan once files arrive."
+        )
+        return
+    question = (
+        f"Try it on copies of your {len(picked)} most recent item(s)? They are copied to a "
+        f"temporary folder and classified with {cfg.provider.name}; nothing in {where} moves."
+    )
+    if not ask.confirm(question, default=True):
+        return
+    typer.echo(f"Classifying {len(picked)} copies; this can take a minute...")
+    try:
+        result = onboarding.run_trial(cfg, get_provider(cfg.provider), picked)
+    except (ProviderError, ScanError) as exc:
+        typer.echo(f"warning: the trial stopped: {exc}", err=True)
+        return
+    _print_trial(result, cfg)
+
+
+def _print_trial(trial: onboarding.Trial, cfg: Config) -> None:
+    root = onboarding.display_path(cfg.output_root)
+    typer.echo(f"\nTrial on {trial.sampled} copies (destinations are inside {root}):")
+    for item in trial.items:
+        if item.destination is None:
+            typer.echo(f"  keep    {item.name}  ({item.reason})")
+        else:
+            label = "review" if item.status is FileStatus.REVIEW else "move"
+            typer.echo(f"  {label:<8}{item.name}  ->  {item.destination}")
+    organized = trial.count(FileStatus.ORGANIZED)
+    review = trial.count(FileStatus.REVIEW)
+    stay = len(trial.items) - organized - review
+    typer.echo(
+        f"Summary: {organized} to categories, {review} to {cfg.review_folder} for you to "
+        f"decide, {stay} would stay."
+    )
+    categories = trial.by_category()
+    if categories:
+        typer.echo("  " + ", ".join(f"{name}: {n}" for name, n in sorted(categories.items())))
+    if trial.deferred:
+        typer.echo(f"  {trial.deferred} not tried: the cost cap was reached.")
+    typer.echo(
+        f"Estimated cost of the trial: US$ {trial.cost_usd:.4f}. Nothing in your folders "
+        "moved; the copies and the trial's index are already deleted."
+    )
+
+
+def _offer_schedule(path: Path, cfg: Config, ask: _Asker) -> None:
+    try:
+        state = scheduler.status()
+    except scheduler.ScheduleError as exc:
+        typer.echo(f"warning: cannot read the schedule: {exc}", err=True)
+        return
+    if state.installed:
+        typer.echo(f"A daily run is already scheduled at {state.time}; `flib schedule` changes it.")
+        return
+    question = f"Organize new files automatically every day at {cfg.schedule.time}?"
+    if not ask.confirm(question, default=True):
+        typer.echo("You can schedule it later with `flib schedule` (--at HH:MM for another time).")
+        return
+    try:
+        _install_schedule(path, cfg, cfg.schedule.time, save_key=True if ask.yes else None)
+    except scheduler.ScheduleError as exc:
+        typer.echo(f"warning: could not schedule the daily run: {exc}", err=True)
+        return
+    _report_access(path.resolve())
 
 
 @app.command()

@@ -337,7 +337,7 @@ def load_config(path: Path | None = None) -> Config:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         raise ConfigError(
-            f"no configuration at {path}; copy config.example.yaml there to start"
+            f"no configuration at {path}; run `flib init`, or copy config.example.yaml there"
         ) from exc
     except OSError as exc:
         raise ConfigError(f"cannot read {path}: {exc}") from exc

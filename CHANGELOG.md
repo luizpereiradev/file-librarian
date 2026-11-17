@@ -8,6 +8,24 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `flib init`, the guided first run (RF-38). It asks for the language
+  (default from the shell's locale), the folder to organize, where organized
+  files go and the review folder, the provider and, with `anthropic`, whether
+  to turn on vision (default no, with what is sent and the cost per image).
+  The provider defaults to `claude-code` when Claude Code is installed and
+  logged in, else `anthropic`, and then offers to store a missing API key in
+  the Keychain (hidden input). When the daily run's minimal PATH would not
+  find `claude`, `provider.command` is written for it. The configuration is
+  written commented, mode 600; an existing one is kept unless you confirm
+  replacing it or pass `--force`. A trial then copies the most recent items
+  (`--sample N`, 30 by default, `0` skips it; hidden, sensitive, `never_send`,
+  iCloud-only and items over 20 MB are left out) into a temporary folder and
+  simulates a run over the copies with a throwaway database, showing what
+  would move where, what would go to review and the estimated cost; nothing
+  real is touched. Last, it offers to schedule the daily run with the same
+  checks as `flib schedule`, and mentions the optional MCP server. Every
+  question has a default and `--yes` takes them all. The README quick start
+  is now install, then `flib init`.
 - The `claude-code` provider: classify through the Claude Code CLI
   (`claude -p`) on your Claude subscription, with no API key. Each file is one
   call with `--output-format json --json-schema` (the categories as an enum),
