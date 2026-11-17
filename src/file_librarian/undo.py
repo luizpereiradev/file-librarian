@@ -31,8 +31,9 @@ from file_librarian.fsops import (
     Journal,
     copy_move,
     move_no_replace,
+    new_copy_key,
 )
-from file_librarian.hashing import same_content
+from file_librarian.hashing import same_content, unit_manifest
 from file_librarian.models import CopyPhase, FileStatus, OperationStatus
 from file_librarian.reconcile import place
 
@@ -96,17 +97,18 @@ def _undo_one(store: Store, op: OperationRow, report: UndoReport, config: Config
         try:
             move_no_replace(dst, src)
         except CrossVolumeError:
+            key = new_copy_key(op.id)
             _, kept = copy_move(
-                dst, [src], key=op.id, expected=row.sha256, journal=_journal(store, op)
+                dst, [src], key=key, expected=row.sha256, journal=_journal(store, op, key)
             )
             if kept:
                 report.warnings.append((src, kept))
     except DestinationExistsError:
-        store.set_copy_phase(op.id, None)
+        store.clear_copy_phase(op.id)
         report.skipped.append((dst, f"original path is taken: {src}"))
         return
     except OSError as exc:
-        store.set_copy_phase(op.id, None)
+        store.clear_copy_phase(op.id)
         report.skipped.append((dst, f"could not move back: {exc.strerror or exc}"))
         return
     for warning in record_restored(store, op, config):
@@ -114,11 +116,11 @@ def _undo_one(store: Store, op: OperationRow, report: UndoReport, config: Config
     report.restored.append((dst, src))
 
 
-def _journal(store: Store, op: OperationRow) -> Journal:
+def _journal(store: Store, op: OperationRow, key: str) -> Journal:
     """An undo's copy phases go on the entry it reverts, which keeps its paths."""
 
     def journal(phase: CopyPhase, _dst: Path) -> None:
-        store.set_copy_phase(op.id, phase)
+        store.set_copy_phase(op.id, phase, key)
 
     return journal
 
@@ -131,6 +133,9 @@ def record_restored(store: Store, op: OperationRow, config: Config | None) -> li
     """
     src = op.src_path
     warnings: list[str] = []
+    row = store.file_by_id(op.file_id)
+    if row.is_unit:
+        refresh_unit_identity(store, op.file_id, src, row.sha256)
     status, category = place(config, src) if config else (FileStatus.SKIPPED, None)
     with store.transaction():
         store.set_operation(op.id, OperationStatus.UNDONE)
@@ -148,3 +153,19 @@ def record_restored(store: Store, op: OperationRow, config: Config | None) -> li
             if warning:
                 warnings.append(warning)
     return warnings
+
+
+def refresh_unit_identity(store: Store, file_id: int, path: Path, current: str) -> None:
+    """Index a folder unit by its manifest where it now is.
+
+    Copied to another file system (one that keeps coarser modification
+    times, such as HFS+), a unit's manifest differs from the source's. The
+    index follows it, so undo and reconcile still recognise it there. A move
+    within one volume keeps the manifest, and nothing changes.
+    """
+    try:
+        digest = unit_manifest(path).digest
+    except OSError:
+        return
+    if digest != current:
+        store.set_file_identity(file_id, digest)

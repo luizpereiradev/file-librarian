@@ -102,4 +102,5 @@ testpaths = ["tests"]
 addopts = "-ra --strict-markers"
 markers = [
     "integration: exercises several pipeline stages together (still offline, still in temp dirs)",
+    "volumes: creates and attaches disk images with hdiutil; opt-in with FLIB_TEST_VOLUMES=1",
 ]

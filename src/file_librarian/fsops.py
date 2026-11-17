@@ -7,25 +7,32 @@ overwritten. It works for files and whole folders on the same volume. Across
 volumes it fails with ``CrossVolumeError``, and the caller moves the item with
 ``copy_move`` instead (RF-33), in three journaled phases:
 
-1. ``copying``: the item is copied into a new staging folder next to the
-   destination (``.flib-<key>.copy``) with ``copyfile(3)`` and
-   ``COPYFILE_ALL``, which keeps extended attributes (download origin, Finder
-   tags), ACLs, permissions, flags and timestamps; flushed to the disk
+1. ``copying``: the destination volume must support ``RENAME_EXCL`` (exFAT
+   and FAT do not: nothing is copied there). The item is copied into a new
+   staging folder next to the destination (``.flib-<key>.copy``, ``key``
+   being the journal entry's id and a random suffix) with ``copyfile(3)`` and
+   ``COPYFILE_ALL`` (a folder entry by entry), which keeps extended
+   attributes (download origin, Finder tags), ACLs, permissions, flags and
+   timestamps; flushed to the disk
    (``F_FULLFSYNC``); and verified: the copy's contents must match the
    source's, and the source must still be what the caller expects (its
    SHA-256, or its manifest digest for a folder unit) and must not have
    changed while it was copied.
 2. ``copied``: the verified copy is renamed into place with ``RENAME_EXCL``,
    so it never overwrites anything (a taken name gets the next candidate).
-3. ``placed``: the source is renamed to ``.flib-<key>.delete`` beside it and
-   only then deleted, so a crash mid-way leaves either the whole source under
-   its own name or a half-deleted item under a name that is clearly flib's.
+3. ``placed``: the source, if it is still what was copied, is renamed to
+   ``.flib-<key>.delete`` beside it and only then deleted (read-only folders
+   and locked files included), so a crash mid-way leaves either the whole
+   source under its own name or a half-deleted item under a name that is
+   clearly flib's. A source that changed after it was copied is kept, with a
+   warning.
 
 The caller journals each phase before it starts, and ``resume_copy`` decides
 after a crash, from the phase and what is on disk, whether to finish the move
-or roll it back. The only things ever deleted are the source of a move whose
-verified copy is in place, and the staging folder of a copy that never got
-there while its source is still in place.
+or roll it back. When either folder cannot be listed (an unmounted volume),
+it decides nothing and the entry waits. The only things ever deleted are the
+source of a move whose verified copy is in place, and the staging folder of a
+copy that never got there while its source is still in place.
 """
 
 from __future__ import annotations
@@ -35,8 +42,9 @@ import ctypes
 import ctypes.util
 import errno
 import fcntl
+import logging
 import os
-import shutil
+import secrets
 import stat
 import unicodedata
 from collections.abc import Callable, Iterable
@@ -48,15 +56,20 @@ from file_librarian.hashing import content_digest, file_sha256, same_content, un
 from file_librarian.models import CopyPhase
 
 _RENAME_EXCL = 0x00000004
-# <copyfile.h>: COPYFILE_ALL is ACL | STAT | XATTR | DATA.
+# <copyfile.h>: COPYFILE_METADATA is ACL | STAT | XATTR; COPYFILE_ALL adds DATA.
+_COPYFILE_METADATA = 0x00000007
 _COPYFILE_ALL = 0x0000000F
-_COPYFILE_RECURSIVE = 1 << 15
 _COPYFILE_EXCL = 1 << 17
 _COPYFILE_NOFOLLOW = (1 << 18) | (1 << 19)
 _STAGED_NAME = "item"
 
+_USER_LOCKS = stat.UF_IMMUTABLE | stat.UF_APPEND
+_NO_RENAME_EXCL = frozenset({errno.ENOTSUP, errno.EINVAL})
+
 Journal = Callable[[CopyPhase, Path], None]
 """Records that a cross-volume move enters a phase, aiming at the given destination."""
+
+log = logging.getLogger(__name__)
 
 
 class DestinationExistsError(FileExistsError):
@@ -69,6 +82,14 @@ class CrossVolumeError(OSError):
 
 class CopyMismatchError(OSError):
     """A copy did not match its source, or the source changed while it was copied."""
+
+
+class UnsupportedVolumeError(OSError):
+    """The destination volume cannot rename without replacing, so nothing is moved there."""
+
+
+class UnavailableError(OSError):
+    """A folder of an interrupted copy cannot be listed (an unmounted volume?)."""
 
 
 @cache
@@ -159,118 +180,223 @@ def ensure_folder(path: Path, *, inside: Path) -> None:
 # --- moving across volumes (RF-33) ---------------------------------------------------------
 
 
-def staging_folder(folder: Path, key: int) -> Path:
+def new_copy_key(op_id: int) -> str:
+    """The journal entry's id and a random suffix, so a reset database never reuses names."""
+    return f"{op_id}-{secrets.token_hex(4)}"
+
+
+def staging_folder(folder: Path, key: str) -> Path:
     """Where the cross-volume move ``key`` stages its copy before it goes into ``folder``."""
     return folder / f".flib-{key}.copy"
 
 
-def trash_path(source: Path, key: int) -> Path:
+def trash_path(source: Path, key: str) -> Path:
     """Where the cross-volume move ``key`` puts its source just before deleting it."""
     return source.parent / f".flib-{key}.delete"
 
 
 def copy_move(
-    src: Path, candidates: Iterable[Path], *, key: int, expected: str, journal: Journal
+    src: Path, candidates: Iterable[Path], *, key: str, expected: str, journal: Journal
 ) -> tuple[Path, str | None]:
     """Move ``src`` to the first free name in ``candidates`` by copy, verify, delete.
 
-    The candidates share one folder. ``key`` (the journal entry's id) names
+    The candidates share one folder. ``key`` (see ``new_copy_key``) names
     the staging and trash paths, so recovery finds them; ``expected`` is what
     the source must still be (see ``hashing.same_content``). Until the copy
     is in place, any error removes the staging folder and leaves the source
-    untouched. Returns the new path, and a warning if the source could not be
-    removed afterwards (the move stands: the verified copy is in place).
+    untouched. Returns the new path, and a warning if something went wrong
+    after that (the move stands: the verified copy is in place).
     """
     names = iter(candidates)
     first = next(names)
     stage = staging_folder(first.parent, key)
     journal(CopyPhase.COPYING, first)
-    item = copy_verified(src, stage, expected)
+    item, before = copy_verified(src, stage, expected)
     journal(CopyPhase.COPIED, first)
     try:
         final = _place(item, chain([first], names), lambda c: journal(CopyPhase.COPIED, c))
     except OSError:
-        remove_tree(stage)  # the source is still there
+        _remove_quietly(stage)  # the source is still there
         raise
     journal(CopyPhase.PLACED, final)
-    return final, _discard(src, trash_path(src, key), expected)
+    warnings = [_sync_warning(final.parent), _discard(src, trash_path(src, key), expected, before)]
+    return final, "; ".join(w for w in warnings if w) or None
 
 
-def copy_verified(src: Path, stage: Path, expected: str) -> Path:
-    """Copy ``src`` into the new folder ``stage``, flush and verify it. Returns the copy.
+def copy_verified(src: Path, stage: Path, expected: str) -> tuple[Path, os.stat_result]:
+    """Copy ``src`` into the new folder ``stage``, flush and verify it.
 
-    On any failure (disk full, a mismatch, a source that changed meanwhile)
-    ``stage`` is removed again and the error raised; ``src`` is never touched.
+    Returns the copy and the source's ``lstat`` from before the copy. On any
+    failure (a volume without ``RENAME_EXCL``, a full disk, a mismatch, a
+    source that changed meanwhile) ``stage`` is removed again and the error
+    raised; ``src`` is never touched.
     """
     before = os.lstat(src)
     stage.mkdir()  # fails if a stale one is there: nothing of ours is overwritten
     item = stage / _STAGED_NAME
     try:
+        _require_rename_excl(stage)
         _copyfile(src, item)
         _sync_tree(item)
         _sync(stage)
         _verify(src, item, before, expected)
     except Exception:
-        remove_tree(stage)
+        _remove_quietly(stage)  # never hide the error that matters behind a cleanup error
         raise
-    return item
+    return item, before
 
 
 def resume_copy(
-    src: Path, dst: Path, *, key: int, phase: CopyPhase, expected: str, journal: Journal
+    src: Path, dst: Path, *, key: str, phase: CopyPhase, expected: str, journal: Journal
 ) -> Path | None:
     """Finish or roll back a ``copy_move`` that a crash cut off in ``phase``.
 
     Returns where the item now is when the move was completed, or ``None``
     when it was rolled back, the source left as it is. A copy is deleted only
-    while its source is still in place.
+    while its source is still in place. Raises ``UnavailableError``, having
+    changed nothing, when the source's or the destination's folder cannot be
+    listed: an unmounted volume must not look like a vanished copy.
     """
+    for folder in (src.parent, dst.parent):
+        if not _listable(folder):
+            raise UnavailableError(errno.ENOENT, "folder not available", str(folder))
     stage = staging_folder(dst.parent, key)
     item = stage / _STAGED_NAME
     if phase is CopyPhase.COPYING:
         if os.path.lexists(src):
             remove_tree(stage)  # never verified, and the source is still there
             return None
-        if not same_content(item, expected):
-            return None  # the source is gone and the copy unverified: leave both alone
+        # The source is gone: a later phase may have been lost, or it was deleted by hand.
+        if not (_holds(dst, expected) or _holds(item, expected)):
+            return None  # nothing verifiable: leave whatever is there alone
         phase = CopyPhase.COPIED
     if phase is CopyPhase.COPIED and os.path.lexists(item):
         try:
             dst = _place(item, [dst], lambda c: journal(CopyPhase.COPIED, c))
         except OSError:
             if os.path.lexists(src):
-                remove_tree(stage)
+                _remove_quietly(stage)
             return None
         journal(CopyPhase.PLACED, dst)
-    if not has_exact_name(dst):
-        # The copy never reached its destination, or is gone from there.
+    source = src if os.path.lexists(src) else None
+    if not _holds(dst, expected, source, trusted=True):
+        # The copy never reached its destination, or is not ours, or is gone from there.
         trash = trash_path(src, key)
         if os.path.lexists(trash) and not os.path.lexists(src):
             move_no_replace(trash, src)
         if os.path.lexists(src):
-            remove_tree(stage)
+            _remove_quietly(stage)
         return None
-    remove_tree(stage)
-    _discard(src, trash_path(src, key), expected, check=True)
+    _remove_quietly(stage)
+    if warning := _discard(src, trash_path(src, key), expected):
+        log.warning("%s: %s", src, warning)
     return dst
 
 
 def remove_tree(path: Path) -> None:
-    """Delete ``path`` (a file, symlink or folder) if it exists, never following symlinks."""
+    """Delete ``path`` (a file, symlink or folder) if it exists, never following symlinks.
+
+    Read-only folders and locked (``uchg``) files, which ``copyfile`` copies
+    as they are, are unlocked first; entries that vanish meanwhile (such as
+    the ``._`` files some volumes keep beside each file) are skipped.
+    """
     try:
         st = os.lstat(path)
     except FileNotFoundError:
         return
-    if stat.S_ISDIR(st.st_mode):
-        shutil.rmtree(path)
-    else:
-        path.unlink()
+    if st.st_flags & _USER_LOCKS:
+        os.lchflags(path, st.st_flags & ~_USER_LOCKS)
+    if not stat.S_ISDIR(st.st_mode):
+        with contextlib.suppress(FileNotFoundError):
+            path.unlink()
+        return
+    if st.st_mode & 0o700 != 0o700:
+        path.chmod(stat.S_IMODE(st.st_mode) | 0o700, follow_symlinks=False)
+    with os.scandir(path) as entries:
+        children = [Path(entry.path) for entry in entries]
+    for child in children:
+        remove_tree(child)
+    with contextlib.suppress(FileNotFoundError):
+        path.rmdir()
+
+
+def _remove_quietly(path: Path) -> None:
+    try:
+        remove_tree(path)
+    except OSError as exc:
+        log.warning("could not remove %s: %s", path, exc.strerror or exc)
+
+
+def _listable(folder: Path) -> bool:
+    try:
+        with os.scandir(folder):
+            return True
+    except OSError:
+        return False
+
+
+def _holds(path: Path, expected: str, source: Path | None = None, *, trusted: bool = False) -> bool:
+    """``path``, spelled exactly, holds the item that was copied.
+
+    A file must hash to ``expected``. A folder must have the same contents as
+    ``source`` while it exists; without it, its manifest must equal
+    ``expected``, unless the journal already said the copy was verified
+    (``trusted``): its own manifest differs on a volume with coarser times.
+    """
+    try:
+        if not has_exact_name(path) or path.is_symlink():
+            return False
+        if not path.is_dir():
+            return file_sha256(path) == expected
+        if source is not None and source.is_dir():
+            return content_digest(path) == content_digest(source)
+        return trusted or unit_manifest(path).digest == expected
+    except OSError:
+        return False
+
+
+def _require_rename_excl(stage: Path) -> None:
+    """Fail unless the volume of ``stage`` can rename without replacing (exFAT cannot)."""
+    probe = stage / "probe"
+    probe.mkdir()
+    try:
+        move_no_replace(probe, stage / "probed")
+    except OSError as exc:
+        if exc.errno in _NO_RENAME_EXCL:
+            raise UnsupportedVolumeError(
+                exc.errno,
+                "the destination volume cannot rename without replacing, "
+                "so flib does not move items there",
+                str(stage.parent),
+            ) from exc
+        raise
+    (stage / "probed").rmdir()
 
 
 def _copyfile(src: Path, dst: Path) -> None:
-    flags = _COPYFILE_ALL | _COPYFILE_EXCL | _COPYFILE_NOFOLLOW
-    if stat.S_ISDIR(os.lstat(src).st_mode):
-        flags |= _COPYFILE_RECURSIVE
+    """Copy ``src`` (a file, symlink or whole folder) to the new path ``dst``, metadata included.
+
+    A folder is walked here rather than with ``COPYFILE_RECURSIVE``, which
+    fails on a symlink inside a read-only folder: each folder is created
+    writable, filled, and only then given its own permissions, flags, dates,
+    extended attributes and ACLs.
+    """
+    _copy_entry(src, dst)
+
+
+def _copy_entry(src: Path, dst: Path) -> None:
+    if not stat.S_ISDIR(os.lstat(src).st_mode):
+        _copyfile_call(src, dst, _COPYFILE_ALL | _COPYFILE_EXCL | _COPYFILE_NOFOLLOW)
+        return
+    dst.mkdir(mode=0o700)
+    with os.scandir(src) as entries:
+        names = sorted(entry.name for entry in entries)
+    for name in names:
+        _copy_entry(src / name, dst / name)
+    _copyfile_call(src, dst, _COPYFILE_METADATA | _COPYFILE_NOFOLLOW)
+
+
+def _copyfile_call(src: Path, dst: Path, flags: int) -> None:
     if _libc().copyfile(os.fsencode(src), os.fsencode(dst), None, flags) != 0:
         err = ctypes.get_errno()
         raise OSError(err, os.strerror(err), str(dst))
@@ -288,6 +414,15 @@ def _sync(path: Path) -> None:
         os.close(fd)
 
 
+def _sync_warning(path: Path) -> str | None:
+    """Flush a folder whose entries changed; once the item is in place, failing is a warning."""
+    try:
+        _sync(path)
+    except OSError as exc:
+        return f"could not flush {path} to disk: {exc.strerror or exc}"
+    return None
+
+
 def _sync_tree(root: Path) -> None:
     for dirpath, _dirnames, filenames in os.walk(root, followlinks=False):
         for name in filenames:
@@ -299,14 +434,14 @@ def _sync_tree(root: Path) -> None:
         _sync(root)
 
 
+def _identity(st: os.stat_result) -> tuple[int, int, int]:
+    return st.st_ino, st.st_size, st.st_mtime_ns
+
+
 def _verify(src: Path, copy: Path, before: os.stat_result, expected: str) -> None:
     """The copy matches the source, which is still ``expected`` and did not change meanwhile."""
     after = os.lstat(src)
-    if (after.st_ino, after.st_size, after.st_mtime_ns) != (
-        before.st_ino,
-        before.st_size,
-        before.st_mtime_ns,
-    ):
+    if _identity(after) != _identity(before):
         raise CopyMismatchError(errno.EAGAIN, "changed while it was copied", str(src))
     if stat.S_ISDIR(after.st_mode):
         same = unit_manifest(src).digest == expected and content_digest(copy) == content_digest(src)
@@ -324,26 +459,38 @@ def _place(item: Path, candidates: Iterable[Path], trying: Callable[[Path], None
             move_no_replace(item, candidate)
         except DestinationExistsError:
             continue
-        _sync(candidate.parent)
         with contextlib.suppress(OSError):
             item.parent.rmdir()
         return candidate
     raise DestinationExistsError(errno.EEXIST, "no free name", str(item))
 
 
-def _discard(src: Path, trash: Path, expected: str, *, check: bool = False) -> str | None:
+def _discard(
+    src: Path, trash: Path, expected: str, before: os.stat_result | None = None
+) -> str | None:
     """Delete the source of a copy now in place, if it is still what was copied.
 
-    It is renamed aside first, so its own name never holds a half-deleted
-    item. A folder is checked again (its manifest is cheap); a file was
-    checked moments ago, unless ``check``. Returns a warning instead of
-    raising: by now the move itself stands.
+    A file checked moments ago (``before``, its ``lstat`` from before the
+    copy) is compared by inode, size and modification time; otherwise, and
+    for a folder always (its manifest is cheap), by content. It is renamed
+    aside first, so its own name never holds a half-deleted item, and put
+    back if what was renamed is not what was checked. Returns a warning
+    instead of raising: by now the move itself stands.
     """
     try:
-        if os.path.lexists(src) and (not (check or src.is_dir()) or same_content(src, expected)):
+        if os.path.lexists(src):
+            st = os.lstat(src)
+            if before is not None and not stat.S_ISDIR(st.st_mode):
+                same = _identity(st) == _identity(before)
+            else:
+                same = same_content(src, expected)
+            if not same:
+                return "the original changed after it was copied, so it was kept"
             move_no_replace(src, trash)
+            if os.lstat(trash).st_ino != st.st_ino:
+                move_no_replace(trash, src)
+                return "the original changed while it was being removed, so it was kept"
         remove_tree(trash)
-        _sync(src.parent)
     except OSError as exc:
         return f"copied, but the original could not be removed: {exc.strerror or exc}"
-    return None
+    return _sync_warning(src.parent)

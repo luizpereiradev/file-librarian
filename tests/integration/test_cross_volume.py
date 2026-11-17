@@ -10,8 +10,10 @@ back from whatever was left on disk.
 from __future__ import annotations
 
 import errno
+import logging
 import os
 import plistlib
+import stat
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -24,18 +26,32 @@ from file_librarian.db.store import OperationRow, Store
 from file_librarian.executor import recover
 from file_librarian.extractors.origin import WHERE_FROMS, read_xattr
 from file_librarian.finder_tags import read_tags
-from file_librarian.fsops import CrossVolumeError, copy_verified, resume_copy
+from file_librarian.fsops import (
+    CopyMismatchError,
+    CrossVolumeError,
+    UnavailableError,
+    copy_verified,
+    new_copy_key,
+    remove_tree,
+    resume_copy,
+)
+from file_librarian.hashing import content_digest, unit_manifest
 from file_librarian.models import CopyPhase, FileStatus, OperationStatus
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.undo import undo_run
-from tests._helpers import OLD, Crash, answer, make_old, put, set_tags, write_xattr
+from tests._helpers import OLD, Crash, answer, make_old, put, row_for, set_tags, write_xattr
 
 pytestmark = pytest.mark.integration
 
 
 @pytest.fixture
 def cross_volume(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every move by a run or an undo behaves as if it crossed volumes."""
+    """Every move by a run or an undo behaves as if it crossed volumes.
+
+    Copy keys lose their random suffix, so tests can name the staging paths.
+    """
+    monkeypatch.setattr("file_librarian.executor.new_copy_key", lambda op_id: f"{op_id}-k")
+    monkeypatch.setattr("file_librarian.undo.new_copy_key", lambda op_id: f"{op_id}-k")
 
     def exdev(src: Path, dst: Path) -> None:
         raise CrossVolumeError(errno.EXDEV, "cross-device link", str(dst))
@@ -251,7 +267,7 @@ def test_a_source_that_cannot_be_removed_is_a_warning(
 
 def test_a_stale_staging_folder_is_never_reused(tmp_path: Path) -> None:
     source = put(tmp_path, "a.pdf", b"mine")
-    stage = tmp_path / ".flib-1.copy"
+    stage = tmp_path / ".flib-1-k.copy"
     (stage / "item").parent.mkdir()
     (stage / "item").write_bytes(b"someone's")
     with pytest.raises(FileExistsError):
@@ -337,7 +353,7 @@ def test_recovery_of_a_unit_cut_off_while_deleting_the_source(
     with pytest.raises(Crash):
         run(cfg)
     monkeypatch.undo()
-    assert leftovers(downloads) == [".flib-1.delete"]
+    assert leftovers(downloads) == [".flib-1-k.delete"]
     with Store.open(cfg.database) as store:
         recover(store, cfg)
     moved = finance(downloads) / "Project"
@@ -399,7 +415,7 @@ def test_recovery_never_deletes_the_only_copy(
     with pytest.raises(Crash):
         run(cfg)
     monkeypatch.undo()
-    staged = finance(downloads) / ".flib-1.copy" / "item"
+    staged = finance(downloads) / ".flib-1-k.copy" / "item"
     if not verified:
         staged.write_bytes(b"mi")  # a copy cut off half-way
     source.unlink()  # and the original deleted by hand before the next run
@@ -562,11 +578,12 @@ def test_sync_falls_back_to_fsync(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
 def test_resume_without_a_copy_or_destination_rolls_back(tmp_path: Path) -> None:
     source = put(tmp_path, "a.pdf", b"mine")
+    (tmp_path / "lib").mkdir()
     phases: list[CopyPhase] = []
     result = resume_copy(
         source,
         tmp_path / "lib" / "a.pdf",
-        key=7,
+        key="7-k",
         phase=CopyPhase.COPIED,
         expected="0" * 64,
         journal=lambda phase, _dst: phases.append(phase),
@@ -577,12 +594,12 @@ def test_resume_without_a_copy_or_destination_rolls_back(tmp_path: Path) -> None
 def test_resume_keeps_a_verified_copy_it_cannot_place_once_the_source_is_gone(
     tmp_path: Path,
 ) -> None:
-    staged = put(tmp_path, "lib/.flib-7.copy/item", b"mine")
+    staged = put(tmp_path, "lib/.flib-7-k.copy/item", b"mine")
     taken = put(tmp_path, "lib/a.pdf", b"theirs")
     result = resume_copy(
         tmp_path / "a.pdf",
         taken,
-        key=7,
+        key="7-k",
         phase=CopyPhase.COPIED,
         expected="0" * 64,
         journal=lambda _phase, _dst: None,
@@ -592,13 +609,410 @@ def test_resume_keeps_a_verified_copy_it_cannot_place_once_the_source_is_gone(
 
 
 def test_resume_with_nothing_left_anywhere_changes_nothing(tmp_path: Path) -> None:
-    staged = put(tmp_path, "lib/.flib-7.copy/other", b"?")
+    staged = put(tmp_path, "lib/.flib-7-k.copy/other", b"?")
     result = resume_copy(
         tmp_path / "a.pdf",
         tmp_path / "lib" / "a.pdf",
-        key=7,
+        key="7-k",
         phase=CopyPhase.PLACED,
         expected="0" * 64,
         journal=lambda _phase, _dst: None,
     )
     assert result is None and staged.exists()
+
+
+# --- unreachable folders, locked entries, unsupported volumes ---------------------------------
+
+
+def crash_while_removing_trash(monkeypatch: pytest.MonkeyPatch) -> None:
+    real = fsops.remove_tree
+
+    def crash(path: Path) -> None:
+        if path.name.endswith(".delete"):
+            raise Crash
+        real(path)
+
+    monkeypatch.setattr(fsops, "remove_tree", crash)
+
+
+def tree(folder: Path) -> list[str]:
+    return sorted(str(p.relative_to(folder)) for p in folder.rglob("*"))
+
+
+@pytest.mark.usefixtures("cross_volume")
+@pytest.mark.parametrize("where", ["_place", "remove_tree"])
+def test_recovery_waits_while_the_destination_is_unavailable(
+    downloads: Path,
+    cfg: Config,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    where: str,
+) -> None:
+    put(downloads, "Project/a.txt", b"one")
+    put(downloads, "Project/b.txt", b"two")
+    make_old(downloads / "Project")
+    if where == "_place":
+        crash_in(monkeypatch, "_place")  # verified copy staged in the library
+    else:
+        crash_while_removing_trash(monkeypatch)  # source moved aside, copy in place
+    with pytest.raises(Crash):
+        run(cfg)
+    monkeypatch.undo()
+    library = downloads / "Organized"
+    unmounted = downloads.parent / "unmounted"
+    library.rename(unmounted)  # as if its volume were unmounted
+    before = tree(downloads)
+
+    with Store.open(cfg.database) as store, caplog.at_level(logging.WARNING):
+        assert recover(store, cfg) == 0
+    assert "not available" in caplog.text
+    assert tree(downloads) == before  # nothing put back, nothing deleted
+    op, _, _ = only_op(cfg)
+    assert op.status is OperationStatus.PLANNED and op.copy_phase is not None
+
+    unmounted.rename(library)  # mounted again
+    with Store.open(cfg.database) as store:
+        assert recover(store, cfg) == 1
+    op, status, _ = only_op(cfg)
+    assert (op.status, status) == (OperationStatus.DONE, FileStatus.ORGANIZED)
+    assert sorted(p.name for p in (finance(downloads) / "Project").iterdir()) == ["a.txt", "b.txt"]
+    assert not (downloads / "Project").exists()
+    assert leftovers(downloads, finance(downloads)) == []
+
+
+@pytest.mark.usefixtures("cross_volume")
+def test_an_entry_that_cannot_be_recovered_does_not_stop_the_run(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    put(downloads, "a.pdf", b"mine")
+    crash_in(monkeypatch, "_place")
+    with pytest.raises(Crash):
+        run(cfg)
+    monkeypatch.undo()
+
+    def broken(*_args: Any, **_kwargs: Any) -> None:
+        raise PermissionError(errno.EACCES, "Permission denied")
+
+    monkeypatch.setattr("file_librarian.executor.resume_copy", broken)
+    with caplog.at_level(logging.WARNING):
+        outcome = run(cfg)
+    assert outcome.recovered == 0 and "could not recover" in caplog.text
+    op, _, _ = only_op(cfg)
+    assert op.status is OperationStatus.PLANNED
+
+
+@pytest.mark.usefixtures("cross_volume")
+def test_read_only_folders_and_locked_files_move_and_come_back(
+    downloads: Path, cfg: Config
+) -> None:
+    put(downloads, "Project/sub/a.txt", b"one")
+    locked = put(downloads, "Project/b.txt", b"two")
+    os.chflags(locked, stat.UF_IMMUTABLE)
+    link = downloads / "Project" / "sub" / "link"  # COPYFILE_RECURSIVE fails on this one
+    link.symlink_to("a.txt")
+    os.utime(link, (OLD, OLD), follow_symlinks=False)
+    (downloads / "Project" / "sub").chmod(0o555)
+    for folder in ("Project/sub", "Project"):
+        make_old(downloads / folder)
+
+    outcome = run(cfg)
+
+    assert outcome.report is not None and outcome.report.moved == 1
+    assert outcome.report.items[0].warning is None
+    moved = finance(downloads) / "Project"
+    assert not (downloads / "Project").exists()
+    assert (moved / "sub" / "a.txt").read_bytes() == b"one"
+    assert os.lstat(moved / "b.txt").st_flags & stat.UF_IMMUTABLE
+    assert leftovers(downloads, finance(downloads)) == []
+    with Store.open(cfg.database) as store:
+        report = undo_run(store, config=cfg)
+    assert report.restored == [(moved, downloads / "Project")] and report.warnings == []
+    assert not moved.exists() and leftovers(downloads, finance(downloads)) == []
+    remove_tree(downloads / "Project")  # unlocked, so the temporary folder can be cleaned
+
+
+@pytest.mark.usefixtures("cross_volume")
+def test_recovery_cleans_up_a_read_only_staged_copy(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    put(downloads, "Project/sub/a.txt", b"one")
+    (downloads / "Project" / "sub").chmod(0o555)
+    for folder in ("Project/sub", "Project"):
+        make_old(downloads / folder)
+    crash_in(monkeypatch, "_copyfile", after=True)
+    with pytest.raises(Crash):
+        run(cfg)
+    monkeypatch.undo()
+    with Store.open(cfg.database) as store:
+        assert recover(store, cfg) == 1
+    assert leftovers(downloads, finance(downloads)) == []
+    assert (downloads / "Project" / "sub" / "a.txt").read_bytes() == b"one"
+    (downloads / "Project" / "sub").chmod(0o755)
+
+
+@pytest.mark.usefixtures("cross_volume")
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        (errno.ENOTSUP, "cannot rename without replacing"),
+        (errno.EINVAL, "cannot rename without replacing"),
+        (errno.EACCES, "move failed"),
+    ],
+)
+def test_a_volume_without_rename_excl_is_refused_before_copying(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch, code: int, message: str
+) -> None:
+    source = put(downloads, "a.pdf", b"mine")
+    real = fsops.move_no_replace
+    copies: list[Path] = []
+
+    def no_excl(src: Path, dst: Path) -> None:
+        if src.name == "probe":  # what exFAT answers to RENAME_EXCL
+            raise OSError(code, os.strerror(code), str(src))
+        real(src, dst)
+
+    monkeypatch.setattr(fsops, "move_no_replace", no_excl)
+    monkeypatch.setattr(fsops, "_copyfile", lambda _src, dst: copies.append(dst))
+    outcome = run(cfg)
+    assert outcome.report is not None
+    [item] = outcome.report.items
+    assert item.status is FileStatus.FAILED and message in item.note
+    assert copies == [] and source.read_bytes() == b"mine"
+    assert leftovers(downloads, finance(downloads)) == []
+
+
+@pytest.mark.usefixtures("cross_volume")
+def test_a_cleanup_error_does_not_hide_a_full_disk(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    source = put(downloads, "a.pdf", b"mine")
+
+    def full(_src: Path, dst: Path) -> None:
+        dst.write_bytes(b"mi")
+        raise OSError(errno.ENOSPC, "No space left on device", str(dst))
+
+    def stuck(path: Path) -> None:
+        raise PermissionError(errno.EPERM, "Operation not permitted", str(path))
+
+    monkeypatch.setattr(fsops, "_copyfile", full)
+    monkeypatch.setattr(fsops, "remove_tree", stuck)
+    with caplog.at_level(logging.WARNING):
+        outcome = run(cfg)
+    assert outcome.report is not None
+    assert "not enough space" in outcome.report.items[0].note
+    assert "could not remove" in caplog.text
+    assert source.read_bytes() == b"mine"
+    _, _, attempts = only_op(cfg)
+    assert attempts == 0
+
+
+# --- the source after the copy ----------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("cross_volume")
+def test_a_folder_changed_after_copying_is_kept_with_a_warning(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    put(downloads, "Project/a.txt", b"one")
+    make_old(downloads / "Project")
+    real = fsops._place
+
+    def place_then_edit(*args: Any) -> Path:
+        final: Path = real(*args)
+        put(downloads, "Project/new.txt", b"new")
+        return final
+
+    monkeypatch.setattr(fsops, "_place", place_then_edit)
+    outcome = run(cfg)
+    assert outcome.report is not None
+    [item] = outcome.report.items
+    assert item.status is FileStatus.ORGANIZED and item.warning is not None
+    assert "changed after it was copied" in item.warning
+    assert (downloads / "Project" / "new.txt").exists()
+    assert (finance(downloads) / "Project" / "a.txt").exists()
+    assert leftovers(downloads, finance(downloads)) == []
+
+
+@pytest.mark.usefixtures("cross_volume")
+def test_a_file_replaced_after_copying_is_kept(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = put(downloads, "a.pdf", b"mine")
+    real = fsops._place
+
+    def place_then_replace(*args: Any) -> Path:
+        final: Path = real(*args)
+        source.unlink()
+        put(downloads, "a.pdf", b"mine")  # same name, size and time; another file
+        return final
+
+    monkeypatch.setattr(fsops, "_place", place_then_replace)
+    outcome = run(cfg)
+    assert outcome.report is not None
+    warning = outcome.report.items[0].warning
+    assert warning is not None and "changed after it was copied" in warning
+    assert source.read_bytes() == b"mine"
+
+
+@pytest.mark.usefixtures("cross_volume")
+def test_a_source_swapped_while_moving_it_aside_is_put_back(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = put(downloads, "a.pdf", b"mine")
+    real = fsops.move_no_replace
+
+    def swap(src: Path, dst: Path) -> None:
+        real(src, dst)
+        if dst.name.endswith(".delete"):
+            dst.unlink()
+            dst.write_bytes(b"someone else's")
+
+    monkeypatch.setattr(fsops, "move_no_replace", swap)
+    outcome = run(cfg)
+    assert outcome.report is not None
+    warning = outcome.report.items[0].warning
+    assert warning is not None and "while it was being removed" in warning
+    assert source.read_bytes() == b"someone else's"
+    assert leftovers(downloads, finance(downloads)) == []
+
+
+@pytest.mark.usefixtures("cross_volume")
+def test_a_flush_error_after_placing_is_only_a_warning(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = put(downloads, "a.pdf", b"mine")
+    real = fsops._sync
+
+    def flaky(path: Path) -> None:
+        if path == finance(downloads):
+            raise OSError(errno.EIO, "Input/output error", str(path))
+        real(path)
+
+    monkeypatch.setattr(fsops, "_sync", flaky)
+    outcome = run(cfg)
+    assert outcome.report is not None
+    [item] = outcome.report.items
+    assert item.status is FileStatus.ORGANIZED and item.warning is not None
+    assert "could not flush" in item.warning
+    assert (finance(downloads) / "a.pdf").read_bytes() == b"mine" and not source.exists()
+
+
+@pytest.mark.usefixtures("cross_volume")
+def test_recovery_keeps_a_source_edited_after_the_crash(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    source = put(downloads, "a.pdf", b"mine")
+    crash_in(monkeypatch, "_discard")
+    with pytest.raises(Crash):
+        run(cfg)
+    monkeypatch.undo()
+    source.write_bytes(b"MINE")  # same size, edited before the next run
+    with Store.open(cfg.database) as store, caplog.at_level(logging.WARNING):
+        recover(store, cfg)
+    assert source.read_bytes() == b"MINE"
+    assert (finance(downloads) / "a.pdf").read_bytes() == b"mine"
+    assert "changed after it was copied" in caplog.text
+    op, _, _ = only_op(cfg)
+    assert op.status is OperationStatus.DONE
+
+
+# --- recovery checks what it finds -------------------------------------------------------------
+
+
+@pytest.mark.usefixtures("cross_volume")
+def test_recovery_does_not_take_someone_elses_file_for_the_copy(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = put(downloads, "a.pdf", b"mine")
+    crash_in(monkeypatch, "_place", after=True)  # renamed into place, phase still "copied"
+    with pytest.raises(Crash):
+        run(cfg)
+    monkeypatch.undo()
+    moved = finance(downloads) / "a.pdf"
+    moved.write_bytes(b"theirs")
+    with Store.open(cfg.database) as store:
+        recover(store, cfg)
+    op, _, _ = only_op(cfg)
+    assert op.status is OperationStatus.FAILED
+    assert source.read_bytes() == b"mine" and moved.read_bytes() == b"theirs"
+
+
+@pytest.mark.usefixtures("cross_volume")
+def test_recovery_finds_a_finished_copy_when_later_phases_were_lost(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = put(downloads, "a.pdf", b"mine")
+    crash_in(monkeypatch, "_discard")
+    with pytest.raises(Crash):
+        run(cfg)
+    monkeypatch.undo()
+    source.unlink()
+    with Store.open(cfg.database) as store:
+        store.conn.execute("UPDATE operations SET copy_phase = 'copying'")
+        recover(store, cfg)
+    op, status, _ = only_op(cfg)
+    assert (op.status, status) == (OperationStatus.DONE, FileStatus.ORGANIZED)
+    assert (finance(downloads) / "a.pdf").read_bytes() == b"mine"
+
+
+@pytest.mark.usefixtures("cross_volume")
+def test_a_unit_on_a_coarser_file_system_is_indexed_as_it_is_there(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    put(downloads, "Project/a.txt", b"one", mtime=OLD + 0.123456)
+    make_old(downloads / "Project")
+    real = fsops._copyfile
+
+    def coarse(src: Path, dst: Path) -> None:
+        real(src, dst)
+        # Whole seconds there, as HFS+ keeps them; even seconds on the way back, as FAT.
+        step = 1 if finance(downloads) in dst.parents else 2
+        for path in [dst, *dst.rglob("*")]:
+            seconds = int(os.lstat(path).st_mtime) // step * step
+            os.utime(path, (seconds, seconds), follow_symlinks=False)
+
+    monkeypatch.setattr(fsops, "_copyfile", coarse)
+    run(cfg)
+    moved = finance(downloads) / "Project"
+    assert row_for(cfg, "Project").sha256 == unit_manifest(moved).digest
+    with Store.open(cfg.database) as store:
+        report = undo_run(store, config=cfg)
+    assert report.restored == [(moved, downloads / "Project")]
+    assert row_for(cfg, "Project").sha256 == unit_manifest(downloads / "Project").digest
+
+
+# --- the pieces on their own --------------------------------------------------------------------
+
+
+def test_a_unit_that_is_no_longer_what_was_indexed_is_not_copied(tmp_path: Path) -> None:
+    put(tmp_path, "Project/a.txt")
+    stage = tmp_path / ".flib-x.copy"
+    with pytest.raises(CopyMismatchError):
+        copy_verified(tmp_path / "Project", stage, "0" * 64)
+    assert not stage.exists()
+
+
+def test_content_digest_tells_symlink_targets_apart(tmp_path: Path) -> None:
+    for name, target in (("a", "x"), ("b", "y")):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "link").symlink_to(target)
+    assert content_digest(tmp_path / "a") != content_digest(tmp_path / "b")
+
+
+def test_copy_keys_never_repeat() -> None:
+    key = new_copy_key(5)
+    assert key.startswith("5-") and key != new_copy_key(5)
+
+
+def test_resume_does_nothing_while_a_folder_is_unavailable(tmp_path: Path) -> None:
+    source = put(tmp_path, "a.pdf", b"mine")
+    with pytest.raises(UnavailableError):
+        resume_copy(
+            source,
+            tmp_path / "unmounted" / "a.pdf",
+            key="7-k",
+            phase=CopyPhase.PLACED,
+            expected="0" * 64,
+            journal=lambda _phase, _dst: None,
+        )
+    assert source.read_bytes() == b"mine"

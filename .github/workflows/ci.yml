@@ -45,3 +45,8 @@ jobs:
         run: uv run coverage run -m pytest
       - name: Coverage (fails under 93%)
         run: uv run coverage report
+      - name: Cross-volume moves on disk images (APFS, HFS+, exFAT)
+        if: matrix.python == '3.13'
+        env:
+          FLIB_TEST_VOLUMES: "1"
+        run: uv run pytest -m volumes -p no:cacheprovider

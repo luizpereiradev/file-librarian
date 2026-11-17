@@ -10,16 +10,22 @@ All notable changes to this project are documented here. The format follows
 
 - Moves to another volume (RF-33). A destination on another volume used to
   fail the item; now it is copied with `copyfile(3)` (extended attributes
-  such as the download origin and Finder tags, ACLs, permissions and dates
-  included) into a hidden staging folder, flushed to disk, verified (its
-  SHA-256, or for a folder unit every file's content and the source's
+  such as the download origin and Finder tags, ACLs, permissions, flags and
+  dates included) into a hidden staging folder, flushed to disk, verified
+  (its SHA-256, or for a folder unit every file's content and the source's
   manifest; the source must not have changed meanwhile), renamed into place
-  without overwriting, and only then is the source removed. `flib undo`
-  copies back the same way. Each phase is journaled (migration 0008,
-  `operations.copy_phase`) and crash recovery finishes or rolls back from
-  what is on disk, never deleting the only verified copy. A full disk
-  cleans up, leaves the source untouched and does not count as a failed
-  attempt.
+  without overwriting, and only then is the source removed, read-only
+  folders and locked files included; a source changed after the copy is
+  kept, with a warning. `flib undo` copies back the same way. Each phase is
+  journaled (migration 0008, `operations.copy_phase` and `copy_key`, flushed
+  with `F_FULLFSYNC`) and crash recovery finishes or rolls back from what is
+  on disk, never deleting the only verified copy, and waits while a volume
+  is unmounted. Volumes that cannot rename without replacing (exFAT, FAT)
+  are refused before anything is copied. A full disk cleans up, leaves the
+  source untouched and does not count as a failed attempt. A folder unit on
+  a file system with coarser times (HFS+) is indexed by its manifest there.
+  Opt-in tests on real disk images: `FLIB_TEST_VOLUMES=1 uv run pytest -m
+  volumes`.
 - `flib doctor` writes one redacted diagnostics report to attach to a bug
   report (RF-39) and prints its path: flib, Python and macOS versions, the
   install kind (uv tool or development checkout), whether the MCP extra is

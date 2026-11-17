@@ -14,7 +14,8 @@ commands keep these guarantees:
   destination is on another volume (an external disk), the item is copied,
   the copy is checked against the original's hash, and only then is the
   original removed; extended attributes (download origin, Finder tags),
-  permissions and dates go with it;
+  permissions and dates go with it. exFAT and FAT drives cannot rename
+  without replacing, so flib does not move anything onto them;
 - every run is recorded and can be undone, except files you changed or moved
   afterwards, which are skipped and listed.
 - nothing is downloaded from iCloud: files that exist only in the cloud, and

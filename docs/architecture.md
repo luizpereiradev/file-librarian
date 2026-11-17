@@ -55,27 +55,44 @@ model.
   skips (and lists) files that were edited or whose original path is taken.
 - A move to another volume (RF-33), where a rename is impossible, is copy,
   verify, delete (`fsops.copy_move`), and so is an undo back across volumes.
-  The copy is made with `copyfile(3)` and `COPYFILE_ALL` into a hidden
-  staging folder next to the destination (`.flib-<id>.copy`), which keeps
-  extended attributes (download origin, Finder tags), ACLs, permissions,
-  flags and dates. It is flushed with `F_FULLFSYNC` and verified: the copy's
-  SHA-256 must equal the indexed one (for a folder unit, every file's
-  SHA-256 must match the source's, and the source's manifest the indexed
-  one), and the source must not have changed while it was copied (inode,
-  size, modification time). Only then is it renamed into place with
-  `RENAME_EXCL`, and the source renamed aside (`.flib-<id>.delete`) and
-  deleted. `copyfile(3)` was chosen over `shutil.copy2` because it copies
-  every extended attribute, ACLs and file flags, and whole bundles, as
-  Finder does. A full disk, a failed copy or a mismatch removes the staging
-  folder and leaves the source untouched; the item fails. The journal entry
-  records each phase in `copy_phase`, and recovery decides from it and from
-  what is on disk:
+  The destination volume must support `RENAME_EXCL`; exFAT and FAT do not,
+  so nothing is copied there (the item fails with a clear message and counts
+  an attempt). The copy is made with `copyfile(3)` and `COPYFILE_ALL` (a
+  folder entry by entry, each folder given its own permissions last, since
+  `COPYFILE_RECURSIVE` fails on a symlink inside a read-only folder) into a
+  hidden staging folder next to the destination (`.flib-<key>.copy`, the key
+  being the journal entry's id and a random suffix), which keeps extended
+  attributes (download origin, Finder tags), ACLs, permissions, flags and
+  dates. It is flushed with `F_FULLFSYNC` and verified: the copy's SHA-256
+  must equal the indexed one (for a folder unit, every file's SHA-256 and
+  symlink target must match the source's, and the source's manifest the
+  indexed one), and the source must not have changed while it was copied
+  (inode, size, modification time). Only then is it renamed into place with
+  `RENAME_EXCL`, and the source checked once more, renamed aside
+  (`.flib-<key>.delete`, put back if what was renamed is not what was
+  checked) and deleted, read-only folders and locked (`uchg`) files
+  included. A source that changed after the copy is kept, with a warning.
+  `copyfile(3)` was chosen over `shutil.copy2` because it copies every
+  extended attribute, ACLs and file flags, as Finder does. A full disk, a
+  failed copy or a mismatch removes the staging folder (a cleanup error is
+  logged, never reported in place of the real one) and leaves the source
+  untouched; the item fails. A folder unit copied to a file system with
+  coarser times (HFS+) gets a different manifest there, so its index row
+  takes the new digest, and undo and reconcile still recognise it.
+
+  The journal entry records each phase in `copy_phase`, committed with
+  `F_FULLFSYNC` so it is on the disk before a source is deleted (only these
+  commits pay for it). Recovery decides from the phase and from what is on
+  disk. If the source's or the destination's folder cannot be listed (an
+  unmounted volume), it decides nothing: the entry stays as it is, with a
+  warning, and is finished once the volume is back. An entry that fails to
+  recover is logged and left; it never stops a run.
 
   | Phase at the crash | What recovery does |
   | --- | --- |
-  | `copying` (copy not yet verified) | Source still there: delete the staging folder and fail the item; the source is untouched. Source gone (deleted by hand) and the staged copy matches the hash: place it. Otherwise leave both alone. |
-  | `copied` (verified, being renamed) | Staged copy there: rename it into place, then remove the source. Name taken meanwhile: roll back (the staging folder is deleted only while the source is still there). Copy already at the destination: remove the source. |
-  | `placed` (in place, removing the source) | Finish removing the source (only if it still has the copied content) and what is left of `.delete`. If the copy is gone from the destination, a source already moved aside is put back instead. |
+  | `copying` (copy not yet verified) | Source still there: delete the staging folder and fail the item; the source is untouched. Source gone and the destination or the staged copy holds the indexed content (a later phase was lost, or the source was deleted by hand): finish from there. Otherwise leave everything alone. |
+  | `copied` (verified, being renamed) | Staged copy there: rename it into place, then remove the source. Name taken meanwhile: roll back (the staging folder is deleted only while the source is still there). Copy already at the destination: check it holds the copied content, then remove the source. |
+  | `placed` (in place, removing the source) | Check the destination holds the copied content, then finish removing the source (only if it still has the copied content; otherwise keep it, with a warning) and what is left of `.delete`. If the copy is gone from the destination or is not ours, a source already moved aside is put back instead. |
 
   For an undo the entry stays `done` while its `copy_phase` is set; a
   rolled-back undo leaves the item in the library, still undoable. A
@@ -107,12 +124,13 @@ Found in the safety review of M1 and accepted for now:
   not match, counts as a failed attempt; after `max_attempts` the file is
   left alone until the index row is cleared. A full disk or quota (`ENOSPC`,
   `EDQUOT`) does not count: the item is retried every run.
-- **Folder units and coarse timestamps.** A folder unit's identity includes
-  its files' modification times. Moved to a volume whose file system keeps
-  coarser times than APFS (HFS+, exFAT), the copy's manifest differs from the
-  indexed one, so `flib undo` and `flib reconcile` see it as changed and
-  leave it where it is. Single files are identified by content and are not
-  affected.
+- **No moves to exFAT or FAT.** Those file systems cannot rename without
+  replacing (`RENAME_EXCL`), so flib refuses to copy there rather than risk
+  overwriting a file; such a destination fails the item.
+- **An unreachable destination waits.** A move interrupted while its
+  library volume is unmounted stays unresolved (and its file is not
+  processed again) until the volume is back. If the library folder was
+  deleted for good, the entry keeps waiting, with a warning each run.
 - **`flib fix` stays on one volume.** A correction is a rename inside the
   library; a category folder that is the mount point of another volume
   fails the fix with nothing changed.

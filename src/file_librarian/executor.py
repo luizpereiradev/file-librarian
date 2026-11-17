@@ -26,24 +26,28 @@ source of a cross-volume move once its verified copy is in place.
 from __future__ import annotations
 
 import errno
+import logging
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from functools import partial
 from itertools import chain
 from pathlib import Path
 
 from file_librarian.config import Config
-from file_librarian.db.store import OperationRow, Store
+from file_librarian.db.store import FileRow, OperationRow, Store
 from file_librarian.finder_tags import tag_moved
 from file_librarian.fix import complete_interrupted
 from file_librarian.fsops import (
     CrossVolumeError,
     DestinationExistsError,
     Journal,
+    UnavailableError,
     copy_move,
     ensure_folder,
     has_exact_name,
     move_no_replace,
+    new_copy_key,
     resume_copy,
 )
 from file_librarian.hashing import same_content, unit_manifest
@@ -58,10 +62,12 @@ from file_librarian.models import (
 )
 from file_librarian.naming import candidate_names
 from file_librarian.planner import Plan, PlannedItem
-from file_librarian.undo import record_restored
+from file_librarian.undo import record_restored, refresh_unit_identity
 
 # A full disk or quota is not the file's fault: the item is retried every run.
 _ENVIRONMENTAL = frozenset({errno.ENOSPC, errno.EDQUOT})
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -177,6 +183,8 @@ def _apply(
     with store.transaction():
         store.set_operation(op_id, OperationStatus.DONE, destination)
         store.set_file_location(file_id, destination, item.status)
+    if ctx.is_unit:
+        refresh_unit_identity(store, file_id, destination, ctx.sha256)
     warnings = [w for w in (kept, _tag(item, destination, config, store, op_id)) if w]
     return ItemResult(ctx.path, item.status, destination, item.reason, "; ".join(warnings) or None)
 
@@ -224,21 +232,22 @@ def _move(src: Path, dst: Path, store: Store, op_id: int, expected: str) -> tupl
         except DestinationExistsError:
             continue
         except CrossVolumeError:
+            key = new_copy_key(op_id)
             return copy_move(
                 src,
                 chain([candidate], candidates),
-                key=op_id,
+                key=key,
                 expected=expected,
-                journal=_journal(store, op_id),
+                journal=_journal(store, op_id, key),
             )
     raise DestinationExistsError(f"no free name for {dst}")
 
 
-def _journal(store: Store, op_id: int, *, moves_dst: bool = True) -> Journal:
+def _journal(store: Store, op_id: int, key: str, *, moves_dst: bool = True) -> Journal:
     """Record each cross-volume phase on the entry; a move also records where it aims."""
 
     def journal(phase: CopyPhase, dst: Path) -> None:
-        store.set_copy_phase(op_id, phase, dst if moves_dst else None)
+        store.set_copy_phase(op_id, phase, key, dst if moves_dst else None)
 
     return journal
 
@@ -258,70 +267,99 @@ def recover(store: Store, config: Config | None = None) -> int:
     An entry made by ``flib fix`` is finished or failed as a whole (see
     ``fix.complete_interrupted``); given ``config``, that includes its Finder tags.
     A move or an undo cut off while copying to another volume is finished or
-    rolled back by ``fsops.resume_copy``.
+    rolled back by ``fsops.resume_copy``; one whose folders cannot be reached
+    (an unmounted volume) is left as it is for a later run, with a warning.
+    An entry that cannot be resolved is logged and left, never fatal: it
+    must not stop every later run.
     """
-    undos = store.interrupted_undos()
-    for op in undos:
-        if op.copy_phase is not None:
-            _recover_undo(store, op, op.copy_phase, config)
-    pending = store.operations(status=OperationStatus.PLANNED)
-    for op in pending:
-        row = store.file_by_id(op.file_id)
-        if op.copy_phase is not None:
-            _recover_copy(store, op, op.copy_phase, row.sha256, row.status)
-            continue
-        # Done if the journaled destination is the very inode we moved (a rename keeps
-        # it, even if the file was edited since), or holds exactly the content we moved.
-        # Its exact name must be there: on a case-insensitive volume "A.pdf" opens "a.pdf".
-        moved = has_exact_name(op.dst_path) and (
-            _same_inode(op.dst_path, op.src_identity) or same_content(op.dst_path, row.sha256)
+    resolved = 0
+    for op in store.interrupted_undos():
+        resolved += _resolve(op, partial(_recover_undo, store, op, config))
+    for op in store.operations(status=OperationStatus.PLANNED):
+        resolved += _resolve(op, partial(_recover_one, store, op, config))
+    return resolved
+
+
+def _resolve(op: OperationRow, action: Callable[[], None]) -> int:
+    """Run one entry's recovery; 1 if it was resolved, 0 if it was left for later."""
+    try:
+        action()
+    except UnavailableError as exc:
+        log.warning(
+            "move of %s left as it is: %s is not available (an unmounted volume?); "
+            "it is finished when it is back",
+            op.src_path,
+            exc.filename,
         )
-        if op.fix is not None:
-            complete_interrupted(config, store, op, moved=moved)
-        elif moved:
-            with store.transaction():
-                store.set_operation(op.id, OperationStatus.DONE)
-                store.set_file_location(op.file_id, op.dst_path, row.status)
-        else:
-            with store.transaction():
-                store.set_operation(op.id, OperationStatus.FAILED)
-                store.mark_file_failed(op.file_id, "interrupted before the move finished")
-    return len(undos) + len(pending)
+        return 0
+    except Exception as exc:
+        log.warning("could not recover the move of %s: %s; left for later", op.src_path, exc)
+        return 0
+    return 1
 
 
-def _recover_copy(
-    store: Store, op: OperationRow, phase: CopyPhase, sha256: str, status: FileStatus
-) -> None:
+def _recover_one(store: Store, op: OperationRow, config: Config | None) -> None:
+    row = store.file_by_id(op.file_id)
+    if op.copy_phase is not None and op.copy_key is not None:
+        _recover_copy(store, op, op.copy_phase, op.copy_key, row)
+    else:
+        _recover_rename(store, op, row, config)
+
+
+def _recover_rename(store: Store, op: OperationRow, row: FileRow, config: Config | None) -> None:
+    # Done if the journaled destination is the very inode we moved (a rename keeps
+    # it, even if the file was edited since), or holds exactly the content we moved.
+    # Its exact name must be there: on a case-insensitive volume "A.pdf" opens "a.pdf".
+    moved = has_exact_name(op.dst_path) and (
+        _same_inode(op.dst_path, op.src_identity) or same_content(op.dst_path, row.sha256)
+    )
+    if op.fix is not None:
+        complete_interrupted(config, store, op, moved=moved)
+    elif moved:
+        with store.transaction():
+            store.set_operation(op.id, OperationStatus.DONE)
+            store.set_file_location(op.file_id, op.dst_path, row.status)
+    else:
+        with store.transaction():
+            store.set_operation(op.id, OperationStatus.FAILED)
+            store.mark_file_failed(op.file_id, "interrupted before the move finished")
+
+
+def _recover_copy(store: Store, op: OperationRow, phase: CopyPhase, key: str, row: FileRow) -> None:
     final = resume_copy(
         op.src_path,
         op.dst_path,
-        key=op.id,
+        key=key,
         phase=phase,
-        expected=sha256,
-        journal=_journal(store, op.id),
+        expected=row.sha256,
+        journal=_journal(store, op.id, key),
     )
     with store.transaction():
         if final is not None:
             store.set_operation(op.id, OperationStatus.DONE, final)
-            store.set_file_location(op.file_id, final, status)
+            store.set_file_location(op.file_id, final, row.status)
         else:
             store.set_operation(op.id, OperationStatus.FAILED)
             store.mark_file_failed(op.file_id, "interrupted while copying to another volume")
+    if final is not None and row.is_unit:
+        refresh_unit_identity(store, op.file_id, final, row.sha256)
 
 
-def _recover_undo(store: Store, op: OperationRow, phase: CopyPhase, config: Config | None) -> None:
+def _recover_undo(store: Store, op: OperationRow, config: Config | None) -> None:
     """An undo across volumes cut off mid-copy: restored now, or still where it was moved."""
+    if op.copy_phase is None or op.copy_key is None:
+        return
     row = store.file_by_id(op.file_id)
     restored = resume_copy(
         op.dst_path,
         op.src_path,
-        key=op.id,
-        phase=phase,
+        key=op.copy_key,
+        phase=op.copy_phase,
         expected=row.sha256,
-        journal=_journal(store, op.id, moves_dst=False),
+        journal=_journal(store, op.id, op.copy_key, moves_dst=False),
     )
     if restored is None:
-        store.set_copy_phase(op.id, None)  # rolled back: the move stands and can be undone
+        store.clear_copy_phase(op.id)  # rolled back: the move stands and can be undone
     else:
         record_restored(store, op, config)
 

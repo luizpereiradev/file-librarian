@@ -133,6 +133,8 @@ class OperationRow:
     """For a ``flib fix``, the (status, category) it gives the file; ``None`` for a run."""
     copy_phase: CopyPhase | None = None
     """How far a move (``planned``) or its undo (``done``) to another volume got."""
+    copy_key: str | None = None
+    """Names that copy's staging and trash paths (``fsops.new_copy_key``)."""
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> OperationRow:
@@ -150,6 +152,7 @@ class OperationRow:
             if row["fix_status"] is None
             else (FileStatus(row["fix_status"]), row["fix_category"]),
             copy_phase=None if row["copy_phase"] is None else CopyPhase(row["copy_phase"]),
+            copy_key=row["copy_key"],
         )
 
 
@@ -193,6 +196,8 @@ class Store:
         conn.row_factory = sqlite3.Row
         conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
         conn.execute("PRAGMA journal_mode = WAL")
+        # Checkpoints reach the disk itself (F_FULLFSYNC); see set_copy_phase for commits.
+        conn.execute("PRAGMA checkpoint_fullfsync = ON")
         conn.execute("PRAGMA foreign_keys = ON")
         store = cls(conn)
         store.migrate()
@@ -346,6 +351,17 @@ class Store:
         )
         return [CorrectionRow.from_row(r) for r in rows]
 
+    def set_file_identity(self, file_id: int, sha256: str) -> bool:
+        """A folder unit's new manifest digest after a copy to another file system.
+
+        Returns ``False`` (and changes nothing) if another row already has it.
+        """
+        try:
+            self.conn.execute("UPDATE files SET sha256 = ? WHERE id = ?", (sha256, file_id))
+        except sqlite3.IntegrityError:
+            return False
+        return True
+
     def mark_file_failed(self, file_id: int, error: str, *, attempt: bool = True) -> None:
         """``attempt=False`` for a cause outside the file (a full disk): retried every run."""
         self.conn.execute(
@@ -434,25 +450,42 @@ class Store:
         """Set the status (and destination); this ends any cross-volume copy phase."""
         if dst is None:
             self.conn.execute(
-                "UPDATE operations SET status = ?, copy_phase = NULL WHERE id = ?",
+                "UPDATE operations SET status = ?, copy_phase = NULL, copy_key = NULL WHERE id = ?",
                 (status.value, op_id),
             )
         else:
             self.conn.execute(
-                "UPDATE operations SET status = ?, dst_path = ?, copy_phase = NULL WHERE id = ?",
+                """UPDATE operations SET status = ?, dst_path = ?, copy_phase = NULL,
+                                         copy_key = NULL
+                   WHERE id = ?""",
                 (status.value, str(dst), op_id),
             )
 
-    def set_copy_phase(self, op_id: int, phase: CopyPhase | None, dst: Path | None = None) -> None:
-        """Journal how far a cross-volume move (or its undo) got, and where it is going."""
-        value = None if phase is None else phase.value
-        if dst is None:
-            self.conn.execute("UPDATE operations SET copy_phase = ? WHERE id = ?", (value, op_id))
-        else:
+    def set_copy_phase(
+        self, op_id: int, phase: CopyPhase, key: str, dst: Path | None = None
+    ) -> None:
+        """Journal how far a cross-volume move (or its undo) got, and where it is going.
+
+        Committed with ``F_FULLFSYNC``, so the phase is on the disk itself, not
+        only in the drive's cache, before the move goes on to delete a source.
+        Only these few commits pay for it (a few milliseconds each).
+        """
+        self.conn.execute("PRAGMA fullfsync = ON")
+        try:
             self.conn.execute(
-                "UPDATE operations SET copy_phase = ?, dst_path = ? WHERE id = ?",
-                (value, str(dst), op_id),
+                """UPDATE operations SET copy_phase = ?, copy_key = ?,
+                                         dst_path = coalesce(?, dst_path)
+                   WHERE id = ?""",
+                (phase.value, key, None if dst is None else str(dst), op_id),
             )
+        finally:
+            self.conn.execute("PRAGMA fullfsync = OFF")
+
+    def clear_copy_phase(self, op_id: int) -> None:
+        """A copy that was rolled back: the entry keeps its status."""
+        self.conn.execute(
+            "UPDATE operations SET copy_phase = NULL, copy_key = NULL WHERE id = ?", (op_id,)
+        )
 
     def interrupted_undos(self) -> list[OperationRow]:
         """``done`` entries whose undo to another volume a crash cut off."""
