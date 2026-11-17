@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 import zipfile
 import zlib
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from xml.etree.ElementTree import Element, ParseError, XMLPullParser
 
@@ -86,7 +86,7 @@ def _part_text(
 
 
 def _collect(
-    path: Path,
+    zf: zipfile.ZipFile,
     parts: Iterable[str],
     text_tags: set[str],
     break_tags: set[str],
@@ -98,8 +98,7 @@ def _collect(
         if remaining <= 0:
             break
         try:
-            with zipfile.ZipFile(path) as zf:
-                text = _part_text(zf, name, text_tags, break_tags, remaining)
+            text = _part_text(zf, name, text_tags, break_tags, remaining)
         except KeyError:
             continue
         out.append(text)
@@ -108,15 +107,27 @@ def _collect(
     return joined[:max_chars] or None
 
 
-def _members(path: Path) -> list[str]:
+_Reader = Callable[[zipfile.ZipFile, list[str], int], "str | None"]
+
+
+def _extract(path: Path, max_chars: int, kind: str, read: _Reader) -> str | None:
+    """Open ``path`` as a ZIP once and hand the open archive to ``read``.
+
+    Any damage maps to ``ExtractionError``: while opening (not a ZIP, or a
+    password-protected OLE container) and while reading the parts.
+    """
     try:
-        with zipfile.ZipFile(path) as zf:
-            names = zf.namelist()
+        zf = zipfile.ZipFile(path)
     except _DAMAGED as exc:
         raise ExtractionError("not a readable Office file (damaged or password-protected)") from exc
-    if len(names) > 10_000:
-        raise ExtractionError("too many parts for an Office file")
-    return names
+    with zf:
+        names = zf.namelist()
+        if len(names) > 10_000:
+            raise ExtractionError("too many parts for an Office file")
+        try:
+            return read(zf, names, max_chars)
+        except _DAMAGED as exc:
+            raise ExtractionError(f"cannot read {kind}: {exc}") from exc
 
 
 def _numbered(names: list[str], prefix: str) -> list[str]:
@@ -125,43 +136,42 @@ def _numbered(names: list[str], prefix: str) -> list[str]:
     return [n for _, n in sorted(found)][:MAX_PARTS]
 
 
+def _docx_text(zf: zipfile.ZipFile, names: list[str], max_chars: int) -> str | None:
+    parts = [n for n in names if n == "word/document.xml"]
+    return _collect(zf, parts, {"t"}, {"p", "br", "tab"}, max_chars)
+
+
+def _pptx_text(zf: zipfile.ZipFile, names: list[str], max_chars: int) -> str | None:
+    return _collect(zf, _numbered(names, "ppt/slides/slide"), {"t"}, {"p"}, max_chars)
+
+
+def _xlsx_text(zf: zipfile.ZipFile, names: list[str], max_chars: int) -> str | None:
+    sheet_names = _sheet_names(zf) if "xl/workbook.xml" in names else []
+    header = f"Sheets: {', '.join(sheet_names)}\n" if sheet_names else ""
+    body = _collect(zf, ["xl/sharedStrings.xml"], {"t"}, {"si"}, max_chars)
+    text = (header + (body or "")).strip()
+    return text[:max_chars] or None
+
+
 class DocxExtractor:
     extensions = frozenset({".docx", ".docm"})
 
     def extract(self, path: Path, max_chars: int) -> str | None:
-        names = _members(path)
-        parts = [n for n in names if n == "word/document.xml"]
-        try:
-            return _collect(path, parts, {"t"}, {"p", "br", "tab"}, max_chars)
-        except _DAMAGED as exc:
-            raise ExtractionError(f"cannot read document: {exc}") from exc
+        return _extract(path, max_chars, "document", _docx_text)
 
 
 class PptxExtractor:
     extensions = frozenset({".pptx", ".pptm"})
 
     def extract(self, path: Path, max_chars: int) -> str | None:
-        names = _members(path)
-        try:
-            return _collect(path, _numbered(names, "ppt/slides/slide"), {"t"}, {"p"}, max_chars)
-        except _DAMAGED as exc:
-            raise ExtractionError(f"cannot read presentation: {exc}") from exc
+        return _extract(path, max_chars, "presentation", _pptx_text)
 
 
 class XlsxExtractor:
     extensions = frozenset({".xlsx", ".xlsm"})
 
     def extract(self, path: Path, max_chars: int) -> str | None:
-        names = _members(path)
-        try:
-            with zipfile.ZipFile(path) as zf:
-                sheet_names = _sheet_names(zf) if "xl/workbook.xml" in names else []
-            header = f"Sheets: {', '.join(sheet_names)}\n" if sheet_names else ""
-            body = _collect(path, ["xl/sharedStrings.xml"], {"t"}, {"si"}, max_chars)
-        except _DAMAGED as exc:
-            raise ExtractionError(f"cannot read spreadsheet: {exc}") from exc
-        text = (header + (body or "")).strip()
-        return text[:max_chars] or None
+        return _extract(path, max_chars, "spreadsheet", _xlsx_text)
 
 
 def _sheet_names(zf: zipfile.ZipFile) -> list[str]:

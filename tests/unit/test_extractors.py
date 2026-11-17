@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import tarfile
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pypdf import PdfWriter
@@ -61,6 +63,33 @@ def test_office_max_chars(tmp_path: Path) -> None:
     path = make_docx(tmp_path / "big.docx", ["word " * 1000] * 50)
     text = extract(path, max_chars=500)
     assert text is not None and len(text) <= 500
+
+
+@pytest.mark.parametrize(
+    ("name", "build"),
+    [
+        ("doc.docx", lambda p: make_docx(p, ["One", "Two"])),
+        ("sheet.xlsx", lambda p: make_xlsx(p, ["2026"], ["Rent"])),
+        ("deck.pptx", lambda p: make_pptx(p, ["Slide 1", "Slide 2", "Slide 3"])),
+    ],
+)
+def test_office_opens_the_zip_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    build: Callable[[Path], Path],
+) -> None:
+    path = build(tmp_path / name)
+    opened: list[object] = []
+
+    class CountingZipFile(zipfile.ZipFile):  # defined before the patch below
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            opened.append(args[0] if args else kwargs.get("file"))
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(zipfile, "ZipFile", CountingZipFile)
+    assert extract(path)
+    assert opened == [path]
 
 
 @pytest.mark.parametrize("name", ["locked.docx", "locked.xlsx", "locked.pptx"])

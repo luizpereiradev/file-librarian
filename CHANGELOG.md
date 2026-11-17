@@ -177,5 +177,6 @@ All notable changes to this project are documented here. The format follows
   runs on `main` and the weekly audit are not.
 - mypy checks `tests/` too; ruff runs the bandit (`S`) rules.
 - Requirements are available in English in `docs/requirements.md`.
+- The Office extractor opens each document as a ZIP once instead of once per part.
 
 [Unreleased]: https://github.com/luizpereiradev/file-librarian/commits/main
