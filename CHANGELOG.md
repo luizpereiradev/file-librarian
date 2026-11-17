@@ -197,6 +197,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- `FileContext.metadata` is a typed `FileMetadata` instead of a string dict;
+  what providers receive is unchanged.
 - Of several copies with the same content, the original goes ahead: a name
   without a copy suffix (` (1)`, ` copy`) first, then the copy created first.
   Version numbers like `-0.1.2` are not mistaken for copy suffixes.

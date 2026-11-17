@@ -39,7 +39,34 @@ Rules for every extractor:
 - **Never write** to the file, its metadata or its folder.
 - Prefer the standard library. A new dependency needs a reason in the pull request.
 
-## 2. Register it
+## 2. Add metadata (optional)
+
+An extractor returns text only. Anything else the pipeline learns about a file
+lives in `FileContext.metadata`, a frozen `FileMetadata` dataclass in
+`models.py` (`content`, `extraction_error`, `sensitive`, and `bundle` for
+`.app` units), filled in by `context.py`. Readers use its attributes, never
+string keys. To record something new, say a page count:
+
+1. Add a typed, documented field defaulting to `None`:
+
+   ```python
+   @dataclass(frozen=True, slots=True)
+   class FileMetadata:
+       ...
+       pages: int | None = None
+       """How many pages the document has."""
+   ```
+
+2. Set it where `context.py` builds the `FileMetadata` for the file, e.g.
+   `FileMetadata(content=content, extraction_error=error, pages=pages)`.
+
+3. Metadata stays local unless `user_message` in `providers/prompt.py` sends
+   it. To send a field, add it there, bump `PROMPT_VERSION` in
+   `classifier.py` (cached answers were given without it) and update the
+   golden strings in `tests/unit/test_prompt_payload.py`, which pin the exact
+   text sent to providers.
+
+## 3. Register it
 
 Append the module name to `BUILTIN` in `extractors/__init__.py`, so it is
 imported on the first lookup. Keep the names that are already there:
@@ -48,12 +75,12 @@ imported on the first lookup. Keep the names that are already there:
 BUILTIN: tuple[str, ...] = (..., "markdown")
 ```
 
-## 3. Test it
+## 4. Test it
 
 Generate a small synthetic sample in the test itself (or add a tiny, obviously
 fake file under `tests/fixtures/`) and cover: normal text, the `max_chars`
 cap, an empty file, and a corrupted file raising `ExtractionError`.
 
-## 4. Document it
+## 5. Document it
 
 Add the format to the README and to `CHANGELOG.md` under `Unreleased`.

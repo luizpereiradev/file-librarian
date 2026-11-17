@@ -98,7 +98,7 @@ def plan(decisions: list[Decision], config: Config, *, today: date | None = None
 def _plan_one(decision: Decision, config: Config, names: _Names, today: date) -> PlannedItem:
     ctx = decision.context
     if ctx.sensitive:
-        reason = ctx.metadata.get("sensitive", "sensitive content")
+        reason = ctx.metadata.sensitive or "sensitive content"
         return PlannedItem(ctx, FileStatus.SENSITIVE, None, f"sensitive: {reason}")
     answer = decision.classification
     if answer is None:

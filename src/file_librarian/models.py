@@ -74,6 +74,46 @@ class Attachment:
 
 
 @dataclass(frozen=True, slots=True)
+class BundleInfo:
+    """What an ``.app`` bundle's ``Info.plist`` says about it (strings only, each capped)."""
+
+    name: str | None = None
+    """``CFBundleName``; the only one sent in the prompt's metadata block."""
+    identifier: str | None = None
+    """``CFBundleIdentifier``."""
+    version: str | None = None
+    """``CFBundleShortVersionString``."""
+
+    def plist_items(self) -> tuple[tuple[str, str], ...]:
+        """The keys that were present, under their ``Info.plist`` names, in a fixed order."""
+        items = (
+            ("CFBundleName", self.name),
+            ("CFBundleIdentifier", self.identifier),
+            ("CFBundleShortVersionString", self.version),
+        )
+        return tuple((key, value) for key, value in items if value is not None)
+
+
+@dataclass(frozen=True, slots=True)
+class FileMetadata:
+    """What the extractor stage learned about a file besides its text.
+
+    Each field is ``None`` when it does not apply. Only ``content`` and
+    ``bundle.name`` reach the provider (see ``providers/prompt.py``); the rest
+    explains the outcome locally.
+    """
+
+    content: str | None = None
+    """Why no text is sent: ``"no readable text"``, ``"withheld (never_send)"``..."""
+    extraction_error: str | None = None
+    """Why reading the file failed (RF-27); it is then classified from metadata."""
+    sensitive: str | None = None
+    """What made the file sensitive (a secret kind or a credential file name)."""
+    bundle: BundleInfo | None = None
+    """For an ``.app`` unit, what its ``Info.plist`` says."""
+
+
+@dataclass(frozen=True, slots=True)
 class FileContext:
     """Everything the classifier may know about one file (or one folder/.app unit)."""
 
@@ -88,7 +128,7 @@ class FileContext:
     text: str | None = None
     is_unit: bool = False
     sensitive: bool = False
-    metadata: dict[str, str] = field(default_factory=dict)
+    metadata: FileMetadata = FileMetadata()
     visual: VisualKind | None = None
     """Set when ``vision.enabled`` and the file is an image or a PDF with no text layer."""
     attachment: Attachment | None = None
