@@ -8,6 +8,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- iCloud files that exist only in the cloud are skipped (RF-24). The scanner
+  recognises them from `lstat` (`SF_DATALESS`) before opening, hashing or
+  extracting anything, so no download is triggered; a folder unit with any
+  such file inside is skipped as a whole, and the manifest walk stops at the
+  first one. `flib simulate` and `flib run` list them as `in iCloud only, not
+  downloaded`; a later run picks them up once downloaded.
 - `flib reconcile` (RF-20): the index follows files moved, renamed or deleted
   by hand. Files are found again by content (only same-size files are
   hashed; folder units by manifest) under the library and the input folders.
