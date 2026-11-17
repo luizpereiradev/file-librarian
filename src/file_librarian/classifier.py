@@ -56,7 +56,7 @@ from file_librarian.providers.base import FatalProviderError, Provider, Provider
 from file_librarian.sensitive import sensitive_name, withheld_by_config
 
 CACHE_DAYS = 7
-PROMPT_VERSION = "3"  # bump when the prompt or answer schema changes, to invalidate the cache
+PROMPT_VERSION = "4"  # bump when the prompt or answer schema changes, to invalidate the cache
 EXAMPLE_DESCRIPTION_CHARS = 200
 
 

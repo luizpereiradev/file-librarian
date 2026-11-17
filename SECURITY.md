@@ -11,7 +11,9 @@ Do not open a public issue. Use GitHub's private reporting instead:
 
 Please include the version (`flib --version`), your macOS version, and the
 steps to reproduce. Leave out real file names, paths and contents; synthetic
-examples are enough. You should get a first answer within 7 days.
+examples are enough. The report `flib doctor` writes has names, paths and
+secrets replaced already (see the README's Troubleshooting section); read it
+before attaching it. You should get a first answer within 7 days.
 
 ## In scope
 

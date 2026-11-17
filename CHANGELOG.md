@@ -16,6 +16,22 @@ All notable changes to this project are documented here. The format follows
   stop with a clear message. The MCP `search_files` tool takes the same
   filters (`categories`, `extensions`, `since`, `until`), and its `query` is
   now optional when a filter is given.
+- `flib doctor` writes one redacted diagnostics report to attach to a bug
+  report (RF-39) and prints its path: flib, Python and macOS versions, the
+  install kind (uv tool or development checkout), whether the MCP extra is
+  installed, the configuration (validated, folders as `<input-1>`, `<output>`,
+  category hints and personal patterns replaced), where the API key comes
+  from as one word (the key itself never appears, not even its last
+  characters), the schedule's state, the database's schema version and counts
+  by status, the last runs and the last run logs. In the logs, every file name
+  becomes `<file-N>` plus its extension (the same name, the same number),
+  folders become placeholders, and secrets (the patterns of secret detection),
+  e-mail addresses, URLs and quoted text are replaced; category names stay. A
+  section that fails shows its error instead of stopping the report. It goes
+  to flib's logs folder (owner-only, last ten kept); `--stdout` prints it,
+  `--output PATH` writes it elsewhere, `--format markdown` makes it
+  paste-ready, `--logs N` sets how many run logs. The bug report template
+  asks for it.
 - `flib check-config` warns when an option that is accepted but not active
   yet is set to anything but its default, so nobody thinks it works. The
   list lives in `config.INACTIVE_OPTIONS`; every option in the configuration
@@ -228,6 +244,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- A descriptive original name is no longer replaced by a shorter, vaguer one
+  (#59). The answer schema gains `name_choice` (`original` or `proposed`) and
+  `name_choice_reason`: the model compares the file's current name with its
+  proposal and says which describes the file better. When it picks
+  `original`, the planner builds the new name from the original's words, with
+  flib's own naming rules (pattern and date, sanitising, length, extension; a
+  leading date in the old name is not repeated); generic names (`scan001`,
+  `document (3)`) are still replaced. The choice and reason are stored in the
+  index (migration 0007), marked "original name kept" in `flib simulate`, and
+  shown by `flib inspect` (which now looks the file up in the index; it takes
+  `--config`) and the MCP `get_file` tool. Both Claude providers send the new
+  schema. `PROMPT_VERSION` is now 4, so cached answers are not reused.
 - `FileContext.metadata` is a typed `FileMetadata` instead of a string dict;
   what providers receive is unchanged.
 - Of several copies with the same content, the original goes ahead: a name

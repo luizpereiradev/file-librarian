@@ -129,6 +129,8 @@ def file_record(
         last_error=error,
         provider=provider if answer else None,
         model=model if answer else None,
+        name_choice=item.name_choice if answer else None,
+        name_choice_reason=answer.name_choice_reason if answer and item.name_choice else None,
     )
 
 

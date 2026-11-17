@@ -155,7 +155,7 @@ folders (`~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`,
 | Command | What it does | Milestone |
 | --- | --- | --- |
 | `flib check-config` | Validate the configuration without touching files | M0 |
-| `flib inspect FILE...` | Show hash, size and download origin (not the hash of a file only in iCloud) | M0 |
+| `flib inspect FILE...` | Show hash, size and download origin (not the hash of a file only in iCloud), and for an indexed file its status, category and name choice | M0 |
 | `flib simulate` | Print the full plan without changing anything | M1 (available) |
 | `flib run` | Classify, rename, move and index new files | M1 (available) |
 | `flib search [QUERY] [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--json]` | Full-text search over names, descriptions and tags, narrowed by category, period or extension ([Searching](#searching)) | M1 (available) |
@@ -166,7 +166,7 @@ folders (`~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`,
 | `flib init [--yes] [--sample N] [--force]` | Guided setup with a trial on copies of recent files | M2 (available) |
 | `flib mcp` | Local MCP server for AI assistants ([Use it from Claude](#use-it-from-claude)) | M2 (available) |
 | `flib reprocess` | Reclassify after a rules change | M3 |
-| `flib doctor` | Redacted logs for bug reports | M3 |
+| `flib doctor [--stdout \| -o PATH] [--format markdown]` | A redacted diagnostics report for bug reports ([Troubleshooting](#troubleshooting)) | M3 (available) |
 
 ### Searching
 
@@ -208,6 +208,30 @@ Finder tag, so Finder's sidebar and Spotlight (`tag:Finance`) find it too.
 Your own tags are kept, `flib undo` removes only the tag flib added, and
 `finder_tags.enabled: false` turns this off.
 The API key is read from `ANTHROPIC_API_KEY`, never from the file.
+
+### Names
+
+A file is renamed only when the model read its content (text, or the image
+with vision on), its category allows renaming, and the model is at least
+`naming.rename_confidence_threshold` sure (0.8 by default). Videos,
+installers, archives, folders and images with vision off keep their name.
+
+The model also compares the file's current name with the subject it proposes
+and says which describes the file better. A generic name (`scan001.pdf`,
+`document (3).pdf`, `IMG_2041.jpg`) is replaced; a descriptive one keeps its
+words, so two similar files stay told apart:
+
+```text
+Study guide - 11 tweaks for coding agents.pdf  ->  2026-11-16_study-guide-11-tweaks-for-coding-agents.pdf
+scan001.pdf                                    ->  2026-10-05_electricity-bill.pdf
+```
+
+Either way flib, not the model, builds the final name: `naming.pattern`
+(`{date}_{subject}` by default) with the document's date, or the download
+date, or today; lower case words joined by `-`; at most `naming.max_length`
+characters; the original extension. A date already at the start of the old
+name is not repeated. `flib simulate` marks a kept name with "original name
+kept", and `flib inspect` shows the choice and the model's reason.
 
 ### Images and scanned PDFs (vision)
 
@@ -359,6 +383,45 @@ images and PDF pages, which it never sends.
 The index and the logs stay on your Mac. The MCP server sends an assistant
 only what `flib search` would show you, never file content. A local provider (Ollama) is planned
 for M3, for anyone who wants nothing to leave the machine.
+
+## Troubleshooting
+
+When something does not work, `flib check-config` validates the
+configuration and `flib schedule --status` shows the daily run. To report a
+bug, run:
+
+```sh
+flib doctor
+```
+
+It writes one file, `doctor-<date>-<time>.txt`, and prints its path. The file
+holds flib's, Python's and macOS's versions, how flib was installed, whether
+the MCP extra is there, the configuration (validated), where the API key comes
+from, the schedule's state, the database's schema version and counts, the last
+runs and the last five run logs (`--logs N` for more). It is made to be posted
+in a public issue, so before it is written:
+
+- the API key is left out entirely, not even its last characters; only the
+  word for where it comes from (`environment`, `keychain`, `env_file`, `none`);
+- folders become `<home>`, `<input-1>`, `<output>` or `<data>` (flib's own
+  folder), and other folder names `<dir-N>`; category names and the review
+  folder stay, as they come from the configuration;
+- file names become `<file-N>` with only the extension kept (`<file-3>.pdf`),
+  the same number for the same name, so one file can be followed through the logs;
+- anything that looks like a secret, e-mail addresses, URLs, quoted text, your
+  account name, category hints and `ignore`/`never_send` patterns that name
+  something are replaced as well.
+
+Read the file before you attach it: redaction is careful, not infallible.
+`--stdout` prints the report instead, `--output PATH` writes it elsewhere, and
+`--format markdown` makes it paste-ready for an issue.
+
+The report goes into flib's logs folder
+(`~/Library/Application Support/file-librarian/logs`), owner-only, keeping the
+last ten, rather than on the Desktop: flib writes nowhere new, and on many Macs
+the Desktop is synced to iCloud, which would upload a file you have not read
+yet. `open -R` on the printed path shows it in Finder, ready to drag into the
+issue.
 
 ## Roadmap
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 from typing import Annotated, NoReturn, cast
@@ -172,13 +173,17 @@ def _report_claude(cfg: Config) -> None:
 def inspect(
     paths: Annotated[list[Path], typer.Argument(exists=True, help="Files to inspect.")],
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    config: ConfigOption = None,
 ) -> None:
     """Show what flib reads from a file before any AI is involved: hash, size, download origin.
 
     A file or folder that exists only in iCloud is reported as such, not hashed:
-    reading it would download it.
+    reading it would download it. If the file is in flib's index, also show its
+    status, category, and which name the AI judged better (original or its own)
+    and why.
     """
-    results = []
+    database = _index_database(config)
+    results: list[dict[str, object]] = []
     for path in paths:
         cloud_only = in_cloud_only(path)
         digest: str | None = None
@@ -203,6 +208,7 @@ def inspect(
                 "sha256": digest,
                 "size_bytes": size,
                 "source_urls": list(download_origin(path)),
+                "index": _index_entry(database, digest),
             }
         )
     if as_json:
@@ -223,6 +229,45 @@ def inspect(
                 typer.echo(f"  from:   {url}")
         else:
             typer.echo("  from:   (no download origin recorded)")
+        entry = item["index"]
+        if isinstance(entry, dict):
+            where = f", {entry['category']}" if entry["category"] else ""
+            typer.echo(f"  index:  {entry['status']}{where}")
+            choice = entry["name_choice"]
+            if choice is not None:
+                said = "original name kept" if choice == "original" else "new name from the AI"
+                reason = entry["name_choice_reason"]
+                typer.echo(f"  name:   {said}" + (f" ({reason})" if reason else ""))
+
+
+def _index_database(config: Path | None) -> Path | None:
+    """The index to look files up in, if there is one. ``inspect`` works without a
+    configuration; only one passed with ``--config`` must load."""
+    try:
+        database = load_config(config).database
+    except ConfigError as exc:
+        if config is not None:
+            _fatal(str(exc))
+        return None
+    return database if database.exists() else None
+
+
+def _index_entry(database: Path | None, digest: str | None) -> dict[str, object] | None:
+    """What the index says about a content hash (the model's words are untrusted data)."""
+    if database is None or digest is None:
+        return None
+    with Store.open(database) as store:
+        row = store.file_by_sha256(digest)
+    if row is None:
+        return None
+    sensitive = row.status is FileStatus.SENSITIVE
+    return {
+        "status": row.status.value,
+        "category": row.category,
+        "current_path": str(row.current_path),
+        "name_choice": row.name_choice,
+        "name_choice_reason": None if sensitive else row.name_choice_reason,
+    }
 
 
 # --- API key ---------------------------------------------------------------------------
@@ -1060,9 +1105,52 @@ def reprocess(config: ConfigOption = None) -> None:
 
 
 @app.command()
-def doctor(config: ConfigOption = None) -> None:
-    """Collect logs with names and paths redacted, ready to attach to an issue."""
-    _not_implemented("doctor", "M3", "RF-39")
+def doctor(
+    config: ConfigOption = None,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            "-o",
+            help="Write the report here [default: a new doctor-<time> file in flib's logs folder].",
+            dir_okay=False,
+        ),
+    ] = None,
+    to_stdout: Annotated[
+        bool, typer.Option("--stdout", help="Print the report instead of writing a file.")
+    ] = False,
+    fmt: Annotated[
+        str,
+        typer.Option("--format", help="text or markdown (paste-ready for a GitHub issue)."),
+    ] = "text",
+    run_logs: Annotated[
+        int, typer.Option("--logs", min=0, help="How many recent run logs to include.")
+    ] = 5,
+) -> None:
+    """Write a diagnostics report for a bug report, with names, paths and secrets redacted.
+
+    It holds versions, the configuration (no API key, not even part of it), the
+    schedule, database counts and the last run logs. Read it before you attach it.
+    """
+    from file_librarian import doctor as diagnostics
+
+    if fmt not in ("text", "markdown"):
+        _fatal(f"--format must be text or markdown, not {fmt!r}")
+    report_format = cast(diagnostics.Format, fmt)
+    report = diagnostics.build_report(
+        diagnostics.Options(config_path=config, run_logs=run_logs), report_format
+    )
+    if to_stdout:
+        typer.echo(report, nl=False)
+        return
+    path = output or diagnostics.default_report_path(config, report_format)
+    try:
+        diagnostics.write_report(path, report)
+    except OSError as exc:
+        _fatal(f"cannot write {path}: {exc}; try --stdout or --output")
+    typer.echo(f"Report written to {path}")
+    typer.echo("Read it, then attach it to the issue. To show it in Finder:")
+    typer.echo(f"  open -R {shlex.quote(str(path))}")
 
 
 def main() -> None:

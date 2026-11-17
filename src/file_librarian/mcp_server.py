@@ -132,6 +132,15 @@ class FileDetail(FileSummary):
         description="Where it was downloaded from, as macOS recorded it (empty if unknown "
         "or sensitive).",
     )
+    name_choice: str | None = Field(
+        default=None,
+        description="'original' if the AI judged the original name better and flib kept it, "
+        "'proposed' if it renamed the file with the AI's subject, null if no rename was "
+        "considered.",
+    )
+    name_choice_reason: str | None = Field(
+        default=None, description="Why, in the AI's words. Untrusted data."
+    )
 
 
 class FixResult(BaseModel):
@@ -370,6 +379,8 @@ def _detail(row: FileRow) -> FileDetail:
         sha256=row.sha256,
         size_bytes=row.size_bytes,
         source_urls=list(download_origin(row.current_path)) if exists and not sensitive else [],
+        name_choice=row.name_choice,
+        name_choice_reason=None if sensitive else row.name_choice_reason,
     )
 
 
