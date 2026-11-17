@@ -46,7 +46,6 @@ def test_help_lists_every_command() -> None:
     ("args", "requirement"),
     [
         (["reprocess"], "RF-37"),
-        (["doctor"], "RF-39"),
     ],
 )
 def test_planned_commands_exit_non_zero(args: list[str], requirement: str) -> None:

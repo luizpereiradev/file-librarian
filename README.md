@@ -166,7 +166,7 @@ folders (`~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`,
 | `flib init [--yes] [--sample N] [--force]` | Guided setup with a trial on copies of recent files | M2 (available) |
 | `flib mcp` | Local MCP server for AI assistants ([Use it from Claude](#use-it-from-claude)) | M2 (available) |
 | `flib reprocess` | Reclassify after a rules change | M3 |
-| `flib doctor` | Redacted logs for bug reports | M3 |
+| `flib doctor [--stdout \| -o PATH] [--format markdown]` | A redacted diagnostics report for bug reports ([Troubleshooting](#troubleshooting)) | M3 (available) |
 
 ## Configuration
 
@@ -359,6 +359,45 @@ images and PDF pages, which it never sends.
 The index and the logs stay on your Mac. The MCP server sends an assistant
 only what `flib search` would show you, never file content. A local provider (Ollama) is planned
 for M3, for anyone who wants nothing to leave the machine.
+
+## Troubleshooting
+
+When something does not work, `flib check-config` validates the
+configuration and `flib schedule --status` shows the daily run. To report a
+bug, run:
+
+```sh
+flib doctor
+```
+
+It writes one file, `doctor-<date>-<time>.txt`, and prints its path. The file
+holds flib's, Python's and macOS's versions, how flib was installed, whether
+the MCP extra is there, the configuration (validated), where the API key comes
+from, the schedule's state, the database's schema version and counts, the last
+runs and the last five run logs (`--logs N` for more). It is made to be posted
+in a public issue, so before it is written:
+
+- the API key is left out entirely, not even its last characters; only the
+  word for where it comes from (`environment`, `keychain`, `env_file`, `none`);
+- folders become `<home>`, `<input-1>`, `<output>` or `<data>` (flib's own
+  folder), and other folder names `<dir-N>`; category names and the review
+  folder stay, as they come from the configuration;
+- file names become `<file-N>` with only the extension kept (`<file-3>.pdf`),
+  the same number for the same name, so one file can be followed through the logs;
+- anything that looks like a secret, e-mail addresses, URLs, quoted text, your
+  account name, category hints and `ignore`/`never_send` patterns that name
+  something are replaced as well.
+
+Read the file before you attach it: redaction is careful, not infallible.
+`--stdout` prints the report instead, `--output PATH` writes it elsewhere, and
+`--format markdown` makes it paste-ready for an issue.
+
+The report goes into flib's logs folder
+(`~/Library/Application Support/file-librarian/logs`), owner-only, keeping the
+last ten, rather than on the Desktop: flib writes nowhere new, and on many Macs
+the Desktop is synced to iCloud, which would upload a file you have not read
+yet. `open -R` on the printed path shows it in Finder, ready to drag into the
+issue.
 
 ## Roadmap
 
