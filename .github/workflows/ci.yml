@@ -16,12 +16,16 @@ concurrency:
 jobs:
   check:
     name: lint, types, tests (Python ${{ matrix.python }})
-    runs-on: macos-latest
+    # Pinned image: macos-latest jobs were cancelled after waiting 15 minutes
+    # for a runner. Dependabot does not bump this; review it with the matrix.
+    runs-on: macos-15
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.11", "3.12", "3.13", "3.14", "3.15"]
+        # Pull requests test the oldest and newest Python (macOS runners are
+        # scarce); main gets every supported version.
+        python: ${{ fromJSON(github.event_name == 'pull_request' && '["3.11", "3.15"]' || '["3.11", "3.12", "3.13", "3.14", "3.15"]') }}
     env:
       UV_PYTHON: ${{ matrix.python }}
     steps:
@@ -46,7 +50,22 @@ jobs:
       - name: Coverage (fails under 93%)
         run: uv run coverage report
       - name: Cross-volume moves on disk images (APFS, HFS+, exFAT)
-        if: matrix.python == '3.13'
+        # One version is enough: it exercises the file systems, not Python.
+        if: matrix.python == '3.15'
         env:
           FLIB_TEST_VOLUMES: "1"
         run: uv run pytest -m volumes -p no:cacheprovider
+
+  # The one required check: it passes only when every matrix entry passed, so
+  # the branch rules do not depend on which versions ran.
+  passed:
+    name: CI passed
+    if: always()
+    needs: [check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every version passed
+        env:
+          RESULT: ${{ needs.check.result }}
+        run: test "$RESULT" = success

@@ -26,6 +26,14 @@ All notable changes to this project are documented here. The format follows
   a file system with coarser times (HFS+) is indexed by its manifest there.
   Opt-in tests on real disk images: `FLIB_TEST_VOLUMES=1 uv run pytest -m
   volumes`.
+- Search filters (RF-14): `flib search` takes `--category` (any case),
+  `--ext` (with or without the dot), both repeatable or comma-separated, and
+  `--since`/`--until` (`YYYY-MM-DD`, inclusive, local time) on the day flib
+  last processed the file. Filters combine with the query and with each
+  other, and work without a query, listing matches newest first. Bad values
+  stop with a clear message. The MCP `search_files` tool takes the same
+  filters (`categories`, `extensions`, `since`, `until`), and its `query` is
+  now optional when a filter is given.
 - `flib doctor` writes one redacted diagnostics report to attach to a bug
   report (RF-39) and prints its path: flib, Python and macOS versions, the
   install kind (uv tool or development checkout), whether the MCP extra is
@@ -292,7 +300,8 @@ All notable changes to this project are documented here. The format follows
   Claude Haiku 5.5, items sent to review fell from 17 to 12 of 48.
 - `flib check-config` warns when the configured provider is not implemented yet.
 - `flib inspect` no longer reports a size for directories.
-- CI tests Python 3.11 through 3.15; superseded pull request runs are cancelled,
+- CI tests Python 3.11 through 3.15 on `main` and the oldest and newest on
+  pull requests, behind one required `CI passed` check; superseded pull request runs are cancelled,
   runs on `main` and the weekly audit are not.
 - mypy checks `tests/` too; ruff runs the bandit (`S`) rules.
 - Requirements are available in English in `docs/requirements.md`.

@@ -42,6 +42,13 @@ from file_librarian.reconcile import in_cloud_only
 from file_librarian.reconcile import reconcile as run_reconcile
 from file_librarian.runlog import logs_dir, write_log
 from file_librarian.scanner import ScanError, SkipReason
+from file_librarian.search import (
+    SearchError,
+    SearchFilters,
+    SearchHit,
+    make_filters,
+    split_values,
+)
 from file_librarian.search import search as run_search
 from file_librarian.search import to_json as search_json
 from file_librarian.undo import NothingToUndoError, undo_file, undo_run
@@ -439,20 +446,67 @@ def _print_report(report: RunReport, cfg: Config, skipped: list[str]) -> None:
             typer.echo(f"warning: could not write the run log: {exc}", err=True)
 
 
+def _search_filters(
+    known: list[str],
+    category: list[str] | None,
+    ext: list[str] | None,
+    since: str | None,
+    until: str | None,
+) -> SearchFilters:
+    try:
+        return make_filters(
+            categories=category, extensions=ext, since=since, until=until, known_categories=known
+        )
+    except SearchError as exc:
+        _fatal(str(exc))
+
+
 @app.command()
 def search(
-    query: Annotated[str, typer.Argument(help="What you remember about the file.")],
+    query: Annotated[
+        str, typer.Argument(help="What you remember about the file (optional with filters).")
+    ] = "",
+    category: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--category",
+            help="Only this category, any case. Repeat it or use commas for any of several.",
+        ),
+    ] = None,
+    since: Annotated[
+        str | None,
+        typer.Option("--since", help="Processed on or after this day (YYYY-MM-DD, local time)."),
+    ] = None,
+    until: Annotated[
+        str | None,
+        typer.Option("--until", help="Processed on or before this day (YYYY-MM-DD, local time)."),
+    ] = None,
+    ext: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--ext", help="Only this extension (pdf or .pdf). Repeat it or use commas for several."
+        ),
+    ] = None,
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON for other programs.")] = False,
     limit: Annotated[int, typer.Option("--limit", min=1, max=500, help="Most results.")] = 20,
     config: ConfigOption = None,
 ) -> None:
-    """Find organized files by name, description or tags."""
+    """Find organized files by name, description or tags, and by category, period or type.
+
+    Without a query, the files matching the filters are listed newest first.
+    """
     cfg = _load(config)
+    has_filters = bool(split_values(category) or split_values(ext) or since or until)
+    if not query.strip() and not has_filters:
+        _fatal("give words to search for, a filter (--category, --since, --until, --ext), or both")
+    configured = [c.name for c in cfg.categories]
+    hits: list[SearchHit] = []
     if not cfg.database.exists():
-        hits = []
+        _search_filters(configured, category, ext, since, until)  # still validate them
     else:
         with Store.open(cfg.database) as store:
-            hits = run_search(store, query, limit=limit)
+            filters = _search_filters(configured + store.categories(), category, ext, since, until)
+            hits = run_search(store, query, filters=filters, limit=limit)
     if as_json:
         typer.echo(search_json(hits))
         return
