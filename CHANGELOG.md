@@ -228,6 +228,8 @@ All notable changes to this project are documented here. The format follows
 - mypy checks `tests/` too; ruff runs the bandit (`S`) rules.
 - Requirements are available in English in `docs/requirements.md`.
 - The Office extractor opens each document as a ZIP once instead of once per part.
+- Shared test helpers live in `tests/_helpers.py` and shared fixtures in
+  `tests/conftest.py`; the per-module copies are gone.
 
 ### Fixed
 

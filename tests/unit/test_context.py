@@ -2,17 +2,12 @@ from __future__ import annotations
 
 import plistlib
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-from file_librarian.config import Config, parse_config
-from file_librarian.context import build_context
-from file_librarian.hashing import file_sha256, unit_manifest
-from file_librarian.models import BundleInfo, FileContext, FileMetadata
-from file_librarian.scanner import Candidate
+from file_librarian.models import BundleInfo, FileMetadata
 from file_librarian.sensitive import find_secrets, sensitive_name
-from tests._helpers import make_docx, make_pdf
+from tests._helpers import context_for, fake_config, make_docx, make_pdf
 
 # Synthetic, clearly fake secrets assembled at runtime so scanners do not flag the repo.
 FAKE = {
@@ -25,22 +20,6 @@ FAKE = {
     "connection string with password": "postgres://admin:" + "hunter2pass@db.example.com/app",
     "password or secret assignment": "DB_PASSWORD=" + "correct-horse-battery",
 }
-
-
-def config(**overrides: Any) -> Config:
-    raw: dict[str, Any] = {"provider": {"name": "fake", "model": "fixed"}}
-    return parse_config(raw | overrides)
-
-
-def candidate(path: Path) -> Candidate:
-    if path.is_dir():
-        m = unit_manifest(path)
-        return Candidate(path, m.digest, m.size_bytes, 0.0, is_unit=True)
-    return Candidate(path, file_sha256(path), path.stat().st_size, 0.0, is_unit=False)
-
-
-def context_for(path: Path, cfg: Config | None = None) -> FileContext:
-    return build_context(candidate(path), cfg or config())
 
 
 @pytest.mark.parametrize(("kind", "value"), FAKE.items())
@@ -68,7 +47,7 @@ def test_not_sensitive_names(name: str) -> None:
 def test_document_text_is_capped_for_the_provider(tmp_path: Path) -> None:
     path = make_docx(tmp_path / "contract.docx", ["Lease agreement " * 500])
     ctx = context_for(
-        path, config(provider={"name": "fake", "model": "x", "max_chars_per_file": 100})
+        path, fake_config(provider={"name": "fake", "model": "x", "max_chars_per_file": 100})
     )
     assert ctx.text is not None and len(ctx.text) == 100
     assert ctx.sensitive is False
@@ -112,13 +91,13 @@ def test_sensitive_name_needs_no_reading(tmp_path: Path) -> None:
 def test_detection_can_be_turned_off(tmp_path: Path) -> None:
     path = tmp_path / "id_rsa"
     path.write_text("plain", encoding="utf-8")
-    ctx = context_for(path, config(sensitive={"detect_secrets": False}))
+    ctx = context_for(path, fake_config(sensitive={"detect_secrets": False}))
     assert ctx.sensitive is False
 
 
 def test_never_send_withholds_content(tmp_path: Path) -> None:
     path = make_pdf(tmp_path / "medical.pdf", "Exam results")
-    ctx = context_for(path, config(never_send=["medical*"]))
+    ctx = context_for(path, fake_config(never_send=["medical*"]))
     assert ctx.sensitive is False
     assert ctx.text is None
     assert ctx.metadata == FileMetadata(content="withheld (never_send)")

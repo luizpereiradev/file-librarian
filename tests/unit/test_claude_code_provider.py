@@ -18,7 +18,7 @@ from file_librarian.providers import claude_code as cc
 from file_librarian.providers.base import FatalProviderError, ProviderError, Usage
 from file_librarian.providers.claude_code import ClaudeCodeProvider, find_claude
 from file_librarian.scheduler import SAFE_PATH
-from tests._helpers import OLD, FakeClaude
+from tests._helpers import FakeClaude, put, write_config
 
 runner = CliRunner()
 RULES = Rules(categories=(CategoryRule("Finance", "bills"), CategoryRule("Other")), language="en")
@@ -273,19 +273,14 @@ def test_logged_in(fake_claude: FakeClaude, tmp_path: Path) -> None:
 # --- check-config, schedule and a whole run ---------------------------------------------
 
 
-def write_config(tmp_path: Path, downloads: Path, extra: str = "") -> Path:
-    path = tmp_path / f"config{len(list(tmp_path.glob('config*.yaml')))}.yaml"
-    path.write_text(
-        f"inputs: [{downloads}]\nprovider: {{name: claude-code, model: sonnet{extra}}}\n",
-        encoding="utf-8",
-    )
-    return path
+def claude_config(tmp_path: Path, downloads: Path, extra: str = "") -> Path:
+    return write_config(tmp_path, downloads, f"{{name: claude-code, model: sonnet{extra}}}")
 
 
 def test_check_config_reports_claude(
     fake_claude: FakeClaude, tmp_path: Path, downloads: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cfg = write_config(tmp_path, downloads)
+    cfg = claude_config(tmp_path, downloads)
     ok = runner.invoke(app, ["check-config", "-c", str(cfg)])
     assert ok.exit_code == 0, ok.stderr
     assert f"claude: {fake_claude.executable}" in ok.stdout
@@ -311,13 +306,13 @@ def test_check_config_reports_claude(
 def test_schedule_tells_how_to_find_claude(
     fake_claude: FakeClaude, tmp_path: Path, downloads: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    cfg = write_config(tmp_path, downloads)
+    cfg = claude_config(tmp_path, downloads)
     result = runner.invoke(app, ["schedule", "-c", str(cfg), "--no-check"])
     assert result.exit_code == 0, result.stderr
     assert f"command: {fake_claude.executable}" in result.stderr
     assert "key" not in result.stderr.lower()
 
-    pinned = write_config(tmp_path, downloads, f", command: {fake_claude.executable}")
+    pinned = claude_config(tmp_path, downloads, f", command: {fake_claude.executable}")
     quiet = runner.invoke(app, ["schedule", "-c", str(pinned), "--no-check"])
     assert quiet.exit_code == 0
     assert "claude" not in quiet.stderr.lower()
@@ -330,12 +325,8 @@ def test_schedule_tells_how_to_find_claude(
 def test_a_run_files_through_claude_code(
     fake_claude: FakeClaude, tmp_path: Path, downloads: Path
 ) -> None:
-    import os
-
-    doc = downloads / "notes.txt"
-    doc.write_text("Electricity invoice for October.", encoding="utf-8")
-    os.utime(doc, (OLD, OLD))
-    cfg: Config = load_config(write_config(tmp_path, downloads))
+    put(downloads, "notes.txt", b"Electricity invoice for October.")
+    cfg: Config = load_config(claude_config(tmp_path, downloads))
     outcome = run(cfg, get_provider(cfg.provider), simulate=True)
     assert outcome.cost_usd == pytest.approx(0.0123)
     assert len(fake_claude.calls()) == 1

@@ -13,7 +13,7 @@ from file_librarian import keychain, scheduler
 from file_librarian.cli import app
 from file_librarian.config import load_config
 from file_librarian.db.store import Store
-from tests._helpers import OLD, REPO_ROOT
+from tests._helpers import REPO_ROOT, put, write_config
 
 runner = CliRunner()
 KEY = "sk-ant-" + "sched-" + "k" * 20
@@ -21,14 +21,9 @@ KEY = "sk-ant-" + "sched-" + "k" * 20
 
 @pytest.fixture
 def config_file(tmp_path: Path, downloads: Path) -> Path:
-    path = tmp_path / "config.yaml"
-    path.write_text(
-        f"inputs: [{downloads}]\n"
-        "provider: {name: anthropic, model: m}\n"
-        "schedule: {time: '9:05'}\n",
-        encoding="utf-8",
+    return write_config(
+        tmp_path, downloads, "{name: anthropic, model: m}", "schedule: {time: '9:05'}\n"
     )
-    return path
 
 
 def loaded(fake_launchd: Path) -> dict[str, str]:
@@ -124,10 +119,8 @@ def test_denied_folder_explains_how_to_grant_access(config_file: Path, downloads
 
 
 def test_scheduled_run_records_its_trigger(tmp_path: Path, downloads: Path) -> None:
-    cfg = tmp_path / "c.yaml"
-    cfg.write_text(f"inputs: [{downloads}]\nprovider: {{name: fake, model: x}}\n", encoding="utf-8")
-    (downloads / "a.txt").write_text("x", encoding="utf-8")
-    os.utime(downloads / "a.txt", (OLD, OLD))
+    cfg = write_config(tmp_path, downloads)
+    put(downloads, "a.txt", b"x")
     assert runner.invoke(app, ["run", "-c", str(cfg), "--trigger", "schedule"]).exit_code == 0
     with Store.open(load_config(cfg).database) as store:
         assert store.conn.execute("SELECT trigger FROM runs").fetchone()[0] == "schedule"

@@ -28,7 +28,7 @@ from file_librarian.models import Classification, FileContext, Rules
 from file_librarian.providers.base import Usage
 from file_librarian.search import search
 from file_librarian.undo import undo_run
-from tests._helpers import OLD, make_docx, make_pdf, make_pptx, make_xlsx
+from tests._helpers import OLD, make_docx, make_old, make_pdf, make_pptx, make_xlsx
 
 pytestmark = pytest.mark.integration
 
@@ -138,7 +138,7 @@ def build_corpus(root: Path) -> int:
         make_pdf(root / f"boleto-{i}.pdf", f"Boleto {i} vencimento outubro")
     for path in root.rglob("*"):
         os.utime(path, (OLD, OLD), follow_symlinks=False)
-    os.utime(root, (OLD, OLD))
+    make_old(root)
     return len(list(root.iterdir()))
 
 

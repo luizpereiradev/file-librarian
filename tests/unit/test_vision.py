@@ -16,8 +16,7 @@ import pytest
 from pypdf import PdfReader, PdfWriter
 
 from file_librarian.classifier import classify_all, rules_key, vision_key
-from file_librarian.config import Config, ConfigError, VisionConfig, parse_config
-from file_librarian.context import build_context
+from file_librarian.config import Config, ConfigError, VisionConfig
 from file_librarian.extractors import visual
 from file_librarian.extractors.visual import (
     VisionError,
@@ -26,7 +25,6 @@ from file_librarian.extractors.visual import (
     prepare_pdf,
     strip_jpeg_metadata,
 )
-from file_librarian.hashing import file_sha256
 from file_librarian.models import (
     Attachment,
     CategoryRule,
@@ -41,8 +39,7 @@ from file_librarian.planner import plan
 from file_librarian.providers.anthropic import AnthropicProvider, user_content
 from file_librarian.providers.base import Provider, Usage
 from file_librarian.providers.fake import FakeProvider
-from file_librarian.scanner import Candidate
-from tests._helpers import make_blank_pdf, make_image, make_pdf
+from tests._helpers import context_for, fake_config, make_blank_pdf, make_image, make_pdf
 
 RULES = Rules(categories=(CategoryRule("Images"), CategoryRule("Other")), language="en")
 ANSWER = Classification(
@@ -54,13 +51,8 @@ ANSWER = Classification(
 EVERYTHING = frozenset({"image/jpeg", "application/pdf"})
 
 
-def config(**overrides: Any) -> Config:
-    raw: dict[str, Any] = {"provider": {"name": "fake", "model": "fixed"}}
-    return parse_config(raw | overrides)
-
-
 def vision_on(**settings: Any) -> Config:
-    return config(vision={"enabled": True} | settings)
+    return fake_config(vision={"enabled": True} | settings)
 
 
 def calls(log: Path) -> list[list[str]]:
@@ -69,16 +61,11 @@ def calls(log: Path) -> list[list[str]]:
     return [json.loads(line) for line in log.read_text().splitlines()]
 
 
-def context_for(path: Path, cfg: Config) -> FileContext:
-    candidate = Candidate(path, file_sha256(path), path.stat().st_size, 0.0, is_unit=False)
-    return build_context(candidate, cfg)
-
-
 # --- Configuration ----------------------------------------------------------------
 
 
 def test_vision_is_off_by_default() -> None:
-    v = config().vision
+    v = fake_config().vision
     assert (v.enabled, v.max_image_px, v.max_pdf_pages) == (False, 1568, 3)
 
 
@@ -87,19 +74,19 @@ def test_vision_is_off_by_default() -> None:
 )
 def test_vision_limits_are_validated(bad: dict[str, Any]) -> None:
     with pytest.raises(ConfigError):
-        config(vision=bad)
+        fake_config(vision=bad)
 
 
 def test_old_scanned_pdf_max_pages_key_still_loads() -> None:
-    assert config(limits={"scanned_pdf_max_pages": 5}).vision.max_pdf_pages == 5
-    moved = config(limits={"scanned_pdf_max_pages": 5}, vision={"enabled": True})
+    assert fake_config(limits={"scanned_pdf_max_pages": 5}).vision.max_pdf_pages == 5
+    moved = fake_config(limits={"scanned_pdf_max_pages": 5}, vision={"enabled": True})
     assert (moved.vision.enabled, moved.vision.max_pdf_pages) == (True, 5)
-    explicit = config(limits={"scanned_pdf_max_pages": 5}, vision={"max_pdf_pages": 2})
+    explicit = fake_config(limits={"scanned_pdf_max_pages": 5}, vision={"max_pdf_pages": 2})
     assert explicit.vision.max_pdf_pages == 2
     with pytest.raises(ConfigError):  # still validated where it lands
-        config(limits={"scanned_pdf_max_pages": 0})
+        fake_config(limits={"scanned_pdf_max_pages": 0})
     with pytest.raises(ConfigError):  # a vision section that is not a mapping is reported
-        config(limits={"scanned_pdf_max_pages": 5}, vision="yes")
+        fake_config(limits={"scanned_pdf_max_pages": 5}, vision="yes")
 
 
 # --- Context ----------------------------------------------------------------------
@@ -109,7 +96,7 @@ def test_images_and_scanned_pdfs_are_visual_only_with_vision_on(tmp_path: Path) 
     photo = make_image(tmp_path / "IMG_0001.HEIC", 4032, 3024)
     scan = make_blank_pdf(tmp_path / "scan.pdf", 2)
     text_pdf = make_pdf(tmp_path / "bill.pdf", "Electricity bill")
-    on, off = vision_on(), config()
+    on, off = vision_on(), fake_config()
     assert context_for(photo, on).visual == "image"
     assert context_for(scan, on).visual == "pdf"
     assert context_for(text_pdf, on).visual is None
@@ -120,7 +107,7 @@ def test_images_and_scanned_pdfs_are_visual_only_with_vision_on(tmp_path: Path) 
 def test_never_send_damaged_and_sensitive_files_are_not_visual(tmp_path: Path) -> None:
     cfg = vision_on()
     photo = make_image(tmp_path / "passport.jpg", 800, 600)
-    withheld = context_for(photo, config(vision={"enabled": True}, never_send=["passport*"]))
+    withheld = context_for(photo, fake_config(vision={"enabled": True}, never_send=["passport*"]))
     assert withheld.visual is None
     assert withheld.metadata == FileMetadata(content="withheld (never_send)")
     broken = tmp_path / "broken.pdf"
@@ -365,7 +352,7 @@ def test_a_file_that_cannot_be_prepared_is_classified_from_metadata() -> None:
 def test_vision_answers_are_cached_apart_from_text_answers() -> None:
     provider = FakeProvider(default=ANSWER, attachments=EVERYTHING)
     cache = Cache()
-    on, off = vision_on(), config()
+    on, off = vision_on(), fake_config()
     classify([image_ctx()], provider, on, cache=cache)
     assert list(cache.rows) == [("IMG_0001.jpg", vision_key(rules_key(provider, RULES, on), on))]
 
@@ -404,7 +391,7 @@ class Billed(FakeProvider):
 
 def test_billed_image_tokens_count_toward_the_cost_cap() -> None:
     provider = Billed()
-    cfg = config(vision={"enabled": True}, limits={"max_cost_usd_per_run": 0.5})
+    cfg = fake_config(vision={"enabled": True}, limits={"max_cost_usd_per_run": 0.5})
     result = classify([image_ctx("a.jpg"), image_ctx("b.jpg"), image_ctx("c.jpg")], provider, cfg)
     assert len(result.decisions) == 2 and [c.path.name for c in result.deferred] == ["c.jpg"]
     assert result.cost_usd == pytest.approx(0.6)
@@ -416,7 +403,7 @@ def test_billed_image_tokens_count_toward_the_cost_cap() -> None:
 def test_an_image_the_model_saw_is_renamed_one_it_did_not_keeps_its_name(
     tmp_path: Path,
 ) -> None:
-    cfg = config(
+    cfg = fake_config(
         inputs=[str(tmp_path / "in")],
         output_root=str(tmp_path / "out"),
         categories=[{"name": "Images"}, {"name": "Other"}],

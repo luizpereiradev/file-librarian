@@ -25,13 +25,21 @@ from typer.testing import CliRunner
 
 from file_librarian import pipeline
 from file_librarian.cli import app
-from file_librarian.config import Config, parse_config
+from file_librarian.config import Config
 from file_librarian.db.store import Store
 from file_librarian.lock import instance_lock
 from file_librarian.mcp_server import WRITE_TOOLS, build_server
 from file_librarian.models import Classification, FileStatus
 from file_librarian.providers.fake import FakeProvider
-from tests._helpers import OLD, mark_cloud_only, write_xattr
+from tests._helpers import (
+    fake_config,
+    library,
+    make_old,
+    mark_cloud_only,
+    organize,
+    write_config,
+    write_xattr,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -46,29 +54,6 @@ def answer(category: str, confidence: float = 0.75) -> Classification:
         tags=["sample"],
         confidence=confidence,
     )
-
-
-def make_cfg(downloads: Path, **extra: Any) -> Config:
-    return parse_config(
-        {"inputs": [str(downloads)], "provider": {"name": "fake", "model": "x"}} | extra
-    )
-
-
-@pytest.fixture
-def cfg(downloads: Path) -> Config:
-    return make_cfg(downloads)
-
-
-def organize(downloads: Path, cfg: Config, files: dict[str, tuple[bytes, Classification]]) -> None:
-    for name, (content, _) in files.items():
-        (downloads / name).write_bytes(content)
-        os.utime(downloads / name, (OLD, OLD))
-    provider = FakeProvider({name: a for name, (_, a) in files.items()})
-    pipeline.run(cfg, provider, simulate=False)
-
-
-def lib(downloads: Path) -> Path:
-    return downloads / "Organized"
 
 
 def session(cfg: Config, body: Callable[[Client], Awaitable[Any]]) -> Any:
@@ -135,10 +120,10 @@ def test_every_tool_has_a_description_and_schemas(cfg: Config) -> None:
 
 
 def test_read_only_hides_the_write_tools(downloads: Path) -> None:
-    cfg = make_cfg(downloads, mcp={"read_only": True})
+    cfg = fake_config(downloads, mcp={"read_only": True})
     organize(downloads, cfg, {"bill.txt": (b"electricity bill", answer("Other"))})
     assert set(tool_names(cfg)) == {"search_files", "get_file"}
-    target = lib(downloads) / "Other" / "bill.txt"
+    target = library(downloads) / "Other" / "bill.txt"
     result = call(cfg, "recategorize_file", path=str(target), category="Finance")
     assert "Unknown tool" in error_text(result)
     assert "Unknown tool" in error_text(call(cfg, "undo"))
@@ -160,7 +145,7 @@ def test_search_before_any_run_finds_nothing(cfg: Config) -> None:
 
 def test_search_and_get_file(downloads: Path, cfg: Config) -> None:
     organize(downloads, cfg, {"bill.txt": (b"electricity bill", answer("Finance"))})
-    target = lib(downloads) / "Finance" / "bill.txt"
+    target = library(downloads) / "Finance" / "bill.txt"
     write_xattr(target, "com.apple.metadata:kMDItemWhereFroms", _where_froms())
     [hit] = ok(call(cfg, "search_files", query="finance"))["files"]
     assert hit == {
@@ -186,7 +171,7 @@ def test_search_and_get_file(downloads: Path, cfg: Config) -> None:
 
 def test_get_file_of_a_file_moved_away(downloads: Path, cfg: Config) -> None:
     organize(downloads, cfg, {"bill.txt": (b"bill", answer("Finance"))})
-    target = lib(downloads) / "Finance" / "bill.txt"
+    target = library(downloads) / "Finance" / "bill.txt"
     target.rename(downloads / "elsewhere.txt")
     detail = ok(call(cfg, "get_file", path=str(target)))
     assert (detail["exists"], detail["source_urls"]) == (False, [])
@@ -196,7 +181,7 @@ def test_get_file_never_reads_a_file_only_in_icloud(
     downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     organize(downloads, cfg, {"bill.txt": (b"bill", answer("Finance"))})
-    target = lib(downloads) / "Finance" / "bill.txt"
+    target = library(downloads) / "Finance" / "bill.txt"
     with Store.open(cfg.database) as store:
         row = store.file_by_current_path(target)
     assert row is not None
@@ -216,7 +201,7 @@ def test_get_file_needs_an_indexed_absolute_path(downloads: Path, cfg: Config) -
 def test_sensitive_files_never_show_their_text(downloads: Path, cfg: Config) -> None:
     secret = downloads / "notes.txt"
     secret.write_text(SECRET, encoding="utf-8")
-    os.utime(secret, (OLD, OLD))
+    make_old(secret)
     pipeline.run(cfg, FakeProvider(default=answer("Other")), simulate=False)
     write_xattr(secret, "com.apple.metadata:kMDItemWhereFroms", _where_froms())
     # Even a row that somehow carries text keeps it out of every result.
@@ -238,9 +223,9 @@ def test_sensitive_files_never_show_their_text(downloads: Path, cfg: Config) -> 
 
 def test_recategorize_through_mcp_then_undo_the_run(downloads: Path, cfg: Config) -> None:
     organize(downloads, cfg, {"bill.txt": (b"electricity bill", answer("Other"))})
-    source = lib(downloads) / "Other" / "bill.txt"
+    source = library(downloads) / "Other" / "bill.txt"
     fixed = ok(call(cfg, "recategorize_file", path=str(source), category="finance", name="power"))
-    target = lib(downloads) / "Finance" / "power.txt"
+    target = library(downloads) / "Finance" / "power.txt"
     assert fixed["destination"] == str(target) and target.exists() and not source.exists()
     assert (fixed["category"], fixed["name"]) == (["Other", "Finance"], ["bill.txt", "power.txt"])
     assert fixed["recovered"] == 0
@@ -263,7 +248,7 @@ def test_undo_one_file_and_the_last_run(downloads: Path, cfg: Config) -> None:
         cfg,
         {"a.txt": (b"a", answer("Finance")), "b.txt": (b"b", answer("Finance"))},
     )
-    moved_a = lib(downloads) / "Finance" / "a.txt"
+    moved_a = library(downloads) / "Finance" / "a.txt"
     undone = ok(call(cfg, "undo", path=str(moved_a)))
     assert undone["restored"] == [{"from_path": str(moved_a), "to_path": str(downloads / "a.txt")}]
     # Neither argument: the most recent run, like `flib undo`.
@@ -284,7 +269,7 @@ def test_undo_reports_what_it_skipped(downloads: Path, cfg: Config) -> None:
 def test_write_errors_change_nothing(downloads: Path, cfg: Config) -> None:
     assert "no run has moved" in error_text(call(cfg, "undo"))
     organize(downloads, cfg, {"bill.txt": (b"bill", answer("Other"))})
-    source = lib(downloads) / "Other" / "bill.txt"
+    source = library(downloads) / "Other" / "bill.txt"
     result = call(cfg, "recategorize_file", path=str(source), category="Nope")
     assert "unknown category" in error_text(result)
     assert "absolute" in error_text(call(cfg, "recategorize_file", path="bill.txt", name="x"))
@@ -296,7 +281,7 @@ def test_write_tools_wait_for_nobody_and_hold_no_lock_when_idle(
     downloads: Path, cfg: Config
 ) -> None:
     organize(downloads, cfg, {"bill.txt": (b"bill", answer("Other"))})
-    source = lib(downloads) / "Other" / "bill.txt"
+    source = library(downloads) / "Other" / "bill.txt"
 
     async def body(client: Client) -> None:
         # A run holds the lock: the write fails at once, reads still work.
@@ -311,7 +296,7 @@ def test_write_tools_wait_for_nobody_and_hold_no_lock_when_idle(
             pass
 
     session(cfg, body)
-    assert (lib(downloads) / "Other" / "x.txt").exists()
+    assert (library(downloads) / "Other" / "x.txt").exists()
 
 
 # --- The command -------------------------------------------------------------------------
@@ -322,7 +307,7 @@ def test_flib_mcp_serves_the_loaded_config(
 ) -> None:
     served: list[Config] = []
     monkeypatch.setattr("file_librarian.mcp_server.serve", served.append)
-    path = _config_file(tmp_path, downloads)
+    path = write_config(tmp_path, downloads)
     result = CliRunner().invoke(app, ["mcp", "-c", str(path)])
     assert result.exit_code == 0, result.stderr
     [loaded] = served
@@ -333,7 +318,7 @@ def test_flib_mcp_without_the_optional_sdk(
     downloads: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setitem(sys.modules, "file_librarian.mcp_server", None)  # import fails
-    result = CliRunner().invoke(app, ["mcp", "-c", str(_config_file(tmp_path, downloads))])
+    result = CliRunner().invoke(app, ["mcp", "-c", str(write_config(tmp_path, downloads))])
     assert result.exit_code == 1
     assert "./scripts/install.sh --with-mcp" in result.stderr
     assert result.exception is None or isinstance(result.exception, SystemExit)
@@ -352,7 +337,7 @@ def test_flib_mcp_over_stdio(downloads: Path, cfg: Config, tmp_path: Path) -> No
     organize(downloads, cfg, {"bill.txt": (b"bill", answer("Finance"))})
     params = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "file_librarian", "mcp", "-c", str(_config_file(tmp_path, downloads))],
+        args=["-m", "file_librarian", "mcp", "-c", str(write_config(tmp_path, downloads))],
         env={**os.environ},
     )
 
@@ -361,16 +346,7 @@ def test_flib_mcp_over_stdio(downloads: Path, cfg: Config, tmp_path: Path) -> No
             return ok(await client.call_tool("search_files", {"query": "bill"}))
 
     [hit] = anyio.run(main)["files"]
-    assert hit["path"] == str(lib(downloads) / "Finance" / "bill.txt")
-
-
-def _config_file(folder: Path, downloads: Path) -> Path:
-    path = folder / "config.yaml"
-    path.write_text(
-        f"inputs: [{json.dumps(str(downloads))}]\nprovider: {{name: fake, model: x}}\n",
-        encoding="utf-8",
-    )
-    return path
+    assert hit["path"] == str(library(downloads) / "Finance" / "bill.txt")
 
 
 def _where_froms() -> bytes:

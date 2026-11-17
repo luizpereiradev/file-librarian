@@ -17,7 +17,7 @@ import pytest
 
 from file_librarian.models import Attachment, FileContext
 from file_librarian.providers.prompt import user_message
-from tests.unit.test_context import config, context_for
+from tests._helpers import context_for, fake_config
 
 
 def _app(tmp: Path) -> FileContext:
@@ -49,7 +49,7 @@ def _folder(tmp: Path) -> FileContext:
 def _file(name: str, data: bytes, **overrides: object) -> Callable[[Path], FileContext]:
     def build(tmp: Path) -> FileContext:
         (tmp / name).write_bytes(data)
-        return context_for(tmp / name, config(**overrides) if overrides else None)
+        return context_for(tmp / name, fake_config(**overrides) if overrides else None)
 
     return build
 

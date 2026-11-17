@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-import plistlib
 from pathlib import Path
 
 import pytest
@@ -16,19 +14,9 @@ from file_librarian.db.store import Store
 from file_librarian.finder_tags import USER_TAGS, read_tags
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.undo import undo_file, undo_run
-from tests._helpers import OLD, write_xattr
-from tests.integration.test_pipeline import answer, make_config, put, rows
+from tests._helpers import answer, fake_config, make_old, put, rows, set_tags, write_xattr
 
 pytestmark = pytest.mark.integration
-
-
-def set_tags(path: Path, tags: list[str]) -> None:
-    write_xattr(path, USER_TAGS, plistlib.dumps(tags, fmt=plistlib.FMT_BINARY))
-
-
-@pytest.fixture
-def cfg(downloads: Path) -> Config:
-    return make_config(downloads)
 
 
 def test_run_tags_organized_items_and_undo_removes_only_that_tag(
@@ -37,13 +25,13 @@ def test_run_tags_organized_items_and_undo_removes_only_that_tag(
     set_tags(put(downloads, "a.pdf", b"A"), ["Work\n4"])
     set_tags(put(downloads, "b.pdf", b"B"), ["finance"])  # the user's own, any case
     put(downloads, "proj/x.txt")
-    os.utime(downloads / "proj", (OLD, OLD))
+    make_old(downloads / "proj")
     put(downloads, "unsure.pdf", b"U")
     provider = FakeProvider(
         {
             "a.pdf": answer("Finance", "a", 0.75),
             "b.pdf": answer("Finance", "b", 0.75),
-            "proj": answer("Other", "project"),
+            "proj": answer("Other", "project", 0.95),
             "unsure.pdf": answer("Finance", "u", confidence=0.3),
         }
     )
@@ -72,7 +60,7 @@ def test_run_tags_organized_items_and_undo_removes_only_that_tag(
 
 
 def test_turning_the_option_off_stops_new_tags(downloads: Path) -> None:
-    cfg = make_config(downloads, finder_tags={"enabled": False})
+    cfg = fake_config(downloads, finder_tags={"enabled": False})
     put(downloads, "a.pdf")
     pipeline.run(cfg, FakeProvider(default=answer("Finance", "a", 0.75)), simulate=False)
     assert read_tags(downloads / "Organized" / "Finance" / "a.pdf") == []

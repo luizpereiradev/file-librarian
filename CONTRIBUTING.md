@@ -29,6 +29,21 @@ A new branch of behaviour, especially a failure path, comes with a test.
 
 `uv run ruff format .` fixes formatting; `uv run ruff check --fix .` fixes most lint findings.
 
+## Writing tests
+
+- **Helpers** (plain functions and classes) live in `tests/_helpers.py`:
+  `put` and `make_old` for stable files in the fake Downloads, `fake_config`
+  and `write_config` for configurations, `organize`, `answer`, `row_for` and
+  `rows` for a real run over the fake provider, `make_pdf`/`make_docx`/... for
+  synthetic documents, `mark_cloud_only`, `set_tags`, `Crash`, and
+  `FakeClient`/`reply` for the Anthropic API.
+- **Fixtures** live in `tests/conftest.py`. The safety guards there are
+  autouse: no network or DNS, a temporary `HOME`, and fakes of the Keychain,
+  launchctl, sips and `claude` (the `tests/fake_*.py` scripts). `downloads`
+  and `cfg` give a test a Downloads folder and the fake provider's config.
+- A helper needed by more than one test module goes into `tests/_helpers.py`;
+  test modules never import from each other.
+
 ## Questions
 
 Ask in [Discussions](https://github.com/luizpereiradev/file-librarian/discussions).

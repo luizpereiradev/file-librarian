@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import stat
 from pathlib import Path
 from typing import Any
@@ -13,13 +12,13 @@ from typer.testing import CliRunner
 
 from file_librarian import pipeline
 from file_librarian.cli import app
-from file_librarian.config import Config, parse_config
+from file_librarian.config import Config
 from file_librarian.db.store import Store
 from file_librarian.models import Classification
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.runlog import KEEP, logs_dir, write_log
 from file_librarian.search import fts_query, search
-from tests._helpers import OLD
+from tests._helpers import fake_config, put, write_config
 
 pytestmark = pytest.mark.integration
 
@@ -32,11 +31,8 @@ def answer(category: str, name: str, description: str, tags: list[str]) -> Class
 
 @pytest.fixture
 def indexed(downloads: Path, tmp_path: Path) -> tuple[Config, Path]:
-    config_file = tmp_path / "config.yaml"
-    config_file.write_text(
-        f"inputs: [{downloads}]\nprovider: {{name: fake, model: offline}}\n", encoding="utf-8"
-    )
-    cfg = parse_config({"inputs": [str(downloads)], "provider": {"name": "fake", "model": "x"}})
+    config_file = write_config(tmp_path, downloads, "{name: fake, model: offline}")
+    cfg = fake_config(downloads)
     files: dict[str, Any] = {
         "documento(3).pdf": answer(
             "Finance",
@@ -50,9 +46,7 @@ def indexed(downloads: Path, tmp_path: Path) -> tuple[Config, Path]:
         ),
     }
     for name in files:
-        path = downloads / name
-        path.write_bytes(name.encode())
-        os.utime(path, (OLD, OLD))
+        put(downloads, name, name.encode())
     pipeline.run(cfg, FakeProvider(files), simulate=False)
     return cfg, config_file
 

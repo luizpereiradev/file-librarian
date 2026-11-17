@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 
 from file_librarian import pipeline
-from file_librarian.config import Config, parse_config
+from file_librarian.config import Config
 from file_librarian.db.store import Store
 from file_librarian.models import Classification, FileContext, Rules
 from file_librarian.providers.base import FatalProviderError, Usage
-from tests._helpers import OLD
+from tests._helpers import OLD, fake_config, put
 
 pytestmark = pytest.mark.integration
 
@@ -42,16 +41,8 @@ class PricedProvider:
 
 def setup(downloads: Path, n: int, **limits: object) -> Config:
     for i in range(n):
-        path = downloads / f"f{i}.txt"
-        path.write_text(f"file {i}", encoding="utf-8")
-        os.utime(path, (OLD - i, OLD - i))
-    return parse_config(
-        {
-            "inputs": [str(downloads)],
-            "provider": {"name": "fake", "model": "claude-haiku-5-5"},
-            "limits": limits,
-        }
-    )
+        put(downloads, f"f{i}.txt", f"file {i}".encode(), mtime=OLD - i)
+    return fake_config(downloads, provider={"model": "claude-haiku-5-5"}, limits=limits)
 
 
 def test_fatal_provider_error_moves_nothing_and_marks_nothing(downloads: Path) -> None:
