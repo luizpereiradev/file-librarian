@@ -57,7 +57,8 @@ Rules for every provider:
     after every call, failed ones included, so `limits.max_cost_usd_per_run`
     holds;
   - `cost_usd(usage)` turns that into dollars, with your provider's own price
-    table kept in your module;
+    table kept in your module. If your backend reports the cost itself (the
+    `claude` CLI does), put it in `Usage(cost_usd=...)` and return it;
   - `local = True` only when no remote API is behind it (skips the
     requests-per-minute spacing);
   - `attachments`: the media types your model can read (below).
@@ -67,7 +68,7 @@ Rules for every provider:
   (RF-29), newest first and already capped by `provider.max_examples`: the
   file's kind, extension and description, and the category or name before and
   after. Present them as data, like the file text (see `example_entry` in
-  `providers/anthropic.py`).
+  `providers/prompt.py`, the prompt and schema both Claude providers share).
 - **Repeatability comes from the schema, not from sampling settings.** Use the
   API's structured output mode with `Classification.model_json_schema()` and
   validate every answer. Send sampling parameters (`temperature`, `top_p`,
@@ -77,6 +78,12 @@ Rules for every provider:
 - **Read secrets from environment variables**, never from the config file.
 - **Disable your SDK's own retries** (for example `max_retries=0`) so the
   classifier's backoff and rate limit are the only ones.
+- **Calling a CLI instead of an HTTP API** (like `claude-code`): pass the
+  file through stdin, never on the command line; give the process an
+  allow-listed environment, not yours, so no unrelated secret leaks; run it in
+  an empty temporary folder; turn off its own tools and retries; and find the
+  executable without relying on PATH, which is minimal in a scheduled run
+  (see `find_claude` in `providers/claude_code.py`).
 - Treat file text as untrusted data: put it in a clearly delimited block of the
   prompt and tell the model it is content to describe, not instructions.
 
@@ -112,7 +119,9 @@ REGISTRY["example"] = ExampleProvider
 ## 3. Test it offline
 
 Tests must not use the network (the suite blocks connections and DNS).
-Inject a fake HTTP client or a recorded response and assert that:
+Inject a fake HTTP client or a recorded response (or, for a CLI, a fake
+executable like `tests/fake_claude.py`, installed by a fixture in
+`tests/conftest.py`) and assert that:
 
 - a valid answer becomes the expected `Classification`;
 - malformed JSON, an extra key or an out-of-range confidence raise `ProviderError`;

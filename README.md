@@ -29,7 +29,9 @@ commands keep these guarantees:
 - The current major release of macOS (the only supported platform)
 - [uv](https://docs.astral.sh/uv/) 0.13 or newer (`brew install uv`); it
   installs Python 3.11+ for you
-- An Anthropic API key for the default provider (from M1)
+- An Anthropic API key for the default provider, or
+  [Claude Code](https://code.claude.com) logged in to your Claude
+  subscription for the `claude-code` provider
 
 ## Install
 
@@ -80,6 +82,41 @@ everything is filed under the last category, offline.
 Scheduled runs don't see your shell's environment, so the Keychain is the
 easiest choice for them. Set `api_key_source` to `environment`, `keychain` or
 `env_file` to use only one place.
+
+### Using your Claude subscription instead (`claude-code`)
+
+If you already use Claude Code, flib can classify through it instead of the
+API, with no API key:
+
+```yaml
+provider:
+  name: claude-code
+  model: haiku               # any name `claude --model` takes: haiku, sonnet, claude-sonnet-5-5...
+```
+
+`flib check-config` shows which `claude` it found and whether it is logged in
+(if not, run `claude` once and sign in with `/login`). Each file is one
+`claude -p` call with every tool, MCP server, hook, skill and CLAUDE.md turned
+off, in an empty temporary folder, with a structured-output schema; only the
+same prompt the `anthropic` provider sends leaves your Mac. `ANTHROPIC_API_KEY`
+and other secrets in your environment are not passed to it.
+
+Trade-offs:
+
+- it uses your subscription's usage limits; reaching one stops the run, and
+  the remaining files wait for the next one;
+- each file starts a new `claude` process, so it is slower than the API
+  (a few seconds per file);
+- `limits.max_cost_usd_per_run` applies to the cost Claude Code reports, an
+  estimate at API list prices. On a subscription nothing is charged per call,
+  but the figure still caps how much of your plan a run uses;
+- images and scanned PDFs are classified from their metadata: `claude -p`
+  takes text only, so `vision.enabled` has no effect with this provider.
+
+Scheduled runs have a minimal PATH. flib also looks in the usual install
+folders (`~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`,
+`/usr/local/bin`); if yours is elsewhere, `flib schedule` tells you to set
+`provider.command` to the path it found in your shell.
 
 ## Commands
 
@@ -259,6 +296,9 @@ Two kinds of files are treated differently:
 - **Credential names (`id_rsa`, `*.pem`…) or secrets found in the content:**
   nothing at all is sent, the file stays where it is, and the index records
   only that it is sensitive.
+
+With `claude-code` the same goes to Anthropic through the `claude` CLI, except
+images and PDF pages, which it never sends.
 
 The index and the logs stay on your Mac. The MCP server sends an assistant
 only what `flib search` would show you, never file content. A local provider (Ollama) is planned

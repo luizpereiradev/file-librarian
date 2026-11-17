@@ -26,12 +26,19 @@ def _anthropic(config: ProviderConfig) -> Provider:
     return AnthropicProvider(config)
 
 
+def _claude_code(config: ProviderConfig) -> Provider:
+    from file_librarian.providers.claude_code import ClaudeCodeProvider
+
+    return ClaudeCodeProvider(config)
+
+
 REGISTRY: dict[str, ProviderFactory] = {
     "fake": lambda _cfg: FakeProvider(echo=True),
     "anthropic": _anthropic,
+    "claude-code": _claude_code,
 }
 
-PLANNED = {"claude-code": "M2", "ollama": "M3", "openai-compat": "M3"}
+PLANNED = {"ollama": "M3", "openai-compat": "M3"}
 
 
 def known_providers() -> frozenset[str]:

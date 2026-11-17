@@ -5,6 +5,7 @@ from __future__ import annotations
 import builtins
 import ctypes
 import ctypes.util
+import json
 import os
 import time
 import zipfile
@@ -188,3 +189,28 @@ def case_insensitive(folder: Path) -> bool:
 def names(folder: Path) -> list[str]:
     """The entry names in ``folder`` as the disk spells them, sorted."""
     return sorted(entry.name for entry in folder.iterdir())
+
+
+# --- Claude Code CLI ---------------------------------------------------------------
+
+
+class FakeClaude:
+    """Controls the fake ``claude`` installed for every test (``tests/fake_claude.py``)."""
+
+    def __init__(self, folder: Path) -> None:
+        self.folder = folder
+        self.executable = folder / "claude"
+
+    def reply(self, stdout: str = "", *, stderr: str = "", exit: int = 0, sleep: float = 0) -> None:
+        """Make the next calls print this instead of a successful answer."""
+        payload = {"stdout": stdout, "stderr": stderr, "exit": exit, "sleep": sleep}
+        (self.folder / "reply.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    def log_out(self) -> None:
+        (self.folder / "logged_out").touch()
+
+    def calls(self) -> list[dict[str, Any]]:
+        log = self.folder / "calls.jsonl"
+        if not log.exists():
+            return []
+        return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]

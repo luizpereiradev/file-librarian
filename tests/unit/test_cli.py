@@ -63,10 +63,10 @@ def test_check_config_ok() -> None:
 
 def test_check_config_warns_about_planned_provider(tmp_path: Path) -> None:
     cfg = tmp_path / "config.yaml"
-    cfg.write_text("provider: {name: claude-code, model: x}\n", encoding="utf-8")
+    cfg.write_text("provider: {name: ollama, model: x}\n", encoding="utf-8")
     result = runner.invoke(app, ["check-config", "-c", str(cfg)])
     assert result.exit_code == 0
-    assert "planned for M2" in result.stderr
+    assert "planned for M3" in result.stderr
 
 
 def test_inspect_directory_reports_unit_size(downloads: Path) -> None:
@@ -182,11 +182,11 @@ def test_simulate_run_and_undo_end_to_end(downloads: Path, tmp_path: Path) -> No
 def test_run_with_unimplemented_provider_fails_cleanly(downloads: Path, tmp_path: Path) -> None:
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
-        f"inputs: [{downloads}]\nprovider: {{name: claude-code, model: x}}\n", encoding="utf-8"
+        f"inputs: [{downloads}]\nprovider: {{name: ollama, model: x}}\n", encoding="utf-8"
     )
     result = runner.invoke(app, ["run", "-c", str(cfg)])
     assert result.exit_code == 1
-    assert "planned for M2" in result.stderr
+    assert "planned for M3" in result.stderr
 
 
 def test_simulate_lists_cloud_only_files(

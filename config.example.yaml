@@ -25,7 +25,7 @@ inputs:
 # database: ~/Library/Application Support/file-librarian/library.db
 
 provider:
-  name: anthropic            # anthropic | fake (offline, for trying flib) | claude-code (M2) | ollama, openai-compat (M3)
+  name: anthropic            # anthropic | claude-code (your Claude subscription, no key) | fake (offline, for trying flib) | ollama, openai-compat (M3)
   model: claude-haiku-5-5    # fast and cheap; for harder files try claude-sonnet-5-5 or claude-opus-5-5
   effort: low                # low | medium | high | xhigh | max: classification needs little
   max_chars_per_file: 4000   # only this much text is ever sent
@@ -37,6 +37,10 @@ provider:
   #   auto: ANTHROPIC_API_KEY, then the macOS Keychain (`flib key set`), then env_file
   api_key_source: auto       # auto | environment | keychain | env_file
   # env_file: ~/.config/file-librarian/.env   # a file with ANTHROPIC_API_KEY=..., mode 600
+  # claude-code only: the `claude` executable. Unset, it is looked up on PATH and in
+  # ~/.local/bin, ~/.claude/local, /opt/homebrew/bin and /usr/local/bin; `flib schedule`
+  # tells you when the daily run needs it set.
+  # command: ~/.local/bin/claude
 
 limits:
   max_files_per_run: 200

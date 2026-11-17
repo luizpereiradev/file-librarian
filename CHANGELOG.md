@@ -8,6 +8,22 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- The `claude-code` provider: classify through the Claude Code CLI
+  (`claude -p`) on your Claude subscription, with no API key. Each file is one
+  call with `--output-format json --json-schema` (the categories as an enum),
+  `--tools ""`, `--strict-mcp-config`, `--safe-mode`, `--permission-mode
+  dontAsk` and `--no-session-persistence`, run in an empty temporary folder
+  with an allow-listed environment (no `ANTHROPIC_API_KEY` or other secrets)
+  and Claude Code's own retries off. Not logged in, a usage limit, an unknown
+  model or a missing or outdated `claude` stop the run; overload, rate limits
+  and timeouts are retried; anything else fails only that file. The cost cap
+  applies to the cost Claude Code reports (an estimate at list prices). The
+  executable is `provider.command` when set, else `claude` on PATH or in the
+  usual install folders; `flib check-config` shows it and the login state,
+  and `flib schedule` says when the daily run needs `provider.command`. Images
+  and scanned PDFs are classified from metadata with it. The prompt and schema
+  moved to `providers/prompt.py`, shared with `anthropic`. Tests use a fake
+  `claude`.
 - `flib mcp`, a local MCP server over stdio for Claude and other assistants
   (RF-22). Tools: `search_files` (as `flib search`), `get_file` (the index
   record plus hash, size, download origin and `icloud_only`; a cloud-only
