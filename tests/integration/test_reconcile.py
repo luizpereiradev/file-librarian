@@ -16,7 +16,7 @@ from file_librarian.db.store import FileRow, Store
 from file_librarian.models import Classification, FileStatus
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.reconcile import ReconcileReport, reconcile
-from tests._helpers import OLD
+from tests._helpers import OLD, mark_cloud_only
 
 pytestmark = pytest.mark.integration
 
@@ -138,3 +138,119 @@ def test_cli_reconcile_reports(tmp_path: Path, downloads: Path, cfg: Config) -> 
     assert result.exit_code == 0, result.stderr
     assert "learned Finance/a.pdf: Other -> Finance" in result.stdout
     assert "1 moved by hand" in result.stdout
+
+
+# --- iCloud: nothing that exists only in the cloud is read (that would download it) ---
+
+
+def test_cloud_only_at_its_place_is_left_as_is_not_missing(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    organize(downloads, cfg, {"a.pdf": (b"a", "Finance")})
+    recorded = lib(downloads) / "Finance" / "a.pdf"
+    mark_cloud_only(monkeypatch, recorded)
+    for _ in range(2):  # nothing is written, so it is reported again each time
+        report = run(cfg)
+        assert report.cloud_only == [recorded]
+        assert report.missing == [] and report.moved == []
+        row = row_for(cfg, "a.pdf")
+        assert (row.status, row.current_path) == (FileStatus.ORGANIZED, recorded)
+
+
+def test_file_inside_a_cloud_only_folder_is_not_looked_up(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    organize(downloads, cfg, {"a.pdf": (b"a", "Finance")})
+    mark_cloud_only(monkeypatch, lib(downloads) / "Finance")
+    report = run(cfg)
+    assert report.cloud_only == [lib(downloads) / "Finance" / "a.pdf"]
+    assert row_for(cfg, "a.pdf").status is FileStatus.ORGANIZED
+
+
+def organize_unit(downloads: Path, cfg: Config) -> Path:
+    (downloads / "project").mkdir()
+    (downloads / "project" / "main.py").write_text("print(1)", encoding="utf-8")
+    for p in (downloads / "project" / "main.py", downloads / "project"):
+        os.utime(p, (OLD, OLD))
+    pipeline.run(cfg, FakeProvider(default=answer("Other")), simulate=False)
+    return lib(downloads) / "Other" / "project"
+
+
+def test_unit_with_a_cloud_only_file_inside_is_left_as_is(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    unit = organize_unit(downloads, cfg)
+    mark_cloud_only(monkeypatch, unit / "main.py")
+    report = run(cfg)
+    assert report.cloud_only == [unit]
+    assert row_for(cfg, "project").status is FileStatus.ORGANIZED
+
+
+def test_cloud_only_copy_elsewhere_is_no_match(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    organize(downloads, cfg, {"a.pdf": (b"a", "Other")})
+    (lib(downloads) / "Finance").mkdir()
+    moved = lib(downloads) / "Finance" / "a.pdf"
+    shutil.move(lib(downloads) / "Other" / "a.pdf", moved)
+    with monkeypatch.context() as patch:
+        mark_cloud_only(patch, moved)
+        report = run(cfg)
+    assert report.missing == [lib(downloads) / "Other" / "a.pdf"]
+    assert row_for(cfg, "a.pdf").status is FileStatus.MISSING
+    # Once downloaded, the next reconcile finds it.
+    assert run(cfg).found_again == [moved]
+    assert row_for(cfg, "a.pdf").category == "Finance"
+
+
+def test_cloud_only_unit_elsewhere_is_no_match(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    unit = organize_unit(downloads, cfg)
+    (lib(downloads) / "Images").mkdir()
+    moved = lib(downloads) / "Images" / "project"
+    shutil.move(unit, moved)
+    mark_cloud_only(monkeypatch, moved / "main.py")
+    report = run(cfg)
+    assert report.missing == [unit]
+
+
+def test_cloud_only_folders_are_not_searched(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    unit = organize_unit(downloads, cfg)
+    organize(downloads, cfg, {"a.pdf": (b"a", "Other")})
+    archive = lib(downloads) / "Archive"
+    archive.mkdir()
+    shutil.move(lib(downloads) / "Other" / "a.pdf", archive / "a.pdf")
+    shutil.move(unit, archive / "project")
+    mark_cloud_only(monkeypatch, archive)
+    report = run(cfg)  # listing or hashing anything in Archive fails the test
+    assert sorted(p.name for p in report.missing) == ["a.pdf", "project"]
+
+
+def test_cloud_only_library_is_not_searched(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    organize(downloads, cfg, {"a.pdf": (b"a", "Finance")})
+    shutil.move(lib(downloads) / "Finance" / "a.pdf", tmp_path / "a.pdf")
+    run(cfg)  # now missing
+    mark_cloud_only(monkeypatch, lib(downloads))
+    report = run(cfg)
+    assert report.missing == [] and report.found_again == []
+    assert row_for(cfg, "a.pdf").status is FileStatus.MISSING
+
+
+def test_cli_reconcile_lists_cloud_only(
+    tmp_path: Path, downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_file = tmp_path / "c.yaml"
+    config_file.write_text(
+        f"inputs: [{downloads}]\nprovider: {{name: fake, model: x}}\n", encoding="utf-8"
+    )
+    organize(downloads, cfg, {"a.pdf": (b"a", "Finance")})
+    mark_cloud_only(monkeypatch, lib(downloads) / "Finance" / "a.pdf")
+    result = CliRunner().invoke(app, ["reconcile", "-c", str(config_file)])
+    assert result.exit_code == 0, result.stderr
+    assert "icloud  Finance/a.pdf  (in iCloud only, not downloaded, not checked)" in result.stdout
+    assert "0 missing, 1 in iCloud only." in result.stdout

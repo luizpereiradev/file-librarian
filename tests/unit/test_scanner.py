@@ -7,11 +7,12 @@ from typing import Any
 
 import pytest
 
-from file_librarian import hashing, scanner
+from file_librarian import hashing
 from file_librarian.config import Config, parse_config
 from file_librarian.hashing import SF_DATALESS, file_sha256
 from file_librarian.models import FileState, FileStatus
 from file_librarian.scanner import ScanError, SkipReason, scan
+from tests._helpers import mark_cloud_only
 
 NOW = time.time()
 OLD = NOW - 3600  # well past stable_seconds
@@ -118,43 +119,6 @@ def test_folders_ignore_skips_units(downloads: Path) -> None:
     result = scan(make_config(downloads, folders="ignore"), nothing_known, now=NOW)
     assert result.candidates == []
     assert reasons(result)["project"] is SkipReason.FOLDER_IGNORED
-
-
-def mark_cloud_only(monkeypatch: pytest.MonkeyPatch, *paths: Path) -> set[Path]:
-    """Real dataless files cannot be made in a test: report these inodes as cloud-only.
-
-    Any read of them (hashing, opening, listing a folder) fails the test.
-    """
-    inodes = {os.lstat(p).st_ino for p in paths}
-    real_is_dataless = hashing.is_dataless
-    monkeypatch.setattr(
-        hashing, "is_dataless", lambda st: st.st_ino in inodes or real_is_dataless(st)
-    )
-
-    def touched(path: object) -> bool:
-        target = Path(os.fsdecode(path))  # type: ignore[arg-type]
-        return any(target == p or p in target.parents for p in paths)
-
-    real_sha = file_sha256
-    real_open = Path.open
-    real_walk = os.walk
-
-    def guarded_sha(path: Path) -> str:
-        assert not touched(path), f"hashed a cloud-only item: {path}"
-        return real_sha(path)
-
-    def guarded_open(self: Path, *args: Any, **kwargs: Any) -> Any:
-        assert not touched(self), f"opened a cloud-only item: {self}"
-        return real_open(self, *args, **kwargs)
-
-    def guarded_walk(top: Any, *args: Any, **kwargs: Any) -> Any:
-        assert not touched(top), f"listed a cloud-only folder: {top}"
-        return real_walk(top, *args, **kwargs)
-
-    monkeypatch.setattr(scanner, "file_sha256", guarded_sha)
-    monkeypatch.setattr(Path, "open", guarded_open)
-    monkeypatch.setattr(os, "walk", guarded_walk)
-    return set(paths)
 
 
 def test_dataless_flag_is_read_from_st_flags(downloads: Path) -> None:

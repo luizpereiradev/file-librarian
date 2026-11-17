@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 from file_librarian.cli import EXIT_NOT_IMPLEMENTED, app
 from file_librarian.extractors.origin import WHERE_FROMS
-from tests._helpers import REPO_ROOT, write_xattr
+from tests._helpers import REPO_ROOT, mark_cloud_only, write_xattr
 
 runner = CliRunner()
 
@@ -101,6 +101,51 @@ def test_inspect_shows_origin(downloads: Path) -> None:
     [item] = json.loads(result.stdout)
     assert item["source_urls"] == [url]
     assert len(item["sha256"]) == 64
+    assert item["icloud_only"] is False
+
+
+def test_inspect_cloud_only_file_is_not_read(
+    downloads: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = downloads / "slides.key"
+    path.write_bytes(b"only in the cloud")
+    url = "https://example.com/slides.key"
+    write_xattr(path, WHERE_FROMS, plistlib.dumps([url], fmt=plistlib.FMT_BINARY))
+    mark_cloud_only(monkeypatch, path)
+
+    result = runner.invoke(app, ["inspect", "--json", str(path)])
+    assert result.exit_code == 0, result.stderr
+    [item] = json.loads(result.stdout)
+    assert item["icloud_only"] is True
+    assert item["sha256"] is None
+    assert item["size_bytes"] == len(b"only in the cloud")  # from metadata
+    assert item["source_urls"] == [url]  # an extended attribute, never downloads
+
+    text = runner.invoke(app, ["inspect", str(path)])
+    assert text.exit_code == 0, text.stderr
+    assert "sha256: (in iCloud only, not downloaded; download it to inspect it)" in text.stdout
+    assert "size:   17 bytes" in text.stdout
+
+
+def test_inspect_cloud_only_folders(downloads: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    album = downloads / "Album"
+    album.mkdir()
+    (album / "photo.jpg").write_bytes(b"jpg")
+    project = downloads / "project"
+    project.mkdir()
+    (project / "a.txt").write_text("a", encoding="utf-8")
+    (project / "b.bin").write_bytes(b"only in the cloud")
+    mark_cloud_only(monkeypatch, album, project / "b.bin")
+
+    result = runner.invoke(app, ["inspect", "--json", str(album), str(project)])
+    assert result.exit_code == 0, result.stderr
+    items = json.loads(result.stdout)
+    assert [(i["kind"], i["icloud_only"], i["sha256"]) for i in items] == [
+        ("folder unit", True, None),
+        ("folder unit", True, None),
+    ]
+    text = runner.invoke(app, ["inspect", str(album)])
+    assert "size:" not in text.stdout  # a partial size would mislead
 
 
 def test_simulate_run_and_undo_end_to_end(downloads: Path, tmp_path: Path) -> None:
