@@ -74,7 +74,7 @@ def _run(
     trigger: RunTrigger,
     now: float | None,
 ) -> Outcome:
-    recovered = 0 if simulate else recover(store)
+    recovered = 0 if simulate else recover(store, config)
     store.prune_cache(max_age_days=CACHE_DAYS)
     found = scan(config, store.file_state, now=now)
     contexts = [build_context_safely(c, config) for c in found.candidates]

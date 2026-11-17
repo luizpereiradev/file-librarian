@@ -14,7 +14,8 @@ The caller holds the instance lock. For each planned move:
    a warning: the move stands.
 
 A crash between 1 and 5 leaves a ``planned`` entry that ``recover`` resolves
-at the start of the next run by looking at where the file actually is.
+at the start of the next run by looking at where the file actually is. An
+entry made by ``flib fix`` is resolved as a whole fix (see ``fix``).
 Nothing is ever deleted.
 """
 
@@ -27,10 +28,12 @@ from pathlib import Path
 from file_librarian.config import Config
 from file_librarian.db.store import Store
 from file_librarian.finder_tags import tag_moved
+from file_librarian.fix import complete_interrupted
 from file_librarian.fsops import (
     CrossVolumeError,
     DestinationExistsError,
     ensure_folder,
+    has_exact_name,
     move_no_replace,
 )
 from file_librarian.hashing import same_content, unit_manifest
@@ -211,14 +214,24 @@ def _fail(store: Store, op_id: int, file_id: int, src: Path, error: str) -> Item
     return ItemResult(src, FileStatus.FAILED, None, error)
 
 
-def recover(store: Store) -> int:
-    """Resolve journal entries left ``planned`` by a crash. Returns how many."""
+def recover(store: Store, config: Config | None = None) -> int:
+    """Resolve journal entries left ``planned`` by a crash. Returns how many.
+
+    An entry made by ``flib fix`` is finished or failed as a whole (see
+    ``fix.complete_interrupted``); given ``config``, that includes its Finder tags.
+    """
     pending = store.operations(status=OperationStatus.PLANNED)
     for op in pending:
         row = store.file_by_id(op.file_id)
         # Done if the journaled destination is the very inode we moved (a rename keeps
         # it, even if the file was edited since), or holds exactly the content we moved.
-        if _same_inode(op.dst_path, op.src_identity) or same_content(op.dst_path, row.sha256):
+        # Its exact name must be there: on a case-insensitive volume "A.pdf" opens "a.pdf".
+        moved = has_exact_name(op.dst_path) and (
+            _same_inode(op.dst_path, op.src_identity) or same_content(op.dst_path, row.sha256)
+        )
+        if op.fix is not None:
+            complete_interrupted(config, store, op, moved=moved)
+        elif moved:
             with store.transaction():
                 store.set_operation(op.id, OperationStatus.DONE)
                 store.set_file_location(op.file_id, op.dst_path, row.status)

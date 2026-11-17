@@ -173,3 +173,18 @@ def make_blank_pdf(path: Path, pages: int) -> Path:
     with path.open("wb") as fh:
         writer.write(fh)
     return path
+
+
+def case_insensitive(folder: Path) -> bool:
+    """Whether ``folder``'s volume ignores case in names (the macOS default)."""
+    probe = folder / ".flib-case-probe"
+    probe.write_bytes(b"")
+    try:
+        return (folder / ".FLIB-CASE-PROBE").exists()
+    finally:
+        probe.unlink()
+
+
+def names(folder: Path) -> list[str]:
+    """The entry names in ``folder`` as the disk spells them, sorted."""
+    return sorted(entry.name for entry in folder.iterdir())

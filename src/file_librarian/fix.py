@@ -11,7 +11,15 @@ as an example in later requests.
 The same safety rules as the executor apply: the file must still be the one
 indexed (same content), the destination is a configured folder under
 ``output_root``, and nothing is ever overwritten: a taken name gets the next
-free ``-N``.
+free ``-N``. Changing only the capitalization of a name renames the file in
+place (see ``fsops.move_no_replace``).
+
+A fix is all or nothing, even across a crash (#47): the journal entry
+carries the status and category the fix gives the file, and stays
+``planned`` until the index, the corrections and the run are written in one
+transaction. ``recover`` (see the executor) then either finishes the whole
+fix, if the file reached its destination, or fails the entry and leaves the
+file's row as it was, if it did not.
 """
 
 from __future__ import annotations
@@ -22,7 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from file_librarian.config import Config
-from file_librarian.db.store import FileRow, Store
+from file_librarian.db.store import FileRow, OperationRow, Store
 from file_librarian.finder_tags import tag_moved, untag_restored
 from file_librarian.fsops import DestinationExistsError, ensure_folder, move_no_replace
 from file_librarian.hashing import same_content
@@ -77,11 +85,17 @@ def fix_file(
     if destination == source:
         raise FixError(f"{path} is already there with that name")
 
+    status = FileStatus.REVIEW if new_category is None else FileStatus.ORGANIZED
     st = os.lstat(source)
     run_id = store.start_run(RunMode.RUN, trigger)
     with store.transaction():
         op_id = store.add_operation(
-            run_id, row.id, source, destination, identity=(st.st_dev, st.st_ino)
+            run_id,
+            row.id,
+            source,
+            destination,
+            identity=(st.st_dev, st.st_ino),
+            fix=(status, new_category),
         )
     try:
         ensure_folder(destination.parent, inside=config.output_root)
@@ -92,16 +106,64 @@ def fix_file(
             store.finish_run(run_id, seen=1, moved=0, review=0, errors=1)
         raise FixError(f"could not move {path}: {exc}") from exc
 
-    status = FileStatus.REVIEW if new_category is None else FileStatus.ORGANIZED
+    category_change, name_change, warnings = _complete(
+        config, store, row, run_id, op_id, destination, status, new_category
+    )
+    return FixReport(run_id, source, destination, category_change, name_change, warnings)
+
+
+def complete_interrupted(
+    config: Config | None, store: Store, op: OperationRow, *, moved: bool
+) -> None:
+    """Resolve a fix a crash left ``planned`` (#47): all of it, or none of it.
+
+    ``moved``: the file is at the journaled destination. Then the rest of the
+    fix is done now, exactly as ``fix_file`` would have (index, corrections,
+    Finder tag; the tag only given ``config``). Otherwise the fix never
+    happened: the journal entry fails and the file's row is left as it was,
+    since the file was never touched.
+    """
+    if op.fix is None:
+        raise ValueError(f"operation {op.id} is not a fix")
+    if not moved:
+        with store.transaction():
+            store.set_operation(op.id, OperationStatus.FAILED)
+            store.finish_run(op.run_id, seen=1, moved=0, review=0, errors=1)
+        return
+    row = store.file_by_id(op.file_id)
+    status, category = op.fix
+    _complete(config, store, row, op.run_id, op.id, op.dst_path, status, category)
+
+
+def _complete(
+    config: Config | None,
+    store: Store,
+    row: FileRow,
+    run_id: int,
+    op_id: int,
+    destination: Path,
+    status: FileStatus,
+    category: str | None,
+) -> tuple[tuple[str | None, str] | None, tuple[str, str] | None, list[str]]:
+    """Everything after the move. ``row`` is the file as indexed before the fix.
+
+    The Finder tags are swapped first and the index written last, in one
+    transaction with the journal entry becoming ``done``: until then the entry
+    stays ``planned``, so a crash anywhere here is finished by recovery. Doing
+    the tag swap again is harmless (a tag already there is not added twice).
+    """
     category_change = None
-    if new_category is not None and new_category != row.category:
-        category_change = (row.category, new_category)
+    if category is not None and category != row.category:
+        category_change = (row.category, category)
     name_change = None
     if destination.name != row.current_name:
         name_change = (row.current_name, destination.name)
+    warnings: list[str] = []
+    if category_change is not None and config is not None:
+        warnings = _swap_tag(config, store, row.id, op_id, destination, *category_change)
     with store.transaction():
         store.set_operation(op_id, OperationStatus.DONE, destination)
-        store.relocate_file(row.id, destination, status, new_category)
+        store.relocate_file(row.id, destination, status, category)
         if category_change is not None:
             store.add_correction(row.id, "category", *category_change)
         if name_change is not None:
@@ -113,10 +175,7 @@ def fix_file(
             review=int(status is FileStatus.REVIEW),
             errors=0,
         )
-    warnings: list[str] = []
-    if category_change is not None:
-        warnings = _swap_tag(config, store, row.id, op_id, destination, *category_change)
-    return FixReport(run_id, source, destination, category_change, name_change, warnings)
+    return category_change, name_change, warnings
 
 
 def _swap_tag(

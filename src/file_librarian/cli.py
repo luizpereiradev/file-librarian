@@ -394,7 +394,7 @@ def undo(
     cfg = _load(config)
     try:
         with instance_lock(cfg.database), Store.open(cfg.database) as store:
-            recovered = recover(store)  # finish the journal before reading it
+            recovered = recover(store, cfg)  # finish the journal before reading it
             report = (
                 undo_file(store, file, config=cfg)
                 if file is not None
@@ -429,7 +429,7 @@ def fix(
     cfg = _load(config)
     try:
         with instance_lock(cfg.database), Store.open(cfg.database) as store:
-            recover(store)  # finish the journal before adding to it
+            recover(store, cfg)  # finish the journal before adding to it
             report = fix_file(cfg, store, file, category=category, name=name)
     except (FixError, AlreadyRunningError) as exc:
         _fatal(str(exc))
