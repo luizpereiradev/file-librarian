@@ -5,6 +5,9 @@ connections and DNS lookups disabled, and with a throwaway keychain in place of
 the user's login Keychain and fakes of launchctl, sips and claude, so code that uses
 ``Path.home()`` or ``~`` stays in a temporary folder and nothing reaches a real API. A test that
 hard-codes an absolute path could still escape; reviewers must reject those.
+
+The plain fixtures at the bottom (``downloads``, ``cfg``) are shared conveniences;
+helper functions live in ``tests/_helpers.py``.
 """
 
 from __future__ import annotations
@@ -18,7 +21,8 @@ from typing import Any
 
 import pytest
 
-from tests._helpers import FakeClaude
+from file_librarian.config import Config
+from tests._helpers import FakeClaude, fake_config
 
 
 class NetworkBlockedError(RuntimeError):
@@ -120,3 +124,9 @@ def downloads(fake_home: Path) -> Iterator[Path]:
     folder = fake_home / "Downloads"
     folder.mkdir()
     yield folder
+
+
+@pytest.fixture
+def cfg(downloads: Path) -> Config:
+    """The fake provider's config, watching ``downloads``."""
+    return fake_config(downloads)

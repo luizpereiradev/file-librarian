@@ -6,9 +6,9 @@ from typing import Any
 import pytest
 
 from file_librarian.classifier import classify_all
-from file_librarian.config import parse_config
 from file_librarian.models import CategoryRule, Classification, FileContext, Rules
 from file_librarian.providers.base import FatalProviderError, ProviderError, Usage
+from tests._helpers import fake_config
 
 RULES = Rules(categories=(CategoryRule("Other"),), language="en")
 ANSWER = Classification(category="Other", suggested_name="x", description="d", confidence=0.9)
@@ -58,9 +58,7 @@ class Clock:
 
 def config(**provider: Any) -> Any:
     limits = provider.pop("limits", {})
-    return parse_config(
-        {"provider": {"name": "fake", "model": "claude-haiku-5-5"} | provider, "limits": limits}
-    )
+    return fake_config(provider={"model": "claude-haiku-5-5"} | provider, limits=limits)
 
 
 def run(contexts: list[FileContext], prov: ScriptedProvider, cfg: Any) -> tuple[Any, Clock]:

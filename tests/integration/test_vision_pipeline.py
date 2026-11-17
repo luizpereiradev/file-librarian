@@ -9,21 +9,18 @@ from __future__ import annotations
 
 import base64
 import io
-import os
 from datetime import date
 from pathlib import Path
-from typing import Any
 
 import pytest
 from pypdf import PdfReader
 
 from file_librarian import pipeline
-from file_librarian.config import Config, ProviderConfig, parse_config
+from file_librarian.config import ProviderConfig
 from file_librarian.models import Classification, FileStatus
 from file_librarian.providers.anthropic import AnthropicProvider
 from file_librarian.providers.fake import FakeProvider
-from tests._helpers import OLD, make_blank_pdf, make_image
-from tests.unit.test_anthropic_provider import FakeClient, reply
+from tests._helpers import FakeClient, fake_config, make_blank_pdf, make_image, make_old, reply
 
 pytestmark = pytest.mark.integration
 
@@ -42,23 +39,10 @@ SCAN = Classification(
 )
 
 
-def make_config(downloads: Path, **overrides: Any) -> Config:
-    raw: dict[str, Any] = {
-        "inputs": [str(downloads)],
-        "provider": {"name": "fake", "model": "fixed"},
-    }
-    return parse_config(raw | overrides)
-
-
-def old(path: Path) -> Path:
-    os.utime(path, (OLD, OLD))
-    return path
-
-
 def test_photo_and_scan_are_seen_named_and_filed(downloads: Path) -> None:
-    old(make_image(downloads / "IMG_0001.HEIC", 4032, 3024))
-    old(make_blank_pdf(downloads / "scan0001.pdf", 6))
-    cfg = make_config(downloads, vision={"enabled": True, "max_pdf_pages": 2})
+    make_old(make_image(downloads / "IMG_0001.HEIC", 4032, 3024))
+    make_old(make_blank_pdf(downloads / "scan0001.pdf", 6))
+    cfg = fake_config(downloads, vision={"enabled": True, "max_pdf_pages": 2})
     provider = FakeProvider(
         {"IMG_0001.HEIC": PHOTO, "scan0001.pdf": SCAN},
         attachments=frozenset({"image/jpeg", "application/pdf"}),
@@ -79,8 +63,8 @@ def test_photo_and_scan_are_seen_named_and_filed(downloads: Path) -> None:
 
 
 def test_with_vision_off_nothing_is_attached_and_names_are_kept(downloads: Path) -> None:
-    old(make_image(downloads / "IMG_0001.HEIC", 4032, 3024))
-    cfg = make_config(downloads)
+    make_old(make_image(downloads / "IMG_0001.HEIC", 4032, 3024))
+    cfg = fake_config(downloads)
     provider = FakeProvider(
         {"IMG_0001.HEIC": PHOTO}, attachments=frozenset({"image/jpeg", "application/pdf"})
     )
@@ -91,8 +75,8 @@ def test_with_vision_off_nothing_is_attached_and_names_are_kept(downloads: Path)
 
 
 def test_anthropic_request_carries_the_image(downloads: Path) -> None:
-    old(make_image(downloads / "Screenshot 2026-11-02.png", 2880, 1800))
-    cfg = make_config(downloads, vision={"enabled": True, "max_image_px": 1280})
+    make_old(make_image(downloads / "Screenshot 2026-11-02.png", 2880, 1800))
+    cfg = fake_config(downloads, vision={"enabled": True, "max_image_px": 1280})
     client = FakeClient(
         reply(
             {

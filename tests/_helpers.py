@@ -1,4 +1,10 @@
-"""Shared test helpers. Import from here, not from conftest.py."""
+"""Shared test helpers: plain functions and classes. Import from here.
+
+Fixtures, including the autouse safety guards, live in ``tests/conftest.py``;
+the fake ``security``, ``launchctl``, ``sips`` and ``claude`` binaries are the
+``tests/fake_*.py`` scripts those fixtures install. A helper used by more than
+one test module belongs here, never in a test module another one imports.
+"""
 
 from __future__ import annotations
 
@@ -7,13 +13,26 @@ import ctypes
 import ctypes.util
 import json
 import os
+import plistlib
+import sqlite3
 import time
 import zipfile
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+
+from file_librarian import pipeline
+from file_librarian.config import Config, parse_config
+from file_librarian.context import build_context
+from file_librarian.db.store import FileRow, Store
+from file_librarian.finder_tags import USER_TAGS
+from file_librarian.hashing import file_sha256, unit_manifest
+from file_librarian.models import Classification, FileContext
+from file_librarian.providers.fake import FakeProvider
+from file_librarian.scanner import Candidate
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -24,6 +43,28 @@ OLD = time.time() - 3 * 3600
 OLD_DATE = date.fromtimestamp(OLD)
 
 _XATTR_NOFOLLOW = 0x0001
+
+
+class Crash(BaseException):
+    """Stands in for a power cut: not an Exception, so nothing in flib catches it."""
+
+
+# --- Files in the fake Downloads ---------------------------------------------------
+
+
+def make_old(path: Path) -> Path:
+    """Backdate ``path`` to OLD, so the scanner sees it as stable."""
+    os.utime(path, (OLD, OLD))
+    return path
+
+
+def put(folder: Path, name: str, content: bytes = b"data", *, mtime: float = OLD) -> Path:
+    """Write ``folder/name`` (creating parents), modified at ``mtime``."""
+    path = folder / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    os.utime(path, (mtime, mtime))
+    return path
 
 
 def write_xattr(path: Path, name: str, value: bytes) -> None:
@@ -42,6 +83,101 @@ def write_xattr(path: Path, name: str, value: bytes) -> None:
     if rc != 0:
         err = ctypes.get_errno()
         raise OSError(err, os.strerror(err), str(path))
+
+
+def set_tags(path: Path, tags: list[str]) -> None:
+    """Give ``path`` these Finder tags, the way Finder stores them."""
+    write_xattr(path, USER_TAGS, plistlib.dumps(tags, fmt=plistlib.FMT_BINARY))
+
+
+# --- Configuration, runs and the index -------------------------------------------
+
+
+def fake_config(downloads: Path | None = None, /, **overrides: Any) -> Config:
+    """A config for the offline fake provider, watching ``downloads`` if given.
+
+    ``provider`` overrides are merged into the fake provider's settings; every
+    other key replaces the default.
+    """
+    provider = {"name": "fake", "model": "x"} | overrides.pop("provider", {})
+    raw: dict[str, Any] = {"provider": provider}
+    if downloads is not None:
+        raw["inputs"] = [str(downloads)]
+    return parse_config(raw | overrides)
+
+
+def write_config(
+    folder: Path, downloads: Path, provider: str = "{name: fake, model: x}", extra: str = ""
+) -> Path:
+    """A config file in ``folder`` for ``flib -c``; a second call writes a second file."""
+    taken = len(list(folder.glob("config*.yaml")))
+    path = folder / ("config.yaml" if not taken else f"config{taken}.yaml")
+    path.write_text(
+        f"inputs: [{json.dumps(str(downloads))}]\nprovider: {provider}\n{extra}",
+        encoding="utf-8",
+    )
+    return path
+
+
+def answer(
+    category: str = "Finance",
+    name: str = "x",
+    confidence: float = 0.75,
+    *,
+    description: str = "d",
+    **kw: Any,
+) -> Classification:
+    """A fake provider's answer; by default below the rename threshold, so names stay."""
+    return Classification(
+        category=category,
+        suggested_name=name,
+        description=description,
+        confidence=confidence,
+        **kw,
+    )
+
+
+def library(downloads: Path) -> Path:
+    """Where organized files land by default."""
+    return downloads / "Organized"
+
+
+def organize(
+    downloads: Path, cfg: Config, files: dict[str, tuple[bytes, Classification | str]]
+) -> None:
+    """Drop ``files`` into Downloads and run the pipeline for real.
+
+    Each value is the content and the answer, or just a category for ``answer(category)``.
+    """
+    answers: dict[str, Classification] = {}
+    for name, (content, reply) in files.items():
+        put(downloads, name, content)
+        answers[name] = answer(reply) if isinstance(reply, str) else reply
+    pipeline.run(cfg, FakeProvider(answers), simulate=False)
+
+
+def row_for(cfg: Config, original: str) -> FileRow:
+    """The index row of the file first seen as ``original``."""
+    with Store.open(cfg.database) as store:
+        return next(r for r in store.all_files() if r.original_name == original)
+
+
+def rows(cfg: Config, sql: str) -> list[sqlite3.Row]:
+    with Store.open(cfg.database) as store:
+        return list(store.conn.execute(sql))
+
+
+def candidate(path: Path) -> Candidate:
+    """A scanner candidate for ``path``, a file or a folder unit."""
+    if path.is_dir():
+        m = unit_manifest(path)
+        return Candidate(path, m.digest, m.size_bytes, 0.0, is_unit=True)
+    return Candidate(path, file_sha256(path), path.stat().st_size, 0.0, is_unit=False)
+
+
+def context_for(path: Path, cfg: Config | None = None) -> FileContext:
+    """The context flib would build for ``path``."""
+    return build_context(candidate(path), cfg or fake_config())
 
 
 # --- iCloud ----------------------------------------------------------------------
@@ -214,3 +350,41 @@ class FakeClaude:
         if not log.exists():
             return []
         return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+
+
+# --- Anthropic API -----------------------------------------------------------------
+
+
+def reply(
+    data: Any,
+    *,
+    stop: str = "end_turn",
+    usage: tuple[int, int] = (1000, 100),
+    iterations: list[Any] | None = None,
+) -> SimpleNamespace:
+    """A Messages API response carrying ``data`` as its text block."""
+    text = data if isinstance(data, str) else json.dumps(data)
+    return SimpleNamespace(
+        stop_reason=stop,
+        content=[
+            SimpleNamespace(type="thinking", thinking=""),
+            SimpleNamespace(type="text", text=text),
+        ],
+        usage=SimpleNamespace(input_tokens=usage[0], output_tokens=usage[1], iterations=iterations),
+    )
+
+
+class FakeClient:
+    """Stands in for ``anthropic.Anthropic``: answers with ``responses`` in order."""
+
+    def __init__(self, *responses: Any) -> None:
+        self.responses = list(responses)
+        self.requests: list[dict[str, Any]] = []
+        self.beta = SimpleNamespace(messages=SimpleNamespace(create=self._create))
+
+    def _create(self, **kwargs: Any) -> Any:
+        self.requests.append(kwargs)
+        item = self.responses.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item

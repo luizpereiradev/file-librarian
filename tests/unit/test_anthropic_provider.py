@@ -13,6 +13,7 @@ from file_librarian.config import ProviderConfig
 from file_librarian.models import CategoryRule, Correction, FileContext, Rules
 from file_librarian.providers.anthropic import FALLBACK_BETA, AnthropicProvider
 from file_librarian.providers.base import FatalProviderError, ProviderError, Usage
+from tests._helpers import FakeClient, reply
 
 RULES = Rules(
     categories=(CategoryRule("Finance", "bills, invoices"), CategoryRule("Other")),
@@ -34,38 +35,6 @@ GOOD = {
     "confidence": 0.93,
     "document_date": "2026-10-05",
 }
-
-
-def reply(
-    data: Any,
-    *,
-    stop: str = "end_turn",
-    usage: tuple[int, int] = (1000, 100),
-    iterations: list[Any] | None = None,
-) -> SimpleNamespace:
-    text = data if isinstance(data, str) else json.dumps(data)
-    return SimpleNamespace(
-        stop_reason=stop,
-        content=[
-            SimpleNamespace(type="thinking", thinking=""),
-            SimpleNamespace(type="text", text=text),
-        ],
-        usage=SimpleNamespace(input_tokens=usage[0], output_tokens=usage[1], iterations=iterations),
-    )
-
-
-class FakeClient:
-    def __init__(self, *responses: Any) -> None:
-        self.responses = list(responses)
-        self.requests: list[dict[str, Any]] = []
-        self.beta = SimpleNamespace(messages=SimpleNamespace(create=self._create))
-
-    def _create(self, **kwargs: Any) -> Any:
-        self.requests.append(kwargs)
-        item = self.responses.pop(0)
-        if isinstance(item, Exception):
-            raise item
-        return item
 
 
 def provider(

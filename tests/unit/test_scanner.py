@@ -8,37 +8,19 @@ from typing import Any
 import pytest
 
 from file_librarian import hashing
-from file_librarian.config import Config, parse_config
+from file_librarian.config import Config
 from file_librarian.hashing import SF_DATALESS, file_sha256
 from file_librarian.models import FileState, FileStatus
 from file_librarian.scanner import ScanError, SkipReason, scan
-from tests._helpers import mark_cloud_only
+from tests._helpers import OLD, fake_config, make_old, mark_cloud_only, put
 
 NOW = time.time()
-OLD = NOW - 3600  # well past stable_seconds
 
 
 def make_config(downloads: Path, **overrides: Any) -> Config:
-    raw: dict[str, Any] = {
-        "inputs": [str(downloads)],
-        "output_root": str(downloads / "Organized"),
-        "provider": {"name": "fake", "model": "fixed"},
-        "ignore": ["*.tmp"],
-    }
-    for key, value in overrides.items():
-        if isinstance(value, dict) and isinstance(raw.get(key), dict):
-            raw[key] = raw[key] | value
-        else:
-            raw[key] = value
-    return parse_config(raw)
-
-
-def put(folder: Path, name: str, content: bytes = b"data", mtime: float = OLD) -> Path:
-    path = folder / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(content)
-    os.utime(path, (mtime, mtime))
-    return path
+    """The fake config, also ignoring ``*.tmp``."""
+    defaults: dict[str, Any] = {"output_root": str(downloads / "Organized"), "ignore": ["*.tmp"]}
+    return fake_config(downloads, **(defaults | overrides))
 
 
 def nothing_known(_sha: str) -> FileState | None:
@@ -86,7 +68,7 @@ def test_skips_recent_files_until_stable(downloads: Path) -> None:
 
 def test_never_enters_the_managed_output_folder(downloads: Path) -> None:
     put(downloads, "Organized/Finance/invoice.pdf")
-    os.utime(downloads / "Organized", (OLD, OLD))
+    make_old(downloads / "Organized")
     result = scan(make_config(downloads), nothing_known, now=NOW)
     assert result.candidates == []
     assert reasons(result)["Organized"] is SkipReason.MANAGED
@@ -96,8 +78,8 @@ def test_folders_and_bundles_are_units(downloads: Path) -> None:
     put(downloads, "project/src/main.py", b"print('hi')")
     put(downloads, "Tool.app/Contents/MacOS/tool", b"\x7fELF")
     for folder in ("project/src", "project", "Tool.app/Contents/MacOS", "Tool.app/Contents"):
-        os.utime(downloads / folder, (OLD, OLD))
-    os.utime(downloads / "Tool.app", (OLD, OLD))
+        make_old(downloads / folder)
+    make_old(downloads / "Tool.app")
     result = scan(make_config(downloads), nothing_known, now=NOW)
     units = {c.path.name: c for c in result.candidates}
     assert set(units) == {"project", "Tool.app"}
@@ -108,14 +90,14 @@ def test_folders_and_bundles_are_units(downloads: Path) -> None:
 def test_unit_with_a_recent_file_inside_waits(downloads: Path) -> None:
     put(downloads, "project/old.txt")
     put(downloads, "project/new.txt", mtime=NOW - 5)
-    os.utime(downloads / "project", (OLD, OLD))
+    make_old(downloads / "project")
     result = scan(make_config(downloads), nothing_known, now=NOW)
     assert reasons(result)["project"] is SkipReason.UNSTABLE
 
 
 def test_folders_ignore_skips_units(downloads: Path) -> None:
     put(downloads, "project/a.txt")
-    os.utime(downloads / "project", (OLD, OLD))
+    make_old(downloads / "project")
     result = scan(make_config(downloads, folders="ignore"), nothing_known, now=NOW)
     assert result.candidates == []
     assert reasons(result)["project"] is SkipReason.FOLDER_IGNORED
@@ -155,7 +137,7 @@ def test_unit_with_a_cloud_only_file_inside_is_skipped_whole(
     put(downloads, "project/a_local.txt")
     cloud = put(downloads, "project/b_cloud.bin", b"only in the cloud")
     put(downloads, "project/c_local.txt")
-    os.utime(downloads / "project", (OLD, OLD))
+    make_old(downloads / "project")
     mark_cloud_only(monkeypatch, cloud)
     result = scan(make_config(downloads), nothing_known, now=NOW)
     assert result.candidates == []
@@ -164,7 +146,7 @@ def test_unit_with_a_cloud_only_file_inside_is_skipped_whole(
 
 def test_cloud_only_folder_is_not_listed(downloads: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     put(downloads, "Album/photo.jpg")
-    os.utime(downloads / "Album", (OLD, OLD))
+    make_old(downloads / "Album")
     mark_cloud_only(monkeypatch, downloads / "Album")
     result = scan(make_config(downloads), nothing_known, now=NOW)
     assert result.candidates == []
@@ -255,7 +237,7 @@ def test_unreadable_file_is_skipped_not_fatal(downloads: Path) -> None:
 def test_scanner_does_not_modify_anything(downloads: Path) -> None:
     put(downloads, "a.pdf")
     put(downloads, "project/b.txt")
-    os.utime(downloads / "project", (OLD, OLD))
+    make_old(downloads / "project")
     before = {p: p.stat().st_mtime_ns for p in downloads.rglob("*")}
     scan(make_config(downloads), nothing_known, now=NOW)
     assert {p: p.stat().st_mtime_ns for p in downloads.rglob("*")} == before

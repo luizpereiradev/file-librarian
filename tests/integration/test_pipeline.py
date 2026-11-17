@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-import sqlite3
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -11,7 +9,7 @@ from typing import Any
 import pytest
 
 from file_librarian import pipeline
-from file_librarian.config import Config, parse_config
+from file_librarian.config import Config
 from file_librarian.db.store import Store
 from file_librarian.executor import execute, recover
 from file_librarian.fsops import move_no_replace
@@ -24,7 +22,16 @@ from file_librarian.models import (
 )
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.undo import NothingToUndoError, undo_file, undo_run
-from tests._helpers import OLD, OLD_DATE, make_docx, make_pdf
+from tests._helpers import (
+    OLD_DATE,
+    Crash,
+    fake_config,
+    make_docx,
+    make_old,
+    make_pdf,
+    put,
+    rows,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -42,27 +49,9 @@ def answer(
     )
 
 
-def make_config(downloads: Path, **overrides: Any) -> Config:
-    raw: dict[str, Any] = {
-        "inputs": [str(downloads)],
-        "provider": {"name": "fake", "model": "fixed"},
-    }
-    return parse_config(raw | overrides)
-
-
 def put_pdf(folder: Path, name: str, text: str) -> Path:
     """A real PDF with a text layer, so the provider has content to name it from."""
-    path = make_pdf(folder / name, text)
-    os.utime(path, (OLD, OLD))
-    return path
-
-
-def put(folder: Path, name: str, content: bytes = b"data") -> Path:
-    path = folder / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(content)
-    os.utime(path, (OLD, OLD))
-    return path
+    return make_old(make_pdf(folder / name, text))
 
 
 def snapshot(root: Path) -> dict[str, bytes]:
@@ -71,16 +60,6 @@ def snapshot(root: Path) -> dict[str, bytes]:
         for p in sorted(root.rglob("*"))
         if p.is_file() and "Library" not in p.parts
     }
-
-
-def rows(config: Config, sql: str) -> list[sqlite3.Row]:
-    with Store.open(config.database) as store:
-        return list(store.conn.execute(sql))
-
-
-@pytest.fixture
-def cfg(downloads: Path) -> Config:
-    return make_config(downloads)
 
 
 def test_run_organizes_renames_and_indexes(downloads: Path, cfg: Config) -> None:
@@ -137,7 +116,7 @@ def test_rename_needs_its_own_confidence(downloads: Path, cfg: Config) -> None:
 def test_category_rename_policy_and_units_keep_names(downloads: Path, cfg: Config) -> None:
     put(downloads, "Setup-2.1.dmg")
     put(downloads, "project/main.py")
-    os.utime(downloads / "project", (OLD, OLD))
+    make_old(downloads / "project")
     provider = FakeProvider(
         {
             "Setup-2.1.dmg": answer("Installers", "some installer"),
@@ -248,9 +227,9 @@ def test_file_changed_after_scan_is_left_alone(downloads: Path, cfg: Config) -> 
 def test_undo_last_run_restores_everything(downloads: Path, cfg: Config) -> None:
     put(downloads, "a.pdf", b"A")
     make_docx(downloads / "b.docx", ["contract"])
-    os.utime(downloads / "b.docx", (OLD, OLD))
+    make_old(downloads / "b.docx")
     put(downloads, "proj/x.txt")
-    os.utime(downloads / "proj", (OLD, OLD))
+    make_old(downloads / "proj")
     before = snapshot(downloads)
     pipeline.run(cfg, FakeProvider(default=answer("Finance", "doc")), simulate=False)
     assert snapshot(downloads) != before
@@ -300,10 +279,6 @@ def test_undo_single_file_and_nothing_to_undo(downloads: Path, cfg: Config) -> N
     assert (downloads / "Organized" / "Finance" / "b.pdf").exists()
 
 
-class Crash(BaseException):
-    """Stands in for a power cut: not an Exception, so nothing in flib catches it."""
-
-
 @pytest.mark.parametrize("moment", ["after the rename", "before the rename"])
 def test_recover_resolves_a_crash_mid_move(
     downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch, moment: str
@@ -341,9 +316,9 @@ def test_runs_are_exclusive(downloads: Path, cfg: Config) -> None:
 
 
 def test_offline_fake_provider_works_end_to_end(downloads: Path) -> None:
-    config = make_config(downloads, language="pt-BR")
+    config = fake_config(downloads, language="pt-BR")
     make_pdf(downloads / "fatura.pdf", "Fatura de energia")
-    os.utime(downloads / "fatura.pdf", (OLD, OLD))
+    make_old(downloads / "fatura.pdf")
     pipeline.run(config, FakeProvider(echo=True), simulate=False)
     moved = list((downloads / "Organizado" / "Outros").iterdir())
     assert len(moved) == 1 and moved[0].suffix == ".pdf"

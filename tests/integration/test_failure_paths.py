@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -14,30 +13,13 @@ from file_librarian import cli, pipeline
 from file_librarian.config import Config, parse_config
 from file_librarian.db.store import Store
 from file_librarian.fsops import CrossVolumeError, DestinationExistsError, move_no_replace
-from file_librarian.models import Classification, FileStatus, OperationStatus, RunMode, RunTrigger
+from file_librarian.models import FileStatus, OperationStatus, RunMode, RunTrigger
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.undo import NothingToUndoError, undo_file, undo_run
-from tests._helpers import OLD
+from tests._helpers import answer, put, write_config
 
 pytestmark = pytest.mark.integration
 runner = CliRunner()
-
-
-def answer(category: str = "Finance") -> Classification:
-    # Below the rename threshold: names stay, which keeps the assertions simple.
-    return Classification(category=category, suggested_name="x", description="d", confidence=0.75)
-
-
-def put(folder: Path, name: str, content: bytes) -> Path:
-    path = folder / name
-    path.write_bytes(content)
-    os.utime(path, (OLD, OLD))
-    return path
-
-
-@pytest.fixture
-def cfg(downloads: Path) -> Config:
-    return parse_config({"inputs": [str(downloads)], "provider": {"name": "fake", "model": "x"}})
 
 
 def finance(downloads: Path) -> Path:
@@ -179,14 +161,6 @@ def test_commands_reject_an_invalid_config(tmp_path: Path, args: list[str]) -> N
     result = runner.invoke(cli.app, [*args, "-c", str(bad)])
     assert result.exit_code == 1
     assert "invalid configuration" in result.stderr
-
-
-def write_config(tmp_path: Path, downloads: Path) -> Path:
-    path = tmp_path / "config.yaml"
-    path.write_text(
-        f"inputs: [{downloads}]\nprovider: {{name: fake, model: x}}\n", encoding="utf-8"
-    )
-    return path
 
 
 def test_undo_rejects_file_and_run_together(tmp_path: Path, downloads: Path) -> None:
