@@ -33,6 +33,7 @@ from file_librarian.models import (
     Classification,
     Decision,
     FileContext,
+    FileMetadata,
     FileStatus,
     Rules,
 )
@@ -121,7 +122,7 @@ def test_never_send_damaged_and_sensitive_files_are_not_visual(tmp_path: Path) -
     photo = make_image(tmp_path / "passport.jpg", 800, 600)
     withheld = context_for(photo, config(vision={"enabled": True}, never_send=["passport*"]))
     assert withheld.visual is None
-    assert withheld.metadata == {"content": "withheld (never_send)"}
+    assert withheld.metadata == FileMetadata(content="withheld (never_send)")
     broken = tmp_path / "broken.pdf"
     broken.write_bytes(b"%PDF-1.4 not really")
     assert context_for(broken, cfg).visual is None
@@ -449,7 +450,7 @@ def test_image_goes_first_as_a_base64_image_block() -> None:
         "x",
         10,
         ".jpg",
-        metadata={"content": "no extractor for this format"},
+        metadata=FileMetadata(content="no extractor for this format"),
         attachment=Attachment("image/jpeg", b"\xff\xd8jpeg"),
     )
     image, text = blocks(ctx)

@@ -33,7 +33,7 @@ from file_librarian.config import Config
 from file_librarian.extractors import ExtractionError, extractor_for
 from file_librarian.extractors.origin import download_origin
 from file_librarian.extractors.visual import is_image
-from file_librarian.models import FileContext, VisualKind
+from file_librarian.models import BundleInfo, FileContext, FileMetadata, VisualKind
 from file_librarian.scanner import Candidate
 from file_librarian.sensitive import find_secrets, sensitive_name, withheld_by_config
 
@@ -61,7 +61,7 @@ def build_context_safely(candidate: Candidate, config: Config) -> FileContext:
             inode=candidate.inode,
             downloaded=date.fromtimestamp(candidate.created) if candidate.created else None,
             is_unit=candidate.is_unit,
-            metadata={"extraction_error": f"{type(exc).__name__}: {exc}"[:200]},
+            metadata=FileMetadata(extraction_error=f"{type(exc).__name__}: {exc}"[:200]),
         )
 
 
@@ -81,18 +81,24 @@ def build_context(candidate: Candidate, config: Config) -> FileContext:
     detect = config.sensitive.detect_secrets
 
     if candidate.is_unit:
-        names, info = _unit_listing(path)
+        names, bundle = _unit_listing(path)
         if detect and any(sensitive_name(Path(n).name) for n in names):
-            return replace(base, sensitive=True, metadata={"sensitive": "credential files"})
-        return replace(base, text=_describe_unit(names, info, config), metadata=info)
+            return replace(
+                base, sensitive=True, metadata=FileMetadata(sensitive="credential files")
+            )
+        return replace(
+            base, text=_describe_unit(names, bundle, config), metadata=FileMetadata(bundle=bundle)
+        )
 
     if detect and sensitive_name(path.name):
-        return replace(base, sensitive=True, metadata={"sensitive": "credential file name"})
+        return replace(
+            base, sensitive=True, metadata=FileMetadata(sensitive="credential file name")
+        )
 
     if withheld_by_config(path.name, config.never_send):
-        return replace(base, metadata={"content": "withheld (never_send)"})
+        return replace(base, metadata=FileMetadata(content="withheld (never_send)"))
 
-    metadata: dict[str, str] = {}
+    error: str | None = None
     extractor = extractor_for(path)
     text: str | None = None
     sendable = True
@@ -103,36 +109,38 @@ def build_context(candidate: Candidate, config: Config) -> FileContext:
             text = _sniff_text(path)
             sendable = False
     except ExtractionError as exc:
-        metadata["extraction_error"] = str(exc)[:200]
+        error = str(exc)[:200]
     except OSError as exc:
-        metadata["extraction_error"] = f"unreadable: {exc.strerror or exc}"[:200]
+        error = f"unreadable: {exc.strerror or exc}"[:200]
     except Exception as exc:
         # This is the boundary that keeps one damaged file from stopping every run (RF-27).
-        metadata["extraction_error"] = f"{type(exc).__name__}: {exc}"[:200]
+        error = f"{type(exc).__name__}: {exc}"[:200]
 
     if detect and text:
         kinds = find_secrets(text)
         if kinds:
-            return replace(base, sensitive=True, metadata={"sensitive": ", ".join(kinds)})
+            return replace(base, sensitive=True, metadata=FileMetadata(sensitive=", ".join(kinds)))
 
     sent = text[: config.provider.max_chars_per_file] if (text and sendable) else None
+    content: str | None = None
     if extractor is None:
-        metadata["content"] = "no extractor for this format"
-    elif text is None and "extraction_error" not in metadata:
-        metadata["content"] = "no readable text"
+        content = "no extractor for this format"
+    elif text is None and error is None:
+        content = "no readable text"
+    metadata = FileMetadata(content=content, extraction_error=error)
     visual = _visual(base, sent, metadata, config)
     return replace(base, text=sent, metadata=metadata, visual=visual)
 
 
 def _visual(
-    base: FileContext, text: str | None, metadata: dict[str, str], config: Config
+    base: FileContext, text: str | None, metadata: FileMetadata, config: Config
 ) -> VisualKind | None:
     """``"image"``, ``"pdf"`` (scanned: readable, but no text) or ``None``."""
     if not config.vision.enabled:
         return None
     if is_image(base.path):
         return "image"
-    if base.extension == ".pdf" and text is None and "extraction_error" not in metadata:
+    if base.extension == ".pdf" and text is None and metadata.extraction_error is None:
         return "pdf"
     return None
 
@@ -145,18 +153,24 @@ def _sniff_text(path: Path) -> str | None:
     return raw.decode("utf-8", errors="replace")
 
 
-def _unit_listing(root: Path) -> tuple[list[str], dict[str, str]]:
+def _unit_listing(root: Path) -> tuple[list[str], BundleInfo | None]:
     names: list[str] = []
-    info: dict[str, str] = {}
+    bundle: BundleInfo | None = None
     if root.suffix.lower() == ".app":
         plist = root / "Contents" / "Info.plist"
         try:
             if plist.is_file() and not plist.is_symlink() and plist.stat().st_size < 1_000_000:
                 data = plistlib.loads(plist.read_bytes())
-                for key in ("CFBundleName", "CFBundleIdentifier", "CFBundleShortVersionString"):
+
+                def string(key: str) -> str | None:
                     value = data.get(key)
-                    if isinstance(value, str):
-                        info[key] = value[:200]
+                    return value[:200] if isinstance(value, str) else None
+
+                bundle = BundleInfo(
+                    name=string("CFBundleName"),
+                    identifier=string("CFBundleIdentifier"),
+                    version=string("CFBundleShortVersionString"),
+                )
         except Exception:  # noqa: S110 - any damaged plist: the bundle is just listed by name
             pass
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
@@ -164,12 +178,12 @@ def _unit_listing(root: Path) -> tuple[list[str], dict[str, str]]:
         for name in sorted(filenames):
             names.append(str(Path(dirpath, name).relative_to(root)))
             if len(names) >= UNIT_LISTING:
-                return names, info
-    return names, info
+                return names, bundle
+    return names, bundle
 
 
-def _describe_unit(names: list[str], info: dict[str, str], config: Config) -> str:
-    lines = [f"{k}: {v}" for k, v in info.items()]
+def _describe_unit(names: list[str], bundle: BundleInfo | None, config: Config) -> str:
+    lines = [f"{k}: {v}" for k, v in bundle.plist_items()] if bundle else []
     if names:
         more = "+" if len(names) >= UNIT_LISTING else ""
         lines.append(f"Folder contents ({len(names)}{more} files):")

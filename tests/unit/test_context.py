@@ -9,7 +9,7 @@ import pytest
 from file_librarian.config import Config, parse_config
 from file_librarian.context import build_context
 from file_librarian.hashing import file_sha256, unit_manifest
-from file_librarian.models import FileContext
+from file_librarian.models import BundleInfo, FileContext, FileMetadata
 from file_librarian.scanner import Candidate
 from file_librarian.sensitive import find_secrets, sensitive_name
 from tests._helpers import make_docx, make_pdf
@@ -80,7 +80,7 @@ def test_secret_in_document_marks_sensitive_and_sends_nothing(tmp_path: Path) ->
     ctx = context_for(path)
     assert ctx.sensitive is True
     assert ctx.text is None
-    assert ctx.metadata == {"sensitive": "AWS access key"}
+    assert ctx.metadata == FileMetadata(sensitive="AWS access key")
     assert FAKE["AWS access key"] not in repr(ctx)
 
 
@@ -100,13 +100,13 @@ def test_key_without_extractor_is_sniffed_but_never_sent(tmp_path: Path) -> None
     ctx = context_for(other)
     assert ctx.sensitive is False
     assert ctx.text is None  # sniffed for secrets only
-    assert ctx.metadata["content"] == "no extractor for this format"
+    assert ctx.metadata.content == "no extractor for this format"
 
 
 def test_sensitive_name_needs_no_reading(tmp_path: Path) -> None:
     path = tmp_path / "id_rsa"
     path.write_text("whatever", encoding="utf-8")
-    assert context_for(path).metadata == {"sensitive": "credential file name"}
+    assert context_for(path).metadata == FileMetadata(sensitive="credential file name")
 
 
 def test_detection_can_be_turned_off(tmp_path: Path) -> None:
@@ -121,7 +121,7 @@ def test_never_send_withholds_content(tmp_path: Path) -> None:
     ctx = context_for(path, config(never_send=["medical*"]))
     assert ctx.sensitive is False
     assert ctx.text is None
-    assert ctx.metadata == {"content": "withheld (never_send)"}
+    assert ctx.metadata == FileMetadata(content="withheld (never_send)")
 
 
 def test_extraction_failure_falls_back_to_metadata(tmp_path: Path) -> None:
@@ -129,7 +129,9 @@ def test_extraction_failure_falls_back_to_metadata(tmp_path: Path) -> None:
     path.write_bytes(b"%PDF-1.4 garbage")
     ctx = context_for(path)
     assert ctx.text is None
-    assert "cannot read PDF" in ctx.metadata["extraction_error"]
+    assert ctx.metadata.extraction_error is not None
+    assert "cannot read PDF" in ctx.metadata.extraction_error
+    assert ctx.metadata.content is None
 
 
 def test_folder_unit_sends_a_listing(tmp_path: Path) -> None:
@@ -154,6 +156,7 @@ def test_app_bundle_reports_its_name(tmp_path: Path) -> None:
     ctx = context_for(app)
     assert ctx.text is not None
     assert ctx.text.startswith("CFBundleName: Tool\nCFBundleIdentifier: com.example.tool\n")
+    assert ctx.metadata == FileMetadata(bundle=BundleInfo("Tool", "com.example.tool", "2.1"))
 
 
 def test_folder_with_credentials_inside_is_sensitive(tmp_path: Path) -> None:
