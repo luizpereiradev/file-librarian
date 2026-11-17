@@ -220,6 +220,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- A descriptive original name is no longer replaced by a shorter, vaguer one
+  (#59). The answer schema gains `name_choice` (`original` or `proposed`) and
+  `name_choice_reason`: the model compares the file's current name with its
+  proposal and says which describes the file better. When it picks
+  `original`, the planner builds the new name from the original's words, with
+  flib's own naming rules (pattern and date, sanitising, length, extension; a
+  leading date in the old name is not repeated); generic names (`scan001`,
+  `document (3)`) are still replaced. The choice and reason are stored in the
+  index (migration 0007), marked "original name kept" in `flib simulate`, and
+  shown by `flib inspect` (which now looks the file up in the index; it takes
+  `--config`) and the MCP `get_file` tool. Both Claude providers send the new
+  schema. `PROMPT_VERSION` is now 4, so cached answers are not reused.
 - `FileContext.metadata` is a typed `FileMetadata` instead of a string dict;
   what providers receive is unchanged.
 - Of several copies with the same content, the original goes ahead: a name

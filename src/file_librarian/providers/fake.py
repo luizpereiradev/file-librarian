@@ -3,9 +3,10 @@
 It never touches the network. Answers come from a fixed table keyed by file
 name; anything not in the table gets ``default``. With ``echo=True`` (what
 ``provider.name: fake`` in a configuration uses) every file goes to the last
-configured category under its own name, which lets you try ``flib simulate``
-and ``flib run`` end to end without an API key. It reads no attachments unless
-``attachments`` says so; ``calls`` keeps every context, attachment included.
+configured category under its own name (``name_choice: original``), which
+lets you try ``flib simulate`` and ``flib run`` end to end without an API key.
+It reads no attachments unless ``attachments`` says so; ``calls`` keeps every
+context, attachment included.
 """
 
 from __future__ import annotations
@@ -51,6 +52,8 @@ class FakeProvider:
                 suggested_name=context.path.stem or context.path.name,
                 description=f"Offline test classification of {context.path.name}.",
                 confidence=0.9,
+                name_choice="original",
+                name_choice_reason="Offline: the original name is kept.",
             )
         if answer is None:
             raise ProviderError(f"no fake answer for {context.path.name}")

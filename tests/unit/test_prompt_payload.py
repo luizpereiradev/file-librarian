@@ -1,9 +1,12 @@
-"""Pin the exact text every provider sends for one file.
+"""Pin the exact text every provider sends for one file, and the answer it asks for.
 
 ``FileContext.metadata`` feeds the prompt; these golden strings were captured
 before it became a typed ``FileMetadata`` and must stay byte-identical, so a
 refactor of the context cannot silently change what the model sees (or make
 cached answers stale without a ``PROMPT_VERSION`` bump).
+
+The answer schema and the name-choice instructions (#59) are pinned too: both
+the ``anthropic`` and ``claude-code`` providers send them.
 """
 
 from __future__ import annotations
@@ -15,8 +18,14 @@ from pathlib import Path
 
 import pytest
 
-from file_librarian.models import Attachment, FileContext
-from file_librarian.providers.prompt import user_message
+from file_librarian.classifier import PROMPT_VERSION
+from file_librarian.models import Attachment, CategoryRule, FileContext, Rules
+from file_librarian.providers.prompt import (
+    normalize_answer,
+    response_schema,
+    system_prompt,
+    user_message,
+)
 from tests._helpers import context_for, fake_config
 
 
@@ -134,3 +143,67 @@ CASES: dict[str, tuple[Callable[[Path], FileContext], str]] = {
 def test_user_message_is_pinned(case: str, tmp_path: Path) -> None:
     build, expected = CASES[case]
     assert user_message(build(tmp_path)) == expected
+
+
+# --- The answer schema and the name choice (#59) ------------------------------------
+# Changing these is a prompt change: bump PROMPT_VERSION so cached answers are not reused.
+
+RULES = Rules(categories=(CategoryRule("Finance"), CategoryRule("Other")), language="en")
+
+
+def test_answer_schema_is_pinned() -> None:
+    assert response_schema(RULES) == {
+        "type": "object",
+        "properties": {
+            "category": {"type": "string", "enum": ["Finance", "Other"]},
+            "suggested_name": {"type": "string"},
+            "name_choice_reason": {"type": "string"},
+            "name_choice": {"type": "string", "enum": ["original", "proposed"]},
+            "description": {"type": "string"},
+            "tags": {"type": "array", "items": {"type": "string"}},
+            "confidence": {"type": "number"},
+            "document_date": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        },
+        "required": [
+            "category",
+            "suggested_name",
+            "name_choice_reason",
+            "name_choice",
+            "description",
+            "tags",
+            "confidence",
+            "document_date",
+        ],
+        "additionalProperties": False,
+    }
+    assert PROMPT_VERSION == "4"
+
+
+def test_name_choice_instructions_are_pinned() -> None:
+    assert (
+        "- name_choice_reason: one short sentence in English comparing the file's\n"
+        "  current name (file_name, ignoring its extension and any date in it) with\n"
+        "  your suggested_name.\n"
+        '- name_choice: which of the two describes the file better. "original" when the\n'
+        "  current name already says what this specific file is, with the details that\n"
+        "  tell it apart from similar files (a title, a subject, a number or a\n"
+        '  version), even if it is in another language. "proposed" when it is generic\n'
+        "  or meaningless (scan001, document (3), IMG_2041, download, untitled) or\n"
+        "  does not match the content. A shorter or vaguer name never wins: when both\n"
+        '  are good, choose "original". flib adds the date and formatting either way.\n'
+    ) in system_prompt(RULES)
+
+
+@pytest.mark.parametrize(
+    ("raw", "choice", "reason"),
+    [
+        ({"name_choice": "original", "name_choice_reason": " Specific. "}, "original", "Specific."),
+        ({"name_choice": " Original "}, "original", None),
+        ({"name_choice": "proposed", "name_choice_reason": ""}, "proposed", None),
+        ({"name_choice": "both", "name_choice_reason": "x" * 400}, "proposed", "x" * 300),
+        ({}, "proposed", None),
+    ],
+)
+def test_name_choice_is_normalized(raw: dict[str, object], choice: str, reason: str | None) -> None:
+    data = normalize_answer({"category": "Finance", "confidence": 0.9} | raw)
+    assert (data["name_choice"], data["name_choice_reason"]) == (choice, reason)

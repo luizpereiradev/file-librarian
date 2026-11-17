@@ -23,6 +23,8 @@ def response_schema(rules: Rules) -> dict[str, Any]:
         "properties": {
             "category": {"type": "string", "enum": [c.name for c in rules.categories]},
             "suggested_name": {"type": "string"},
+            "name_choice_reason": {"type": "string"},
+            "name_choice": {"type": "string", "enum": ["original", "proposed"]},
             "description": {"type": "string"},
             "tags": {"type": "array", "items": {"type": "string"}},
             "confidence": {"type": "number"},
@@ -31,6 +33,8 @@ def response_schema(rules: Rules) -> dict[str, Any]:
         "required": [
             "category",
             "suggested_name",
+            "name_choice_reason",
+            "name_choice",
             "description",
             "tags",
             "confidence",
@@ -82,6 +86,16 @@ Answer fields:
 - category: the best category from the list.
 - suggested_name: a short subject for the file name, 2 to 6 words, in {language},
   without the date or the extension.
+- name_choice_reason: one short sentence in {language} comparing the file's
+  current name (file_name, ignoring its extension and any date in it) with
+  your suggested_name.
+- name_choice: which of the two describes the file better. "original" when the
+  current name already says what this specific file is, with the details that
+  tell it apart from similar files (a title, a subject, a number or a
+  version), even if it is in another language. "proposed" when it is generic
+  or meaningless (scan001, document (3), IMG_2041, download, untitled) or
+  does not match the content. A shorter or vaguer name never wins: when both
+  are good, choose "original". flib adds the date and formatting either way.
 - description: 1 to 3 sentences in {language} saying what the file is, with the
   names, amounts and dates someone would search for.
 - tags: up to 6 single-word or short tags in {language}.
@@ -144,6 +158,10 @@ def normalize_answer(data: dict[str, Any]) -> dict[str, Any]:
     tags = [str(t).strip()[:40] for t in data.get("tags") or [] if str(t).strip()]
     data["tags"] = tags[:10]
     data["suggested_name"] = str(data.get("suggested_name", "")).strip()[:200] or "untitled"
+    # Anything but a clear "original" falls back to the proposal, as before this choice existed.
+    choice = str(data.get("name_choice", "")).strip().lower()
+    data["name_choice"] = "original" if choice == "original" else "proposed"
+    data["name_choice_reason"] = str(data.get("name_choice_reason") or "").strip()[:300] or None
     data["description"] = str(data.get("description", "")).strip()[:600] or "No description."
     data["document_date"] = _iso_date(data.get("document_date"))
     return data

@@ -11,7 +11,14 @@ import pytest
 from file_librarian import fsops
 from file_librarian.config import NamingConfig
 from file_librarian.fsops import DestinationExistsError, ensure_folder, move_no_replace
-from file_librarian.naming import build_name, safe_component, slugify, split_name, with_counter
+from file_librarian.naming import (
+    build_name,
+    original_subject,
+    safe_component,
+    slugify,
+    split_name,
+    with_counter,
+)
 from tests._helpers import case_insensitive, names
 
 DAY = date(2026, 10, 5)
@@ -30,6 +37,21 @@ DAY = date(2026, 10, 5)
 )
 def test_split_name(name: str, expected: tuple[str, str]) -> None:
     assert split_name(name) == expected
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("Study guide - AI agents.pdf", "Study guide - AI agents"),
+        ("2026-11-16_report-q3.pdf", "report-q3"),
+        ("2026-11-16 - Lease agreement.docx", "Lease agreement"),
+        ("2026-11-16.pdf", ""),
+        ("backup.tar.gz", "backup"),
+        ("Release notes 2026-11-16.txt", "Release notes 2026-11-16"),  # only a leading date
+    ],
+)
+def test_original_subject_drops_extension_and_leading_date(name: str, expected: str) -> None:
+    assert original_subject(name) == expected
 
 
 def test_slugify_keeps_letters_in_any_language() -> None:

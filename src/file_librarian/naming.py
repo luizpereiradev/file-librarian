@@ -4,6 +4,10 @@ Everything the model says is untrusted. A suggested name becomes a single
 path component: Unicode NFC, no separators or control characters, no leading
 dot, lower case words joined by ``-``, within ``naming.max_length`` characters
 and 255 bytes. The original extension is always kept.
+
+When the model judges the original name better than its proposal
+(``name_choice: original``), ``original_subject`` makes that name the subject,
+so it gets the same pattern, date and sanitising as any other.
 """
 
 from __future__ import annotations
@@ -18,6 +22,8 @@ from file_librarian.config import NamingConfig
 
 COMPOUND_SUFFIXES = (".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst")
 _MAX_NAME_BYTES = 255
+# A date flib (or someone) already put in front of a name: "2026-11-16_", "2026-11-16 - ".
+_LEADING_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}[\s_.-]*")
 
 
 def split_name(name: str) -> tuple[str, str]:
@@ -30,6 +36,16 @@ def split_name(name: str) -> tuple[str, str]:
     if suffix and len(suffix) <= 16 and name != suffix:
         return name[: -len(suffix)], suffix
     return name, ""
+
+
+def original_subject(name: str) -> str:
+    """The subject an original name carries: its stem without a leading ISO date.
+
+    The pattern adds the date again, so ``2026-11-16_report.pdf`` must not
+    become ``2026-11-16_2026-11-16-report.pdf``.
+    """
+    stem, _ = split_name(name)
+    return _LEADING_DATE.sub("", stem.strip())
 
 
 def slugify(text: str) -> str:
