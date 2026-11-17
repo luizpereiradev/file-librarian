@@ -8,6 +8,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `flib mcp`, a local MCP server over stdio for Claude and other assistants
+  (RF-22). Tools: `search_files` (as `flib search`), `get_file` (the index
+  record plus hash, size and download origin), `recategorize_file` (as
+  `flib fix`, journaled as its own run with trigger `mcp`, so `flib undo`
+  reverts it) and `undo` (as `flib undo`). Each has a description and input
+  and output JSON schemas. Results never include file content; sensitive
+  files show no description, tags or download origin. Write tools take the
+  instance lock only for the call and fail at once while a run holds it; an
+  idle server holds no lock. `mcp.read_only: true` hides the write tools. The
+  README shows how to add it to Claude Code and Claude Desktop. New runtime
+  dependency: the official MCP Python SDK (`mcp`, MIT).
 - `flib fix PATH [--category NAME] [--name NAME]` and learning from
   corrections (RF-29). The file moves through the journal as its own run, so
   `flib undo` reverts it (an undone fix restores the old category and stops

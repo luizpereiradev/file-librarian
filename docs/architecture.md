@@ -93,6 +93,29 @@ One SQLite file, outside the organized folders (default
 Schema changes are new numbered files in `db/migrations/`; the applied version
 is `PRAGMA user_version`. Names and paths are stored in Unicode NFC.
 
+## The MCP server
+
+`flib mcp` (`mcp_server.py`) is another front end over the same modules, built
+on the official MCP Python SDK and served over stdio:
+
+| Tool | Reuses |
+| --- | --- |
+| `search_files` | `search.py`, as `flib search` |
+| `get_file` | the index row, plus the download origin `flib inspect` reads |
+| `recategorize_file` | `fix.fix_file`, as `flib fix`, with run trigger `mcp` |
+| `undo` | `undo.py`, as `flib undo` |
+
+- Reads take no lock and open the database only for the call (WAL mode).
+- Each write takes the instance lock for the call only, finishes an
+  interrupted journal first (`recover`) and fails at once if a run holds the
+  lock. An idle server holds neither the lock nor the database, so the daily
+  run is never blocked by an assistant left open.
+- `mcp.read_only: true` does not register the write tools at all.
+- Results are metadata and model-written descriptions, never file content.
+  Rows with status `sensitive` have description, tags and download origin
+  withheld. Paths must be absolute and must be in the index; the server
+  tells the client that names and descriptions are untrusted data.
+
 ## Extension points
 
 - **Providers** (`providers/`): implement `Provider.classify(context, rules)`
