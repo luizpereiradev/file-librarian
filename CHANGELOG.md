@@ -8,6 +8,21 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Vision for images and scanned PDFs (RF-05, RF-26), opt-in: a new
+  `vision` section, `enabled: false` by default. When on, an image
+  (`.jpg`, `.png`, `.heic`, `.webp`, `.gif`, `.tiff`, `.bmp`) is converted
+  to JPEG by macOS's `/usr/bin/sips`, shrunk so its longer side is at most
+  `vision.max_image_px` (default 1568, never enlarged) and stripped of EXIF,
+  XMP and other metadata before it is sent; a PDF with no text layer is cut
+  with pypdf to its first `vision.max_pdf_pages` pages (default 3) and sent
+  as a document. No new dependency. `never_send` and sensitive names still
+  apply first, and the cost cap counts the billed image tokens. Providers
+  declare the media types they read in `attachments`; a provider without
+  them (and any file that cannot be prepared) falls back to metadata only.
+  A file the model saw can now be renamed. Answers with vision are cached
+  under their own key, so toggling vision never reuses the other kind. The
+  `limits.scanned_pdf_max_pages` placeholder moved to
+  `vision.max_pdf_pages`; old files still load. Tests use a fake `sips`.
 - `flib fix PATH [--category NAME] [--name NAME]` and learning from
   corrections (RF-29). The file moves through the journal as its own run, so
   `flib undo` reverts it (an undone fix restores the old category and stops

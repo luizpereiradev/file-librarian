@@ -115,6 +115,47 @@ Your own tags are kept, `flib undo` removes only the tag flib added, and
 `finder_tags.enabled: false` turns this off.
 The API key is read from `ANTHROPIC_API_KEY`, never from the file.
 
+### Images and scanned PDFs (vision)
+
+Photos, screenshots and scanned PDFs have no text, so by default they are
+classified from their name and metadata only and keep their name. Turn vision
+on to let the model look at them:
+
+```yaml
+vision:
+  enabled: true      # off by default
+  max_image_px: 1568 # longer side of the image sent, in pixels
+  max_pdf_pages: 3   # first pages sent of a PDF with no text layer
+```
+
+Images (`.jpg`, `.png`, `.heic`, `.webp`, `.gif`, `.tiff`, `.bmp`) are
+converted to JPEG and shrunk by macOS's own `sips` (never enlarged), and
+their metadata (EXIF, GPS position, camera details) is removed before sending.
+A PDF whose pages have no text gets its first `max_pdf_pages` pages cut into a
+new PDF, which is sent as a document. Because the model then sees the content,
+these files can be renamed like any document (`IMG_4512.HEIC` becomes, say,
+`2026-11-02_beach-at-sunset.HEIC`). If an image cannot be converted, or the
+provider cannot read images, the file is classified from its metadata as with
+vision off. Answers given with vision are cached apart from answers without
+it, so turning it on or off never reuses the other kind.
+
+**Estimated cost** on the default model (Claude Haiku 5.5, US$0.10 per
+million input tokens and US$0.50 per million output tokens). An image costs
+about width × height / 750 input tokens:
+
+| What is sent | Image tokens | Whole request, estimated |
+| --- | --- | --- |
+| Photo, 4:3, shrunk to 1568 × 1176 | ~2,460 | ~US$0.0005 |
+| Screenshot, 16:10, shrunk to 1568 × 980 | ~2,050 | ~US$0.0005 |
+| Scanned PDF, 3 pages | ~1,600-2,500 per page | ~US$0.001 |
+
+"Whole request" adds about 1,000 tokens of instructions and metadata and a
+few hundred output tokens. These are estimates from the published formula,
+not measurements; what counts toward `limits.max_cost_usd_per_run` is the
+usage the API actually bills, so the cap holds either way. Roughly 2,000
+photos fit in the default US$1 cap. Lowering `max_image_px` lowers the cost
+quadratically (1024 px: about 40% of it).
+
 ### Teaching it
 
 When a file lands in the wrong place, correct it:
@@ -139,7 +180,12 @@ for each file:
 - its name, extension, size, download date and the URL it was downloaded
   from;
 - at most `provider.max_chars_per_file` characters of its text (4,000 by
-  default), or for a folder, the names of up to 100 files inside it.
+  default), or for a folder, the names of up to 100 files inside it;
+- only with `vision.enabled` (off by default): for an image, the image
+  itself, shrunk to `vision.max_image_px` and stripped of its metadata; for a
+  PDF with no text layer, its first `vision.max_pdf_pages` pages. Secret
+  detection reads text, not pixels: a photo of a document or a screenshot of
+  a password goes as it is. Keep such files out with `never_send`.
 
 With every request also go your most recent corrections (at most
 `provider.max_examples`): for each, the corrected file's extension, the

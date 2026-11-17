@@ -13,7 +13,14 @@ Wraps any ``Provider`` with what the provider itself should not decide:
   answers;
 - the estimated cost of what was actually billed is tracked, and once it
   reaches ``limits.max_cost_usd_per_run`` the remaining files are deferred to
-  the next run (not counted as failures).
+  the next run (not counted as failures);
+- a ``visual`` context (``vision.enabled``: an image or a scanned PDF) gets
+  its image or first pages attached only when the provider lists that media
+  type in ``attachments``, and only right before the call; otherwise, or when
+  preparing it fails, it is classified from metadata as with vision off.
+  Answers that saw an attachment are cached under their own key, which also
+  covers the vision limits, so turning vision on or off never reuses an
+  answer given with the other setting.
 
 The provider's answer is only data; the planner decides what it means.
 
@@ -28,14 +35,23 @@ import hashlib
 import json
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from pydantic import ValidationError
 
-from file_librarian.config import Config
+from file_librarian.config import Config, VisionConfig
 from file_librarian.db.store import CorrectionRow
-from file_librarian.models import Classification, Correction, Decision, FileContext, Rules
+from file_librarian.extractors import visual
+from file_librarian.models import (
+    VISUAL_MEDIA_TYPES,
+    Attachment,
+    Classification,
+    Correction,
+    Decision,
+    FileContext,
+    Rules,
+)
 from file_librarian.providers.base import FatalProviderError, Provider, ProviderError, Usage
 from file_librarian.sensitive import sensitive_name, withheld_by_config
 
@@ -72,6 +88,22 @@ def rules_key(provider: Provider, rules: Rules, config: Config) -> str:
         sort_keys=True,
     )
     return hashlib.sha256(material.encode()).hexdigest()
+
+
+def vision_key(text_key: str, config: Config) -> str:
+    """The cache key for answers given with an attachment: the rules plus the vision limits."""
+    v = config.vision
+    material = f"{text_key}|vision|{v.max_image_px}|{v.max_pdf_pages}"
+    return hashlib.sha256(material.encode()).hexdigest()
+
+
+def wants_attachment(ctx: FileContext, provider: Provider, config: Config) -> bool:
+    """Vision is on, ``ctx`` is an image or scanned PDF, and the provider reads that type."""
+    return (
+        config.vision.enabled
+        and ctx.visual is not None
+        and VISUAL_MEDIA_TYPES[ctx.visual] in provider.attachments
+    )
 
 
 def correction_examples(rows: Iterable[CorrectionRow], config: Config) -> tuple[Correction, ...]:
@@ -124,6 +156,7 @@ def classify_all(
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
     cache: AnswerCache | None = None,
+    prepare: Callable[[FileContext, VisionConfig], Attachment] = visual.prepare,
 ) -> Classified:
     settings = config.provider
     cap = config.limits.max_cost_usd_per_run
@@ -131,17 +164,21 @@ def classify_all(
     interval = 0.0 if provider.local else 60.0 / settings.requests_per_minute
     result = Classified()
     last_call: float | None = None
-    key = rules_key(provider, rules, config) if cache is not None else ""
+    text_key = rules_key(provider, rules, config) if cache is not None else ""
+    seen_key = vision_key(text_key, config) if cache is not None else ""
 
     for ctx in contexts:
         if ctx.sensitive:
             result.decisions.append(Decision(ctx))
             continue
+        vision = wants_attachment(ctx, provider, config)
+        key = seen_key if vision else text_key
         if cache is not None:
             hit = cache.cached_answer(ctx.sha256, key, max_age_days=CACHE_DAYS)
             if hit is not None:
                 try:
-                    result.decisions.append(Decision(ctx, Classification.model_validate_json(hit)))
+                    answer = Classification.model_validate_json(hit)
+                    result.decisions.append(Decision(replace(ctx, vision_used=vision), answer))
                     result.cached += 1
                     continue
                 except ValidationError:
@@ -149,6 +186,13 @@ def classify_all(
         if cap is not None and result.cost_usd >= cap:
             result.deferred.append(ctx)
             continue
+        sent = ctx
+        if vision:
+            try:
+                sent = replace(ctx, attachment=prepare(ctx, config.vision))
+            except Exception:
+                # Any trouble with the image or PDF: classify from metadata (RF-27).
+                vision, key = False, text_key
         error = "not classified"
         for attempt in range(settings.max_retries + 1):
             if last_call is not None:
@@ -157,7 +201,7 @@ def classify_all(
                     sleep(wait)
             last_call = clock()
             try:
-                answer = provider.classify(ctx, rules)
+                answer = provider.classify(sent, rules)
             except FatalProviderError:
                 raise
             except ProviderError as exc:
@@ -173,7 +217,8 @@ def classify_all(
                 result.decisions.append(Decision(ctx, error=f"invalid answer: {exc}"[:500]))
                 break
             result.cost_usd += _billed(provider)
-            result.decisions.append(Decision(ctx, answer))
+            # The decision keeps no attachment: the bytes are needed for the call only.
+            result.decisions.append(Decision(replace(ctx, vision_used=vision), answer))
             if cache is not None:
                 cache.cache_answer(ctx.sha256, key, answer.model_dump_json())
             break

@@ -59,6 +59,7 @@ class ByExtension:
 
     name = "acceptance"
     local = True
+    attachments: frozenset[str] = frozenset()
 
     def __init__(self) -> None:
         self.last_usage = Usage()

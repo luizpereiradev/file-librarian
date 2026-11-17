@@ -22,6 +22,7 @@ class PricedProvider:
 
     name = "priced"
     local = True
+    attachments: frozenset[str] = frozenset()
 
     def __init__(self, fail_with: Exception | None = None) -> None:
         self.fail_with = fail_with
