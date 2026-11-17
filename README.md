@@ -124,9 +124,11 @@ flib fix ~/Downloads/Organized/Other/scan.pdf --category Finance
 flib fix ~/Downloads/Organized/_Review/document.pdf --category Contracts --name lease-2026
 ```
 
-The file moves (a taken name gets `-2`; a missing extension is kept), the
-index, search and the Finder tag follow, and `flib undo` reverts it like a
-run. Corrections,
+The file moves (a taken name gets `-2`, but changing only the capitalization
+renames in place; a missing extension is kept), the index, search and the
+Finder tag follow, and `flib undo` reverts it like a run. If flib is
+interrupted mid-fix, the next command finishes the whole fix or leaves the
+file as it was. Corrections,
 these and the moves or renames `flib reconcile` finds, are sent as examples
 with later requests, so the classifier stops repeating the mistake.
 `provider.max_examples` caps how many (10 by default; `0` sends none).

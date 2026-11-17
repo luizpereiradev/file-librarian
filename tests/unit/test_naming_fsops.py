@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import ctypes
+import errno
+import os
 from datetime import date
 from pathlib import Path
 
 import pytest
 
+from file_librarian import fsops
 from file_librarian.config import NamingConfig
 from file_librarian.fsops import DestinationExistsError, ensure_folder, move_no_replace
 from file_librarian.naming import build_name, safe_component, slugify, split_name, with_counter
+from tests._helpers import case_insensitive, names
 
 DAY = date(2026, 10, 5)
 
@@ -84,6 +89,92 @@ def test_move_refuses_case_variant_on_apfs(tmp_path: Path) -> None:
     (tmp_path / "B.txt").write_text("precious", encoding="utf-8")
     with pytest.raises(DestinationExistsError):
         move_no_replace(src, tmp_path / "b.txt")
+
+
+def test_move_changes_only_case_in_place(tmp_path: Path) -> None:
+    if not case_insensitive(tmp_path):
+        pytest.skip("the temporary folder's volume is case-sensitive; there is no clash")
+    src = tmp_path / "a.txt"
+    src.write_text("mine", encoding="utf-8")
+    move_no_replace(src, tmp_path / "A.txt")
+    assert names(tmp_path) == ["A.txt"]
+
+
+class _ExclReportsSelf:
+    """A libc whose ``RENAME_EXCL`` sees the source itself as the destination, as
+    case-insensitive APFS does on some macOS versions; plain renames are real."""
+
+    real = fsops._libc()
+
+    def __init__(self, plain_fails: bool = False) -> None:
+        self.plain_fails = plain_fails
+
+    def renamex_np(self, src: bytes, dst: bytes, flags: int) -> int:
+        if (flags and os.path.lexists(dst)) or (not flags and self.plain_fails):
+            ctypes.set_errno(errno.EEXIST if flags else errno.EACCES)
+            return -1
+        return int(self.real.renamex_np(src, dst, flags))
+
+
+@pytest.fixture
+def excl_reports_self(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(fsops, "_libc", _ExclReportsSelf)
+
+
+@pytest.mark.usefixtures("excl_reports_self")
+def test_case_only_rename_of_the_same_entry_goes_ahead(tmp_path: Path) -> None:
+    src = tmp_path / "report.pdf"
+    src.write_text("mine", encoding="utf-8")
+    dst = tmp_path / "Report.pdf"
+    if not case_insensitive(tmp_path):
+        os.link(src, dst)  # same inode, but a second entry: never replaced
+        with pytest.raises(DestinationExistsError):
+            move_no_replace(src, dst)
+        return
+    move_no_replace(src, dst)
+    assert names(tmp_path) == ["Report.pdf"]
+
+
+@pytest.mark.usefixtures("excl_reports_self")
+def test_a_different_entry_is_never_replaced(tmp_path: Path) -> None:
+    src = tmp_path / "a.txt"
+    src.write_text("mine", encoding="utf-8")
+    link = tmp_path / "b.txt"
+    os.link(src, link)  # same inode, another name
+    with pytest.raises(DestinationExistsError):
+        move_no_replace(src, tmp_path / "B.txt")
+    (tmp_path / "other").mkdir()
+    (tmp_path / "other" / "A.txt").write_text("precious", encoding="utf-8")
+    with pytest.raises(DestinationExistsError):
+        move_no_replace(src, tmp_path / "other" / "A.txt")  # same name, another folder
+    assert names(tmp_path) == ["a.txt", "b.txt", "other"]
+    assert (tmp_path / "other" / "A.txt").read_text(encoding="utf-8") == "precious"
+
+
+def test_an_exact_spelling_on_disk_is_a_different_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    src = tmp_path / "a.txt"
+    src.write_text("mine", encoding="utf-8")
+    if case_insensitive(tmp_path):
+        # As a case-sensitive volume lists a hard link "A.txt" next to "a.txt".
+        monkeypatch.setattr(fsops, "has_exact_name", lambda _p: True)
+    else:
+        os.link(src, tmp_path / "A.txt")
+    assert not fsops._same_entry(src, tmp_path / "A.txt")
+
+
+def test_a_failed_case_only_rename_is_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if not case_insensitive(tmp_path):
+        pytest.skip("the temporary folder's volume is case-sensitive; there is no clash")
+    monkeypatch.setattr(fsops, "_libc", lambda: _ExclReportsSelf(plain_fails=True))
+    src = tmp_path / "a.txt"
+    src.write_text("mine", encoding="utf-8")
+    with pytest.raises(PermissionError):
+        move_no_replace(src, tmp_path / "A.txt")
+    assert names(tmp_path) == ["a.txt"]
 
 
 def test_move_folder(tmp_path: Path) -> None:

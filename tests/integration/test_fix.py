@@ -14,13 +14,15 @@ from file_librarian import pipeline
 from file_librarian.cli import app
 from file_librarian.config import Config, parse_config
 from file_librarian.db.store import FileRow, Store
+from file_librarian.executor import recover
 from file_librarian.finder_tags import USER_TAGS, read_tags
 from file_librarian.fix import FixError, FixReport, fix_file
-from file_librarian.models import Classification, Correction, FileStatus
+from file_librarian.fsops import move_no_replace
+from file_librarian.models import Classification, Correction, FileStatus, OperationStatus
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.search import search
 from file_librarian.undo import undo_file, undo_run
-from tests._helpers import OLD, write_xattr
+from tests._helpers import OLD, case_insensitive, names, write_xattr
 
 pytestmark = pytest.mark.integration
 
@@ -141,6 +143,21 @@ def test_taken_names_get_a_counter(downloads: Path, cfg: Config) -> None:
     report = fix(cfg, lib(downloads) / "Other" / "a.txt", category="Finance", name="b")
     assert report.destination == lib(downloads) / "Finance" / "b-2.txt"
     assert (lib(downloads) / "Finance" / "b.txt").read_bytes() == b"b"
+
+
+def test_changing_only_the_case_renames_in_place(downloads: Path, cfg: Config) -> None:
+    if not case_insensitive(downloads):
+        pytest.skip("the temporary folder's volume is case-sensitive; there is no clash")
+    organize(downloads, cfg, {"bill.txt": (b"bill", answer("Other"))})
+    other = lib(downloads) / "Other"
+    report = fix(cfg, other / "bill.txt", name="Bill")
+    assert report.destination == other / "Bill.txt"
+    assert names(other) == ["Bill.txt"]
+    assert corrections(cfg) == [("name", "bill.txt", "Bill.txt")]
+    with Store.open(cfg.database) as store:
+        undo_run(store, config=cfg)
+    assert names(other) == ["bill.txt"]
+    assert row_for(cfg, "bill.txt").current_path == other / "bill.txt"
 
 
 def test_refusals_change_nothing(downloads: Path, cfg: Config) -> None:
@@ -330,3 +347,141 @@ def test_fix_tag_trouble_is_only_a_warning(tmp_path: Path, downloads: Path, cfg:
     assert result.exit_code == 0, result.stderr
     assert (lib(downloads) / "Finance" / "a.txt").exists()
     assert result.stdout.count("warning") == 2  # not removed, not set
+
+
+# --- a crash in the middle of a fix (#47) --------------------------------------------
+
+
+class Crash(BaseException):
+    """Stands in for a power cut: not an Exception, so nothing in flib catches it."""
+
+
+def crash_fix(
+    cfg: Config, path: Path, patch: pytest.MonkeyPatch, where: str, crash: Any, **kwargs: Any
+) -> None:
+    with patch.context() as p, pytest.raises(Crash):
+        p.setattr(where, crash)
+        fix(cfg, path, **kwargs)
+    with Store.open(cfg.database) as store:
+        assert store.operations()[-1].status is OperationStatus.PLANNED
+
+
+def raise_crash(*_args: Any, **_kwargs: Any) -> None:
+    raise Crash
+
+
+def move_then_crash(src: Path, dst: Path) -> None:
+    move_no_replace(src, dst)
+    raise Crash
+
+
+def run_finished(cfg: Config, run_id: int) -> tuple[int, int]:
+    with Store.open(cfg.database) as store:
+        row = store.conn.execute(
+            "SELECT finished_at IS NOT NULL, errors FROM runs WHERE id = ?", (run_id,)
+        ).fetchone()
+    return int(row[0]), int(row[1])
+
+
+@pytest.mark.parametrize(
+    "where",
+    ["file_librarian.fix.ensure_folder", "file_librarian.fix.move_no_replace"],
+    ids=["before the folder", "before the rename"],
+)
+def test_recovery_fails_a_fix_that_never_moved(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch, where: str
+) -> None:
+    organize(downloads, cfg, {"a.txt": (b"a", answer("Other"))})
+    source = lib(downloads) / "Other" / "a.txt"
+    before = row_for(cfg, "a.txt")
+    crash_fix(cfg, source, monkeypatch, where, raise_crash, category="Finance", name="b")
+    with Store.open(cfg.database) as store:
+        assert recover(store, cfg) == 1
+        op = store.operations()[-1]
+    assert op.status is OperationStatus.FAILED
+    # The fix never happened: the file and its row are exactly as they were.
+    assert row_for(cfg, "a.txt") == before and source.read_bytes() == b"a"
+    assert corrections(cfg) == []
+    assert run_finished(cfg, op.run_id) == (1, 1)
+    assert read_tags(source) == ["Other"]
+
+
+def test_recovery_finishes_a_fix_that_moved(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    organize(downloads, cfg, {"a.txt": (b"a", answer("Other"))})
+    source = lib(downloads) / "Other" / "a.txt"
+    where = "file_librarian.fix.move_no_replace"
+    crash_fix(cfg, source, monkeypatch, where, move_then_crash, category="Finance", name="b")
+    target = lib(downloads) / "Finance" / "b.txt"
+    with Store.open(cfg.database) as store:
+        assert recover(store, cfg) == 1
+        op = store.operations()[-1]
+        [hit] = search(store, "b")
+    assert (op.status, op.dst_path, op.finder_tag) == (OperationStatus.DONE, target, "Finance")
+    row = row_for(cfg, "a.txt")
+    assert (row.status, row.category, row.current_path) == (FileStatus.ORGANIZED, "Finance", target)
+    assert (hit.path, hit.category) == (str(target), "Finance")
+    assert corrections(cfg) == [("category", "Other", "Finance"), ("name", "a.txt", "b.txt")]
+    assert read_tags(target) == ["Finance"]
+    assert run_finished(cfg, op.run_id) == (1, 0)
+    # And it is undone like any finished fix.
+    with Store.open(cfg.database) as store:
+        undo_run(store, config=cfg)
+    assert read_tags(source) == ["Other"]
+    assert row_for(cfg, "a.txt").category == "Other"
+
+
+def test_recovery_finishes_a_fix_cut_off_while_writing_the_index(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    organize(downloads, cfg, {"a.txt": (b"a", answer("Other"))})
+    source = lib(downloads) / "Other" / "a.txt"
+    # The tags are already swapped; the transaction writing the index rolls back.
+    where = "file_librarian.fix.Store.add_correction"
+    crash_fix(cfg, source, monkeypatch, where, raise_crash, category="Finance")
+    target = lib(downloads) / "Finance" / "a.txt"
+    assert read_tags(target) == ["Finance"]
+    assert row_for(cfg, "a.txt").current_path == source
+    with Store.open(cfg.database) as store:
+        assert recover(store) == 1  # without the configuration, tags are left as they are
+        op = store.operations()[-1]
+    assert (op.status, op.finder_tag) == (OperationStatus.DONE, "Finance")
+    assert row_for(cfg, "a.txt").current_path == target
+    assert corrections(cfg) == [("category", "Other", "Finance")]
+    assert read_tags(target) == ["Finance"]
+
+
+def test_recovery_does_not_mistake_a_case_only_rename_for_done(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if not case_insensitive(downloads):
+        pytest.skip("the temporary folder's volume is case-sensitive; there is no clash")
+    organize(downloads, cfg, {"bill.txt": (b"bill", answer("Other"))})
+    source = lib(downloads) / "Other" / "bill.txt"
+    where = "file_librarian.fix.move_no_replace"
+    crash_fix(cfg, source, monkeypatch, where, raise_crash, name="Bill")
+    # "Bill.txt" opens "bill.txt" here, but the rename never happened.
+    with Store.open(cfg.database) as store:
+        assert recover(store, cfg) == 1
+        assert store.operations()[-1].status is OperationStatus.FAILED
+    assert row_for(cfg, "bill.txt").current_path == source
+    assert names(source.parent) == ["bill.txt"]
+
+
+def test_cli_fix_recovers_an_interrupted_fix_first(
+    tmp_path: Path, downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    organize(downloads, cfg, {"a.txt": (b"a", answer("Other")), "b.txt": (b"b", answer("Other"))})
+    other = lib(downloads) / "Other"
+    where = "file_librarian.fix.move_no_replace"
+    crash_fix(cfg, other / "a.txt", monkeypatch, where, move_then_crash, category="Finance")
+    config_file = tmp_path / "c.yaml"
+    config_file.write_text(
+        f"inputs: [{downloads}]\nprovider: {{name: fake, model: x}}\n", encoding="utf-8"
+    )
+    args = ["fix", str(other / "b.txt"), "--category", "Finance", "-c", str(config_file)]
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 0, result.stderr
+    assert row_for(cfg, "a.txt").category == "Finance"
+    assert read_tags(lib(downloads) / "Finance" / "a.txt") == ["Finance"]

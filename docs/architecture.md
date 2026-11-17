@@ -37,7 +37,15 @@ model.
 - Nothing is deleted and nothing is overwritten. The only removal is the
   source of a cross-volume move, after the copy's hash is verified.
 - Every operation is written to `operations` as `planned` before it runs, so a
-  crash mid-run is recoverable and every run can be undone.
+  crash mid-run is recoverable and every run can be undone. Recovery looks
+  for the file under the journaled name, spelled exactly (a case-insensitive
+  volume would otherwise answer for `A.pdf` with `a.pdf`).
+- A `flib fix` is all or nothing: its journal entry also records the status
+  and category it gives the file, and only becomes `done` in the same
+  transaction that updates the index and records the correction. After a
+  crash, recovery finishes the whole fix (index, correction, Finder tag) if
+  the file reached its destination, and otherwise fails the entry and leaves
+  the file's row untouched.
 - `flib undo` walks a run's operations in reverse, checks each file's hash, and
   skips (and lists) files that were edited or whose original path is taken.
 - Nothing that exists only in iCloud is read, hashed or listed, since that
@@ -78,7 +86,7 @@ One SQLite file, outside the organized folders (default
 | --- | --- |
 | `files` | one row per file: original and current name/path, hash, origin, category, description, tags, status, attempts |
 | `runs` | one row per `flib run`, with counts (simulations record none) |
-| `operations` | the journal behind `flib undo`, including the Finder tag each move added |
+| `operations` | the journal behind `flib undo`, including the Finder tag each move added and, for `flib fix`, the status and category it sets |
 | `corrections` | user recategorizations and renames (`flib fix`, `flib reconcile`); the latest per file and field, while still in effect, are sent as examples and are part of the cache key |
 | `files_fts` | FTS5 index over names, description and tags; accents ignored |
 

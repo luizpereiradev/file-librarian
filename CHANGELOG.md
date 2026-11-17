@@ -13,7 +13,14 @@ All notable changes to this project are documented here. The format follows
   `flib undo` reverts it (an undone fix restores the old category and stops
   teaching); the index and search follow, the Finder tag flib added for the
   old category is swapped for the new one (and back on undo), and the change
-  is recorded in `corrections`. Later requests carry the most recent corrections still in
+  is recorded in `corrections`. A fix is all or nothing: migration 0006
+  records on its journal entry the status and category it sets, so if flib
+  stops mid-fix, recovery finishes the whole fix (index, correction, Finder
+  tag) or, if the file never moved, fails it and leaves the file as it was
+  (#47). Changing only a name's capitalization renames the file in place
+  instead of adding `-2`, and recovery no longer takes such a rename for
+  done when a case-insensitive volume answers for the new spelling with the
+  old (#48). Later requests carry the most recent corrections still in
   effect as examples: kind, extension, earlier description and the category
   or name before and after, never content, never from sensitive or
   `never_send` files. `provider.max_examples` caps them (default 10, `0` for

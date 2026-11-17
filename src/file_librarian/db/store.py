@@ -123,6 +123,8 @@ class OperationRow:
     """The source's (st_dev, st_ino) when journaled; ``None`` for older rows."""
     finder_tag: str | None = None
     """The Finder tag this move added, which undo removes; ``None`` if none."""
+    fix: tuple[FileStatus, str | None] | None = None
+    """For a ``flib fix``, the (status, category) it gives the file; ``None`` for a run."""
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> OperationRow:
@@ -136,6 +138,9 @@ class OperationRow:
             status=OperationStatus(row["status"]),
             src_identity=None if dev is None or ino is None else (int(dev), int(ino)),
             finder_tag=row["finder_tag"],
+            fix=None
+            if row["fix_status"] is None
+            else (FileStatus(row["fix_status"]), row["fix_category"]),
         )
 
 
@@ -386,15 +391,27 @@ class Store:
     # --- operations (the journal behind undo) ------------------------------------
 
     def add_operation(
-        self, run_id: int, file_id: int, src: Path, dst: Path, *, identity: tuple[int, int]
+        self,
+        run_id: int,
+        file_id: int,
+        src: Path,
+        dst: Path,
+        *,
+        identity: tuple[int, int],
+        fix: tuple[FileStatus, str | None] | None = None,
     ) -> int:
-        """Journal a move. ``identity`` is the source's (st_dev, st_ino)."""
+        """Journal a move. ``identity`` is the source's (st_dev, st_ino); ``fix`` is the
+        (status, category) a ``flib fix`` gives the file, so recovery can finish it."""
+        fix_status, fix_category = (None, None) if fix is None else (fix[0].value, fix[1])
         cur = self.conn.execute(
             """INSERT INTO operations (run_id, file_id, src_path, dst_path, status, created_at,
-                                      src_dev, src_ino)
-               VALUES (?, ?, ?, ?, 'planned', ?, ?, ?)""",
-            (run_id, file_id, str(src), str(dst), _now(), identity[0], identity[1]),
-        )
+                                      src_dev, src_ino, fix_status, fix_category)
+               VALUES (?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?)""",
+            (
+                run_id, file_id, str(src), str(dst), _now(), identity[0], identity[1],
+                fix_status, fix_category,
+            ),
+        )  # fmt: skip
         return _rowid(cur)
 
     def set_operation(self, op_id: int, status: OperationStatus, dst: Path | None = None) -> None:
