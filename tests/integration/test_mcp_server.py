@@ -165,8 +165,27 @@ def test_search_and_get_file(downloads: Path, cfg: Config) -> None:
     assert detail["size_bytes"] == len(b"electricity bill")
     assert len(detail["sha256"]) == 64
     assert detail["source_urls"] == ["https://example.com/bill.txt"]
+    # Below the rename threshold no rename was considered, so there is no name choice.
+    assert detail["name_choice"] is None and detail["name_choice_reason"] is None
     # The content itself is never part of a result.
     assert "electricity" not in json.dumps(detail)
+
+
+def test_get_file_shows_the_name_choice(downloads: Path, cfg: Config) -> None:
+    kept = Classification(
+        category="Finance",
+        suggested_name="bill",
+        description="d",
+        confidence=0.95,
+        name_choice="original",
+        name_choice_reason="The original is specific.",
+    )
+    organize(downloads, cfg, {"Power bill October.txt": (b"electricity bill", kept)})
+    [target] = (library(downloads) / "Finance").iterdir()
+    assert target.name.endswith("_power-bill-october.txt")
+    detail = ok(call(cfg, "get_file", path=str(target)))
+    assert detail["name_choice"] == "original"
+    assert detail["name_choice_reason"] == "The original is specific."
 
 
 def test_get_file_of_a_file_moved_away(downloads: Path, cfg: Config) -> None:

@@ -13,6 +13,11 @@ This is where the model's answer stops being trusted. For each item:
   their name: a name invented from the old name alone is worse than the
   original. An image or scanned PDF the model actually saw (``vision``)
   counts as read content, so it can be renamed like a text document.
+  When a rename is allowed, the model's ``name_choice`` picks the subject:
+  ``original`` keeps the subject of the current name (a descriptive name the
+  model judged better than its own proposal), ``proposed`` uses
+  ``suggested_name``. Either way the naming rules (pattern, date, sanitising,
+  length, extension) are applied here, never by the model.
 
 Every destination is ``output_root / <configured folder> / <safe name>``;
 ``_destination`` re-checks that before returning it. Names are unique against
@@ -27,8 +32,14 @@ from datetime import date
 from pathlib import Path
 
 from file_librarian.config import Config, folder_key
-from file_librarian.models import Classification, Decision, FileContext, FileStatus
-from file_librarian.naming import build_name, candidate_names, safe_component, split_name
+from file_librarian.models import Classification, Decision, FileContext, FileStatus, NameChoice
+from file_librarian.naming import (
+    build_name,
+    candidate_names,
+    original_subject,
+    safe_component,
+    split_name,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +51,8 @@ class PlannedItem:
     reason: str
     classification: Classification | None = None
     renamed: bool = False
+    name_choice: NameChoice | None = None
+    """The subject the name was built from; ``None`` when no rename was considered."""
 
 
 @dataclass(slots=True)
@@ -115,6 +128,7 @@ def _plan_one(decision: Decision, config: Config, names: _Names, today: date) ->
 
     original = ctx.path.name
     new_name = None
+    choice: NameChoice | None = None
     if (
         not ctx.is_unit
         # a new name needs evidence from the content (text, or pixels the model saw)
@@ -123,16 +137,26 @@ def _plan_one(decision: Decision, config: Config, names: _Names, today: date) ->
         and answer.confidence >= config.naming.rename_confidence_threshold
     ):
         when = answer.document_date or ctx.downloaded or today
-        new_name = build_name(original, answer.suggested_name, when, config.naming)
+        choice = answer.name_choice
+        if choice == "original":
+            new_name = build_name(original, original_subject(original), when, config.naming)
+            if new_name is None:  # nothing usable left of the original: take the proposal
+                choice = "proposed"
+        if choice == "proposed":
+            new_name = build_name(original, answer.suggested_name, when, config.naming)
     chosen = new_name or original
     destination = _destination(config, category.name, chosen, names, ctx)
+    reason = f"category {category.name}"
+    if choice == "original":
+        reason += ", original name kept"
     return PlannedItem(
         ctx,
         FileStatus.ORGANIZED,
         destination,
-        f"category {category.name}",
+        reason,
         answer,
         renamed=destination.name != original,
+        name_choice=choice,
     )
 
 

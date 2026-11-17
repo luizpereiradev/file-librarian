@@ -76,7 +76,9 @@ def test_classifies_through_the_cli_with_only_safe_flags(
         assert flag in argv
     schema = json.loads(flags["--json-schema"])
     assert schema["properties"]["category"]["enum"] == ["Finance", "Other"]
+    assert schema["properties"]["name_choice"]["enum"] == ["original", "proposed"]
     assert "untrusted data" in flags["--system-prompt"]
+    assert "- name_choice:" in flags["--system-prompt"]
     # The file goes through stdin, never on the command line, in a delimited block.
     assert "<file_excerpt>" in call["stdin"]
     assert "Electricity invoice" in call["stdin"]

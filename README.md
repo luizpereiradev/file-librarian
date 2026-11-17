@@ -155,7 +155,7 @@ folders (`~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`,
 | Command | What it does | Milestone |
 | --- | --- | --- |
 | `flib check-config` | Validate the configuration without touching files | M0 |
-| `flib inspect FILE...` | Show hash, size and download origin (not the hash of a file only in iCloud) | M0 |
+| `flib inspect FILE...` | Show hash, size and download origin (not the hash of a file only in iCloud), and for an indexed file its status, category and name choice | M0 |
 | `flib simulate` | Print the full plan without changing anything | M1 (available) |
 | `flib run` | Classify, rename, move and index new files | M1 (available) |
 | `flib search QUERY [--json]` | Full-text search over names, descriptions and tags | M1 (available) |
@@ -184,6 +184,30 @@ Finder tag, so Finder's sidebar and Spotlight (`tag:Finance`) find it too.
 Your own tags are kept, `flib undo` removes only the tag flib added, and
 `finder_tags.enabled: false` turns this off.
 The API key is read from `ANTHROPIC_API_KEY`, never from the file.
+
+### Names
+
+A file is renamed only when the model read its content (text, or the image
+with vision on), its category allows renaming, and the model is at least
+`naming.rename_confidence_threshold` sure (0.8 by default). Videos,
+installers, archives, folders and images with vision off keep their name.
+
+The model also compares the file's current name with the subject it proposes
+and says which describes the file better. A generic name (`scan001.pdf`,
+`document (3).pdf`, `IMG_2041.jpg`) is replaced; a descriptive one keeps its
+words, so two similar files stay told apart:
+
+```text
+Study guide - 11 tweaks for coding agents.pdf  ->  2026-11-16_study-guide-11-tweaks-for-coding-agents.pdf
+scan001.pdf                                    ->  2026-10-05_electricity-bill.pdf
+```
+
+Either way flib, not the model, builds the final name: `naming.pattern`
+(`{date}_{subject}` by default) with the document's date, or the download
+date, or today; lower case words joined by `-`; at most `naming.max_length`
+characters; the original extension. A date already at the start of the old
+name is not repeated. `flib simulate` marks a kept name with "original name
+kept", and `flib inspect` shows the choice and the model's reason.
 
 ### Images and scanned PDFs (vision)
 
