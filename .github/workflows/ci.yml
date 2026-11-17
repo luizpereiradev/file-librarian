@@ -16,10 +16,10 @@ concurrency:
 jobs:
   check:
     name: lint, types, tests (Python ${{ matrix.python }})
-    runs-on: macos-latest
-    # A run takes about two minutes; the limit also covers waiting for a
-    # macOS runner, which can take a while when they are scarce.
-    timeout-minutes: 45
+    # Pinned image: macos-latest jobs were cancelled after waiting 15 minutes
+    # for a runner. Dependabot does not bump this; review it with the matrix.
+    runs-on: macos-15
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
