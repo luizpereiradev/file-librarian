@@ -30,6 +30,8 @@ class FakeProvider:
         self._default = default
         self._echo = echo
         self.calls: list[FileContext] = []
+        self.rules: list[Rules] = []
+        """The rules each call received, examples included, for tests to inspect."""
         self.last_usage = Usage()
 
     def cost_usd(self, usage: Usage) -> float:
@@ -37,6 +39,7 @@ class FakeProvider:
 
     def classify(self, context: FileContext, rules: Rules) -> Classification:
         self.calls.append(context)
+        self.rules.append(rules)
         answer = self._answers.get(context.path.name, self._default)
         if answer is None and self._echo:
             return Classification(

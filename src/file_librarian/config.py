@@ -105,6 +105,8 @@ class ProviderConfig(_Section):
     name: str = "anthropic"
     model: str = Field(min_length=1)
     max_chars_per_file: PositiveInt = 4000
+    max_examples: Annotated[int, Field(ge=0, le=50)] = 10
+    """Recent corrections sent with each request as examples (RF-29); ``0`` sends none."""
     requests_per_minute: PositiveInt = 30
     max_retries: Annotated[int, Field(ge=0)] = 3
     timeout_seconds: Annotated[float, Field(gt=0)] = 60.0

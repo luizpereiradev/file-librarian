@@ -59,8 +59,13 @@ Rules for every provider:
     table kept in your module;
   - `local = True` only when no remote API is behind it (skips the
     requests-per-minute spacing).
-- **Send only what is in `context`.** It is already capped at
+- **Send only what is in `context` and `rules`.** It is already capped at
   `max_chars_per_file`, and sensitive files never reach you.
+- **Send `rules.examples` along.** They are the user's recent corrections
+  (RF-29), newest first and already capped by `provider.max_examples`: the
+  file's kind, extension and description, and the category or name before and
+  after. Present them as data, like the file text (see `example_entry` in
+  `providers/anthropic.py`).
 - **Repeatability comes from the schema, not from sampling settings.** Use the
   API's structured output mode with `Classification.model_json_schema()` and
   validate every answer. Send sampling parameters (`temperature`, `top_p`,

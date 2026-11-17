@@ -106,12 +106,20 @@ class CategoryRule:
 
 @dataclass(frozen=True, slots=True)
 class Correction:
-    """A past user correction, reused as a few-shot example (RF-29)."""
+    """A past user correction, reused as a few-shot example (RF-29).
 
-    original_name: str
-    field: str
+    Only what the provider already saw or produced: the kind and extension of
+    the file, the description it wrote, and the value the user changed. Never
+    the file's content.
+    """
+
+    field: Literal["category", "name"]
     old_value: str | None
+    """``None`` for a category: the file had none (it was in review or left in place)."""
     new_value: str
+    extension: str = ""
+    is_unit: bool = False
+    description: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,7 +129,7 @@ class Rules:
     categories: tuple[CategoryRule, ...]
     language: Language
     examples: tuple[Correction, ...] = ()
-    """Past user corrections for few-shot prompting (RF-29, M2: not populated yet)."""
+    """Recent user corrections, newest first, sent as few-shot examples (RF-29)."""
     date_order: Literal["DMY", "MDY", "YMD"] = "DMY"
     """How to read ambiguous numeric dates in documents (``naming.date_order``)."""
 

@@ -86,7 +86,7 @@ class _Finder:
         return next((p for p in candidates if same_content(p, row.sha256)), None)
 
 
-def _place(config: Config, path: Path) -> tuple[FileStatus, str | None]:
+def place(config: Config, path: Path) -> tuple[FileStatus, str | None]:
     """What a location means: (status, category)."""
     root = config.output_root
     if is_within(path, root) and path.parent != root:
@@ -114,7 +114,7 @@ def reconcile(config: Config, store: Store) -> ReconcileReport:
                 store.set_file_status(row.id, FileStatus.MISSING)
                 report.missing.append(recorded)
             continue
-        status, category = _place(config, found)
+        status, category = place(config, found)
         if row.status is FileStatus.SENSITIVE:
             status, category = FileStatus.SENSITIVE, None  # stays sensitive wherever it is
         with store.transaction():

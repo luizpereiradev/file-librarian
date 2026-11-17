@@ -8,6 +8,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `flib fix PATH [--category NAME] [--name NAME]` and learning from
+  corrections (RF-29). The file moves through the journal as its own run, so
+  `flib undo` reverts it (an undone fix restores the old category and stops
+  teaching); the index and search follow, the Finder tag flib added for the
+  old category is swapped for the new one (and back on undo), and the change
+  is recorded in `corrections`. Later requests carry the most recent corrections still in
+  effect as examples: kind, extension, earlier description and the category
+  or name before and after, never content, never from sensitive or
+  `never_send` files. `provider.max_examples` caps them (default 10, `0` for
+  none). The examples are part of the cache key, and the prompt version is
+  now 3, so cached answers are refreshed.
 - Finder tags (RF-36): after a move into a category folder, the item gets
   the category name as a Finder tag (`com.apple.metadata:_kMDItemUserTags`).
   The user's own tags and colors are kept, a tag already there is not

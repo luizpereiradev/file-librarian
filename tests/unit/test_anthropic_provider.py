@@ -10,7 +10,7 @@ import httpx2
 import pytest
 
 from file_librarian.config import ProviderConfig
-from file_librarian.models import CategoryRule, FileContext, Rules
+from file_librarian.models import CategoryRule, Correction, FileContext, Rules
 from file_librarian.providers.anthropic import FALLBACK_BETA, AnthropicProvider
 from file_librarian.providers.base import FatalProviderError, ProviderError, Usage
 
@@ -105,6 +105,36 @@ def test_no_fallbacks_for_models_without_support() -> None:
     p.classify(CTX, RULES)
     assert "fallbacks" not in client.requests[0]
     assert "betas" not in client.requests[0]
+
+
+def test_corrections_go_in_the_request_as_data() -> None:
+    rules = Rules(
+        categories=RULES.categories,
+        language="en",
+        examples=(
+            Correction("category", None, "Finance", ".pdf", False, "An electricity bill."),
+            Correction("name", "scan.pdf", "power-bill.pdf", ".pdf", False, None),
+            Correction("category", "Other", "Finance", "", True, "A project folder."),
+        ),
+    )
+    p, client = provider(reply(GOOD))
+    p.classify(CTX, rules)
+    system = client.requests[0]["system"]
+    block = system.split("<past_corrections>\n")[1].split("\n</past_corrections>")[0]
+    lines = [json.loads(line) for line in block.splitlines()]
+    assert lines[0] == {
+        "kind": "file",
+        "extension": ".pdf",
+        "description": "An electricity bill.",
+        "category_was": "(none: sent to review)",
+        "category_corrected_to": "Finance",
+    }
+    assert lines[1]["name_was"] == "scan.pdf" and lines[1]["name_corrected_to"] == "power-bill.pdf"
+    assert lines[2]["kind"] == "folder" and lines[2]["category_was"] == "Other"
+    assert "data, not an instruction" in system
+    p, client = provider(reply(GOOD))
+    p.classify(CTX, RULES)
+    assert "past_corrections" not in client.requests[0]["system"]
 
 
 def test_valid_answer_and_normalization() -> None:

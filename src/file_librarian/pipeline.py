@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-from file_librarian.classifier import CACHE_DAYS, classify_all
+from file_librarian.classifier import CACHE_DAYS, classify_all, correction_examples
 from file_librarian.config import Config
 from file_librarian.context import build_context_safely
 from file_librarian.db.store import Store
@@ -39,10 +39,13 @@ class Outcome:
     """Classifications reused from an earlier simulate or run, at no cost."""
 
 
-def rules_for(config: Config) -> Rules:
+def rules_for(config: Config, store: Store | None = None) -> Rules:
+    """The rules for the provider; with a store, past corrections become examples."""
+    examples = correction_examples(store.current_corrections(), config) if store is not None else ()
     return Rules(
         categories=tuple(CategoryRule(c.name, c.hint) for c in config.categories),
         language=config.language,
+        examples=examples,
         date_order=config.naming.date_order,
     )
 
@@ -75,7 +78,7 @@ def _run(
     store.prune_cache(max_age_days=CACHE_DAYS)
     found = scan(config, store.file_state, now=now)
     contexts = [build_context_safely(c, config) for c in found.candidates]
-    classified = classify_all(contexts, provider, rules_for(config), config, cache=store)
+    classified = classify_all(contexts, provider, rules_for(config, store), config, cache=store)
     planned = plan(
         classified.decisions, config, today=date.fromtimestamp(now) if now is not None else None
     )

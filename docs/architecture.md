@@ -72,7 +72,7 @@ One SQLite file, outside the organized folders (default
 | `files` | one row per file: original and current name/path, hash, origin, category, description, tags, status, attempts |
 | `runs` | one row per `flib run`, with counts (simulations record none) |
 | `operations` | the journal behind `flib undo`, including the Finder tag each move added |
-| `corrections` | user recategorizations and renames, reused as examples |
+| `corrections` | user recategorizations and renames (`flib fix`, `flib reconcile`); the latest per file and field, while still in effect, are sent as examples and are part of the cache key |
 | `files_fts` | FTS5 index over names, description and tags; accents ignored |
 
 Schema changes are new numbered files in `db/migrations/`; the applied version
