@@ -158,7 +158,7 @@ folders (`~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`,
 | `flib inspect FILE...` | Show hash, size and download origin (not the hash of a file only in iCloud) | M0 |
 | `flib simulate` | Print the full plan without changing anything | M1 (available) |
 | `flib run` | Classify, rename, move and index new files | M1 (available) |
-| `flib search QUERY [--json]` | Full-text search over names, descriptions and tags | M1 (available) |
+| `flib search [QUERY] [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--json]` | Full-text search over names, descriptions and tags, narrowed by category, period or extension ([Searching](#searching)) | M1 (available) |
 | `flib undo [--run ID \| --file PATH]` | Revert a run or one file | M1 (available) |
 | `flib schedule [--at HH:MM \| --status \| --remove]` | Run every day via launchd, with an access check | M2 (available) |
 | `flib reconcile` | Update the index after you move, rename or delete files by hand; files only in iCloud are left unchecked | M2 (available) |
@@ -167,6 +167,30 @@ folders (`~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`,
 | `flib mcp` | Local MCP server for AI assistants ([Use it from Claude](#use-it-from-claude)) | M2 (available) |
 | `flib reprocess` | Reclassify after a rules change | M3 |
 | `flib doctor` | Redacted logs for bug reports | M3 |
+
+### Searching
+
+Every word of the query must match a name, the description or a tag; accents
+are ignored and words match as prefixes. Filters narrow the results and can be
+combined with each other and with a query, or used without one, in which case
+matches are listed newest first:
+
+- `--category NAME`: case-insensitive. Repeat it or separate names with commas
+  to match any of them (`--category finance,contracts`).
+- `--ext EXT`: with or without the dot (`pdf` or `.pdf`). Repeat it or use
+  commas for several (`--ext jpg,png`).
+- `--since DATE` / `--until DATE`: `YYYY-MM-DD`, both days included, in your
+  local time. The date is when flib last processed the file (filed it, or sent
+  it to review), not the date written in the document, which the index does not
+  keep, nor the file's modification time.
+
+```sh
+flib search "power bill" --category finance --since 2026-01-01
+flib search --ext pdf --until 2025-12-31 --json
+```
+
+An unknown category, a malformed extension or date, or `--since` after
+`--until` stops with a message saying what is wrong.
 
 ## Configuration
 
@@ -253,7 +277,7 @@ network and reads the same database as `flib search`.
 
 | Tool | What it does |
 | --- | --- |
-| `search_files` | Full-text search over names, descriptions and tags, like `flib search` |
+| `search_files` | Full-text search over names, descriptions and tags, with the same category, extension and period filters as `flib search` |
 | `get_file` | Everything the index knows about one file: where it is and was, category, description, tags, hash, size, download origin, whether it is only in iCloud |
 | `recategorize_file` | Move a file to another configured category and/or rename it, like `flib fix` |
 | `undo` | Revert a run or the last move of one file, like `flib undo` |
