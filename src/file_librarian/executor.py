@@ -48,7 +48,9 @@ from file_librarian.fsops import (
     has_exact_name,
     move_no_replace,
     new_copy_key,
+    require_rename_excl,
     resume_copy,
+    volume_of,
 )
 from file_librarian.hashing import same_content, unit_manifest
 from file_librarian.models import (
@@ -62,7 +64,7 @@ from file_librarian.models import (
 )
 from file_librarian.naming import candidate_names
 from file_librarian.planner import Plan, PlannedItem
-from file_librarian.undo import record_restored, refresh_unit_identity
+from file_librarian.undo import record_restored, unit_identity
 
 # A full disk or quota is not the file's fault: the item is retried every run.
 _ENVIRONMENTAL = frozenset({errno.ENOSPC, errno.EDQUOT})
@@ -173,6 +175,7 @@ def _apply(
         file_id = store.upsert_file(file_record(item, item.status, provider, model), run_id=run_id)
         op_id = store.add_operation(run_id, file_id, ctx.path, destination, identity=identity)
     try:
+        _require_safe_volume(ctx.path, config.output_root)
         ensure_folder(destination.parent, inside=config.output_root)
         destination, kept = _move(ctx.path, destination, store, op_id, ctx.sha256)
     except (OSError, ValueError) as exc:
@@ -180,13 +183,32 @@ def _apply(
             error = f"not enough space at the destination; retried next run: {exc.strerror}"
             return _fail(store, op_id, file_id, ctx.path, error, attempt=False)
         return _fail(store, op_id, file_id, ctx.path, f"move failed: {exc}")
+    unit = unit_identity(destination, ctx.sha256) if ctx.is_unit else None
     with store.transaction():
         store.set_operation(op_id, OperationStatus.DONE, destination)
         store.set_file_location(file_id, destination, item.status)
-    if ctx.is_unit:
-        refresh_unit_identity(store, file_id, destination, ctx.sha256)
+        if unit is not None:
+            store.set_file_identity(file_id, unit)
     warnings = [w for w in (kept, _tag(item, destination, config, store, op_id)) if w]
     return ItemResult(ctx.path, item.status, destination, item.reason, "; ".join(warnings) or None)
+
+
+def _require_safe_volume(src: Path, output_root: Path) -> None:
+    """Refuse a library on a volume that cannot rename without replacing (exFAT).
+
+    Checked before any folder is created there, in the library or, while it
+    does not exist yet, the nearest folder above it, when that is on another
+    volume than the item. (The staging folder is probed again before copying.)
+    """
+    folder = output_root
+    while not folder.exists() and folder != folder.parent:
+        folder = folder.parent
+    try:
+        same = src.lstat().st_dev == folder.stat().st_dev
+    except OSError:
+        return
+    if not same:
+        require_rename_excl(folder)
 
 
 def _tag(item: PlannedItem, path: Path, config: Config, store: Store, op_id: int) -> str | None:
@@ -238,16 +260,22 @@ def _move(src: Path, dst: Path, store: Store, op_id: int, expected: str) -> tupl
                 chain([candidate], candidates),
                 key=key,
                 expected=expected,
-                journal=_journal(store, op_id, key),
+                journal=_journal(store, op_id, key, src),
             )
     raise DestinationExistsError(f"no free name for {dst}")
 
 
-def _journal(store: Store, op_id: int, key: str, *, moves_dst: bool = True) -> Journal:
-    """Record each cross-volume phase on the entry; a move also records where it aims."""
+def _journal(store: Store, op_id: int, key: str, src: Path) -> Journal:
+    """Record each cross-volume phase on the entry, and where it aims.
+
+    When the copy starts, the volumes of its two folders are recorded too.
+    """
 
     def journal(phase: CopyPhase, dst: Path) -> None:
-        store.set_copy_phase(op_id, phase, key, dst if moves_dst else None)
+        volumes = None
+        if phase is CopyPhase.COPYING:
+            volumes = (volume_of(src.parent), volume_of(dst.parent))
+        store.set_copy_phase(op_id, phase, key, dst, volumes=volumes)
 
     return journal
 
@@ -332,17 +360,19 @@ def _recover_copy(store: Store, op: OperationRow, phase: CopyPhase, key: str, ro
         key=key,
         phase=phase,
         expected=row.sha256,
-        journal=_journal(store, op.id, key),
+        journal=_journal(store, op.id, key, op.src_path),
+        volumes=op.copy_volumes,
     )
+    unit = unit_identity(final, row.sha256) if final is not None and row.is_unit else None
     with store.transaction():
         if final is not None:
             store.set_operation(op.id, OperationStatus.DONE, final)
             store.set_file_location(op.file_id, final, row.status)
+            if unit is not None:
+                store.set_file_identity(op.file_id, unit)
         else:
             store.set_operation(op.id, OperationStatus.FAILED)
             store.mark_file_failed(op.file_id, "interrupted while copying to another volume")
-    if final is not None and row.is_unit:
-        refresh_unit_identity(store, op.file_id, final, row.sha256)
 
 
 def _recover_undo(store: Store, op: OperationRow, config: Config | None) -> None:
@@ -350,13 +380,15 @@ def _recover_undo(store: Store, op: OperationRow, config: Config | None) -> None
     if op.copy_phase is None or op.copy_key is None:
         return
     row = store.file_by_id(op.file_id)
+    key = op.copy_key
     restored = resume_copy(
         op.dst_path,
         op.src_path,
-        key=op.copy_key,
+        key=key,
         phase=op.copy_phase,
         expected=row.sha256,
-        journal=_journal(store, op.id, op.copy_key, moves_dst=False),
+        journal=lambda phase, _dst: store.set_copy_phase(op.id, phase, key),
+        volumes=op.copy_volumes,
     )
     if restored is None:
         store.clear_copy_phase(op.id)  # rolled back: the move stands and can be undone

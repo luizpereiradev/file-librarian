@@ -56,8 +56,13 @@ model.
 - A move to another volume (RF-33), where a rename is impossible, is copy,
   verify, delete (`fsops.copy_move`), and so is an undo back across volumes.
   The destination volume must support `RENAME_EXCL`; exFAT and FAT do not,
-  so nothing is copied there (the item fails with a clear message and counts
-  an attempt). The copy is made with `copyfile(3)` and `COPYFILE_ALL` (a
+  so nothing is copied there: a probe (an empty folder renamed in the
+  library, or in the nearest folder above it while there is none yet) fails
+  the item with a clear message, counting an attempt, before any folder is
+  created there. A locked item (Finder's "Locked", `uchg`), or a folder with
+  anything locked inside, is refused the same way before copying: flib
+  would otherwise have to delete a file you locked, and a rename on one
+  volume refuses it too. The copy is made with `copyfile(3)` and `COPYFILE_ALL` (a
   folder entry by entry, each folder given its own permissions last, since
   `COPYFILE_RECURSIVE` fails on a symlink inside a read-only folder) into a
   hidden staging folder next to the destination (`.flib-<key>.copy`, the key
@@ -70,23 +75,32 @@ model.
   (inode, size, modification time). Only then is it renamed into place with
   `RENAME_EXCL`, and the source checked once more, renamed aside
   (`.flib-<key>.delete`, put back if what was renamed is not what was
-  checked) and deleted, read-only folders and locked (`uchg`) files
-  included. A source that changed after the copy is kept, with a warning.
+  checked) and deleted, read-only folders included. Deleting walks open
+  folder descriptors (`O_NOFOLLOW`, names relative to them), so a folder
+  swapped for a symlink meanwhile cannot lead it outside; only flib's own
+  staging and trash paths are deleted this way. A source that changed after
+  the copy is kept, with a warning.
   `copyfile(3)` was chosen over `shutil.copy2` because it copies every
   extended attribute, ACLs and file flags, as Finder does. A full disk, a
   failed copy or a mismatch removes the staging folder (a cleanup error is
   logged, never reported in place of the real one) and leaves the source
   untouched; the item fails. A folder unit copied to a file system with
   coarser times (HFS+) gets a different manifest there, so its index row
-  takes the new digest, and undo and reconcile still recognise it.
+  takes the new digest, in the same transaction that records the move as
+  `done`, and undo and reconcile still recognise it.
 
   The journal entry records each phase in `copy_phase`, committed with
   `F_FULLFSYNC` so it is on the disk before a source is deleted (only these
   commits pay for it). Recovery decides from the phase and from what is on
-  disk. If the source's or the destination's folder cannot be listed (an
-  unmounted volume), it decides nothing: the entry stays as it is, with a
-  warning, and is finished once the volume is back. An entry that fails to
-  recover is logged and left; it never stops a run.
+  disk. The devices of the copy's two folders are recorded when it starts
+  (`copy_src_dev`, `copy_dst_dev`). If a folder cannot be listed and the
+  nearest existing folder above it is on another device, its volume is
+  unmounted: recovery decides nothing, the entry stays as it is, with a
+  warning, and is finished once the volume is back. A folder deleted from a
+  volume that is still there is simply absent, and recovery goes on (a
+  category folder deleted mid-copy rolls the move back, the source
+  untouched). An entry that fails to recover is logged and left; it never
+  stops a run.
 
   | Phase at the crash | What recovery does |
   | --- | --- |
@@ -127,10 +141,13 @@ Found in the safety review of M1 and accepted for now:
 - **No moves to exFAT or FAT.** Those file systems cannot rename without
   replacing (`RENAME_EXCL`), so flib refuses to copy there rather than risk
   overwriting a file; such a destination fails the item.
-- **An unreachable destination waits.** A move interrupted while its
-  library volume is unmounted stays unresolved (and its file is not
-  processed again) until the volume is back. If the library folder was
-  deleted for good, the entry keeps waiting, with a warning each run.
+- **Locked items stay.** A locked item is not moved: on one volume the
+  rename fails; across volumes it is refused before copying, and so is a
+  folder with anything locked inside. Unlock it in Finder (Get Info) to let
+  flib move it.
+- **An unmounted volume waits.** A move interrupted while its library
+  volume is unmounted stays unresolved (and its file is not processed
+  again) until the volume is back.
 - **`flib fix` stays on one volume.** A correction is a rename inside the
   library; a category folder that is the mount point of another volume
   fails the fix with nothing changed.

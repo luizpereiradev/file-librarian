@@ -35,7 +35,7 @@ from file_librarian.fsops import (
     remove_tree,
     resume_copy,
 )
-from file_librarian.hashing import content_digest, unit_manifest
+from file_librarian.hashing import content_digest, file_sha256, unit_manifest
 from file_librarian.models import CopyPhase, FileStatus, OperationStatus
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.undo import undo_run
@@ -658,9 +658,14 @@ def test_recovery_waits_while_the_destination_is_unavailable(
     with pytest.raises(Crash):
         run(cfg)
     monkeypatch.undo()
+    op, _, _ = only_op(cfg)
+    assert op.copy_volumes == (downloads.stat().st_dev, finance(downloads).stat().st_dev)
     library = downloads / "Organized"
     unmounted = downloads.parent / "unmounted"
-    library.rename(unmounted)  # as if its volume were unmounted
+    library.rename(unmounted)
+    # As if the library had been on a volume of its own that is now unmounted.
+    with Store.open(cfg.database) as store:
+        store.conn.execute("UPDATE operations SET copy_dst_dev = -1")
     before = tree(downloads)
 
     with Store.open(cfg.database) as store, caplog.at_level(logging.WARNING):
@@ -702,12 +707,29 @@ def test_an_entry_that_cannot_be_recovered_does_not_stop_the_run(
 
 
 @pytest.mark.usefixtures("cross_volume")
-def test_read_only_folders_and_locked_files_move_and_come_back(
-    downloads: Path, cfg: Config
+@pytest.mark.parametrize("which", ["Project", "Project/b.txt"])
+def test_a_locked_item_is_not_moved_across_volumes(
+    downloads: Path, cfg: Config, which: str
 ) -> None:
+    put(downloads, "Project/b.txt", b"two")
+    make_old(downloads / "Project")
+    os.chflags(downloads / which, stat.UF_IMMUTABLE)  # Finder's "Locked"
+    try:
+        outcome = run(cfg)
+        assert outcome.report is not None
+        [item] = outcome.report.items
+        assert item.status is FileStatus.FAILED and "locked" in item.note
+        assert (downloads / "Project" / "b.txt").read_bytes() == b"two"
+        assert not (finance(downloads) / "Project").exists()
+        assert leftovers(downloads, finance(downloads)) == []
+    finally:
+        os.chflags(downloads / which, 0)
+
+
+@pytest.mark.usefixtures("cross_volume")
+def test_read_only_folders_move_and_come_back(downloads: Path, cfg: Config) -> None:
     put(downloads, "Project/sub/a.txt", b"one")
-    locked = put(downloads, "Project/b.txt", b"two")
-    os.chflags(locked, stat.UF_IMMUTABLE)
+    put(downloads, "Project/b.txt", b"two")
     link = downloads / "Project" / "sub" / "link"  # COPYFILE_RECURSIVE fails on this one
     link.symlink_to("a.txt")
     os.utime(link, (OLD, OLD), follow_symlinks=False)
@@ -722,13 +744,13 @@ def test_read_only_folders_and_locked_files_move_and_come_back(
     moved = finance(downloads) / "Project"
     assert not (downloads / "Project").exists()
     assert (moved / "sub" / "a.txt").read_bytes() == b"one"
-    assert os.lstat(moved / "b.txt").st_flags & stat.UF_IMMUTABLE
+    assert stat.S_IMODE(os.lstat(moved / "sub").st_mode) == 0o555
     assert leftovers(downloads, finance(downloads)) == []
     with Store.open(cfg.database) as store:
         report = undo_run(store, config=cfg)
     assert report.restored == [(moved, downloads / "Project")] and report.warnings == []
     assert not moved.exists() and leftovers(downloads, finance(downloads)) == []
-    remove_tree(downloads / "Project")  # unlocked, so the temporary folder can be cleaned
+    remove_tree(downloads / "Project")  # made writable, so the temporary folder can be cleaned
 
 
 @pytest.mark.usefixtures("cross_volume")
@@ -767,7 +789,7 @@ def test_a_volume_without_rename_excl_is_refused_before_copying(
     copies: list[Path] = []
 
     def no_excl(src: Path, dst: Path) -> None:
-        if src.name == "probe":  # what exFAT answers to RENAME_EXCL
+        if src.name.startswith(".flib-probe-"):  # what exFAT answers to RENAME_EXCL
             raise OSError(code, os.strerror(code), str(src))
         real(src, dst)
 
@@ -1016,3 +1038,139 @@ def test_resume_does_nothing_while_a_folder_is_unavailable(tmp_path: Path) -> No
             journal=lambda _phase, _dst: None,
         )
     assert source.read_bytes() == b"mine"
+
+
+# --- second review: folders gone, foreign folders, unit metadata ------------------------------
+
+
+@pytest.mark.usefixtures("cross_volume")
+def test_a_category_folder_deleted_on_a_mounted_volume_is_resolved(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = put(downloads, "a.pdf", b"mine")
+    crash_in(monkeypatch, "_copyfile", after=True)
+    with pytest.raises(Crash):
+        run(cfg)
+    monkeypatch.undo()
+    remove_tree(finance(downloads))  # deleted by hand, staged copy and all; the volume is there
+    with Store.open(cfg.database) as store:
+        assert recover(store, cfg) == 1
+    op, status, _ = only_op(cfg)
+    assert (op.status, status) == (OperationStatus.FAILED, FileStatus.FAILED)
+    assert source.read_bytes() == b"mine"
+
+
+def test_an_undo_whose_original_folder_is_gone_rolls_back(tmp_path: Path) -> None:
+    library_item = put(tmp_path, "lib/Finance/a.pdf", b"mine")
+    volume = tmp_path.stat().st_dev
+    restored = resume_copy(
+        library_item,
+        tmp_path / "Downloads" / "a.pdf",  # the original folder no longer exists
+        key="7-k",
+        phase=CopyPhase.COPYING,
+        expected=file_sha256(library_item),
+        journal=lambda _phase, _dst: None,
+        volumes=(volume, volume),
+    )
+    assert restored is None and library_item.read_bytes() == b"mine"
+
+
+@pytest.mark.usefixtures("cross_volume")
+def test_recovery_does_not_take_another_folder_for_the_copied_unit(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    put(downloads, "Project/a.txt", b"one")
+    make_old(downloads / "Project")
+    crash_in(monkeypatch, "_discard")  # copy in place, source still there
+    with pytest.raises(Crash):
+        run(cfg)
+    monkeypatch.undo()
+    moved = finance(downloads) / "Project"
+    remove_tree(moved)
+    put(finance(downloads), "Project/other.txt", b"someone else's")  # same name, not ours
+    with Store.open(cfg.database) as store:
+        recover(store, cfg)
+    assert (downloads / "Project" / "a.txt").read_bytes() == b"one"
+    assert (moved / "other.txt").read_bytes() == b"someone else's"
+    op, _, _ = only_op(cfg)
+    assert op.status is OperationStatus.FAILED
+
+
+@pytest.mark.usefixtures("cross_volume")
+def test_a_units_own_metadata_crosses_volumes(downloads: Path, cfg: Config) -> None:
+    unit = downloads / "Project"
+    put(downloads, "Project/a.txt", b"one")
+    origin = plistlib.dumps(["https://example.com/p.zip"], fmt=plistlib.FMT_BINARY)
+    write_xattr(unit, WHERE_FROMS, origin)
+    set_tags(unit, ["Mine"])
+    unit.chmod(0o750)
+    make_old(unit)
+    mtime = os.lstat(unit).st_mtime_ns
+
+    run(cfg)
+
+    moved = finance(downloads) / "Project"
+    st = os.lstat(moved)
+    assert (stat.S_IMODE(st.st_mode), st.st_mtime_ns) == (0o750, mtime)
+    assert read_xattr(moved, WHERE_FROMS) == origin
+    assert read_tags(moved) == ["Mine", "Finance"]
+
+
+def test_remove_tree_never_follows_a_symlink_out(tmp_path: Path) -> None:
+    outside = put(tmp_path, "outside/keep.txt", b"keep")
+    put(tmp_path, "tree/sub/a.txt", b"a")
+    (tmp_path / "tree" / "sub" / "out").symlink_to(outside.parent)
+    (tmp_path / "tree" / "sub").chmod(0o500)
+    remove_tree(tmp_path / "tree")
+    assert not (tmp_path / "tree").exists() and outside.read_bytes() == b"keep"
+
+
+def test_remove_tree_stops_if_a_folder_is_swapped_meanwhile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outside = put(tmp_path, "outside/keep.txt", b"keep")
+    put(tmp_path, "tree/sub/a.txt", b"a")
+    real = fsops._empty_folder_at
+
+    def swap(dir_fd: int, name: str, st: os.stat_result) -> None:
+        if name == "sub":  # between its lstat and its open: now a symlink out
+            (tmp_path / "tree" / "sub").rename(tmp_path / "moved-sub")
+            (tmp_path / "tree" / "sub").symlink_to(outside.parent)
+        real(dir_fd, name, st)
+
+    monkeypatch.setattr(fsops, "_empty_folder_at", swap)
+    with pytest.raises(OSError):
+        remove_tree(tmp_path / "tree")
+    assert outside.read_bytes() == b"keep"
+
+
+@pytest.mark.usefixtures("cross_volume")
+def test_recovery_without_a_source_does_not_take_another_folder_for_the_unit(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    put(downloads, "Project/a.txt", b"one")
+    make_old(downloads / "Project")
+    crash_in(monkeypatch, "require_rename_excl")  # "copying" journaled, nothing copied yet
+    with pytest.raises(Crash):
+        run(cfg)
+    monkeypatch.undo()
+    remove_tree(downloads / "Project")  # the original deleted by hand
+    foreign = put(finance(downloads), "Project/other.txt", b"someone else's")
+    with Store.open(cfg.database) as store:
+        recover(store, cfg)
+    op, _, _ = only_op(cfg)
+    assert op.status is OperationStatus.FAILED
+    assert foreign.read_bytes() == b"someone else's"
+
+
+def test_copy_phases_are_committed_with_fullfsync(downloads: Path, cfg: Config) -> None:
+    put(downloads, "a.pdf", b"mine")
+    run(cfg)
+    statements: list[str] = []
+    with Store.open(cfg.database) as store:
+        [op] = store.operations()
+        store.conn.set_trace_callback(statements.append)
+        store.set_copy_phase(op.id, CopyPhase.COPYING, "1-k")
+    assert statements[0] == "PRAGMA fullfsync = ON"
+    assert statements[1].lstrip().startswith("UPDATE operations SET copy_phase")
+    assert statements[-1] == "PRAGMA fullfsync = OFF"

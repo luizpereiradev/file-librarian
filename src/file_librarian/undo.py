@@ -32,6 +32,7 @@ from file_librarian.fsops import (
     copy_move,
     move_no_replace,
     new_copy_key,
+    volume_of,
 )
 from file_librarian.hashing import same_content, unit_manifest
 from file_librarian.models import CopyPhase, FileStatus, OperationStatus
@@ -117,10 +118,17 @@ def _undo_one(store: Store, op: OperationRow, report: UndoReport, config: Config
 
 
 def _journal(store: Store, op: OperationRow, key: str) -> Journal:
-    """An undo's copy phases go on the entry it reverts, which keeps its paths."""
+    """An undo's copy phases go on the entry it reverts, which keeps its paths.
+
+    The copy goes from ``op.dst_path`` back to ``op.src_path``; their volumes
+    are recorded when it starts.
+    """
 
     def journal(phase: CopyPhase, _dst: Path) -> None:
-        store.set_copy_phase(op.id, phase, key)
+        volumes = None
+        if phase is CopyPhase.COPYING:
+            volumes = (volume_of(op.dst_path.parent), volume_of(op.src_path.parent))
+        store.set_copy_phase(op.id, phase, key, volumes=volumes)
 
     return journal
 
@@ -134,11 +142,12 @@ def record_restored(store: Store, op: OperationRow, config: Config | None) -> li
     src = op.src_path
     warnings: list[str] = []
     row = store.file_by_id(op.file_id)
-    if row.is_unit:
-        refresh_unit_identity(store, op.file_id, src, row.sha256)
+    identity = unit_identity(src, row.sha256) if row.is_unit else None
     status, category = place(config, src) if config else (FileStatus.SKIPPED, None)
     with store.transaction():
         store.set_operation(op.id, OperationStatus.UNDONE)
+        if identity is not None:
+            store.set_file_identity(op.file_id, identity)
         if status is FileStatus.SKIPPED:
             store.set_file_location(op.file_id, src, FileStatus.SKIPPED)
         else:
@@ -155,17 +164,17 @@ def record_restored(store: Store, op: OperationRow, config: Config | None) -> li
     return warnings
 
 
-def refresh_unit_identity(store: Store, file_id: int, path: Path, current: str) -> None:
-    """Index a folder unit by its manifest where it now is.
+def unit_identity(path: Path, current: str) -> str | None:
+    """A folder unit's manifest digest where it now is, if it differs from ``current``.
 
     Copied to another file system (one that keeps coarser modification
     times, such as HFS+), a unit's manifest differs from the source's. The
-    index follows it, so undo and reconcile still recognise it there. A move
-    within one volume keeps the manifest, and nothing changes.
+    index takes the new one, in the same transaction that records the move,
+    so undo and reconcile still recognise it there. A move within one volume
+    keeps the manifest: ``None``.
     """
     try:
         digest = unit_manifest(path).digest
     except OSError:
-        return
-    if digest != current:
-        store.set_file_identity(file_id, digest)
+        return None
+    return digest if digest != current else None

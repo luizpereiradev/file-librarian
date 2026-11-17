@@ -22,7 +22,8 @@ volumes it fails with ``CrossVolumeError``, and the caller moves the item with
    so it never overwrites anything (a taken name gets the next candidate).
 3. ``placed``: the source, if it is still what was copied, is renamed to
    ``.flib-<key>.delete`` beside it and only then deleted (read-only folders
-   and locked files included), so a crash mid-way leaves either the whole
+   included; locked items are refused before copying), so a crash mid-way
+   leaves either the whole
    source under its own name or a half-deleted item under a name that is
    clearly flib's. A source that changed after it was copied is kept, with a
    warning.
@@ -64,6 +65,7 @@ _COPYFILE_NOFOLLOW = (1 << 18) | (1 << 19)
 _STAGED_NAME = "item"
 
 _USER_LOCKS = stat.UF_IMMUTABLE | stat.UF_APPEND
+_LOCKS = _USER_LOCKS | stat.SF_IMMUTABLE | stat.SF_APPEND
 _NO_RENAME_EXCL = frozenset({errno.ENOTSUP, errno.EINVAL})
 
 Journal = Callable[[CopyPhase, Path], None]
@@ -89,7 +91,11 @@ class UnsupportedVolumeError(OSError):
 
 
 class UnavailableError(OSError):
-    """A folder of an interrupted copy cannot be listed (an unmounted volume?)."""
+    """The volume of an interrupted copy is not there (unmounted)."""
+
+
+class LockedError(OSError):
+    """The item, or something inside it, is locked (Finder's Locked, or an immutable flag)."""
 
 
 @cache
@@ -99,6 +105,8 @@ def _libc() -> ctypes.CDLL:
     lib.renamex_np.restype = ctypes.c_int
     lib.copyfile.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_uint32]
     lib.copyfile.restype = ctypes.c_int
+    lib.fchflags.argtypes = [ctypes.c_int, ctypes.c_uint]
+    lib.fchflags.restype = ctypes.c_int
     return lib
 
 
@@ -226,16 +234,19 @@ def copy_move(
 def copy_verified(src: Path, stage: Path, expected: str) -> tuple[Path, os.stat_result]:
     """Copy ``src`` into the new folder ``stage``, flush and verify it.
 
-    Returns the copy and the source's ``lstat`` from before the copy. On any
-    failure (a volume without ``RENAME_EXCL``, a full disk, a mismatch, a
-    source that changed meanwhile) ``stage`` is removed again and the error
+    Returns the copy and the source's ``lstat`` from before the copy. A
+    locked item (or a folder with anything locked inside) is refused before
+    anything is written, as a rename on one volume would refuse it. On any
+    other failure (a volume without ``RENAME_EXCL``, a full disk, a mismatch,
+    a source that changed meanwhile) ``stage`` is removed again and the error
     raised; ``src`` is never touched.
     """
     before = os.lstat(src)
+    _refuse_locked(src)
     stage.mkdir()  # fails if a stale one is there: nothing of ours is overwritten
     item = stage / _STAGED_NAME
     try:
-        _require_rename_excl(stage)
+        require_rename_excl(stage)
         _copyfile(src, item)
         _sync_tree(item)
         _sync(stage)
@@ -246,20 +257,34 @@ def copy_verified(src: Path, stage: Path, expected: str) -> tuple[Path, os.stat_
     return item, before
 
 
+def volume_of(folder: Path) -> int:
+    """The device of ``folder``, recorded when a copy starts (see ``resume_copy``)."""
+    return folder.stat().st_dev
+
+
 def resume_copy(
-    src: Path, dst: Path, *, key: str, phase: CopyPhase, expected: str, journal: Journal
+    src: Path,
+    dst: Path,
+    *,
+    key: str,
+    phase: CopyPhase,
+    expected: str,
+    journal: Journal,
+    volumes: tuple[int | None, int | None] = (None, None),
 ) -> Path | None:
     """Finish or roll back a ``copy_move`` that a crash cut off in ``phase``.
 
     Returns where the item now is when the move was completed, or ``None``
     when it was rolled back, the source left as it is. A copy is deleted only
-    while its source is still in place. Raises ``UnavailableError``, having
-    changed nothing, when the source's or the destination's folder cannot be
-    listed: an unmounted volume must not look like a vanished copy.
+    while its source is still in place. ``volumes`` are the devices of the
+    source's and the destination's folders when the copy started. If either
+    volume is gone (unmounted) it raises ``UnavailableError``, having changed
+    nothing: an unmounted volume must not look like a vanished copy. A folder
+    removed from a volume that is still there is simply absent.
     """
-    for folder in (src.parent, dst.parent):
-        if not _listable(folder):
-            raise UnavailableError(errno.ENOENT, "folder not available", str(folder))
+    for folder, volume in zip((src.parent, dst.parent), volumes, strict=True):
+        if _volume_missing(folder, volume):
+            raise UnavailableError(errno.ENOENT, "volume not available", str(folder))
     stage = staging_folder(dst.parent, key)
     item = stage / _STAGED_NAME
     if phase is CopyPhase.COPYING:
@@ -296,28 +321,85 @@ def resume_copy(
 def remove_tree(path: Path) -> None:
     """Delete ``path`` (a file, symlink or folder) if it exists, never following symlinks.
 
-    Read-only folders and locked (``uchg``) files, which ``copyfile`` copies
-    as they are, are unlocked first; entries that vanish meanwhile (such as
-    the ``._`` files some volumes keep beside each file) are skipped.
+    Only flib's own staging and trash paths are removed this way. The walk
+    goes through open folder descriptors (``O_NOFOLLOW``, names relative to
+    them), so a folder swapped for a symlink meanwhile cannot lead it
+    elsewhere. Read-only folders and ``uchg`` entries of flib's own copies
+    are unlocked first; entries that vanish meanwhile (such as the ``._``
+    files some volumes keep beside each file) are skipped.
     """
     try:
-        st = os.lstat(path)
+        parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
     except FileNotFoundError:
         return
-    if st.st_flags & _USER_LOCKS:
-        os.lchflags(path, st.st_flags & ~_USER_LOCKS)
-    if not stat.S_ISDIR(st.st_mode):
-        with contextlib.suppress(FileNotFoundError):
-            path.unlink()
+    try:
+        _remove_at(parent, path.name)
+    finally:
+        os.close(parent)
+
+
+def _remove_at(dir_fd: int, name: str) -> None:
+    try:
+        st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except FileNotFoundError:
         return
-    if st.st_mode & 0o700 != 0o700:
-        path.chmod(stat.S_IMODE(st.st_mode) | 0o700, follow_symlinks=False)
-    with os.scandir(path) as entries:
-        children = [Path(entry.path) for entry in entries]
-    for child in children:
-        remove_tree(child)
+    if stat.S_ISDIR(st.st_mode):
+        _empty_folder_at(dir_fd, name, st)
+        with contextlib.suppress(FileNotFoundError):
+            os.rmdir(name, dir_fd=dir_fd)
+        return
+    if stat.S_ISREG(st.st_mode) and st.st_flags & _USER_LOCKS:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
+        try:
+            _unlock(fd, st)
+        finally:
+            os.close(fd)
     with contextlib.suppress(FileNotFoundError):
-        path.rmdir()
+        os.unlink(name, dir_fd=dir_fd)
+
+
+def _empty_folder_at(dir_fd: int, name: str, st: os.stat_result) -> None:
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        fd = os.open(name, flags, dir_fd=dir_fd)
+    except PermissionError:  # a folder without read permission at all
+        os.chmod(name, 0o700, dir_fd=dir_fd, follow_symlinks=False)
+        fd = os.open(name, flags, dir_fd=dir_fd)
+    try:
+        _unlock(fd, st)
+        mode = os.fstat(fd).st_mode
+        if mode & 0o700 != 0o700:
+            os.fchmod(fd, stat.S_IMODE(mode) | 0o700)
+        with os.scandir(fd) as entries:
+            names = [entry.name for entry in entries]
+        for child in names:
+            _remove_at(fd, child)
+    finally:
+        os.close(fd)
+
+
+def _unlock(fd: int, expected: os.stat_result) -> None:
+    """Clear the user lock flags of the open ``fd``, which must be the entry ``expected``."""
+    st = os.fstat(fd)
+    if (st.st_dev, st.st_ino) != (expected.st_dev, expected.st_ino):
+        raise OSError(errno.EAGAIN, "changed while it was being removed")
+    if st.st_flags & _USER_LOCKS and _libc().fchflags(fd, st.st_flags & ~_USER_LOCKS) != 0:
+        err = ctypes.get_errno()
+        raise OSError(err, os.strerror(err))
+
+
+def _refuse_locked(src: Path) -> None:
+    """Raise ``LockedError`` if ``src`` or anything inside it is locked.
+
+    A locked item cannot be renamed on its own volume either, so it is not
+    moved to another one, where flib would have to delete the locked original.
+    """
+    inside = (Path(d, n) for d, ds, fs in os.walk(src) for n in [*ds, *fs])
+    for path in chain([src], inside):
+        if os.lstat(path).st_flags & _LOCKS:
+            raise LockedError(
+                errno.EPERM, "locked (Finder's Locked); unlock it to let flib move it", str(path)
+            )
 
 
 def _remove_quietly(path: Path) -> None:
@@ -327,12 +409,27 @@ def _remove_quietly(path: Path) -> None:
         log.warning("could not remove %s: %s", path, exc.strerror or exc)
 
 
-def _listable(folder: Path) -> bool:
+def _volume_missing(folder: Path, volume: int | None) -> bool:
+    """``folder`` cannot be listed, and its volume is not mounted (as far as can be told).
+
+    The nearest existing ancestor tells: on another device than ``volume``,
+    the volume is gone; on the same one, only the folder is. Without a
+    recorded ``volume``, any folder that cannot be listed counts as missing.
+    """
     try:
         with os.scandir(folder):
-            return True
+            return False
     except OSError:
-        return False
+        pass
+    if volume is None:
+        return True
+    ancestor = folder
+    while not os.path.lexists(ancestor) and ancestor != ancestor.parent:
+        ancestor = ancestor.parent
+    try:
+        return ancestor.stat().st_dev != volume
+    except OSError:
+        return True
 
 
 def _holds(path: Path, expected: str, source: Path | None = None, *, trusted: bool = False) -> bool:
@@ -355,22 +452,29 @@ def _holds(path: Path, expected: str, source: Path | None = None, *, trusted: bo
         return False
 
 
-def _require_rename_excl(stage: Path) -> None:
-    """Fail unless the volume of ``stage`` can rename without replacing (exFAT cannot)."""
-    probe = stage / "probe"
+def require_rename_excl(folder: Path) -> None:
+    """Fail unless the volume of ``folder`` can rename without replacing (exFAT cannot).
+
+    Renames an empty probe folder inside ``folder`` with ``RENAME_EXCL``.
+    """
+    token = secrets.token_hex(4)
+    probe, probed = folder / f".flib-probe-{token}", folder / f".flib-probed-{token}"
     probe.mkdir()
     try:
-        move_no_replace(probe, stage / "probed")
+        move_no_replace(probe, probed)
     except OSError as exc:
         if exc.errno in _NO_RENAME_EXCL:
             raise UnsupportedVolumeError(
                 exc.errno,
                 "the destination volume cannot rename without replacing, "
                 "so flib does not move items there",
-                str(stage.parent),
+                str(folder),
             ) from exc
         raise
-    (stage / "probed").rmdir()
+    finally:
+        for path in (probe, probed):
+            with contextlib.suppress(FileNotFoundError):
+                path.rmdir()
 
 
 def _copyfile(src: Path, dst: Path) -> None:

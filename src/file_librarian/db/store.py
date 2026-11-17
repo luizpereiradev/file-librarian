@@ -135,6 +135,8 @@ class OperationRow:
     """How far a move (``planned``) or its undo (``done``) to another volume got."""
     copy_key: str | None = None
     """Names that copy's staging and trash paths (``fsops.new_copy_key``)."""
+    copy_volumes: tuple[int | None, int | None] = (None, None)
+    """Devices of that copy's source and destination folders when it started."""
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> OperationRow:
@@ -153,6 +155,7 @@ class OperationRow:
             else (FileStatus(row["fix_status"]), row["fix_category"]),
             copy_phase=None if row["copy_phase"] is None else CopyPhase(row["copy_phase"]),
             copy_key=row["copy_key"],
+            copy_volumes=(row["copy_src_dev"], row["copy_dst_dev"]),
         )
 
 
@@ -508,9 +511,18 @@ class Store:
             )
 
     def set_copy_phase(
-        self, op_id: int, phase: CopyPhase, key: str, dst: Path | None = None
+        self,
+        op_id: int,
+        phase: CopyPhase,
+        key: str,
+        dst: Path | None = None,
+        *,
+        volumes: tuple[int, int] | None = None,
     ) -> None:
         """Journal how far a cross-volume move (or its undo) got, and where it is going.
+
+        ``volumes``, given when the copy starts, are the devices of its source
+        and destination folders.
 
         Committed with ``F_FULLFSYNC``, so the phase is on the disk itself, not
         only in the drive's cache, before the move goes on to delete a source.
@@ -518,11 +530,14 @@ class Store:
         """
         self.conn.execute("PRAGMA fullfsync = ON")
         try:
+            src_dev, dst_dev = volumes if volumes is not None else (None, None)
             self.conn.execute(
                 """UPDATE operations SET copy_phase = ?, copy_key = ?,
-                                         dst_path = coalesce(?, dst_path)
+                                         dst_path = coalesce(?, dst_path),
+                                         copy_src_dev = coalesce(?, copy_src_dev),
+                                         copy_dst_dev = coalesce(?, copy_dst_dev)
                    WHERE id = ?""",
-                (phase.value, key, None if dst is None else str(dst), op_id),
+                (phase.value, key, None if dst is None else str(dst), src_dev, dst_dev, op_id),
             )
         finally:
             self.conn.execute("PRAGMA fullfsync = OFF")

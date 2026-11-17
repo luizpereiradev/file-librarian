@@ -110,7 +110,8 @@ def test_moves_and_undo_onto_a_real_volume(volume: Volume, downloads: Path) -> N
             assert all("cannot rename without replacing" in i.note for i in outcome.report.items)
             assert (downloads / "a.pdf").read_bytes() == b"mine"
             assert (downloads / "Project" / "sub" / "b.txt").exists()
-            assert leftovers(downloads, library) == []
+            assert not library.exists()  # refused before any folder was created there
+            assert leftovers(downloads, volume.mountpoint) == []
             return
         assert outcome.report.moved == 2
         assert [i.warning for i in outcome.report.items] == [None, None]
