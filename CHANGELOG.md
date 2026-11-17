@@ -10,7 +10,8 @@ All notable changes to this project are documented here. The format follows
 
 - `flib mcp`, a local MCP server over stdio for Claude and other assistants
   (RF-22). Tools: `search_files` (as `flib search`), `get_file` (the index
-  record plus hash, size and download origin), `recategorize_file` (as
+  record plus hash, size, download origin and `icloud_only`; a cloud-only
+  file is never read), `recategorize_file` (as
   `flib fix`, journaled as its own run with trigger `mcp`, so `flib undo`
   reverts it) and `undo` (as `flib undo`). Each has a description and input
   and output JSON schemas. Results never include file content; sensitive

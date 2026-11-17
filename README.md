@@ -143,7 +143,7 @@ network and reads the same database as `flib search`.
 | Tool | What it does |
 | --- | --- |
 | `search_files` | Full-text search over names, descriptions and tags, like `flib search` |
-| `get_file` | Everything the index knows about one file: where it is and was, category, description, tags, hash, size, download origin |
+| `get_file` | Everything the index knows about one file: where it is and was, category, description, tags, hash, size, download origin, whether it is only in iCloud |
 | `recategorize_file` | Move a file to another configured category and/or rename it, like `flib fix` |
 | `undo` | Revert a run or the last move of one file, like `flib undo` |
 

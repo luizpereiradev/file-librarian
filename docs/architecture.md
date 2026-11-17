@@ -101,7 +101,7 @@ on the official MCP Python SDK and served over stdio:
 | Tool | Reuses |
 | --- | --- |
 | `search_files` | `search.py`, as `flib search` |
-| `get_file` | the index row, plus the download origin `flib inspect` reads |
+| `get_file` | the index row, plus the download origin and iCloud-only check `flib inspect` uses (a cloud-only file is never read) |
 | `recategorize_file` | `fix.fix_file`, as `flib fix`, with run trigger `mcp` |
 | `undo` | `undo.py`, as `flib undo` |
 

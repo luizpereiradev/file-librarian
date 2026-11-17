@@ -31,7 +31,7 @@ from file_librarian.lock import instance_lock
 from file_librarian.mcp_server import WRITE_TOOLS, build_server
 from file_librarian.models import Classification, FileStatus
 from file_librarian.providers.fake import FakeProvider
-from tests._helpers import OLD, write_xattr
+from tests._helpers import OLD, mark_cloud_only, write_xattr
 
 pytestmark = pytest.mark.integration
 
@@ -176,6 +176,7 @@ def test_search_and_get_file(downloads: Path, cfg: Config) -> None:
     detail = ok(call(cfg, "get_file", path=str(target)))
     assert detail["original_path"] == str(downloads / "bill.txt")
     assert detail["kind"] == "file"
+    assert detail["icloud_only"] is False
     assert detail["size_bytes"] == len(b"electricity bill")
     assert len(detail["sha256"]) == 64
     assert detail["source_urls"] == ["https://example.com/bill.txt"]
@@ -189,6 +190,20 @@ def test_get_file_of_a_file_moved_away(downloads: Path, cfg: Config) -> None:
     target.rename(downloads / "elsewhere.txt")
     detail = ok(call(cfg, "get_file", path=str(target)))
     assert (detail["exists"], detail["source_urls"]) == (False, [])
+
+
+def test_get_file_never_reads_a_file_only_in_icloud(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    organize(downloads, cfg, {"bill.txt": (b"bill", answer("Finance"))})
+    target = lib(downloads) / "Finance" / "bill.txt"
+    with Store.open(cfg.database) as store:
+        row = store.file_by_current_path(target)
+    assert row is not None
+    mark_cloud_only(monkeypatch, target)  # any open or hash of it fails the test
+    detail = ok(call(cfg, "get_file", path=str(target)))
+    assert (detail["icloud_only"], detail["exists"]) == (True, True)
+    assert detail["sha256"] == row.sha256  # from the index, not recomputed
 
 
 def test_get_file_needs_an_indexed_absolute_path(downloads: Path, cfg: Config) -> None:

@@ -5,7 +5,9 @@ behind a CLI command, so the guarantees are the same:
 
 - ``search_files``: ``flib search`` (``search.py``).
 - ``get_file``: the index record of one file, plus what ``flib inspect``
-  shows (hash, size, download origin).
+  shows (hash, size, download origin, iCloud-only). Like ``inspect`` it
+  never reads a cloud-only file; it never hashes at all, the hash is the
+  one recorded at indexing.
 - ``recategorize_file``: ``flib fix`` (``fix.fix_file``), journaled as its
   own run with trigger ``mcp``, so ``flib undo`` reverts it.
 - ``undo``: ``flib undo`` (``undo.py``).
@@ -44,6 +46,7 @@ from file_librarian.extractors.origin import download_origin
 from file_librarian.fix import FixError, fix_file
 from file_librarian.lock import AlreadyRunningError, instance_lock
 from file_librarian.models import FileStatus, RunTrigger
+from file_librarian.reconcile import in_cloud_only
 from file_librarian.search import SearchHit
 from file_librarian.search import search as run_search
 from file_librarian.undo import NothingToUndoError, UndoReport, undo_file, undo_run
@@ -116,7 +119,13 @@ class FileDetail(FileSummary):
 
     original_path: str = Field(description="Where it was found before flib moved it.")
     kind: str = Field(description="'file', or 'folder unit' for a folder moved as one item.")
-    sha256: str = Field(description="Content hash (manifest digest for a folder unit).")
+    icloud_only: bool = Field(
+        description="It exists only in iCloud, not downloaded; flib reads nothing from it.",
+    )
+    sha256: str = Field(
+        description="Content hash recorded when indexed (manifest digest for a folder unit). "
+        "Never recomputed here.",
+    )
     size_bytes: int | None = Field(description="Size when indexed.")
     source_urls: list[str] = Field(
         description="Where it was downloaded from, as macOS recorded it (empty if unknown "
@@ -310,6 +319,7 @@ def _detail(row: FileRow) -> FileDetail:
         processed_at=row.processed_at,
         original_path=str(row.original_path),
         kind="folder unit" if row.is_unit else "file",
+        icloud_only=exists and in_cloud_only(row.current_path),
         sha256=row.sha256,
         size_bytes=row.size_bytes,
         source_urls=list(download_origin(row.current_path)) if exists and not sensitive else [],
