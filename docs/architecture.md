@@ -48,6 +48,13 @@ model.
   the file's row untouched.
 - `flib undo` walks a run's operations in reverse, checks each file's hash, and
   skips (and lists) files that were edited or whose original path is taken.
+- Nothing that exists only in iCloud is read, hashed or listed, since that
+  would make macOS download it. The scanner, `flib reconcile` and
+  `flib inspect` look at the `lstat` flags first (`hashing.is_dataless`). A
+  scanned item only in iCloud is skipped; `reconcile` does not count one as
+  a match, does not walk into a cloud-only folder, and leaves the row of an
+  indexed item that is at its recorded path but only in iCloud unchanged
+  (it is there, so not `missing`); `inspect` reports it instead of hashing it.
 - One writer at a time: the scheduled run, a manual run and MCP write tools
   share a single-instance lock. The database runs in WAL mode so MCP reads
   never block a run.

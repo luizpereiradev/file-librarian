@@ -33,6 +33,7 @@ from file_librarian.lock import AlreadyRunningError, instance_lock
 from file_librarian.models import FileStatus, RunTrigger
 from file_librarian.planner import Plan
 from file_librarian.providers import PLANNED, ProviderError, get_provider, is_implemented
+from file_librarian.reconcile import in_cloud_only
 from file_librarian.reconcile import reconcile as run_reconcile
 from file_librarian.runlog import logs_dir, write_log
 from file_librarian.scanner import ScanError, SkipReason
@@ -131,18 +132,33 @@ def inspect(
     paths: Annotated[list[Path], typer.Argument(exists=True, help="Files to inspect.")],
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
 ) -> None:
-    """Show what flib reads from a file before any AI is involved: hash, size, download origin."""
+    """Show what flib reads from a file before any AI is involved: hash, size, download origin.
+
+    A file or folder that exists only in iCloud is reported as such, not hashed:
+    reading it would download it.
+    """
     results = []
     for path in paths:
+        cloud_only = in_cloud_only(path)
+        digest: str | None = None
+        size: int | None = None
         if path.is_dir():
-            manifest = unit_manifest(path)
-            digest, size, kind = manifest.digest, manifest.size_bytes, "folder unit"
+            kind = "folder unit"
+            if not cloud_only:
+                manifest = unit_manifest(path)
+                cloud_only = manifest.dataless
+                if not cloud_only:
+                    digest, size = manifest.digest, manifest.size_bytes
         else:
-            digest, size, kind = file_sha256(path), path.stat().st_size, "file"
+            kind = "file"
+            size = path.stat().st_size  # metadata only, never downloads
+            if not cloud_only:
+                digest = file_sha256(path)
         results.append(
             {
                 "path": str(path),
                 "kind": kind,
+                "icloud_only": cloud_only,
                 "sha256": digest,
                 "size_bytes": size,
                 "source_urls": list(download_origin(path)),
@@ -154,8 +170,12 @@ def inspect(
     for item in results:
         typer.echo(str(item["path"]))
         typer.echo(f"  kind:   {item['kind']}")
-        typer.echo(f"  sha256: {item['sha256']}")
-        typer.echo(f"  size:   {item['size_bytes']} bytes")
+        if item["icloud_only"]:
+            typer.echo(f"  sha256: ({SkipReason.CLOUD_ONLY.value}; download it to inspect it)")
+        else:
+            typer.echo(f"  sha256: {item['sha256']}")
+        if item["size_bytes"] is not None:
+            typer.echo(f"  size:   {item['size_bytes']} bytes")
         urls = item["source_urls"]
         if isinstance(urls, list) and urls:
             for url in urls:
@@ -600,9 +620,12 @@ def reconcile(config: ConfigOption = None) -> None:
         typer.echo(f"  found   {_short(path, cfg)}")
     for path in report.missing:
         typer.echo(f"  missing {_short(path, cfg)}")
+    for path in report.cloud_only:
+        typer.echo(f"  icloud  {_short(path, cfg)}  ({SkipReason.CLOUD_ONLY.value}, not checked)")
     typer.echo(
         f"Reconcile: {report.checked} checked, {len(report.moved)} moved by hand, "
-        f"{len(report.found_again)} found again, {len(report.missing)} missing."
+        f"{len(report.found_again)} found again, {len(report.missing)} missing, "
+        f"{len(report.cloud_only)} in iCloud only."
     )
 
 

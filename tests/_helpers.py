@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import ctypes
 import ctypes.util
 import os
@@ -9,6 +10,9 @@ import time
 import zipfile
 from datetime import date
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -37,6 +41,47 @@ def write_xattr(path: Path, name: str, value: bytes) -> None:
     if rc != 0:
         err = ctypes.get_errno()
         raise OSError(err, os.strerror(err), str(path))
+
+
+# --- iCloud ----------------------------------------------------------------------
+
+
+def mark_cloud_only(monkeypatch: pytest.MonkeyPatch, *paths: Path) -> set[Path]:
+    """Real dataless files cannot be made in a test: report these inodes as cloud-only.
+
+    Any read of them, or of anything inside a cloud-only folder (hashing, opening,
+    listing), fails the test.
+    """
+    from file_librarian import cli, hashing, scanner
+
+    inodes = {os.lstat(p).st_ino for p in paths}
+    real_is_dataless = hashing.is_dataless
+    monkeypatch.setattr(
+        hashing, "is_dataless", lambda st: st.st_ino in inodes or real_is_dataless(st)
+    )
+
+    def touched(path: object) -> bool:
+        if not isinstance(path, str | bytes | os.PathLike):
+            return False  # a file descriptor
+        target = Path(os.fsdecode(path)).absolute()
+        return any(target == p or p in target.parents for p in paths)
+
+    def guard(what: str, real: Any) -> Any:
+        def guarded(path: Any, *args: Any, **kwargs: Any) -> Any:
+            assert not touched(path), f"{what} a cloud-only item: {path}"
+            return real(path, *args, **kwargs)
+
+        return guarded
+
+    real_sha = hashing.file_sha256
+    for module in (hashing, scanner, cli):
+        monkeypatch.setattr(module, "file_sha256", guard("hashed", real_sha))
+    monkeypatch.setattr(Path, "open", guard("opened", Path.open))
+    monkeypatch.setattr(builtins, "open", guard("opened", builtins.open))
+    monkeypatch.setattr(os, "walk", guard("walked", os.walk))
+    monkeypatch.setattr(os, "scandir", guard("listed", os.scandir))
+    monkeypatch.setattr(os, "listdir", guard("listed", os.listdir))
+    return set(paths)
 
 
 # --- Synthetic documents ---------------------------------------------------------

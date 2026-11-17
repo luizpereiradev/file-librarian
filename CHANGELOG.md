@@ -180,6 +180,17 @@ All notable changes to this project are documented here. The format follows
 - Requirements are available in English in `docs/requirements.md`.
 - The Office extractor opens each document as a ZIP once instead of once per part.
 
+### Fixed
+
+- `flib reconcile` and `flib inspect` no longer download iCloud files that
+  exist only in the cloud (#44). `reconcile` neither hashes such a file nor
+  lists such a folder: as a match found elsewhere it does not count, and an
+  indexed item still at its recorded path but only in iCloud (or a folder unit
+  with anything inside only in iCloud) keeps its row unchanged instead of
+  becoming `missing`, and is listed as `in iCloud only, not checked`.
+  `inspect` reports such a file or folder as in iCloud only (`icloud_only` in
+  `--json`, with no `sha256`) instead of hashing it.
+
 ### Security
 
 - The daily run uses `flib-python`, a copy of the interpreter inside flib's
