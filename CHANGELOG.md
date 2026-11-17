@@ -8,6 +8,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `flib check-config` warns when an option that is accepted but not active
+  yet is set to anything but its default, so nobody thinks it works. The
+  list lives in `config.INACTIVE_OPTIONS`; every option in the configuration
+  is active today, so only the planned providers (`ollama`, `openai-compat`)
+  warn, as before.
 - `flib init`, the guided first run (RF-38). It asks for the language
   (default from the shell's locale), the folder to organize, where organized
   files go and the review folder, the provider and, with `anthropic`, whether

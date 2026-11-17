@@ -58,7 +58,7 @@ The code mirrors the pipeline; read [docs/architecture.md](docs/architecture.md)
 | Support a new file format | `src/file_librarian/extractors/`, guide in [docs/adding-an-extractor.md](docs/adding-an-extractor.md) |
 | Add an AI provider | `src/file_librarian/providers/`, guide in [docs/adding-a-provider.md](docs/adding-a-provider.md) |
 | Change the database schema | add a new `src/file_librarian/db/migrations/NNNN_*.sql`; never edit a published one |
-| Add a configuration option | `config.py` and `config.example.yaml`, together |
+| Add a configuration option | `config.py` and `config.example.yaml`, together; one that does nothing yet goes into `INACTIVE_OPTIONS` in `config.py` until the PR that activates it |
 | Add a language | `locales.py`, plus a test in `tests/unit/test_config.py` |
 | Change the architecture | write an ADR in [docs/decisions/](docs/decisions/) first |
 

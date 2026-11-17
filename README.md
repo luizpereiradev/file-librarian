@@ -17,12 +17,17 @@ commands keep these guarantees:
   folders with any such file inside, are skipped and listed until you
   download them. `flib reconcile` and `flib inspect` do not read them either.
 
-> **Status: pre-alpha (M1 complete, under acceptance).** Scanning,
-> extraction, secret detection, classification with Claude, planning, moving,
-> search and undo all work. Try it offline first with
-> `provider: {name: fake, model: offline}`, which files everything under the
-> last category without calling any API. Scheduling (`flib schedule`) comes in
-> M2. See the [roadmap](#roadmap).
+> **Status: pre-alpha (M2 features complete, in daily-use validation).**
+> Scanning, extraction, secret detection, classification with Claude,
+> planning, moving, search and undo work, and so do the M2 additions: the
+> guided first run (`flib init`), the daily run (`flib schedule`),
+> `flib reconcile` and `flib fix`, Finder tags, iCloud-aware scanning, opt-in
+> vision, the optional MCP server (`flib mcp`) and the `claude-code` provider.
+> M2 is now in its two-week daily-use validation
+> ([#24](https://github.com/luizpereiradev/file-librarian/issues/24)). Try it
+> offline first with `provider: {name: fake, model: offline}`, which files
+> everything under the last category without calling any API. See the
+> [roadmap](#roadmap).
 
 ## Requirements
 
