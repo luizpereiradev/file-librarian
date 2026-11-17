@@ -7,8 +7,9 @@ from typing import Any
 
 import pytest
 
+from file_librarian import hashing, scanner
 from file_librarian.config import Config, parse_config
-from file_librarian.hashing import file_sha256
+from file_librarian.hashing import SF_DATALESS, file_sha256
 from file_librarian.models import FileState, FileStatus
 from file_librarian.scanner import ScanError, SkipReason, scan
 
@@ -117,6 +118,107 @@ def test_folders_ignore_skips_units(downloads: Path) -> None:
     result = scan(make_config(downloads, folders="ignore"), nothing_known, now=NOW)
     assert result.candidates == []
     assert reasons(result)["project"] is SkipReason.FOLDER_IGNORED
+
+
+def mark_cloud_only(monkeypatch: pytest.MonkeyPatch, *paths: Path) -> set[Path]:
+    """Real dataless files cannot be made in a test: report these inodes as cloud-only.
+
+    Any read of them (hashing, opening, listing a folder) fails the test.
+    """
+    inodes = {os.lstat(p).st_ino for p in paths}
+    real_is_dataless = hashing.is_dataless
+    monkeypatch.setattr(
+        hashing, "is_dataless", lambda st: st.st_ino in inodes or real_is_dataless(st)
+    )
+
+    def touched(path: object) -> bool:
+        target = Path(os.fsdecode(path))  # type: ignore[arg-type]
+        return any(target == p or p in target.parents for p in paths)
+
+    real_sha = file_sha256
+    real_open = Path.open
+    real_walk = os.walk
+
+    def guarded_sha(path: Path) -> str:
+        assert not touched(path), f"hashed a cloud-only item: {path}"
+        return real_sha(path)
+
+    def guarded_open(self: Path, *args: Any, **kwargs: Any) -> Any:
+        assert not touched(self), f"opened a cloud-only item: {self}"
+        return real_open(self, *args, **kwargs)
+
+    def guarded_walk(top: Any, *args: Any, **kwargs: Any) -> Any:
+        assert not touched(top), f"listed a cloud-only folder: {top}"
+        return real_walk(top, *args, **kwargs)
+
+    monkeypatch.setattr(scanner, "file_sha256", guarded_sha)
+    monkeypatch.setattr(Path, "open", guarded_open)
+    monkeypatch.setattr(os, "walk", guarded_walk)
+    return set(paths)
+
+
+def test_dataless_flag_is_read_from_st_flags(downloads: Path) -> None:
+    class Flags:
+        def __init__(self, flags: int) -> None:
+            self.st_flags = flags
+
+    assert SF_DATALESS == 0x40000000
+    assert hashing.is_dataless(Flags(SF_DATALESS))  # type: ignore[arg-type]
+    assert not hashing.is_dataless(Flags(0))  # type: ignore[arg-type]
+    assert not hashing.is_dataless(os.lstat(put(downloads, "local.pdf")))
+
+
+def test_cloud_only_file_is_skipped_without_reading(
+    downloads: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cloud = put(downloads, "report.pdf", b"%PDF only in the cloud")
+    local = put(downloads, "local.pdf", b"%PDF here")
+    mark_cloud_only(monkeypatch, cloud)
+    result = scan(make_config(downloads), nothing_known, now=NOW)
+    assert [c.path for c in result.candidates] == [local]
+    assert reasons(result)["report.pdf"] is SkipReason.CLOUD_ONLY
+
+
+def test_cloud_only_file_is_picked_up_once_downloaded(downloads: Path) -> None:
+    put(downloads, "report.pdf", b"%PDF downloaded now")
+    result = scan(make_config(downloads), nothing_known, now=NOW)
+    assert [c.path.name for c in result.candidates] == ["report.pdf"]
+
+
+def test_unit_with_a_cloud_only_file_inside_is_skipped_whole(
+    downloads: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    put(downloads, "project/a_local.txt")
+    cloud = put(downloads, "project/b_cloud.bin", b"only in the cloud")
+    put(downloads, "project/c_local.txt")
+    os.utime(downloads / "project", (OLD, OLD))
+    mark_cloud_only(monkeypatch, cloud)
+    result = scan(make_config(downloads), nothing_known, now=NOW)
+    assert result.candidates == []
+    assert reasons(result)["project"] is SkipReason.CLOUD_ONLY
+
+
+def test_cloud_only_folder_is_not_listed(downloads: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    put(downloads, "Album/photo.jpg")
+    os.utime(downloads / "Album", (OLD, OLD))
+    mark_cloud_only(monkeypatch, downloads / "Album")
+    result = scan(make_config(downloads), nothing_known, now=NOW)
+    assert result.candidates == []
+    assert reasons(result)["Album"] is SkipReason.CLOUD_ONLY
+
+
+def test_manifest_stops_at_a_cloud_only_member(
+    downloads: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    unit = downloads / "Tool.app"
+    put(downloads, "Tool.app/Contents/Info.plist")
+    cloud = put(downloads, "Tool.app/Contents/MacOS/tool", b"\x7fELF")
+    assert not hashing.unit_manifest(unit).dataless
+    mark_cloud_only(monkeypatch, cloud)
+    assert hashing.unit_manifest(unit).dataless
+    # The top folder itself being cloud-only is caught before listing it.
+    mark_cloud_only(monkeypatch, unit)
+    assert hashing.unit_manifest(unit).dataless
 
 
 def test_symlinks_and_special_files_are_skipped(downloads: Path, tmp_path: Path) -> None:

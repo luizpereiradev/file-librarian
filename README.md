@@ -13,6 +13,9 @@ commands keep these guarantees:
 - nothing is deleted and nothing is overwritten;
 - every run is recorded and can be undone, except files you changed or moved
   afterwards, which are skipped and listed.
+- nothing is downloaded from iCloud: files that exist only in the cloud, and
+  folders with any such file inside, are skipped and listed until you
+  download them.
 
 > **Status: pre-alpha (M1 complete, under acceptance).** Scanning,
 > extraction, secret detection, classification with Claude, planning, moving,

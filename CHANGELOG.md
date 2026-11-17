@@ -18,6 +18,12 @@ All notable changes to this project are documented here. The format follows
   warning in the output and the run log, never a failed move; tags
   `flib` cannot parse are left untouched. `finder_tags.enabled: false` stops
   new tags (existing ones stay). Simulations write no tags.
+- iCloud files that exist only in the cloud are skipped (RF-24). The scanner
+  recognises them from `lstat` (`SF_DATALESS`) before opening, hashing or
+  extracting anything, so no download is triggered; a folder unit with any
+  such file inside is skipped as a whole, and the manifest walk stops at the
+  first one. `flib simulate` and `flib run` list them as `in iCloud only, not
+  downloaded`; a later run picks them up once downloaded.
 - `flib reconcile` (RF-20): the index follows files moved, renamed or deleted
   by hand. Files are found again by content (only same-size files are
   hashed; folder units by manifest) under the library and the input folders.
@@ -187,5 +193,6 @@ All notable changes to this project are documented here. The format follows
   runs on `main` and the weekly audit are not.
 - mypy checks `tests/` too; ruff runs the bandit (`S`) rules.
 - Requirements are available in English in `docs/requirements.md`.
+- The Office extractor opens each document as a ZIP once instead of once per part.
 
 [Unreleased]: https://github.com/luizpereiradev/file-librarian/commits/main
