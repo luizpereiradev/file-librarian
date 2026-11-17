@@ -141,6 +141,38 @@ All notable changes to this project are documented here. The format follows
 - CI on macOS: lint, format, type check and tests.
 - Contributor documents, extension guides and ADRs 0001–0002.
 
+### Changed
+
+- Of several copies with the same content, the original goes ahead: a name
+  without a copy suffix (` (1)`, ` copy`) first, then the copy created first.
+  Version numbers like `-0.1.2` are not mistaken for copy suffixes.
+- `flib simulate` and `flib run` list the items they left alone and why
+  (duplicate, download in progress, still changing...). System files and
+  flib's own folders are not listed; already-processed items are counted.
+- Code and test quality pass from an independent review: a damaged Office
+  file can no longer abort every run (extraction errors of any kind fall back
+  to metadata, with a corruption fuzz test over every format); an invalid
+  document date from the model no longer discards the whole answer; the
+  provider contract (`local`, `last_usage`, `cost_usd`) is declared and
+  type-checked and pricing lives with each provider; store reads return
+  typed rows; layering follows the pipeline; config options that are not
+  active yet are marked as such; tests no longer depend on the time of day;
+  failure paths of the executor, undo and CLI are tested, and CI enforces 93%
+  branch coverage.
+- Files are renamed only when the model could read their content; images,
+  video, installers and other metadata-only files keep their original name
+  instead of getting one invented from the old name.
+- The classification prompt asks the model to judge confidence from the file
+  name and source as well as the content. On the acceptance corpus with
+  Claude Haiku 5.5, items sent to review fell from 17 to 12 of 48.
+- `flib check-config` warns when the configured provider is not implemented yet.
+- `flib inspect` no longer reports a size for directories.
+- CI tests Python 3.11 through 3.15; superseded pull request runs are cancelled,
+  runs on `main` and the weekly audit are not.
+- mypy checks `tests/` too; ruff runs the bandit (`S`) rules.
+- Requirements are available in English in `docs/requirements.md`.
+- The Office extractor opens each document as a ZIP once instead of once per part.
+
 ### Security
 
 - The daily run uses `flib-python`, a copy of the interpreter inside flib's
@@ -173,37 +205,5 @@ All notable changes to this project are documented here. The format follows
   name; inputs cannot be `/`, your home folder, overlapping or inside
   `output_root`; the database must live outside inputs and `output_root`;
   unknown providers are rejected.
-
-### Changed
-
-- Of several copies with the same content, the original goes ahead: a name
-  without a copy suffix (` (1)`, ` copy`) first, then the copy created first.
-  Version numbers like `-0.1.2` are not mistaken for copy suffixes.
-- `flib simulate` and `flib run` list the items they left alone and why
-  (duplicate, download in progress, still changing...). System files and
-  flib's own folders are not listed; already-processed items are counted.
-- Code and test quality pass from an independent review: a damaged Office
-  file can no longer abort every run (extraction errors of any kind fall back
-  to metadata, with a corruption fuzz test over every format); an invalid
-  document date from the model no longer discards the whole answer; the
-  provider contract (`local`, `last_usage`, `cost_usd`) is declared and
-  type-checked and pricing lives with each provider; store reads return
-  typed rows; layering follows the pipeline; config options that are not
-  active yet are marked as such; tests no longer depend on the time of day;
-  failure paths of the executor, undo and CLI are tested, and CI enforces 93%
-  branch coverage.
-- Files are renamed only when the model could read their content; images,
-  video, installers and other metadata-only files keep their original name
-  instead of getting one invented from the old name.
-- The classification prompt asks the model to judge confidence from the file
-  name and source as well as the content. On the acceptance corpus with
-  Claude Haiku 5.5, items sent to review fell from 17 to 12 of 48.
-- `flib check-config` warns when the configured provider is not implemented yet.
-- `flib inspect` no longer reports a size for directories.
-- CI tests Python 3.11 through 3.15; superseded pull request runs are cancelled,
-  runs on `main` and the weekly audit are not.
-- mypy checks `tests/` too; ruff runs the bandit (`S`) rules.
-- Requirements are available in English in `docs/requirements.md`.
-- The Office extractor opens each document as a ZIP once instead of once per part.
 
 [Unreleased]: https://github.com/luizpereiradev/file-librarian/commits/main
