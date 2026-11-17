@@ -37,6 +37,17 @@ class OperationStatus(StrEnum):
     SKIPPED = "skipped"
 
 
+class CopyPhase(StrEnum):
+    """How far a move to another volume got (RF-33), journaled with the operation."""
+
+    COPYING = "copying"
+    """A copy is being written to the staging folder; the source is untouched."""
+    COPIED = "copied"
+    """The copy is verified and being renamed into place."""
+    PLACED = "placed"
+    """The copy is in place; the source is being removed."""
+
+
 class RunMode(StrEnum):
     RUN = "run"
     SIMULATE = "simulate"

@@ -24,6 +24,7 @@ from pathlib import Path
 from types import TracebackType
 
 from file_librarian.models import (
+    CopyPhase,
     FileRecord,
     FileState,
     FileStatus,
@@ -130,6 +131,8 @@ class OperationRow:
     """The Finder tag this move added, which undo removes; ``None`` if none."""
     fix: tuple[FileStatus, str | None] | None = None
     """For a ``flib fix``, the (status, category) it gives the file; ``None`` for a run."""
+    copy_phase: CopyPhase | None = None
+    """How far a move (``planned``) or its undo (``done``) to another volume got."""
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> OperationRow:
@@ -146,6 +149,7 @@ class OperationRow:
             fix=None
             if row["fix_status"] is None
             else (FileStatus(row["fix_status"]), row["fix_category"]),
+            copy_phase=None if row["copy_phase"] is None else CopyPhase(row["copy_phase"]),
         )
 
 
@@ -342,11 +346,12 @@ class Store:
         )
         return [CorrectionRow.from_row(r) for r in rows]
 
-    def mark_file_failed(self, file_id: int, error: str) -> None:
+    def mark_file_failed(self, file_id: int, error: str, *, attempt: bool = True) -> None:
+        """``attempt=False`` for a cause outside the file (a full disk): retried every run."""
         self.conn.execute(
-            """UPDATE files SET status = 'failed', attempts = attempts + 1, last_error = ?
+            """UPDATE files SET status = 'failed', attempts = attempts + ?, last_error = ?
                WHERE id = ?""",
-            (error[:500], file_id),
+            (int(attempt), error[:500], file_id),
         )
 
     def file_by_id(self, file_id: int) -> FileRow:
@@ -426,15 +431,35 @@ class Store:
         return _rowid(cur)
 
     def set_operation(self, op_id: int, status: OperationStatus, dst: Path | None = None) -> None:
+        """Set the status (and destination); this ends any cross-volume copy phase."""
         if dst is None:
             self.conn.execute(
-                "UPDATE operations SET status = ? WHERE id = ?", (status.value, op_id)
+                "UPDATE operations SET status = ?, copy_phase = NULL WHERE id = ?",
+                (status.value, op_id),
             )
         else:
             self.conn.execute(
-                "UPDATE operations SET status = ?, dst_path = ? WHERE id = ?",
+                "UPDATE operations SET status = ?, dst_path = ?, copy_phase = NULL WHERE id = ?",
                 (status.value, str(dst), op_id),
             )
+
+    def set_copy_phase(self, op_id: int, phase: CopyPhase | None, dst: Path | None = None) -> None:
+        """Journal how far a cross-volume move (or its undo) got, and where it is going."""
+        value = None if phase is None else phase.value
+        if dst is None:
+            self.conn.execute("UPDATE operations SET copy_phase = ? WHERE id = ?", (value, op_id))
+        else:
+            self.conn.execute(
+                "UPDATE operations SET copy_phase = ?, dst_path = ? WHERE id = ?",
+                (value, str(dst), op_id),
+            )
+
+    def interrupted_undos(self) -> list[OperationRow]:
+        """``done`` entries whose undo to another volume a crash cut off."""
+        rows = self.conn.execute(
+            "SELECT * FROM operations WHERE status = 'done' AND copy_phase IS NOT NULL ORDER BY id"
+        )
+        return [OperationRow.from_row(r) for r in rows]
 
     def set_operation_tag(self, op_id: int, tag: str) -> None:
         self.conn.execute("UPDATE operations SET finder_tag = ? WHERE id = ?", (tag, op_id))

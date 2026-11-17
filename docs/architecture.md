@@ -19,7 +19,8 @@ classifier, uses AI. Each stage is a module with typed input and output
       │                            (extractors/visual.py) go to providers that read them
  4. Planner      planner.py        Operations: naming pattern, rename policy, collisions,
       │                            low confidence → review folder.   `flib simulate` stops here
- 5. Executor     executor.py       single-instance lock; record "planned" → move → mark "done"
+ 5. Executor     executor.py,      single-instance lock; record "planned" → move → mark "done";
+      │          fsops.py          another volume: copy → verify → place → delete, each journaled
       │
  6. Indexer      db/, search.py,   file record, FTS index, category as Finder tag
                  finder_tags.py
@@ -38,7 +39,8 @@ model.
 ## Safety guarantees
 
 - Nothing is deleted and nothing is overwritten. The only removal is the
-  source of a cross-volume move, after the copy's hash is verified.
+  source of a cross-volume move, after the copy's hash is verified (see
+  below).
 - Every operation is written to `operations` as `planned` before it runs, so a
   crash mid-run is recoverable and every run can be undone. Recovery looks
   for the file under the journaled name, spelled exactly (a case-insensitive
@@ -51,6 +53,33 @@ model.
   the file's row untouched.
 - `flib undo` walks a run's operations in reverse, checks each file's hash, and
   skips (and lists) files that were edited or whose original path is taken.
+- A move to another volume (RF-33), where a rename is impossible, is copy,
+  verify, delete (`fsops.copy_move`), and so is an undo back across volumes.
+  The copy is made with `copyfile(3)` and `COPYFILE_ALL` into a hidden
+  staging folder next to the destination (`.flib-<id>.copy`), which keeps
+  extended attributes (download origin, Finder tags), ACLs, permissions,
+  flags and dates. It is flushed with `F_FULLFSYNC` and verified: the copy's
+  SHA-256 must equal the indexed one (for a folder unit, every file's
+  SHA-256 must match the source's, and the source's manifest the indexed
+  one), and the source must not have changed while it was copied (inode,
+  size, modification time). Only then is it renamed into place with
+  `RENAME_EXCL`, and the source renamed aside (`.flib-<id>.delete`) and
+  deleted. `copyfile(3)` was chosen over `shutil.copy2` because it copies
+  every extended attribute, ACLs and file flags, and whole bundles, as
+  Finder does. A full disk, a failed copy or a mismatch removes the staging
+  folder and leaves the source untouched; the item fails. The journal entry
+  records each phase in `copy_phase`, and recovery decides from it and from
+  what is on disk:
+
+  | Phase at the crash | What recovery does |
+  | --- | --- |
+  | `copying` (copy not yet verified) | Source still there: delete the staging folder and fail the item; the source is untouched. Source gone (deleted by hand) and the staged copy matches the hash: place it. Otherwise leave both alone. |
+  | `copied` (verified, being renamed) | Staged copy there: rename it into place, then remove the source. Name taken meanwhile: roll back (the staging folder is deleted only while the source is still there). Copy already at the destination: remove the source. |
+  | `placed` (in place, removing the source) | Finish removing the source (only if it still has the copied content) and what is left of `.delete`. If the copy is gone from the destination, a source already moved aside is put back instead. |
+
+  For an undo the entry stays `done` while its `copy_phase` is set; a
+  rolled-back undo leaves the item in the library, still undoable. A
+  verified copy is never deleted unless its source is still in place.
 - Nothing that exists only in iCloud is read, hashed or listed, since that
   would make macOS download it. The scanner, `flib reconcile` and
   `flib inspect` look at the `lstat` flags first (`hashing.is_dataless`). A
@@ -73,10 +102,20 @@ Found in the safety review of M1 and accepted for now:
 - **One lock per database.** Two configurations with different databases
   but the same input folders are not excluded from each other. A race there
   ends in a failed move, never a lost file.
-- **Environmental failures use attempts.** A move that fails because the
-  destination is on another volume or a category folder is a symlink counts
-  as a failed attempt; after `max_attempts` the file is left alone until the
-  index row is cleared.
+- **Environmental failures use attempts.** A move that fails because a
+  category folder is a symlink, or a cross-volume copy that fails or does
+  not match, counts as a failed attempt; after `max_attempts` the file is
+  left alone until the index row is cleared. A full disk or quota (`ENOSPC`,
+  `EDQUOT`) does not count: the item is retried every run.
+- **Folder units and coarse timestamps.** A folder unit's identity includes
+  its files' modification times. Moved to a volume whose file system keeps
+  coarser times than APFS (HFS+, exFAT), the copy's manifest differs from the
+  indexed one, so `flib undo` and `flib reconcile` see it as changed and
+  leave it where it is. Single files are identified by content and are not
+  affected.
+- **`flib fix` stays on one volume.** A correction is a rename inside the
+  library; a category folder that is the mount point of another volume
+  fails the fix with nothing changed.
 - **Duplicates wait.** A second copy with the same content as one processed
   in the same run stays in place (moving duplicates is RF-21).
 
@@ -89,7 +128,7 @@ One SQLite file, outside the organized folders (default
 | --- | --- |
 | `files` | one row per file: original and current name/path, hash, origin, category, description, tags, status, attempts |
 | `runs` | one row per `flib run`, with counts (simulations record none) |
-| `operations` | the journal behind `flib undo`, including the Finder tag each move added and, for `flib fix`, the status and category it sets |
+| `operations` | the journal behind `flib undo`, including the Finder tag each move added, the phase of a cross-volume copy in progress and, for `flib fix`, the status and category it sets |
 | `corrections` | user recategorizations and renames (`flib fix`, `flib reconcile`); the latest per file and field, while still in effect, are sent as examples and are part of the cache key |
 | `files_fts` | FTS5 index over names, description and tags; accents ignored |
 
