@@ -84,6 +84,9 @@ class FileRow:
     processed_at: str
     size_bytes: int | None
     is_unit: bool
+    name_choice: str | None = None
+    """``original`` or ``proposed`` (#59); ``None`` when no rename was considered."""
+    name_choice_reason: str | None = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> FileRow:
@@ -106,6 +109,8 @@ class FileRow:
             processed_at=str(row["processed_at"]),
             size_bytes=None if row["size_bytes"] is None else int(row["size_bytes"]),
             is_unit=bool(row["is_unit"]),
+            name_choice=row["name_choice"],
+            name_choice_reason=row["name_choice_reason"],
         )
 
 
@@ -266,8 +271,8 @@ class Store:
             """INSERT INTO files (sha256, original_name, original_path, current_name,
                    current_path, extension, size_bytes, source_url, category, description,
                    tags, confidence, status, attempts, last_error, provider, model, run_id,
-                   processed_at, is_unit)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   processed_at, is_unit, name_choice, name_choice_reason)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(sha256) DO UPDATE SET
                    current_name = excluded.current_name, current_path = excluded.current_path,
                    category = excluded.category, description = excluded.description,
@@ -275,13 +280,15 @@ class Store:
                    status = excluded.status, attempts = files.attempts + excluded.attempts,
                    last_error = excluded.last_error, provider = excluded.provider,
                    model = excluded.model, run_id = excluded.run_id,
-                   processed_at = excluded.processed_at""",
+                   processed_at = excluded.processed_at, name_choice = excluded.name_choice,
+                   name_choice_reason = excluded.name_choice_reason""",
             (
                 r.sha256, normalize(r.original_path.name), normalize(str(r.original_path)),
                 normalize(r.current_path.name), normalize(str(r.current_path)), r.extension,
                 r.size_bytes, r.source_url, r.category, r.description,
                 json.dumps(list(r.tags), ensure_ascii=False), r.confidence, r.status.value,
                 r.attempts, r.last_error, r.provider, r.model, run_id, _now(), int(r.is_unit),
+                r.name_choice, r.name_choice_reason,
             ),
         )  # fmt: skip
         row = self.conn.execute("SELECT id FROM files WHERE sha256 = ?", (r.sha256,)).fetchone()
@@ -347,6 +354,10 @@ class Store:
         if row is None:
             raise LookupError(f"no file with id {file_id}")
         return FileRow.from_row(row)
+
+    def file_by_sha256(self, sha256: str) -> FileRow | None:
+        row = self.conn.execute("SELECT * FROM files WHERE sha256 = ?", (sha256,)).fetchone()
+        return None if row is None else FileRow.from_row(row)
 
     def file_by_current_path(self, path: Path) -> FileRow | None:
         row = self.conn.execute(

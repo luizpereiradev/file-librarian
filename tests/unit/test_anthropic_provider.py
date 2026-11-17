@@ -58,6 +58,7 @@ def test_request_shape() -> None:
         assert forbidden not in req
     schema = req["output_config"]["format"]["schema"]
     assert schema["properties"]["category"]["enum"] == ["Finance", "Other"]
+    assert schema["properties"]["name_choice"]["enum"] == ["original", "proposed"]
     assert schema["additionalProperties"] is False
     assert req["output_config"]["effort"] == "low"
     assert req["betas"] == [FALLBACK_BETA] and req["fallbacks"] == "default"
@@ -115,6 +116,14 @@ def test_valid_answer_and_normalization() -> None:
     assert answer.tags == ["a", "b" * 40]
     assert answer.document_date is None
     assert (p.last_usage.input_tokens, p.last_usage.output_tokens) == (500, 50)
+
+
+def test_name_choice_reaches_the_answer() -> None:
+    kept = GOOD | {"name_choice": "original", "name_choice_reason": "O nome já é específico."}
+    p, _ = provider(reply(kept))
+    answer = p.classify(CTX, RULES)
+    assert answer.name_choice == "original"
+    assert answer.name_choice_reason == "O nome já é específico."
 
 
 @pytest.mark.parametrize(

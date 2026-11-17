@@ -56,6 +56,9 @@ class FileState:
     attempts: int
 
 
+NameChoice = Literal["original", "proposed"]
+"""The model's verdict on a file's name: keep the original subject, or use its proposal."""
+
 VisualKind = Literal["image", "pdf"]
 """What a file can show a vision model: a picture, or the pages of a scanned PDF."""
 
@@ -150,6 +153,9 @@ class Classification(BaseModel):
     )
     confidence: float = Field(ge=0.0, le=1.0)
     document_date: date | None = None
+    name_choice: NameChoice = "proposed"
+    """Which describes the file better: its original name, or ``suggested_name``."""
+    name_choice_reason: str | None = Field(default=None, max_length=300)
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,6 +227,9 @@ class FileRecord:
     last_error: str | None = None
     provider: str | None = None
     model: str | None = None
+    name_choice: NameChoice | None = None
+    """The name choice the planner applied; ``None`` when no rename was considered."""
+    name_choice_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
