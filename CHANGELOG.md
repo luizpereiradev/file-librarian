@@ -15,7 +15,7 @@ All notable changes to this project are documented here. The format follows
   SHA-256, or for a folder unit every file's content and the source's
   manifest; the source must not have changed meanwhile), renamed into place
   without overwriting, and only then is the source removed. `flib undo`
-  copies back the same way. Each phase is journaled (migration 0007,
+  copies back the same way. Each phase is journaled (migration 0008,
   `operations.copy_phase`) and crash recovery finishes or rolls back from
   what is on disk, never deleting the only verified copy. A full disk
   cleans up, leaves the source untouched and does not count as a failed
