@@ -110,3 +110,18 @@ def make_pdf(path: Path, text: str) -> Path:
     )
     path.write_bytes(bytes(out))
     return path
+
+
+def case_insensitive(folder: Path) -> bool:
+    """Whether ``folder``'s volume ignores case in names (the macOS default)."""
+    probe = folder / ".flib-case-probe"
+    probe.write_bytes(b"")
+    try:
+        return (folder / ".FLIB-CASE-PROBE").exists()
+    finally:
+        probe.unlink()
+
+
+def names(folder: Path) -> list[str]:
+    """The entry names in ``folder`` as the disk spells them, sorted."""
+    return sorted(entry.name for entry in folder.iterdir())

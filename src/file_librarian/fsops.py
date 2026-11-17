@@ -17,6 +17,7 @@ import ctypes.util
 import errno
 import os
 import stat
+import unicodedata
 from functools import cache
 from pathlib import Path
 
@@ -40,16 +41,58 @@ def _libc() -> ctypes.CDLL:
 
 
 def move_no_replace(src: Path, dst: Path) -> None:
-    """Rename ``src`` to ``dst``; fail if ``dst`` exists. Never overwrites."""
+    """Rename ``src`` to ``dst``; fail if ``dst`` exists. Never overwrites.
+
+    On a case-insensitive volume, ``a.pdf`` -> ``A.pdf`` finds the source
+    itself at the destination; when it is provably the same directory entry,
+    the rename only changes the name's case and goes ahead.
+    """
     rc = _libc().renamex_np(os.fsencode(src), os.fsencode(dst), _RENAME_EXCL)
     if rc == 0:
         return
     err = ctypes.get_errno()
+    if err == errno.EEXIST and _same_entry(src, dst):
+        if _libc().renamex_np(os.fsencode(src), os.fsencode(dst), 0) == 0:
+            return
+        err = ctypes.get_errno()
     if err == errno.EEXIST:
         raise DestinationExistsError(err, "destination exists", str(dst))
     if err == errno.EXDEV:
         raise CrossVolumeError(err, "source and destination are on different volumes", str(dst))
     raise OSError(err, os.strerror(err), str(src))
+
+
+def _fold(name: str) -> str:
+    return unicodedata.normalize("NFD", name).casefold()
+
+
+def _same_entry(src: Path, dst: Path) -> bool:
+    """Whether ``dst`` is just another spelling of ``src``'s own directory entry.
+
+    Same folder, names equal but for case, same inode, and no
+    entry spelled exactly like ``dst`` (a hard link with that name on a
+    case-sensitive volume is a different entry and must not be replaced).
+    """
+    if src.parent != dst.parent or src.name == dst.name or _fold(src.name) != _fold(dst.name):
+        return False
+    try:
+        a, b = os.lstat(src), os.lstat(dst)
+    except OSError:
+        return False
+    return (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino) and not has_exact_name(dst)
+
+
+def has_exact_name(path: Path) -> bool:
+    """Whether ``path``'s folder holds an entry spelled exactly like ``path`` (up to NFC).
+
+    On a case-insensitive volume ``A.pdf`` opens ``a.pdf``, so existing is not enough.
+    """
+    try:
+        names = [entry.name for entry in path.parent.iterdir()]
+    except OSError:
+        return False
+    wanted = unicodedata.normalize("NFC", path.name)
+    return any(unicodedata.normalize("NFC", n) == wanted for n in names)
 
 
 def ensure_folder(path: Path, *, inside: Path) -> None:
