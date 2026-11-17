@@ -139,6 +139,33 @@ class OperationRow:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class CorrectionRow:
+    """A correction joined with what the index knows about its file."""
+
+    field: str
+    old_value: str | None
+    new_value: str
+    extension: str
+    is_unit: bool
+    description: str | None
+    original_name: str
+    current_name: str
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> CorrectionRow:
+        return cls(
+            field=str(row["field"]),
+            old_value=row["old_value"],
+            new_value=str(row["new_value"]),
+            extension=str(row["extension"] or ""),
+            is_unit=bool(row["is_unit"]),
+            description=row["description"],
+            original_name=str(row["original_name"]),
+            current_name=str(row["current_name"]),
+        )
+
+
 class Store:
     """An open database. Use as a context manager."""
 
@@ -285,6 +312,24 @@ class Store:
             (file_id, field, old, new, _now()),
         )
 
+    def current_corrections(self) -> list[CorrectionRow]:
+        """Corrections still in effect, newest first: the last one per file and field,
+        and only while the file still has that value (an undone fix no longer counts).
+        Sensitive files are left out here; ``never_send`` is the classifier's to apply."""
+        rows = self.conn.execute(
+            """SELECT c.field, c.old_value, c.new_value, f.extension, f.is_unit,
+                      f.description, f.original_name, f.current_name
+               FROM corrections c JOIN files f ON f.id = c.file_id
+               WHERE f.status != 'sensitive'
+                 AND c.id = (SELECT MAX(id) FROM corrections
+                             WHERE file_id = c.file_id AND field = c.field)
+                 AND ((c.field = 'category' AND f.status = 'organized'
+                       AND f.category = c.new_value)
+                      OR (c.field = 'name' AND f.current_name = c.new_value))
+               ORDER BY c.id DESC"""
+        )
+        return [CorrectionRow.from_row(r) for r in rows]
+
     def mark_file_failed(self, file_id: int, error: str) -> None:
         self.conn.execute(
             """UPDATE files SET status = 'failed', attempts = attempts + 1, last_error = ?
@@ -386,6 +431,16 @@ class Store:
             (file_id,),
         ).fetchone()
         return None if row is None else OperationRow.from_row(row)
+
+    def last_finder_tag(self, file_id: int) -> str | None:
+        """The Finder tag of the newest move still in effect that added one."""
+        row = self.conn.execute(
+            """SELECT finder_tag FROM operations
+               WHERE file_id = ? AND status = 'done' AND finder_tag IS NOT NULL
+               ORDER BY id DESC LIMIT 1""",
+            (file_id,),
+        ).fetchone()
+        return None if row is None else str(row[0])
 
     def close(self) -> None:
         self.conn.close()

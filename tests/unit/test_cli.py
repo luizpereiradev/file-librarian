@@ -30,6 +30,7 @@ def test_help_lists_every_command() -> None:
         "undo",
         "schedule",
         "reconcile",
+        "fix",
         "init",
         "mcp",
         "reprocess",

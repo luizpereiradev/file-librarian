@@ -29,6 +29,7 @@ provider:
   model: claude-haiku-5-5    # fast and cheap; for harder files try claude-sonnet-5-5 or claude-opus-5-5
   effort: low                # low | medium | high | xhigh | max: classification needs little
   max_chars_per_file: 4000   # only this much text is ever sent
+  max_examples: 10           # recent corrections (flib fix, reconcile) sent as examples; 0 = none
   requests_per_minute: 30
   max_retries: 3
   timeout_seconds: 60

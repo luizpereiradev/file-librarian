@@ -92,6 +92,7 @@ easiest choice for them. Set `api_key_source` to `environment`, `keychain` or
 | `flib undo [--run ID \| --file PATH]` | Revert a run or one file | M1 (available) |
 | `flib schedule [--at HH:MM \| --status \| --remove]` | Run every day via launchd, with an access check | M2 (available) |
 | `flib reconcile` | Update the index after you move, rename or delete files by hand | M2 (available) |
+| `flib fix PATH [--category NAME] [--name NAME]` | Correct one file's category or name; flib learns from it | M2 (available) |
 | `flib init` | Guided first run on a sample | M2 |
 | `flib mcp` | Local MCP server for AI assistants | M2 |
 | `flib reprocess` | Reclassify after a rules change | M3 |
@@ -114,6 +115,22 @@ Your own tags are kept, `flib undo` removes only the tag flib added, and
 `finder_tags.enabled: false` turns this off.
 The API key is read from `ANTHROPIC_API_KEY`, never from the file.
 
+### Teaching it
+
+When a file lands in the wrong place, correct it:
+
+```sh
+flib fix ~/Downloads/Organized/Other/scan.pdf --category Finance
+flib fix ~/Downloads/Organized/_Review/document.pdf --category Contracts --name lease-2026
+```
+
+The file moves (a taken name gets `-2`; a missing extension is kept), the
+index, search and the Finder tag follow, and `flib undo` reverts it like a
+run. Corrections,
+these and the moves or renames `flib reconcile` finds, are sent as examples
+with later requests, so the classifier stops repeating the mistake.
+`provider.max_examples` caps how many (10 by default; `0` sends none).
+
 ## Privacy
 
 With a remote provider such as `anthropic`, this is what leaves your Mac
@@ -123,6 +140,12 @@ for each file:
   from;
 - at most `provider.max_chars_per_file` characters of its text (4,000 by
   default), or for a folder, the names of up to 100 files inside it.
+
+With every request also go your most recent corrections (at most
+`provider.max_examples`): for each, the corrected file's extension, the
+description the provider wrote for it earlier, and the category or name before
+and after. Never file content, and never from files matching `never_send` or
+flagged sensitive.
 
 Two kinds of files are treated differently:
 

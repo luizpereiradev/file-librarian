@@ -1,4 +1,4 @@
-"""Stage 3: classify contexts with a provider (RF-07, RF-08, RF-30).
+"""Stage 3: classify contexts with a provider (RF-07, RF-08, RF-29, RF-30).
 
 Wraps any ``Provider`` with what the provider itself should not decide:
 
@@ -9,11 +9,17 @@ Wraps any ``Provider`` with what the provider itself should not decide:
 - a ``FatalProviderError`` stops the run before anything moves;
 - answers are cached for ``CACHE_DAYS`` per content hash and rules, so a
   ``flib run`` right after ``flib simulate`` reuses them instead of paying again;
+  the rules include the correction examples, so a new correction means fresh
+  answers;
 - the estimated cost of what was actually billed is tracked, and once it
   reaches ``limits.max_cost_usd_per_run`` the remaining files are deferred to
   the next run (not counted as failures).
 
 The provider's answer is only data; the planner decides what it means.
+
+``correction_examples`` picks the corrections sent along as examples: the
+most recent ``provider.max_examples`` still in effect, never from a sensitive
+file or one matching ``never_send``.
 """
 
 from __future__ import annotations
@@ -21,18 +27,21 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Protocol
 
 from pydantic import ValidationError
 
 from file_librarian.config import Config
-from file_librarian.models import Classification, Decision, FileContext, Rules
+from file_librarian.db.store import CorrectionRow
+from file_librarian.models import Classification, Correction, Decision, FileContext, Rules
 from file_librarian.providers.base import FatalProviderError, Provider, ProviderError, Usage
+from file_librarian.sensitive import sensitive_name, withheld_by_config
 
 CACHE_DAYS = 7
-PROMPT_VERSION = "2"  # bump when the prompt or answer schema changes, to invalidate the cache
+PROMPT_VERSION = "3"  # bump when the prompt or answer schema changes, to invalidate the cache
+EXAMPLE_DESCRIPTION_CHARS = 200
 
 
 class AnswerCache(Protocol):
@@ -54,11 +63,46 @@ def rules_key(provider: Provider, rules: Rules, config: Config) -> str:
             "language": rules.language,
             "date_order": rules.date_order,
             "categories": [[c.name, c.hint] for c in rules.categories],
+            "examples": [
+                [e.field, e.old_value, e.new_value, e.extension, e.is_unit, e.description]
+                for e in rules.examples
+            ],
         },
         ensure_ascii=False,
         sort_keys=True,
     )
     return hashlib.sha256(material.encode()).hexdigest()
+
+
+def correction_examples(rows: Iterable[CorrectionRow], config: Config) -> tuple[Correction, ...]:
+    """The newest corrections to send as examples, at most ``provider.max_examples``.
+
+    A file whose name is sensitive or matches ``never_send``, under its original
+    or its current name, is never used: its content was withheld, and so is
+    what was learned from it.
+    """
+    limit = config.provider.max_examples
+    chosen: list[Correction] = []
+    for row in rows:
+        if len(chosen) >= limit:
+            break
+        names = {row.original_name, row.current_name}
+        if row.field == "name" and row.old_value:
+            names.add(row.old_value)
+        if any(sensitive_name(n) or withheld_by_config(n, config.never_send) for n in names):
+            continue
+        description = (row.description or "")[:EXAMPLE_DESCRIPTION_CHARS] or None
+        chosen.append(
+            Correction(
+                field="name" if row.field == "name" else "category",
+                old_value=row.old_value,
+                new_value=row.new_value,
+                extension=row.extension,
+                is_unit=row.is_unit,
+                description=description,
+            )
+        )
+    return tuple(chosen)
 
 
 @dataclass(slots=True)

@@ -27,6 +27,7 @@ from file_librarian.config import (
 from file_librarian.db.store import Store
 from file_librarian.executor import RunReport, recover
 from file_librarian.extractors.origin import download_origin
+from file_librarian.fix import FixError, fix_file
 from file_librarian.hashing import file_sha256, unit_manifest
 from file_librarian.lock import AlreadyRunningError, instance_lock
 from file_librarian.models import FileStatus, RunTrigger
@@ -374,7 +375,11 @@ def undo(
     try:
         with instance_lock(cfg.database), Store.open(cfg.database) as store:
             recovered = recover(store)  # finish the journal before reading it
-            report = undo_file(store, file) if file is not None else undo_run(store, run_id)
+            report = (
+                undo_file(store, file, config=cfg)
+                if file is not None
+                else undo_run(store, run_id, config=cfg)
+            )
     except (NothingToUndoError, AlreadyRunningError) as exc:
         _fatal(str(exc))
     if recovered:
@@ -386,6 +391,37 @@ def undo(
     for path, warning in report.warnings:
         typer.echo(f"  warning   {_short(path, cfg)}  ({warning})")
     typer.echo(f"Undo: {len(report.restored)} restored, {len(report.skipped)} skipped.")
+
+
+@app.command()
+def fix(
+    file: Annotated[Path, typer.Argument(help="An organized file, by its current path.")],
+    category: Annotated[
+        str | None, typer.Option("--category", help="The category it belongs to.")
+    ] = None,
+    name: Annotated[
+        str | None,
+        typer.Option("--name", help="Its new file name; the extension is kept if left out."),
+    ] = None,
+    config: ConfigOption = None,
+) -> None:
+    """Correct a file's category or name; flib learns from it. `flib undo` reverts it."""
+    cfg = _load(config)
+    try:
+        with instance_lock(cfg.database), Store.open(cfg.database) as store:
+            recover(store)  # finish the journal before adding to it
+            report = fix_file(cfg, store, file, category=category, name=name)
+    except (FixError, AlreadyRunningError) as exc:
+        _fatal(str(exc))
+    typer.echo(f"  moved   {_short(report.source, cfg)}  ->  {_short(report.destination, cfg)}")
+    if report.category is not None:
+        old, new = report.category
+        typer.echo(f"  learned category: {old or '-'} -> {new}")
+    if report.name is not None:
+        typer.echo(f"  learned name: {report.name[0]} -> {report.name[1]}")
+    for warning in report.warnings:
+        typer.echo(f"  warning {warning}")
+    typer.echo(f"Fixed in run {report.run_id}; `flib undo` reverts it.")
 
 
 @app.command()
