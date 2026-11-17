@@ -32,6 +32,9 @@ class Usage:
     input_tokens: int = 0
     output_tokens: int = 0
     models: list[str] = field(default_factory=list)
+    cost_usd: float | None = None
+    """The cost the backend itself reported for the call, when it reports one
+    (``claude-code`` does); ``None`` means price the tokens."""
 
 
 @runtime_checkable

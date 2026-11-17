@@ -36,8 +36,9 @@ def test_fake_provider_satisfies_interface() -> None:
 def test_registry() -> None:
     assert get_provider(ProviderConfig(name="fake", model="x")).name == "fake"
     assert get_provider(ProviderConfig(name="anthropic", model="x")).name == "anthropic"
-    with pytest.raises(ProviderError, match="planned for M2"):
-        get_provider(ProviderConfig(name="claude-code", model="x"))
+    assert get_provider(ProviderConfig(name="claude-code", model="x")).name == "claude-code"
+    with pytest.raises(ProviderError, match="planned for M3"):
+        get_provider(ProviderConfig(name="ollama", model="x"))
     with pytest.raises(ValidationError, match="unknown provider"):
         ProviderConfig(name="nope", model="x")
 

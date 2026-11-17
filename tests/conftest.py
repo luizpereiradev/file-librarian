@@ -2,13 +2,14 @@
 
 Every test runs with HOME pointed at a temporary directory and with outbound
 connections and DNS lookups disabled, and with a throwaway keychain in place of
-the user's login Keychain and fakes of launchctl and sips, so code that uses
+the user's login Keychain and fakes of launchctl, sips and claude, so code that uses
 ``Path.home()`` or ``~`` stays in a temporary folder and nothing reaches a real API. A test that
 hard-codes an absolute path could still escape; reviewers must reject those.
 """
 
 from __future__ import annotations
 
+import os
 import socket
 import sys
 from collections.abc import Iterator
@@ -16,6 +17,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
+from tests._helpers import FakeClaude
 
 
 class NetworkBlockedError(RuntimeError):
@@ -82,6 +85,25 @@ def fake_sips(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Monk
     monkeypatch.delenv("FAKE_SIPS_SILENT", raising=False)
     monkeypatch.setattr("file_librarian.extractors.visual.SIPS", str(script))
     return folder / "calls.jsonl"
+
+
+@pytest.fixture(autouse=True)
+def fake_claude(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> FakeClaude:
+    """Every test finds a fake ``claude`` first on PATH; the real one never runs."""
+    folder = tmp_path_factory.mktemp("claude")
+    target = Path(__file__).with_name("fake_claude.py")
+    shim = folder / "claude"
+    # The provider passes only an allow-list of variables, so the shim names its state itself.
+    shim.write_text(
+        f'#!/bin/sh\nFAKE_CLAUDE_DIR={folder} exec {sys.executable} {target} "$@"\n',
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{folder}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setattr("file_librarian.providers.claude_code.INSTALL_LOCATIONS", ())
+    return FakeClaude(folder)
 
 
 @pytest.fixture(autouse=True)

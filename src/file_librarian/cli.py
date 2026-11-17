@@ -115,6 +115,8 @@ def check_config(config: ConfigOption = None) -> None:
             if found.value
             else "  api key: not found (run `flib key set`, or set ANTHROPIC_API_KEY)"
         )
+    if cfg.provider.name == "claude-code":
+        _report_claude(cfg)
     env_file = cfg.provider.env_file
     if env_file is not None and env_file.exists() and not credentials.env_file_is_private(env_file):
         typer.echo(f"warning: {env_file} is readable by other users; run chmod 600 on it", err=True)
@@ -125,6 +127,28 @@ def check_config(config: ConfigOption = None) -> None:
             "classification commands will not run until then.",
             err=True,
         )
+
+
+def _report_claude(cfg: Config) -> None:
+    """Where the ``claude`` executable is and whether it is logged in (no prompt is sent)."""
+    from file_librarian.providers import claude_code
+
+    executable = claude_code.find_claude(cfg.provider)
+    if executable is None:
+        typer.echo("  claude: not found")
+        typer.echo(
+            "warning: install Claude Code, or set provider.command to the `claude` executable",
+            err=True,
+        )
+        return
+    typer.echo(f"  claude: {executable}")
+    login = claude_code.logged_in(executable)
+    if login is None:
+        typer.echo("warning: could not ask Claude Code whether it is logged in", err=True)
+    elif login:
+        typer.echo("  claude login: ok")
+    else:
+        typer.echo(f"warning: Claude Code is not logged in; {claude_code.LOGIN_HINT}", err=True)
 
 
 @app.command()
@@ -499,6 +523,7 @@ def schedule(
             err=True,
         )
     _ensure_key_for_schedule(cfg, save_key)
+    _ensure_claude_for_schedule(cfg)
     try:
         installed = scheduler.install(when, path.resolve(), logs_dir(cfg.database))
     except scheduler.ScheduleError as exc:
@@ -562,6 +587,29 @@ def _ensure_key_for_schedule(cfg: Config, save_key: bool | None) -> None:
         typer.echo(
             "warning: the daily run will not find the API key; see `flib key set`.", err=True
         )
+
+
+def _ensure_claude_for_schedule(cfg: Config) -> None:
+    """Warn when the scheduled run, with launchd's minimal PATH, would not find ``claude``."""
+    if cfg.provider.name != "claude-code":
+        return
+    from file_librarian.providers import claude_code
+
+    if claude_code.find_claude(cfg.provider, search_path=scheduler.SAFE_PATH) is not None:
+        return
+    here = claude_code.find_claude(cfg.provider)
+    if here is None:
+        typer.echo(
+            "warning: Claude Code was not found; the daily run will fail until you install "
+            "it or set provider.command.",
+            err=True,
+        )
+        return
+    typer.echo(
+        f"warning: the daily run cannot see this shell's PATH and will not find {here}. "
+        f"Add `command: {here}` under `provider:` in the configuration.",
+        err=True,
+    )
 
 
 def _report_access(config_path: Path) -> None:
