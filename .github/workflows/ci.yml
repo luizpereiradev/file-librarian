@@ -49,6 +49,12 @@ jobs:
         run: uv run coverage run -m pytest
       - name: Coverage (fails under 93%)
         run: uv run coverage report
+      - name: Cross-volume moves on disk images (APFS, HFS+, exFAT)
+        # One version is enough: it exercises the file systems, not Python.
+        if: matrix.python == '3.15'
+        env:
+          FLIB_TEST_VOLUMES: "1"
+        run: uv run pytest -m volumes -p no:cacheprovider
 
   # The one required check: it passes only when every matrix entry passed, so
   # the branch rules do not depend on which versions ran.

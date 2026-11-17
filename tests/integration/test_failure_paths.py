@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 from file_librarian import cli, pipeline
 from file_librarian.config import Config, parse_config
 from file_librarian.db.store import Store
-from file_librarian.fsops import CrossVolumeError, DestinationExistsError, move_no_replace
+from file_librarian.fsops import DestinationExistsError, move_no_replace
 from file_librarian.models import FileStatus, OperationStatus, RunMode, RunTrigger
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.undo import NothingToUndoError, undo_file, undo_run
@@ -53,8 +53,8 @@ def test_name_taken_between_plan_and_move_gets_the_next_counter(
 @pytest.mark.parametrize(
     ("error", "message"),
     [
-        (CrossVolumeError(18, "cross-device"), "another volume"),
         (PermissionError(13, "denied"), "move failed"),
+        (NotADirectoryError(20, "not a folder"), "move failed"),
     ],
 )
 def test_failed_move_is_journaled_and_leaves_the_file(

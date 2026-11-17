@@ -8,6 +8,27 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Moves to another volume (RF-33). A destination on another volume used to
+  fail the item; now it is copied with `copyfile(3)` (extended attributes
+  such as the download origin and Finder tags, ACLs, permissions, flags and
+  dates included) into a hidden staging folder, flushed to disk, verified
+  (its SHA-256, or for a folder unit every file's content and the source's
+  manifest; the source must not have changed meanwhile), renamed into place
+  without overwriting, and only then is the source removed, read-only
+  folders included; a source changed after the copy is kept, with a
+  warning. A locked item (Finder's "Locked"), or a folder with anything
+  locked inside, is refused before copying, so flib never deletes what you
+  locked.
+  `flib undo` copies back the same way. Each phase is journaled (migration
+  0008: `operations.copy_phase`, `copy_key` and the two folders' devices;
+  flushed with `F_FULLFSYNC`) and crash recovery finishes or rolls back from
+  what is on disk, never deleting the only verified copy, and waits while a
+  volume is unmounted. Volumes that cannot rename without replacing (exFAT,
+  FAT) are refused before anything is copied or created there. A full disk cleans up, leaves the
+  source untouched and does not count as a failed attempt. A folder unit on
+  a file system with coarser times (HFS+) is indexed by its manifest there.
+  Opt-in tests on real disk images: `FLIB_TEST_VOLUMES=1 uv run pytest -m
+  volumes`.
 - Search filters (RF-14): `flib search` takes `--category` (any case),
   `--ext` (with or without the dot), both repeatable or comma-separated, and
   `--since`/`--until` (`YYYY-MM-DD`, inclusive, local time) on the day flib

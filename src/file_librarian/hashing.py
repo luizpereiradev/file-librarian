@@ -89,6 +89,34 @@ def unit_manifest(root: Path) -> UnitManifest:
     return UnitManifest(digest.hexdigest(), entries, size, newest)
 
 
+def content_digest(path: Path) -> str:
+    """A digest of everything in ``path``, contents included: what a copy must match.
+
+    For a file, its SHA-256. For a folder, every entry's relative path and
+    kind, each file's SHA-256 and each symlink's target. Unlike the unit
+    manifest it reads every byte and ignores modification times, so it
+    compares a copy on another volume (whose file system may keep coarser
+    times) with its source. Every entry counts, Finder's own files included.
+    """
+    if not stat.S_ISDIR(os.lstat(path).st_mode):
+        return file_sha256(path)
+    digest = hashlib.sha256(b"file-librarian content digest v1\0")
+    for dirpath, dirnames, filenames in os.walk(path, followlinks=False):
+        dirnames.sort()
+        for name in sorted([*dirnames, *filenames]):
+            full = Path(dirpath, name)
+            st = os.lstat(full)
+            rel = unicodedata.normalize("NFC", str(full.relative_to(path)))
+            if stat.S_ISLNK(st.st_mode):
+                record = f"l\0{rel}\0{full.readlink()}\n"
+            elif stat.S_ISDIR(st.st_mode):
+                record = f"d\0{rel}\n"
+            else:
+                record = f"f\0{rel}\0{file_sha256(full)}\n"
+            digest.update(record.encode("utf-8", "surrogateescape"))
+    return digest.hexdigest()
+
+
 def same_content(path: Path, sha256: str) -> bool:
     """``path`` exists, is not a symlink, and hashes to ``sha256``."""
     try:

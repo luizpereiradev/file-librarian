@@ -4,7 +4,11 @@
 reverts the last operation on one file. Before moving anything back, each
 item must still be the same content that was moved (same SHA-256, or the same
 manifest digest for a folder unit), and its original path must be free.
-Anything else is skipped and listed, never forced. Restored files are marked
+Anything else is skipped and listed, never forced. An item that has to go
+back to another volume is copied, verified and only then removed from the
+library (``fsops.copy_move``), each phase journaled on the entry, which stays
+``done`` until the copy is complete; ``executor.recover`` finishes or rolls
+back an undo a crash cut off. Restored files are marked
 ``skipped`` in the index, so the next run leaves them where you put them, and
 lose the Finder tag the move added (if any), keeping every other tag.
 Given the configuration, a file restored into the library (undoing ``flib
@@ -21,9 +25,17 @@ from pathlib import Path
 from file_librarian.config import Config
 from file_librarian.db.store import OperationRow, Store
 from file_librarian.finder_tags import tag_moved, untag_restored
-from file_librarian.fsops import DestinationExistsError, move_no_replace
-from file_librarian.hashing import same_content
-from file_librarian.models import FileStatus, OperationStatus
+from file_librarian.fsops import (
+    CrossVolumeError,
+    DestinationExistsError,
+    Journal,
+    copy_move,
+    move_no_replace,
+    new_copy_key,
+    volume_of,
+)
+from file_librarian.hashing import same_content, unit_manifest
+from file_librarian.models import CopyPhase, FileStatus, OperationStatus
 from file_librarian.reconcile import place
 
 
@@ -83,27 +95,86 @@ def _undo_one(store: Store, op: OperationRow, report: UndoReport, config: Config
         report.skipped.append((dst, f"original folder is gone: {src.parent}"))
         return
     try:
-        move_no_replace(dst, src)
+        try:
+            move_no_replace(dst, src)
+        except CrossVolumeError:
+            key = new_copy_key(op.id)
+            _, kept = copy_move(
+                dst, [src], key=key, expected=row.sha256, journal=_journal(store, op, key)
+            )
+            if kept:
+                report.warnings.append((src, kept))
     except DestinationExistsError:
+        store.clear_copy_phase(op.id)
         report.skipped.append((dst, f"original path is taken: {src}"))
         return
     except OSError as exc:
+        store.clear_copy_phase(op.id)
         report.skipped.append((dst, f"could not move back: {exc.strerror or exc}"))
         return
+    for warning in record_restored(store, op, config):
+        report.warnings.append((src, warning))
+    report.restored.append((dst, src))
+
+
+def _journal(store: Store, op: OperationRow, key: str) -> Journal:
+    """An undo's copy phases go on the entry it reverts, which keeps its paths.
+
+    The copy goes from ``op.dst_path`` back to ``op.src_path``; their volumes
+    are recorded when it starts.
+    """
+
+    def journal(phase: CopyPhase, _dst: Path) -> None:
+        volumes = None
+        if phase is CopyPhase.COPYING:
+            volumes = (volume_of(op.dst_path.parent), volume_of(op.src_path.parent))
+        store.set_copy_phase(op.id, phase, key, volumes=volumes)
+
+    return journal
+
+
+def record_restored(store: Store, op: OperationRow, config: Config | None) -> list[str]:
+    """Everything after the item is back at ``op.src_path``: index, journal, Finder tags.
+
+    Recovery calls it too, for an undo a crash cut off after the copy was in
+    place. Returns warnings (a Finder tag that could not be changed).
+    """
+    src = op.src_path
+    warnings: list[str] = []
+    row = store.file_by_id(op.file_id)
+    identity = unit_identity(src, row.sha256) if row.is_unit else None
     status, category = place(config, src) if config else (FileStatus.SKIPPED, None)
     with store.transaction():
         store.set_operation(op.id, OperationStatus.UNDONE)
+        if identity is not None:
+            store.set_file_identity(op.file_id, identity)
         if status is FileStatus.SKIPPED:
             store.set_file_location(op.file_id, src, FileStatus.SKIPPED)
         else:
             store.relocate_file(op.file_id, src, status, category)
-    report.restored.append((dst, src))
     if op.finder_tag is not None and (warning := untag_restored(src, op.finder_tag)):
-        report.warnings.append((src, warning))
+        warnings.append(warning)
     if status is FileStatus.ORGANIZED:
         # Back in a category folder (an undone fix): give back the tag flib set there.
         earlier = store.last_finder_tag(op.file_id)
         if earlier is not None and earlier == category:
             _, warning = tag_moved(src, earlier)
             if warning:
-                report.warnings.append((src, warning))
+                warnings.append(warning)
+    return warnings
+
+
+def unit_identity(path: Path, current: str) -> str | None:
+    """A folder unit's manifest digest where it now is, if it differs from ``current``.
+
+    Copied to another file system (one that keeps coarser modification
+    times, such as HFS+), a unit's manifest differs from the source's. The
+    index takes the new one, in the same transaction that records the move,
+    so undo and reconcile still recognise it there. A move within one volume
+    keeps the manifest: ``None``.
+    """
+    try:
+        digest = unit_manifest(path).digest
+    except OSError:
+        return None
+    return digest if digest != current else None
