@@ -93,5 +93,5 @@ sensitive:
 schedule:
   time: "12:30"              # daily run, 24-hour local time; applied by `flib schedule`
 
-mcp:                         # not active yet: the MCP server comes in M2 (RF-22)
-  read_only: false           # true disables recategorize_file and undo
+mcp:                         # `flib mcp`: the local MCP server for AI assistants
+  read_only: false           # true hides the write tools, recategorize_file and undo

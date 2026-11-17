@@ -35,7 +35,8 @@ commands keep these guarantees:
 
 ```sh
 git clone https://github.com/luizpereiradev/file-librarian.git && cd file-librarian
-./scripts/install.sh                      # installs `flib` with the locked dependency versions
+./scripts/install.sh                      # installs `flib` with the locked dependency versions;
+                                          # asks whether to add the optional MCP server
 mkdir -p ~/.config/file-librarian
 cp config.example.yaml ~/.config/file-librarian/config.yaml
 flib key set                              # stores your Anthropic API key in the macOS Keychain
@@ -94,7 +95,7 @@ easiest choice for them. Set `api_key_source` to `environment`, `keychain` or
 | `flib reconcile` | Update the index after you move, rename or delete files by hand; files only in iCloud are left unchecked | M2 (available) |
 | `flib fix PATH [--category NAME] [--name NAME]` | Correct one file's category or name; flib learns from it | M2 (available) |
 | `flib init` | Guided first run on a sample | M2 |
-| `flib mcp` | Local MCP server for AI assistants | M2 |
+| `flib mcp` | Local MCP server for AI assistants ([Use it from Claude](#use-it-from-claude)) | M2 (available) |
 | `flib reprocess` | Reclassify after a rules change | M3 |
 | `flib doctor` | Redacted logs for bug reports | M3 |
 
@@ -174,6 +175,62 @@ these and the moves or renames `flib reconcile` finds, are sent as examples
 with later requests, so the classifier stops repeating the mistake.
 `provider.max_examples` caps how many (10 by default; `0` sends none).
 
+## Use it from Claude
+
+`flib mcp` is a local [MCP](https://modelcontextprotocol.io) server over
+stdio, so Claude (or any MCP client) can answer "where is last month's power
+bill?" from your library. It runs only while the client is open, uses no
+network and reads the same database as `flib search`.
+
+| Tool | What it does |
+| --- | --- |
+| `search_files` | Full-text search over names, descriptions and tags, like `flib search` |
+| `get_file` | Everything the index knows about one file: where it is and was, category, description, tags, hash, size, download origin, whether it is only in iCloud |
+| `recategorize_file` | Move a file to another configured category and/or rename it, like `flib fix` |
+| `undo` | Revert a run or the last move of one file, like `flib undo` |
+
+**1. Enable it.** The MCP server is optional, because its SDK adds 16
+packages that the rest of flib does not need. Answer yes when
+`./scripts/install.sh` asks, or run it again with the flag:
+
+```sh
+./scripts/install.sh --with-mcp
+```
+
+Later updates keep it; `--without-mcp` removes it. Without it, `flib mcp`
+says how to enable it.
+
+Results carry metadata and descriptions, never file content; sensitive files
+show no description, tags or origin. The write tools go through the same
+journal as the CLI, so `flib undo` reverts what an assistant did, and they
+refuse to run while a run is in progress. Set `mcp.read_only: true` to offer
+only the two read tools.
+
+**2. Add it to Claude Code:**
+
+```sh
+claude mcp add --scope user file-librarian -- ~/.local/bin/flib mcp
+```
+
+**Or to Claude Desktop:** add this to
+`~/Library/Application Support/Claude/claude_desktop_config.json` and restart
+it. Desktop does not expand `~` or read your shell's `PATH`, so give the
+absolute path that `./scripts/install.sh` printed:
+
+```json
+{
+  "mcpServers": {
+    "file-librarian": {
+      "command": "/Users/you/.local/bin/flib",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Add `"--config", "/path/to/config.yaml"` to `args` if your configuration is
+not in the default place.
+
 ## Privacy
 
 With a remote provider such as `anthropic`, this is what leaves your Mac
@@ -203,7 +260,8 @@ Two kinds of files are treated differently:
   nothing at all is sent, the file stays where it is, and the index records
   only that it is sensitive.
 
-The index and the logs stay on your Mac. A local provider (Ollama) is planned
+The index and the logs stay on your Mac. The MCP server sends an assistant
+only what `flib search` would show you, never file content. A local provider (Ollama) is planned
 for M3, for anyone who wants nothing to leave the machine.
 
 ## Roadmap

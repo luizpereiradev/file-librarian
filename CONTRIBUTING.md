@@ -11,7 +11,7 @@ You need the current major release of macOS and
 
 ```sh
 git clone https://github.com/luizpereiradev/file-librarian.git && cd file-librarian
-uv sync              # creates .venv with the package and dev tools (use `uv run flib ...`)
+uv sync              # creates .venv with the package, the optional MCP SDK and dev tools (use `uv run flib ...`)
 uv run pytest        # all tests, offline, in temporary folders
 ```
 

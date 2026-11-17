@@ -126,6 +126,7 @@ def test_install_script_uses_the_lockfile() -> None:
     script = (REPO_ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
     assert "uv export --frozen" in script
     assert "--overrides" in script
+    assert "--extra mcp" in script  # the optional MCP server is locked too
 
 
 def test_guards_are_owned() -> None:

@@ -45,7 +45,6 @@ def test_help_lists_every_command() -> None:
     ("args", "requirement"),
     [
         (["init"], "RF-38"),
-        (["mcp"], "RF-22"),
         (["reprocess"], "RF-37"),
         (["doctor"], "RF-39"),
     ],

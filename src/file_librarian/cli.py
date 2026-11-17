@@ -637,8 +637,17 @@ def init(config: ConfigOption = None) -> None:
 
 @app.command()
 def mcp(config: ConfigOption = None) -> None:
-    """Start the local MCP server over stdio."""
-    _not_implemented("mcp", "M2", "RF-22")
+    """Serve the library to AI assistants: a local MCP server over stdio."""
+    cfg = _load(config)
+    try:
+        # The SDK is an optional extra, and loads only for this command.
+        from file_librarian.mcp_server import serve
+    except ImportError as exc:
+        _fatal(
+            f"the MCP server is optional and is not installed ({exc}). Enable it with "
+            "`./scripts/install.sh --with-mcp` from the file-librarian folder."
+        )
+    serve(cfg)
 
 
 @app.command()
