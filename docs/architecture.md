@@ -121,6 +121,15 @@ and without it the command explains how to enable it:
   withheld. Paths must be absolute and must be in the index; the server
   tells the client that names and descriptions are untrusted data.
 
+## The first run
+
+`flib init` (prompts in `cli.py`, the rest in `onboarding.py`) writes the
+configuration, then runs a trial that cannot touch real files: it copies a
+sample of recent items into a temporary folder and runs `pipeline.run(...,
+simulate=True)` with a configuration whose `inputs`, `output_root` and
+`database` all point inside that folder, which is deleted afterwards. The
+originals are only read, to copy them.
+
 ## Extension points
 
 - **Providers** (`providers/`): implement `Provider.classify(context, rules)`

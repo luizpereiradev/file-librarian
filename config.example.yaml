@@ -1,5 +1,6 @@
 # file-librarian configuration.
-# Copy to ~/.config/file-librarian/config.yaml (or point $FLIB_CONFIG at it)
+# `flib init` writes a short one for you. Or copy this file to
+# ~/.config/file-librarian/config.yaml (or point $FLIB_CONFIG at it)
 # and check it with: flib check-config
 # An invalid file stops the run before any file is touched.
 
