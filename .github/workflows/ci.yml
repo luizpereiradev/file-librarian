@@ -17,7 +17,9 @@ jobs:
   check:
     name: lint, types, tests (Python ${{ matrix.python }})
     runs-on: macos-latest
-    timeout-minutes: 15
+    # A run takes about two minutes; the limit also covers waiting for a
+    # macOS runner, which can take a while when they are scarce.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
