@@ -267,7 +267,7 @@ def _writing(config: Config) -> Iterator[tuple[Store, int]]:
     """The instance lock and an open store for one write call, as the CLI takes them."""
     try:
         with instance_lock(config.database), Store.open(config.database) as store:
-            recovered = recover(store)  # finish the journal before adding to it
+            recovered = recover(store, config)  # finish the journal before adding to it
             yield store, recovered
     except AlreadyRunningError as exc:
         raise ToolError(str(exc)) from exc
