@@ -157,6 +157,24 @@ def make_pdf(path: Path, text: str) -> Path:
     return path
 
 
+def make_image(path: Path, width: int, height: int) -> Path:
+    """A synthetic image only the fake sips (tests/fake_sips.py) can read."""
+    path.write_bytes(f"FAKEIMG {width} {height}\n".encode() + b"\0" * 64)
+    return path
+
+
+def make_blank_pdf(path: Path, pages: int) -> Path:
+    """A PDF with ``pages`` empty pages: no text layer, like a scan."""
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    for _ in range(pages):
+        writer.add_blank_page(width=612, height=792)
+    with path.open("wb") as fh:
+        writer.write(fh)
+    return path
+
+
 def case_insensitive(folder: Path) -> bool:
     """Whether ``folder``'s volume ignores case in names (the macOS default)."""
     probe = folder / ".flib-case-probe"

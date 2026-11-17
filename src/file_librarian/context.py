@@ -12,6 +12,11 @@ provider:
 4. With ``sensitive.detect_secrets``, a sensitive name or any secret found in
    that window marks the file ``sensitive``: nothing is sent and it stays put.
 5. What remains is cut to ``provider.max_chars_per_file`` for the provider.
+6. With ``vision.enabled``, an image, or a PDF with no text layer (scanned),
+   is marked ``visual``; the classifier then sends a downscaled image or the
+   first pages to a provider that reads them (see ``extractors/visual.py``).
+   Steps 1, 2 and 4 come first, so ``never_send`` and sensitive names hold.
+   Pixels cannot be scanned for secrets, which is one reason vision is opt-in.
 
 Extraction failures never stop a run (RF-27): the file falls back to metadata.
 """
@@ -27,7 +32,8 @@ from pathlib import Path
 from file_librarian.config import Config
 from file_librarian.extractors import ExtractionError, extractor_for
 from file_librarian.extractors.origin import download_origin
-from file_librarian.models import FileContext
+from file_librarian.extractors.visual import is_image
+from file_librarian.models import FileContext, VisualKind
 from file_librarian.scanner import Candidate
 from file_librarian.sensitive import find_secrets, sensitive_name, withheld_by_config
 
@@ -114,7 +120,21 @@ def build_context(candidate: Candidate, config: Config) -> FileContext:
         metadata["content"] = "no extractor for this format"
     elif text is None and "extraction_error" not in metadata:
         metadata["content"] = "no readable text"
-    return replace(base, text=sent, metadata=metadata)
+    visual = _visual(base, sent, metadata, config)
+    return replace(base, text=sent, metadata=metadata, visual=visual)
+
+
+def _visual(
+    base: FileContext, text: str | None, metadata: dict[str, str], config: Config
+) -> VisualKind | None:
+    """``"image"``, ``"pdf"`` (scanned: readable, but no text) or ``None``."""
+    if not config.vision.enabled:
+        return None
+    if is_image(base.path):
+        return "image"
+    if base.extension == ".pdf" and text is None and "extraction_error" not in metadata:
+        return "pdf"
+    return None
 
 
 def _sniff_text(path: Path) -> str | None:

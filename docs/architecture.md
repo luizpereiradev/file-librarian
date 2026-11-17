@@ -11,9 +11,12 @@ classifier, uses AI. Each stage is a module with typed input and output
       │                            iCloud cloud-only items skipped from lstat, never read
  2. Extractor    context.py,       FileContext: metadata, download origin, text excerpt;
       │          extractors/,      secret detection here (sensitive.py): sensitive files stop
-      │          sensitive.py      at this stage and stay where they are
- 3. Classifier   providers/        Classification (schema-validated): category, name, description,
-      │                            tags, confidence; rate limits, retries, timeouts
+      │          sensitive.py      at this stage and stay where they are; with vision on,
+      │                            images and scanned PDFs are marked visual
+ 3. Classifier   classifier.py,    Classification (schema-validated): category, name, description,
+      │          providers/        tags, confidence; rate limits, retries, timeouts, cost cap;
+      │                            a visual file's downscaled image or first pages
+      │                            (extractors/visual.py) go to providers that read them
  4. Planner      planner.py        Operations: naming pattern, rename policy, collisions,
       │                            low confidence → review folder.   `flib simulate` stops here
  5. Executor     executor.py       single-instance lock; record "planned" → move → mark "done"

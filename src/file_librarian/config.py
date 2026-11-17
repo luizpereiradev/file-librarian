@@ -131,7 +131,6 @@ class LimitsConfig(_Section):
     stable_seconds: Annotated[int, Field(ge=0)] = 60
     max_attempts: PositiveInt = 3
     confidence_threshold: Fraction = 0.7
-    scanned_pdf_max_pages: PositiveInt = 3
     max_cost_usd_per_run: Annotated[float, Field(gt=0)] | None = 1.0
     """Stop sending files once the estimated provider cost reaches this; ``None`` = no cap."""
 
@@ -174,6 +173,19 @@ class Category(_Section):
 
 class FinderTagsConfig(_Section):
     enabled: bool = True
+
+
+class VisionConfig(_Section):
+    """Images and scanned PDFs sent to the model (RF-05, RF-26). Off by default: opt in.
+
+    With it off, such files are classified from their name and metadata only.
+    """
+
+    enabled: bool = False
+    max_image_px: Annotated[int, Field(ge=256, le=2576)] = 1568
+    """Images are downscaled so the longer side is at most this many pixels."""
+    max_pdf_pages: Annotated[int, Field(ge=1, le=20)] = 3
+    """Only this many first pages of a PDF with no text layer are sent."""
 
 
 class SensitiveConfig(_Section):
@@ -226,6 +238,7 @@ class Config(_Section):
     finder_tags: FinderTagsConfig = FinderTagsConfig()
     ignore: list[str] = Field(default_factory=list)
     never_send: list[str] = Field(default_factory=list)
+    vision: VisionConfig = VisionConfig()
     sensitive: SensitiveConfig = SensitiveConfig()
     mcp: McpConfig = McpConfig()
     schedule: ScheduleConfig = ScheduleConfig()
@@ -243,7 +256,7 @@ class Config(_Section):
         data.setdefault("output_root", f"~/Downloads/{locale.output_folder}")
         data.setdefault("review_folder", locale.review_folder)
         data.setdefault("categories", [c.as_dict() for c in locale.categories])
-        return data
+        return _moved_keys(data)
 
     @model_validator(mode="after")
     def _check_folder_names(self) -> Config:
@@ -279,6 +292,25 @@ class Config(_Section):
 
     def category(self, name: str) -> Category | None:
         return next((c for c in self.categories if c.name == name), None)
+
+
+def _moved_keys(data: dict[str, Any]) -> dict[str, Any]:
+    """Accept keys that moved, so an older configuration keeps working.
+
+    ``limits.scanned_pdf_max_pages`` (a placeholder before vision existed) is
+    now ``vision.max_pdf_pages``; an explicit ``vision.max_pdf_pages`` wins.
+    """
+    limits = data.get("limits")
+    if isinstance(limits, dict) and "scanned_pdf_max_pages" in limits:
+        limits = dict(limits)
+        pages = limits.pop("scanned_pdf_max_pages")
+        data["limits"] = limits
+        vision = data.get("vision")
+        if vision is None:
+            data["vision"] = {"max_pdf_pages": pages}
+        elif isinstance(vision, dict):
+            data["vision"] = {"max_pdf_pages": pages} | vision
+    return data
 
 
 def parse_config(raw: object) -> Config:

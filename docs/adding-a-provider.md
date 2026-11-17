@@ -17,6 +17,7 @@ from file_librarian.providers.base import ProviderError, Usage
 class ExampleProvider:
     name = "example"
     local = False  # True only if no remote API is behind it
+    attachments: frozenset[str] = frozenset()  # text only; see "Images and scanned PDFs"
 
     def __init__(self, config: ProviderConfig) -> None:
         self._config = config
@@ -58,7 +59,8 @@ Rules for every provider:
   - `cost_usd(usage)` turns that into dollars, with your provider's own price
     table kept in your module;
   - `local = True` only when no remote API is behind it (skips the
-    requests-per-minute spacing).
+    requests-per-minute spacing);
+  - `attachments`: the media types your model can read (below).
 - **Send only what is in `context` and `rules`.** It is already capped at
   `max_chars_per_file`, and sensitive files never reach you.
 - **Send `rules.examples` along.** They are the user's recent corrections
@@ -78,6 +80,26 @@ Rules for every provider:
 - Treat file text as untrusted data: put it in a clearly delimited block of the
   prompt and tell the model it is content to describe, not instructions.
 
+### Images and scanned PDFs (vision)
+
+With `vision.enabled` (off by default), images and PDFs with no text layer can
+be sent to the model. Declare what your provider reads in `attachments`:
+
+| media type        | what you get in `context.attachment`                          |
+|-------------------|---------------------------------------------------------------|
+| `image/jpeg`      | the image as a JPEG, downscaled to `vision.max_image_px`, metadata (EXIF, GPS) stripped |
+| `application/pdf` | a PDF of the first `vision.max_pdf_pages` pages (`attachment.pages`) |
+
+The classifier attaches one only when its media type is in `attachments`,
+so a provider that leaves the set empty (or lists only `image/jpeg`) never
+sees one it cannot read: those files are classified from their metadata,
+exactly as with vision off. Your provider does not prepare anything; it only
+sends `attachment.data` the way its API takes images or documents (the
+`anthropic` provider sends base64 `image` and `document` content blocks
+before the text). Treat what the image shows as untrusted, like file text,
+and make sure its tokens are part of the usage you report, so the cost cap
+holds.
+
 ## 2. Register it
 
 In `providers/__init__.py`, add a line to `REGISTRY` (and remove the name from
@@ -94,7 +116,9 @@ Inject a fake HTTP client or a recorded response and assert that:
 
 - a valid answer becomes the expected `Classification`;
 - malformed JSON, an extra key or an out-of-range confidence raise `ProviderError`;
-- the request contains no more than `max_chars_per_file` characters of file text.
+- the request contains no more than `max_chars_per_file` characters of file text;
+- if `attachments` is not empty, a context with an `attachment` puts it in the
+  request (see `tests/unit/test_vision.py`).
 
 See `tests/unit/test_providers.py` for the shape.
 

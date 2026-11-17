@@ -9,8 +9,10 @@ This is where the model's answer stops being trusted. For each item:
 - otherwise the file goes to its category folder, renamed only when the
   category allows it, confidence reaches ``rename_confidence_threshold`` and
   the suggestion yields a usable name. Files whose content the model could
-  not read (images, video, installers) and folder units keep their name:
-  a name invented from the old name alone is worse than the original.
+  not read (video, installers, images with vision off) and folder units keep
+  their name: a name invented from the old name alone is worse than the
+  original. An image or scanned PDF the model actually saw (``vision``)
+  counts as read content, so it can be renamed like a text document.
 
 Every destination is ``output_root / <configured folder> / <safe name>``;
 ``_destination`` re-checks that before returning it. Names are unique against
@@ -115,7 +117,8 @@ def _plan_one(decision: Decision, config: Config, names: _Names, today: date) ->
     new_name = None
     if (
         not ctx.is_unit
-        and ctx.text  # a new name needs evidence from the content, not just the old name
+        # a new name needs evidence from the content (text, or pixels the model saw)
+        and (ctx.text or ctx.vision_used)
         and category.rename
         and answer.confidence >= config.naming.rename_confidence_threshold
     ):

@@ -2,8 +2,8 @@
 
 Every test runs with HOME pointed at a temporary directory and with outbound
 connections and DNS lookups disabled, and with a throwaway keychain in place of
-the user's login Keychain, so code that uses ``Path.home()`` or
-``~`` stays in a temporary folder and nothing reaches a real API. A test that
+the user's login Keychain and fakes of launchctl and sips, so code that uses
+``Path.home()`` or ``~`` stays in a temporary folder and nothing reaches a real API. A test that
 hard-codes an absolute path could still escape; reviewers must reject those.
 """
 
@@ -71,6 +71,17 @@ def fake_launchd(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.M
     (env / "lib").symlink_to(Path(sys.prefix) / "lib")
     monkeypatch.setattr("file_librarian.scheduler.ENV_ROOT", env)
     return folder / "loaded.json"
+
+
+@pytest.fixture(autouse=True)
+def fake_sips(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Every test converts images with a fake sips; returns the log of its calls."""
+    folder = tmp_path_factory.mktemp("sips")
+    script = _shim(folder, "sips", "fake_sips.py")
+    monkeypatch.setenv("FAKE_SIPS_LOG", str(folder / "calls.jsonl"))
+    monkeypatch.delenv("FAKE_SIPS_SILENT", raising=False)
+    monkeypatch.setattr("file_librarian.extractors.visual.SIPS", str(script))
+    return folder / "calls.jsonl"
 
 
 @pytest.fixture(autouse=True)

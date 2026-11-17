@@ -4,7 +4,8 @@ It never touches the network. Answers come from a fixed table keyed by file
 name; anything not in the table gets ``default``. With ``echo=True`` (what
 ``provider.name: fake`` in a configuration uses) every file goes to the last
 configured category under its own name, which lets you try ``flib simulate``
-and ``flib run`` end to end without an API key.
+and ``flib run`` end to end without an API key. It reads no attachments unless
+``attachments`` says so; ``calls`` keeps every context, attachment included.
 """
 
 from __future__ import annotations
@@ -25,10 +26,13 @@ class FakeProvider:
         default: Classification | None = None,
         *,
         echo: bool = False,
+        attachments: frozenset[str] = frozenset(),
     ) -> None:
         self._answers = dict(answers or {})
         self._default = default
         self._echo = echo
+        self.attachments = attachments
+        """Media types it pretends to read; empty (text only) unless a test sets them."""
         self.calls: list[FileContext] = []
         self.rules: list[Rules] = []
         """The rules each call received, examples included, for tests to inspect."""
