@@ -8,6 +8,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Finder tags (RF-36): after a move into a category folder, the item gets
+  the category name as a Finder tag (`com.apple.metadata:_kMDItemUserTags`).
+  The user's own tags and colors are kept, a tag already there is not
+  duplicated (Finder ignores case), and a folder unit is tagged on the
+  folder itself; files sent to `_Review` get no tag. Migration 0005 records
+  on each journal entry the tag the move added, so `flib undo` removes that
+  tag and nothing else. A tag that cannot be written or removed is a
+  warning in the output and the run log, never a failed move; tags
+  `flib` cannot parse are left untouched. `finder_tags.enabled: false` stops
+  new tags (existing ones stay). Simulations write no tags.
 - iCloud files that exist only in the cloud are skipped (RF-24). The scanner
   recognises them from `lstat` (`SF_DATALESS`) before opening, hashing or
   extracting anything, so no download is triggered; a folder unit with any

@@ -67,8 +67,8 @@ naming:
 
 folders: as_unit             # sub-folders and .app bundles: as_unit (move whole) | ignore
 
-finder_tags:                 # not active yet: Finder tags come in M2 (RF-36)
-  enabled: true              # tag = category name
+finder_tags:                 # RF-36: after a move, tag the file in Finder with its category
+  enabled: true              # your own tags are kept; flib undo removes only the tag flib added
 
 ignore:
   - "*.crdownload"

@@ -8,7 +8,10 @@ The caller holds the instance lock. For each planned move:
 3. the destination folder is created, refusing symlinks on the way;
 4. ``move_no_replace`` renames atomically and never overwrites; if the name
    was taken in the meantime, the next free ``-N`` name is tried;
-5. the journal entry becomes ``done`` and the index row points at the new place.
+5. the journal entry becomes ``done`` and the index row points at the new place;
+6. an organized item gets its category as a Finder tag (RF-36), recorded on
+   the journal entry so undo removes exactly that tag. A tag failure is only
+   a warning: the move stands.
 
 A crash between 1 and 5 leaves a ``planned`` entry that ``recover`` resolves
 at the start of the next run by looking at where the file actually is.
@@ -23,6 +26,7 @@ from pathlib import Path
 
 from file_librarian.config import Config
 from file_librarian.db.store import Store
+from file_librarian.finder_tags import tag_moved
 from file_librarian.fsops import (
     CrossVolumeError,
     DestinationExistsError,
@@ -48,6 +52,8 @@ class ItemResult:
     status: FileStatus
     destination: Path | None
     note: str
+    warning: str | None = None
+    """Something that went wrong without failing the item, e.g. a Finder tag."""
 
 
 @dataclass(slots=True)
@@ -150,7 +156,20 @@ def _apply(
     with store.transaction():
         store.set_operation(op_id, OperationStatus.DONE, destination)
         store.set_file_location(file_id, destination, item.status)
-    return ItemResult(ctx.path, item.status, destination, item.reason)
+    warning = _tag(item, destination, config, store, op_id)
+    return ItemResult(ctx.path, item.status, destination, item.reason, warning)
+
+
+def _tag(item: PlannedItem, path: Path, config: Config, store: Store, op_id: int) -> str | None:
+    """Add the category as a Finder tag to an organized item. Returns a warning or ``None``."""
+    answer = item.classification
+    if not config.finder_tags.enabled or item.status is not FileStatus.ORGANIZED or answer is None:
+        return None
+    added, warning = tag_moved(path, answer.category)
+    if added is not None:
+        with store.transaction():
+            store.set_operation_tag(op_id, added)
+    return warning
 
 
 def _unchanged(ctx: FileContext) -> tuple[int, int] | None:

@@ -107,6 +107,11 @@ categories. Only the provider is required; everything else has a default.
 
 The categories are a closed list, and each category's `hint` is the main lever
 for fixing wrong classifications.
+
+Each item moved into a category folder also gets the category name as a
+Finder tag, so Finder's sidebar and Spotlight (`tag:Finance`) find it too.
+Your own tags are kept, `flib undo` removes only the tag flib added, and
+`finder_tags.enabled: false` turns this off.
 The API key is read from `ANTHROPIC_API_KEY`, never from the file.
 
 ## Privacy
