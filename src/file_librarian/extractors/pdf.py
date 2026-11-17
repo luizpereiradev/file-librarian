@@ -3,7 +3,8 @@
 Uses pypdf, a pure-Python parser. At most ``MAX_PAGES`` pages are read, and
 reading stops once ``max_chars`` are collected. A PDF that needs a password
 raises ``ExtractionError``; a scanned PDF with no text layer returns ``None``
-(sending its pages to a vision model is RF-26, a later milestone).
+(with ``vision.enabled``, its first pages go to the model instead: see
+``extractors/visual.py``, RF-26).
 """
 
 from __future__ import annotations

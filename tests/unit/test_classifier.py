@@ -23,6 +23,7 @@ def ctx(name: str, *, sensitive: bool = False) -> FileContext:
 class ScriptedProvider:
     name = "scripted"
     local = False
+    attachments: frozenset[str] = frozenset()
 
     def __init__(self, script: list[Any], usage: Usage | None = None) -> None:
         self.script = script

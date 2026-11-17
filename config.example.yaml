@@ -43,7 +43,6 @@ limits:
   stable_seconds: 60         # size and mtime unchanged for this long
   max_attempts: 3            # after this many failures a file becomes "failed"
   confidence_threshold: 0.7  # below this, the file goes to review_folder
-  scanned_pdf_max_pages: 3   # not active yet: scanned PDFs to a vision model come in M2
   max_cost_usd_per_run: 1.00 # estimated; files left over wait for the next run (null = no cap)
 
 naming:
@@ -82,6 +81,11 @@ never_send:                  # classified from metadata only, never sent to the 
   - "*.pem"
   - "*.key"
   - ".env*"
+
+vision:                      # RF-05, RF-26: let the model look at images and scanned PDFs
+  enabled: false             # off by default: when on, image pixels and scanned pages leave your Mac
+  max_image_px: 1568         # images are shrunk so the longer side is at most this (256-2576)
+  max_pdf_pages: 3           # only the first pages of a PDF with no text layer are sent (1-20)
 
 sensitive:
   detect_secrets: true       # private keys, tokens, credentials found in content

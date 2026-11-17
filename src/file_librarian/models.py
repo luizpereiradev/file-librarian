@@ -56,6 +56,23 @@ class FileState:
     attempts: int
 
 
+VisualKind = Literal["image", "pdf"]
+"""What a file can show a vision model: a picture, or the pages of a scanned PDF."""
+
+# The media type each visual kind is sent as, once prepared.
+VISUAL_MEDIA_TYPES: dict[VisualKind, str] = {"image": "image/jpeg", "pdf": "application/pdf"}
+
+
+@dataclass(frozen=True, slots=True)
+class Attachment:
+    """A file's content prepared for a vision model: a downscaled image or trimmed PDF."""
+
+    media_type: str
+    data: bytes = field(repr=False)
+    pages: int | None = None
+    """For a PDF, how many of its first pages are included."""
+
+
 @dataclass(frozen=True, slots=True)
 class FileContext:
     """Everything the classifier may know about one file (or one folder/.app unit)."""
@@ -72,6 +89,12 @@ class FileContext:
     is_unit: bool = False
     sensitive: bool = False
     metadata: dict[str, str] = field(default_factory=dict)
+    visual: VisualKind | None = None
+    """Set when ``vision.enabled`` and the file is an image or a PDF with no text layer."""
+    attachment: Attachment | None = None
+    """The prepared image or pages, set by the classifier only for the provider call."""
+    vision_used: bool = False
+    """The answer came from a model that saw the image or pages (so renaming is allowed)."""
 
 
 class Classification(BaseModel):

@@ -39,6 +39,10 @@ class Provider(Protocol):
     name: str
     local: bool
     """True when no remote API is behind it: no requests-per-minute spacing."""
+    attachments: frozenset[str]
+    """Media types ``classify`` can read from ``context.attachment``: ``"image/jpeg"``
+    for images, ``"application/pdf"`` for scanned PDFs. Empty when the provider
+    reads text only; images and scanned PDFs then fall back to metadata."""
     last_usage: Usage
     """Set after every ``classify`` call, failed ones included; the classifier resets it."""
 
@@ -48,6 +52,9 @@ class Provider(Protocol):
 
     def classify(self, context: FileContext, rules: Rules) -> Classification:
         """Return a schema-valid classification for one file.
+
+        ``context.attachment``, when set, is an image or PDF of a media type
+        listed in ``attachments``: send it along as the file's content.
 
         Implementations return data only. They never touch the file system and
         never decide paths. Raise ``ProviderError`` on failure; the classifier
