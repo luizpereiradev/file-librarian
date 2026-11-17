@@ -3,6 +3,9 @@
 - Lists the top level of each input folder; never descends into sub-folders.
 - Skips hidden and system files, symlinks, special files, the folders flib
   manages, configured ``ignore`` globs and downloads in progress (RF-02, RF-03).
+- Skips files that exist only in iCloud, and folder units with any such file
+  inside, judging from ``lstat`` alone so nothing is downloaded (RF-24).
+  They are picked up by a later run, once downloaded.
 - Treats each sub-folder or bundle (``.app``, ``.pkg``...) as one unit, or
   skips it, per ``folders`` (RF-23).
 - Waits until an item has not changed for ``stable_seconds`` and its size and
@@ -26,6 +29,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
+from file_librarian import hashing
 from file_librarian.config import Config, is_within
 from file_librarian.globs import matches_any
 from file_librarian.hashing import file_sha256, unit_manifest
@@ -55,6 +59,7 @@ class SkipReason(StrEnum):
     UNREADABLE = "unreadable"
     EMPTY = "empty file"
     DUPLICATE = "same content as another item in this run"
+    CLOUD_ONLY = "in iCloud only, not downloaded"
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +190,10 @@ def scan(config: Config, lookup: Lookup, *, now: float | None = None) -> ScanRes
             if matches_any(entry.name, config.ignore):
                 skip(SkipReason.IGNORED)
                 continue
+            # Before anything that opens, lists or hashes it: that would download it.
+            if hashing.is_dataless(ident):
+                skip(SkipReason.CLOUD_ONLY)
+                continue
 
             try:
                 st = entry.stat(follow_symlinks=False)
@@ -193,6 +202,9 @@ def scan(config: Config, lookup: Lookup, *, now: float | None = None) -> ScanRes
                         skip(SkipReason.FOLDER_IGNORED)
                         continue
                     manifest = unit_manifest(path)
+                    if manifest.dataless:
+                        skip(SkipReason.CLOUD_ONLY)
+                        continue
                     if now - manifest.newest_mtime < limits.stable_seconds:
                         skip(SkipReason.UNSTABLE)
                         continue

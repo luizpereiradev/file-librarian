@@ -8,6 +8,9 @@ while still changing whenever a file inside changes. Folder modification times
 and the files Finder writes on its own (``.DS_Store``, ``Icon\r``) are left
 out, so merely opening a folder in Finder does not change its identity.
 Neither function follows symlinks.
+
+Files that exist only in iCloud ("dataless") are recognised from ``lstat``
+alone: reading one would make macOS download it.
 """
 
 from __future__ import annotations
@@ -22,6 +25,14 @@ from pathlib import Path
 _CHUNK = 1 << 20
 _UNIT_HEADER = b"file-librarian unit manifest v2\0"
 FINDER_FILES = frozenset({".DS_Store", "Icon\r", ".localized"})
+# Set on files (and folders) whose contents are only in the cloud; newer Pythons
+# expose it as ``stat.SF_DATALESS``.
+SF_DATALESS: int = getattr(stat, "SF_DATALESS", 0x40000000)
+
+
+def is_dataless(st: os.stat_result) -> bool:
+    """The item's contents are only in iCloud; opening or listing it would download them."""
+    return bool(getattr(st, "st_flags", 0) & SF_DATALESS)
 
 
 def file_sha256(path: Path) -> str:
@@ -38,14 +49,23 @@ class UnitManifest:
     entries: int
     size_bytes: int
     newest_mtime: float
+    dataless: bool = False
+    """Something inside is only in iCloud. The walk stopped there, so the digest is partial."""
 
 
 def unit_manifest(root: Path) -> UnitManifest:
-    """Digest a folder's structure and metadata without reading file contents."""
+    """Digest a folder's structure and metadata without reading file contents.
+
+    Stops at the first item that exists only in iCloud, without listing or
+    reading it, and returns a manifest marked ``dataless``.
+    """
     digest = hashlib.sha256(_UNIT_HEADER)
     entries = 0
     size = 0
-    newest = os.lstat(root).st_mtime
+    top = os.lstat(root)
+    newest = top.st_mtime
+    if is_dataless(top):
+        return UnitManifest(digest.hexdigest(), entries, size, newest, dataless=True)
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         dirnames.sort()
         for name in sorted([*dirnames, *filenames]):
@@ -53,6 +73,8 @@ def unit_manifest(root: Path) -> UnitManifest:
                 continue
             full = Path(dirpath, name)
             st = os.lstat(full)
+            if is_dataless(st):
+                return UnitManifest(digest.hexdigest(), entries, size, newest, dataless=True)
             rel = unicodedata.normalize("NFC", str(full.relative_to(root)))
             if stat.S_ISLNK(st.st_mode):
                 record = f"l\0{rel}\0{full.readlink()}\n"

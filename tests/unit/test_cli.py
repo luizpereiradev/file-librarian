@@ -142,3 +142,27 @@ def test_run_with_unimplemented_provider_fails_cleanly(downloads: Path, tmp_path
     result = runner.invoke(app, ["run", "-c", str(cfg)])
     assert result.exit_code == 1
     assert "planned for M2" in result.stderr
+
+
+def test_simulate_lists_cloud_only_files(
+    downloads: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+    import time
+
+    from file_librarian import hashing
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        f"inputs: [{downloads}]\nprovider: {{name: fake, model: offline}}\n", encoding="utf-8"
+    )
+    path = downloads / "slides.key"
+    path.write_bytes(b"only in the cloud")
+    old = time.time() - 3600
+    os.utime(path, (old, old))
+    inode = os.lstat(path).st_ino
+    monkeypatch.setattr(hashing, "is_dataless", lambda st: st.st_ino == inode)
+
+    sim = runner.invoke(app, ["simulate", "-c", str(cfg)])
+    assert sim.exit_code == 0, sim.stderr
+    assert "slides.key  (in iCloud only, not downloaded)" in sim.stdout

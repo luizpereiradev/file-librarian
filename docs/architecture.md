@@ -7,8 +7,8 @@ classifier, uses AI. Each stage is a module with typed input and output
 ```text
  input folders
       │
- 1. Scanner      scanner.py        new, stable files (by sha256); folders/.app as one unit
-      │
+ 1. Scanner      scanner.py        new, stable files (by sha256); folders/.app as one unit;
+      │                            iCloud cloud-only items skipped from lstat, never read
  2. Extractor    context.py,       FileContext: metadata, download origin, text excerpt;
       │          extractors/,      secret detection here (sensitive.py): sensitive files stop
       │          sensitive.py      at this stage and stay where they are
