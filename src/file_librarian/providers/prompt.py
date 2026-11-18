@@ -1,9 +1,10 @@
-"""The prompt and answer schema shared by the Claude providers.
+"""The prompt and answer schema every provider shares.
 
 ``anthropic`` sends them through the API, ``claude-code`` through the
-``claude`` CLI; both get the same instructions, the same JSON schema with the
-configured categories as an ``enum``, and normalize the answer the same way
-before ``Classification`` validates it.
+``claude`` CLI, ``openai-compat`` and ``ollama`` over HTTP; all get the same
+instructions, the same JSON schema with the configured categories as an
+``enum``, and normalize the answer the same way before ``Classification``
+validates it.
 """
 
 from __future__ import annotations

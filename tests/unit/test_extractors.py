@@ -9,8 +9,8 @@ from typing import Any
 import pytest
 from pypdf import PdfWriter
 
-from file_librarian.extractors import ExtractionError, extractor_for
-from tests._helpers import make_docx, make_pdf, make_pptx, make_xlsx
+from file_librarian.extractors import ExtractionError, extractor_for, mail
+from tests._helpers import make_docx, make_eml, make_pdf, make_pptx, make_xlsx
 
 
 def extract(path: Path, max_chars: int = 4000) -> str | None:
@@ -181,3 +181,126 @@ def test_corrupted_zip(tmp_path: Path) -> None:
 @pytest.mark.parametrize("name", ["old.doc", "old.xls", "old.ppt", "movie.mp4", "setup.dmg"])
 def test_formats_without_extractor(name: str) -> None:
     assert extractor_for(Path(name)) is None
+
+
+# --- E-mail (.eml) -------------------------------------------------------------------
+
+
+def test_eml_headers_and_plain_body(tmp_path: Path) -> None:
+    path = make_eml(
+        tmp_path / "message.eml",
+        "Hello,\n\n\n\nyour   October bill is R$ 231,40.",
+        sender='"billing@power.example" <billing@power.example>',
+        to="Someone <someone@mail.example>, other@mail.example",
+    )
+    assert extract(path) == (
+        "Subject: Electricity bill\n"
+        "From: …@power.example <…@power.example>\n"
+        "To: Someone <…@mail.example>, …@mail.example\n"
+        "Date: 2026-10-05\n\n"
+        "Hello,\n\nyour October bill is R$ 231,40."
+    )
+
+
+def test_eml_never_sends_the_local_part_of_an_address(tmp_path: Path) -> None:
+    many = ", ".join(f"person{i}@mail.example" for i in range(8))
+    path = make_eml(tmp_path / "m.eml", subject="Re: ask billing@power.example", to=many)
+    text = extract(path)
+    assert text is not None
+    assert "billing@" not in text and "person0@" not in text
+    assert "Subject: Re: ask …@power.example" in text
+    assert "To: " + ", ".join(["…@mail.example"] * 5) + " (+3 more)" in text
+
+
+def test_eml_html_body_when_there_is_no_plain_one(tmp_path: Path) -> None:
+    html = (
+        "<html><head><title>t</title><style>p {color: red}</style></head><body>"
+        "<p>Order #42 shipped</p><script>track()</script><div>Thanks</div></body></html>"
+    )
+    text = extract(make_eml(tmp_path / "order.eml", "", html=html))
+    assert text is not None
+    assert text.endswith("Order #42 shipped\n\nThanks")
+    assert "track()" not in text and "color" not in text
+
+
+def test_eml_prefers_the_plain_body(tmp_path: Path) -> None:
+    text = extract(make_eml(tmp_path / "both.eml", "plain words", html="<p>html words</p>"))
+    assert text is not None and text.endswith("plain words") and "html words" not in text
+
+
+def test_eml_lists_attachment_names_never_their_content(tmp_path: Path) -> None:
+    path = make_eml(
+        tmp_path / "with-files.eml",
+        attachments={
+            "invoice-october.pdf": b"%PDF hidden-content",
+            "../../folder/notes.txt": b"attached words",
+            "C:\\Users\\x\\scan.jpg": b"jpeg",
+        },
+    )
+    text = extract(path)
+    assert text is not None
+    assert "Attachments: invoice-october.pdf, notes.txt, scan.jpg" in text
+    assert "hidden-content" not in text and "attached words" not in text
+
+
+def test_eml_caps_attachments_and_parts(tmp_path: Path) -> None:
+    files = {f"file-{i:03}.pdf": b"x" for i in range(300)}
+    text = extract(make_eml(tmp_path / "many.eml", attachments=files))
+    assert text is not None
+    listed = ", ".join(f"file-{i:03}.pdf" for i in range(mail.MAX_ATTACHMENTS))
+    assert f"Attachments: {listed}, …" in text
+
+
+def test_eml_odd_headers_and_unnamed_attachments(tmp_path: Path) -> None:
+    path = tmp_path / "odd.eml"
+    path.write_bytes(
+        b"Subject: hi\nDate: sometime last week\nTo: undisclosed-recipients:;\n"
+        b'Content-Type: multipart/mixed; boundary="b"\n\n'
+        b"--b\nContent-Type: text/plain\nContent-Disposition: attachment\n\nnot the body\n"
+        b"--b\nContent-Type: text/plain\n\nthe body\n--b--\n"
+    )
+    assert extract(path) == "Subject: hi\nDate: sometime last week\n\nthe body"
+
+
+def test_eml_max_chars(tmp_path: Path) -> None:
+    text = extract(make_eml(tmp_path / "long.eml", "word " * 5000), max_chars=300)
+    assert text is not None and len(text) <= 300
+
+
+@pytest.mark.parametrize("content", [b"", b"\n\n\n"])
+def test_eml_without_anything_readable(tmp_path: Path, content: bytes) -> None:
+    path = tmp_path / "empty.eml"
+    path.write_bytes(content)
+    assert extract(path) is None
+
+
+def test_eml_with_an_unknown_charset_falls_back_to_utf8(tmp_path: Path) -> None:
+    path = tmp_path / "odd.eml"
+    path.write_bytes(
+        b"Subject: hi\nContent-Type: text/plain; charset=x-unknown\n\nOr\xc3\xa7amento\n"
+    )
+    assert extract(path) == "Subject: hi\n\nOrçamento"
+
+
+def test_eml_reads_at_most_the_byte_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mail, "MAX_MESSAGE_BYTES", 400)
+    path = make_eml(tmp_path / "big.eml", "start " + "x" * 10_000 + " END-MARKER")
+    text = extract(path)
+    assert text is not None and "start" in text and "END-MARKER" not in text
+
+
+def test_eml_nested_too_deep_is_an_extraction_error(tmp_path: Path) -> None:
+    head = "".join(
+        f'Content-Type: multipart/mixed; boundary="b{i}"\n\n--b{i}\n' for i in range(5000)
+    )
+    path = tmp_path / "deep.eml"
+    path.write_text("Subject: deep\n" + head + "Content-Type: text/plain\n\nhello\n")
+    with pytest.raises(ExtractionError):
+        extract(path)
+
+
+def test_eml_unreadable_is_an_extraction_error(tmp_path: Path) -> None:
+    folder = tmp_path / "folder.eml"
+    folder.mkdir()
+    with pytest.raises(ExtractionError):
+        extract(folder)

@@ -26,7 +26,7 @@ from file_librarian.context import build_context_safely
 from file_librarian.extractors import ExtractionError, extractor_for
 from file_librarian.hashing import file_sha256, unit_manifest
 from file_librarian.scanner import Candidate
-from tests._helpers import make_docx, make_pdf, make_pptx, make_xlsx
+from tests._helpers import make_docx, make_eml, make_pdf, make_pptx, make_xlsx
 
 CONFIG = parse_config({"provider": {"name": "fake", "model": "x"}})
 ROUNDS = 150
@@ -67,6 +67,12 @@ BUILDERS: dict[str, Callable[[Path], Path]] = {
     "file.pdf": lambda p: make_pdf(p, "Fatura de energia " * 20),
     "photos.zip": _zip,
     "backup.tar.gz": _tar,
+    "message.eml": lambda p: make_eml(
+        p,
+        "Fatura de energia " * 50,
+        html="<p>Fatura <b>de</b> energia</p>" * 20,
+        attachments={"fatura.pdf": b"%PDF" * 200, "nota.txt": b"nota " * 100},
+    ),
 }
 
 
