@@ -140,6 +140,8 @@ class OperationRow:
     """Names that copy's staging and trash paths (``fsops.new_copy_key``)."""
     copy_volumes: tuple[int | None, int | None] = (None, None)
     """Devices of that copy's source and destination folders when it started."""
+    previous: tuple[FileStatus, str | None] | None = None
+    """For a ``flib reprocess`` move, the (status, category) the file had before."""
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> OperationRow:
@@ -159,6 +161,9 @@ class OperationRow:
             copy_phase=None if row["copy_phase"] is None else CopyPhase(row["copy_phase"]),
             copy_key=row["copy_key"],
             copy_volumes=(row["copy_src_dev"], row["copy_dst_dev"]),
+            previous=None
+            if row["prev_status"] is None
+            else (FileStatus(row["prev_status"]), row["prev_category"]),
         )
 
 
@@ -237,6 +242,30 @@ class CorrectionRow:
             original_name=str(row["original_name"]),
             current_name=str(row["current_name"]),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class IndexChange:
+    """A change a run made to the index without moving a file (``index_changes``)."""
+
+    id: int
+    run_id: int
+    target: str
+    """``files.category``, ``corrections.old_value``, ``corrections.new_value`` or
+    ``operations.finder_tag``."""
+    row_id: int
+    old_value: str | None
+    new_value: str | None
+    status: str
+
+
+# The columns ``index_changes`` may point at. Only these fixed names ever reach SQL.
+_INDEX_TARGETS = {
+    "files.category": ("files", "category"),
+    "corrections.old_value": ("corrections", "old_value"),
+    "corrections.new_value": ("corrections", "new_value"),
+    "operations.finder_tag": ("operations", "finder_tag"),
+}
 
 
 class Store:
@@ -327,9 +356,20 @@ class Store:
         return RunTrigger(row[0])
 
     def last_run_with_operations(self) -> int | None:
-        """The newest run that actually moved something (done or since undone)."""
+        """The newest run that actually changed something: moved a file or changed the
+        index (done, or since undone)."""
         row = self.conn.execute(
-            "SELECT MAX(run_id) FROM operations WHERE status IN ('done', 'undone')"
+            """SELECT MAX(run_id) FROM (
+                   SELECT run_id FROM operations WHERE status IN ('done', 'undone')
+                   UNION ALL SELECT run_id FROM index_changes)"""
+        ).fetchone()
+        return None if row is None or row[0] is None else int(row[0])
+
+    def newest_reprocess_after(self, run_id: int | None) -> int | None:
+        """The newest ``flib reprocess`` run started after ``run_id`` (any, if ``None``)."""
+        row = self.conn.execute(
+            "SELECT MAX(id) FROM runs WHERE trigger = 'reprocess' AND id > ?",
+            (run_id if run_id is not None else 0,),
         ).fetchone()
         return None if row is None or row[0] is None else int(row[0])
 
@@ -433,26 +473,86 @@ class Store:
             fields.setdefault(int(row[0]), set()).add(str(row[1]))
         return fields
 
-    def rename_category(self, old: str, new: str, *, organized: bool = False) -> None:
+    def rename_category(self, run_id: int, old: str, new: str, *, organized: bool) -> int:
         """A category renamed in the configuration (``flib reprocess --rename-category``).
 
         Rows outside the category folders (missing ones, say) and past
         corrections take the new name, so a correction to ``old`` stays in
         effect. Organized files are moved one by one, by the executor, unless
         ``organized``: the two names are the same folder on macOS (only the
-        case differs), so their rows are renamed here too.
+        case differs), so their rows are renamed here too. Every change is
+        journaled with ``run_id`` for undo. Returns how many.
         """
         statuses = "1" if organized else "status != 'organized'"
-        self.conn.execute(
-            f"UPDATE files SET category = ? WHERE category = ? AND {statuses}",  # noqa: S608
-            (new, old),
-        )
-        for column in ("old_value", "new_value"):
-            self.conn.execute(
-                f"UPDATE corrections SET {column} = ? "  # noqa: S608 - fixed column names
-                f"WHERE field = 'category' AND {column} = ?",
-                (new, old),
+        ids = [
+            int(r[0])
+            for r in self.conn.execute(
+                f"SELECT id FROM files WHERE category = ? AND {statuses}",  # noqa: S608
+                (old,),
             )
+        ]
+        changes = [("files.category", i) for i in ids]
+        for column in ("old_value", "new_value"):
+            changes.extend(
+                (f"corrections.{column}", int(r[0]))
+                for r in self.conn.execute(
+                    f"SELECT id FROM corrections "  # noqa: S608 - fixed column names
+                    f"WHERE field = 'category' AND {column} = ?",
+                    (old,),
+                )
+            )
+        for target, row_id in changes:
+            self.change_index(run_id, target, row_id, old, new)
+        return len(changes)
+
+    def change_index(
+        self, run_id: int, target: str, row_id: int, old: str | None, new: str | None
+    ) -> None:
+        """Set one indexed value and journal it with ``run_id`` (see ``index_changes``)."""
+        table, column = _INDEX_TARGETS[target]
+        self.conn.execute(
+            f"UPDATE {table} SET {column} = ? WHERE id = ?",  # noqa: S608 - fixed names
+            (new, row_id),
+        )
+        self.conn.execute(
+            """INSERT INTO index_changes (run_id, target, row_id, old_value, new_value, status,
+                                          created_at)
+               VALUES (?, ?, ?, ?, ?, 'done', ?)""",
+            (run_id, target, row_id, old, new, _now()),
+        )
+
+    def index_changes(self, run_id: int) -> list[IndexChange]:
+        """The run's index changes still in effect, oldest first."""
+        rows = self.conn.execute(
+            "SELECT * FROM index_changes WHERE run_id = ? AND status = 'done' ORDER BY id",
+            (run_id,),
+        )
+        return [
+            IndexChange(
+                id=int(r["id"]),
+                run_id=int(r["run_id"]),
+                target=str(r["target"]),
+                row_id=int(r["row_id"]),
+                old_value=r["old_value"],
+                new_value=r["new_value"],
+                status=str(r["status"]),
+            )
+            for r in rows
+        ]
+
+    def revert_index_change(self, change: IndexChange) -> bool:
+        """Put the old value back, if the value is still the one the run set.
+
+        Marks the change ``undone`` either way; returns whether it was put back.
+        """
+        table, column = _INDEX_TARGETS[change.target]
+        cur = self.conn.execute(
+            f"UPDATE {table} SET {column} = ? "  # noqa: S608 - fixed names
+            f"WHERE id = ? AND {column} IS ?",
+            (change.old_value, change.row_id, change.new_value),
+        )
+        self.conn.execute("UPDATE index_changes SET status = 'undone' WHERE id = ?", (change.id,))
+        return cur.rowcount > 0
 
     def organized_categories(self) -> list[str]:
         """Every category an organized file has (others keep no folder to move)."""
@@ -640,17 +740,22 @@ class Store:
         *,
         identity: tuple[int, int],
         fix: tuple[FileStatus, str | None] | None = None,
+        previous: tuple[FileStatus, str | None] | None = None,
     ) -> int:
         """Journal a move. ``identity`` is the source's (st_dev, st_ino); ``fix`` is the
         (status, category) a ``flib fix`` gives the file, so recovery can finish it."""
         fix_status, fix_category = (None, None) if fix is None else (fix[0].value, fix[1])
+        prev_status, prev_category = (
+            (None, None) if previous is None else (previous[0].value, previous[1])
+        )
         cur = self.conn.execute(
             """INSERT INTO operations (run_id, file_id, src_path, dst_path, status, created_at,
-                                      src_dev, src_ino, fix_status, fix_category)
-               VALUES (?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?)""",
+                                      src_dev, src_ino, fix_status, fix_category, prev_status,
+                                      prev_category)
+               VALUES (?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?, ?)""",
             (
                 run_id, file_id, str(src), str(dst), _now(), identity[0], identity[1],
-                fix_status, fix_category,
+                fix_status, fix_category, prev_status, prev_category,
             ),
         )  # fmt: skip
         return _rowid(cur)
@@ -751,6 +856,22 @@ class Store:
             HistoryRow(OperationRow.from_row(r), RunTrigger(r["run_trigger"]), str(r["created_at"]))
             for r in rows
         ]
+
+    def operation_by_id(self, op_id: int) -> OperationRow:
+        row = self.conn.execute("SELECT * FROM operations WHERE id = ?", (op_id,)).fetchone()
+        if row is None:
+            raise LookupError(f"no operation with id {op_id}")
+        return OperationRow.from_row(row)
+
+    def last_tag_operation(self, file_id: int) -> OperationRow | None:
+        """The newest move still in effect that added a Finder tag."""
+        row = self.conn.execute(
+            """SELECT * FROM operations
+               WHERE file_id = ? AND status = 'done' AND finder_tag IS NOT NULL
+               ORDER BY id DESC LIMIT 1""",
+            (file_id,),
+        ).fetchone()
+        return None if row is None else OperationRow.from_row(row)
 
     def last_finder_tag(self, file_id: int) -> str | None:
         """The Finder tag of the newest move still in effect that added one."""

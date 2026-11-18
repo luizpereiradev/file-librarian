@@ -10,25 +10,35 @@ All notable changes to this project are documented here. The format follows
 
 - `flib reprocess` (RF-37): files already in the library (organized or in
   review) are classified again after the rules change (categories, hints,
-  naming, model) and only those whose answer changed move. It estimates the
-  cost (cached answers are free) and asks before sending anything, shows the
-  plan and asks before moving (`--simulate` stops there, `--yes` answers
-  both), honours the per-run cost limit (run it again to go on) and takes
-  the search filters (`--category`, `--since`, `--until`, `--ext`) and
-  `--keep-names`. Corrections made with `flib fix` or found by `flib
-  reconcile` are kept unless `--override-corrections`. The moves are one run
-  with the new trigger `reprocess` (migration 0009 rebuilds `runs` to allow
-  it), journaled like a fix so a crash either finishes a move or leaves the
-  file and its row as they were, and `flib undo` reverts the whole of it,
-  Finder tags included. A category renamed or removed in the configuration
-  while files still use it is reported by every command and needs
-  `--rename-category OLD NEW` (moves the folder's files, renames the
-  category in the index and in corrections) or `--remove-category OLD`
-  (reclassifies its files, or `--to-review` sends them to review without
-  AI). An item's own name no longer counts as taken when the planner
-  re-plans it into its folder. In the MCP server, `get_file` history marks
-  these moves `by: reprocess` and `get_stats` counts a reprocess as the
-  last run.
+  naming, model) and only those whose answer changed move. File names are
+  kept unless `--rename`, and a file you put in a sub-folder of its category
+  stays there unless its category changes. It estimates the cost (cached
+  answers are free; images and scanned pages priced by their size) and asks
+  before sending anything, shows the plan and asks before moving
+  (`--simulate` classifies and stops there, `--yes` answers both); the
+  questions come before the instance lock is taken, and every file is
+  checked again before it moves. It honours the per-run cost limit (run it
+  again to go on), takes the search filters (`--category`, `--since`,
+  `--until`, `--ext`), and never sends a file whose current or original name
+  is sensitive or matches `never_send`. Corrections made with `flib fix` or
+  found by `flib reconcile` are kept unless `--override-corrections`. The
+  moves are one run with the new trigger `reprocess`, journaled like a fix
+  so a crash either finishes a move or leaves the file and its row as they
+  were, and `flib undo` reverts the whole of it, Finder tags included,
+  giving back each file's previous status and category. A category renamed
+  or removed in the configuration while files still use it is reported by
+  every command and needs `--rename-category OLD NEW` (moves the folder's
+  files, renames the category in the index, corrections and, for a change
+  of case only, Finder tags) or `--remove-category OLD` (reclassifies its
+  files, or `--to-review` sends them to review without AI); the index side
+  is journaled too, so undo reverts it, and undo makes a deleted category
+  folder again. Migration 0009 rebuilds `runs` to allow the new trigger,
+  adds the previous status and category to `operations` and the
+  `index_changes` journal. After a reprocess that changed nothing, plain
+  `flib undo` refuses instead of undoing an earlier run. An item's own name
+  no longer counts as taken when the planner re-plans it into its folder.
+  In the MCP server, `get_file` history marks these moves `by: reprocess`
+  and `get_stats` counts a reprocess as the last run.
 - `ollama` provider (#33): classification by a local model through Ollama's
   OpenAI-compatible endpoint (default `http://localhost:11434/v1`), with no
   key. A preset of `openai-compat`. On this Mac it is `local`, which only

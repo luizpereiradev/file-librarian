@@ -23,13 +23,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from file_librarian.config import Config
-from file_librarian.db.store import OperationRow, Store
+from file_librarian.db.store import IndexChange, OperationRow, Store
 from file_librarian.finder_tags import tag_moved, untag_restored
 from file_librarian.fsops import (
     CrossVolumeError,
     DestinationExistsError,
     Journal,
     copy_move,
+    ensure_folder,
     move_no_replace,
     new_copy_key,
     volume_of,
@@ -49,25 +50,57 @@ class UndoReport:
     skipped: list[tuple[Path, str]] = field(default_factory=list)
     warnings: list[tuple[Path, str]] = field(default_factory=list)
     """Restored, but something minor went wrong (a Finder tag left behind)."""
+    reverted: int = 0
+    """Index changes put back (a category renamed by ``flib reprocess``)."""
 
 
 def undo_run(
     store: Store, run_id: int | None = None, *, config: Config | None = None
 ) -> UndoReport:
     explicit = run_id is not None
-    run_id = run_id if run_id is not None else store.last_run_with_operations()
+    hint = "" if explicit else "; to go further back, name a run with --run ID"
     if run_id is None:
-        raise NothingToUndoError("no run has moved anything yet")
+        run_id = store.last_run_with_operations()
+        # A `flib reprocess` that changed nothing (every move skipped or failed)
+        # was what the user asked for last: undo must not reach past it and
+        # unwind an unrelated earlier run in its place.
+        reprocess = store.newest_reprocess_after(run_id)
+        if reprocess is not None:
+            raise NothingToUndoError(
+                f"the newest reprocess (run {reprocess}) changed nothing, so there is "
+                f"nothing of it to undo{hint}"
+            )
+        if run_id is None:
+            raise NothingToUndoError("no run has moved anything yet")
     ops = store.operations(run_id=run_id, status=OperationStatus.DONE)
-    if not ops:
-        hint = "" if explicit else "; to go further back, name a run with --run ID"
-        # Never step back to an older run on its own: repeating `undo` must not
-        # quietly unwind yesterday's work too.
+    changes = store.index_changes(run_id)
+    if not ops and not changes:
         raise NothingToUndoError(f"run {run_id} has nothing left to undo{hint}")
     report = UndoReport()
     for op in reversed(ops):
         _undo_one(store, op, report, config)
+    for change in reversed(changes):
+        _revert(store, change, report)
     return report
+
+
+def _revert(store: Store, change: IndexChange, report: UndoReport) -> None:
+    """Undo one index change (a renamed category), and for a Finder tag, the file's tag."""
+    with store.transaction():
+        reverted = store.revert_index_change(change)
+    if not reverted:
+        return  # changed again since (a later fix, say): that change stands
+    report.reverted += 1
+    if change.target != "operations.finder_tag":
+        return
+    op = store.operation_by_id(change.row_id)
+    path = store.file_by_id(op.file_id).current_path
+    if change.new_value is not None and (warning := untag_restored(path, change.new_value)):
+        report.warnings.append((path, warning))
+    if change.old_value is not None:
+        _, warning = tag_moved(path, change.old_value)
+        if warning:
+            report.warnings.append((path, warning))
 
 
 def undo_file(store: Store, path: Path, *, config: Config | None = None) -> UndoReport:
@@ -92,8 +125,16 @@ def _undo_one(store: Store, op: OperationRow, report: UndoReport, config: Config
         report.skipped.append((dst, "changed since it was moved"))
         return
     if not src.parent.is_dir():
-        report.skipped.append((dst, f"original folder is gone: {src.parent}"))
-        return
+        # A folder of the library (an emptied category folder deleted since)
+        # is made again; any other missing folder is not flib's to create.
+        root = config.output_root if config is not None else None
+        try:
+            if root is None or not src.parent.is_relative_to(root):
+                raise FileNotFoundError(src.parent)
+            ensure_folder(src.parent, inside=root)
+        except (OSError, ValueError):
+            report.skipped.append((dst, f"original folder is gone: {src.parent}"))
+            return
     try:
         try:
             move_no_replace(dst, src)
@@ -143,7 +184,7 @@ def record_restored(store: Store, op: OperationRow, config: Config | None) -> li
     warnings: list[str] = []
     row = store.file_by_id(op.file_id)
     identity = unit_identity(src, row.sha256) if row.is_unit else None
-    status, category = _restored_place(config, src)
+    status, category = op.previous if op.previous is not None else _restored_place(config, src)
     with store.transaction():
         store.set_operation(op.id, OperationStatus.UNDONE)
         if identity is not None:
@@ -157,7 +198,11 @@ def record_restored(store: Store, op: OperationRow, config: Config | None) -> li
     if status is FileStatus.ORGANIZED:
         # Back in a category folder (an undone fix): give back the tag flib set there.
         earlier = store.last_finder_tag(op.file_id)
-        if earlier is not None and earlier == category:
+        if (
+            earlier is not None
+            and category is not None
+            and earlier.casefold() == category.casefold()
+        ):
             _, warning = tag_moved(src, earlier)
             if warning:
                 warnings.append(warning)
@@ -165,20 +210,15 @@ def record_restored(store: Store, op: OperationRow, config: Config | None) -> li
 
 
 def _restored_place(config: Config | None, src: Path) -> tuple[FileStatus, str | None]:
-    """The status and category of an item back at ``src``.
+    """The status and category of an item back at ``src``, from the folder it is in.
 
-    Back in a folder of the library that is no longer a category (undoing
-    ``flib reprocess --rename-category`` or ``--remove-category``), it is
-    still organized under that folder's name, so flib keeps pointing out the
-    category missing from the configuration instead of forgetting the file.
+    A ``flib reprocess`` move records what the file had before instead
+    (``OperationRow.previous``), so undoing a category rename or removal gives
+    back the old category even though the configuration no longer has it.
     """
     if config is None:
         return FileStatus.SKIPPED, None
-    status, category = place(config, src)
-    root = config.output_root
-    if status is FileStatus.SKIPPED and src.is_relative_to(root) and src.parent != root:
-        return FileStatus.ORGANIZED, src.relative_to(root).parts[0]
-    return status, category
+    return place(config, src)
 
 
 def unit_identity(path: Path, current: str) -> str | None:

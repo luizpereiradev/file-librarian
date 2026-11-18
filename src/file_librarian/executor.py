@@ -219,6 +219,9 @@ class Relocation:
     answer: Classification | None = None
     """The new classification, if one was asked for; its description and tags go to the index."""
     name_choice: NameChoice | None = None
+    previous: tuple[FileStatus, str | None] | None = None
+    """The (status, category) the index had when it was planned; checked again before
+    anything changes, and given back by undo."""
 
 
 def relocate(
@@ -226,12 +229,17 @@ def relocate(
     config: Config,
     store: Store,
     *,
+    run_id: int,
     provider: str | None,
     model: str | None,
     deferred: int = 0,
 ) -> RunReport:
-    """Move files already in the library, as one run with trigger ``reprocess``."""
-    run_id = store.start_run(RunMode.RUN, RunTrigger.REPROCESS)
+    """Move files already in the library, in the run ``run_id`` (trigger ``reprocess``).
+
+    The plan may be older than the lock (it was shown and confirmed first):
+    each item is applied only if its index row and the file itself are still
+    as planned.
+    """
     report = RunReport(run_id, deferred=deferred)
     for item in relocations:
         report.items.append(_relocate_one(item, config, store, run_id, provider, model))
@@ -255,6 +263,12 @@ def _relocate_one(
 ) -> ItemResult:
     ctx = item.context
     record = _answer_record(item, provider, model)
+    row = store.file_by_id(item.file_id)
+    previous = (row.status, row.category)
+    if (row.current_path, row.sha256) != (ctx.path, ctx.sha256) or (
+        item.previous is not None and previous != item.previous
+    ):
+        return ItemResult(ctx.path, FileStatus.SKIPPED, None, "changed in the index since the plan")
     if item.destination is None or item.destination == ctx.path:
         if record is not None:
             with store.transaction():
@@ -271,6 +285,7 @@ def _relocate_one(
             item.destination,
             identity=identity,
             fix=(item.status, item.category),
+            previous=previous,
         )
     try:
         ensure_folder(item.destination.parent, inside=config.output_root)

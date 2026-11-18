@@ -246,7 +246,7 @@ provider:
 | `flib fix PATH [--category NAME] [--name NAME]` | Correct one file's category or name; flib learns from it | M2 (available) |
 | `flib init [--yes] [--sample N] [--force]` | Guided setup with a trial on copies of recent files | M2 (available) |
 | `flib mcp` | Local MCP server for AI assistants ([Use it from Claude](#use-it-from-claude)) | M2 (available) |
-| `flib reprocess [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--keep-names] [--simulate] [--yes]` | Reclassify organized files after the rules change; `--rename-category OLD NEW` and `--remove-category OLD [--to-review]` migrate a category ([Changing your rules](#changing-your-rules)) | M3 (available) |
+| `flib reprocess [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--rename] [--simulate] [--yes]` | Reclassify organized files after the rules change (names kept unless `--rename`); `--rename-category OLD NEW` and `--remove-category OLD [--to-review]` migrate a category ([Changing your rules](#changing-your-rules)) | M3 (available) |
 | `flib doctor [--stdout \| -o PATH] [--format markdown]` | A redacted diagnostics report for bug reports ([Troubleshooting](#troubleshooting)) | M3 (available) |
 
 ### Searching
@@ -382,21 +382,29 @@ change categories, their hints, the naming rules or the model, file what is
 already organized again:
 
 ```sh
-flib reprocess --simulate          # show what would move; nothing changes
+flib reprocess --simulate          # classify and show what would move; moves nothing
 flib reprocess                     # asks before sending, then before moving
-flib reprocess --category finance --since 2026-01-01 --keep-names
+flib reprocess --category finance --since 2026-01-01 --rename
 ```
 
 It works on files in the library only (organized or in review), never on the
-input folders, and never sends a file flagged sensitive. Before anything is
+input folders, and never sends a file flagged sensitive, nor the content of
+one whose current or original name matches `never_send`. Before anything is
 sent it says how many files the cache already answers and estimates the cost
 of the rest, and asks; the per-run cost limit
 (`limits.max_cost_usd_per_run`) still applies, and running it again goes on
 where it stopped, the cache answering what was done. Then it shows the plan
-and asks again (`--yes` answers both). A file whose answer did not change
-stays as it is; one the AI is now unsure about stays in its category.
-`--keep-names` changes categories only. The filters are the ones of
-`flib search` (`--category`, `--since`, `--until`, `--ext`).
+and asks again (`--yes` answers both). `--simulate` still sends the files
+(after the same question, so it can cost money; the answers are cached for
+the real run) and stops before moving anything.
+
+A file whose answer did not change stays as it is; one the AI is now unsure
+about stays in its category; one you put in a sub-folder of its category
+stays there unless its category changes. File names are kept: only
+`--rename` applies the current naming rules to them too. The filters are the
+ones of `flib search` (`--category`, `--since`, `--until`, `--ext`). The
+questions are asked before flib takes its lock, so a scheduled run is never
+held up by an unanswered one; each file is checked again before it moves.
 
 Your corrections win: a category or a name you set with `flib fix` (or by
 moving the file and running `flib reconcile`) is kept, unless you add
@@ -415,9 +423,15 @@ flib reprocess --remove-category Misc --to-review  # or send all of it to review
 ```
 
 A rename keeps file names (a taken one gets `-2`), and your corrections to
-the old name now point at the new one. Files the AI is unsure about after a
-removal go to review. The emptied folder stays, so `flib undo` can put the
-files back; delete it when you are done.
+the old name now point at the new one; a rename that only changes the case
+changes the index and the Finder tags. Files the AI is unsure about after a
+removal go to review. `flib undo` reverts a migration like any reprocess,
+the index side included (category names in rows and corrections), and makes
+the emptied folder again if you deleted it.
+
+After a reprocess that changed nothing (every move failed or was skipped),
+plain `flib undo` refuses instead of undoing an earlier run; name that run
+with `--run ID` if you meant it.
 
 ## Use it from Claude
 

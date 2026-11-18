@@ -42,7 +42,9 @@ SNIFF_LIMIT = 1024 * 1024
 UNIT_LISTING = 100
 
 
-def build_context_safely(candidate: Candidate, config: Config) -> FileContext:
+def build_context_safely(
+    candidate: Candidate, config: Config, *, also_named: tuple[str, ...] = ()
+) -> FileContext:
     """``build_context``, but nothing about one item can stop the run (RF-27).
 
     Whatever goes wrong while reading an item, it is classified from its name
@@ -50,7 +52,7 @@ def build_context_safely(candidate: Candidate, config: Config) -> FileContext:
     narrower handlers inside only make the recorded reason more precise.
     """
     try:
-        return build_context(candidate, config)
+        return build_context(candidate, config, also_named=also_named)
     except Exception as exc:
         return FileContext(
             path=candidate.path,
@@ -65,8 +67,14 @@ def build_context_safely(candidate: Candidate, config: Config) -> FileContext:
         )
 
 
-def build_context(candidate: Candidate, config: Config) -> FileContext:
+def build_context(
+    candidate: Candidate, config: Config, *, also_named: tuple[str, ...] = ()
+) -> FileContext:
+    """The context for ``candidate``. ``also_named``: other names the item had (an
+    indexed file's original name, for ``flib reprocess``); a sensitive name or a
+    ``never_send`` match under any of them counts as under the current one."""
     path = candidate.path
+    known_as = (path.name, *also_named)
     base = FileContext(
         path=path,
         sha256=candidate.sha256,
@@ -90,12 +98,12 @@ def build_context(candidate: Candidate, config: Config) -> FileContext:
             base, text=_describe_unit(names, bundle, config), metadata=FileMetadata(bundle=bundle)
         )
 
-    if detect and sensitive_name(path.name):
+    if detect and any(sensitive_name(n) for n in known_as):
         return replace(
             base, sensitive=True, metadata=FileMetadata(sensitive="credential file name")
         )
 
-    if withheld_by_config(path.name, config.never_send):
+    if any(withheld_by_config(n, config.never_send) for n in known_as):
         return replace(base, metadata=FileMetadata(content="withheld (never_send)"))
 
     error: str | None = None

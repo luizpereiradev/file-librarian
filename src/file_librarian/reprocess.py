@@ -12,15 +12,22 @@ ones whose answer now differs, in four steps the command line runs in order:
 2. ``estimate`` counts what the classification cache already answers and
    prices the rest, before anything is sent.
 3. ``plan_reprocess`` classifies (the cost cap and the cache apply as in a
-   run) and plans with the normal planner. A file the provider is now unsure
-   about stays in its category; one that cannot be classified stays where it
-   is. What the user corrected (``flib fix``, or a move by hand that ``flib
+   run) and plans with the normal planner. Names are kept unless renaming
+   was asked for. A file the provider is now unsure about stays in its
+   category; one that cannot be classified stays where it is. A file the
+   user put in a sub-folder of its category stays there unless its category
+   changes (then it goes to the new category's folder, its name kept). What
+   the user corrected (``flib fix``, or a move by hand that ``flib
    reconcile`` recorded) is kept: a corrected category is not changed, a
    corrected name is not renamed, and a file with both is not even sent;
-   ``override_corrections`` lifts that.
+   ``override_corrections`` lifts that. A ``never_send`` pattern or a
+   sensitive name matching the file's original name counts as well as one
+   matching its current name.
 4. ``apply`` moves through the executor (``executor.relocate``) as one run
    with trigger ``reprocess``, journaled, recovered after a crash and undone
-   as a whole by ``flib undo``; Finder tags follow the category.
+   as a whole by ``flib undo``; Finder tags follow the category. The plan is
+   made and confirmed before the instance lock is taken, so the executor
+   checks every item again (index row and file) before it changes anything.
 
 A category renamed or removed in the configuration while files still use it
 (an *orphan* category, see ``orphan_categories``) is never guessed at: plain
@@ -28,8 +35,11 @@ reprocessing refuses until an explicit migration ran. ``plan_rename`` moves
 its files to the new name's folder, and their corrections with them;
 ``--remove-category`` reclassifies its files among the remaining categories
 (``plan_reprocess`` on ``select(..., removed=...)``) or sends them all to
-review (``plan_to_review``). The emptied folder is left in place: undo moves
-files back into it.
+review (``plan_to_review``). The index side of a rename (rows that do not
+move, corrections, and for a rename that only changes case the Finder tags
+flib set) is journaled with the run (``index_changes``), so ``flib undo``
+reverts it too. The emptied folder is left in place; undo makes it again if
+it was deleted.
 
 Only files inside ``output_root`` are touched, and only to destinations the
 planner (or the migration) builds inside it.
@@ -54,8 +64,9 @@ from file_librarian.config import Config, folder_key, is_within
 from file_librarian.context import build_context_safely
 from file_librarian.db.store import FileRow, Store
 from file_librarian.executor import Relocation, RunReport, relocate
+from file_librarian.finder_tags import tag_moved, untag_restored
 from file_librarian.hashing import same_content, unit_manifest
-from file_librarian.models import Decision, FileContext, FileStatus, Rules
+from file_librarian.models import Decision, FileContext, FileStatus, Rules, RunMode, RunTrigger
 from file_librarian.pipeline import rules_for
 from file_librarian.planner import plan
 from file_librarian.providers.base import Provider, Usage
@@ -66,11 +77,13 @@ from file_librarian.search import SearchFilters
 
 _REPROCESSABLE = {FileStatus.ORGANIZED, FileStatus.REVIEW}
 
-# A rough price of one request: about four characters per token, the answer
-# with its thinking, and an image or a few scanned pages when vision applies.
+# A rough price of one request: about four characters per token, and the
+# answer with its thinking. An image costs about (pixels / 750) tokens at its
+# largest size (``vision.max_image_px`` on both sides, the worst case), and a
+# scanned PDF that many per page sent.
 CHARS_PER_TOKEN = 4
 ANSWER_TOKENS = 600
-ATTACHMENT_TOKENS = 1600
+PIXELS_PER_TOKEN = 750
 
 
 class ReprocessError(ValueError):
@@ -86,7 +99,10 @@ class Target:
     keep_category: bool = False
     """The user corrected its category: it stays."""
     keep_name: bool = False
-    """The user corrected its name (or asked to keep names): it is not renamed."""
+    """The user corrected its name, or renaming was not asked for: it is not renamed."""
+    nested: bool = False
+    """The user put it in a sub-folder of its category folder: it stays unless the
+    category changes."""
 
 
 @dataclass(slots=True)
@@ -138,6 +154,18 @@ class ReprocessPlan:
         return [c for c in self.changes if c.moves]
 
 
+@dataclass(frozen=True, slots=True)
+class Applied:
+    report: RunReport
+    index_changes: int = 0
+    """Index changes journaled with the run (a category rename)."""
+
+    @property
+    def undoable(self) -> bool:
+        """The run moved something or changed the index, so `flib undo` has work."""
+        return self.report.moved > 0 or self.index_changes > 0
+
+
 # --- orphan categories --------------------------------------------------------------
 
 
@@ -184,7 +212,7 @@ def select(
     *,
     filters: SearchFilters | None = None,
     removed: str | None = None,
-    keep_names: bool = False,
+    rename: bool = False,
     override_corrections: bool = False,
 ) -> Selection:
     """The library files to reprocess, checked to be where and what the index says.
@@ -192,7 +220,7 @@ def select(
     ``removed``: only the organized files of that category, which the
     configuration no longer has (``--remove-category``). Otherwise every
     file of the library matching ``filters``; a category the configuration
-    lost must be migrated first.
+    lost must be migrated first. Names are kept unless ``rename``.
     """
     if removed is not None:
         removed = _orphan(removed, config, store)
@@ -207,7 +235,8 @@ def select(
             continue
         fields = corrected.get(row.id, set())
         keep_category = "category" in fields and removed is None
-        keep_name = keep_names or "name" in fields
+        nested = _nested(row, config)
+        keep_name = not rename or nested or "name" in fields
         if keep_category and keep_name:
             selection.left.append((row.current_path, "your correction is kept"))
             continue
@@ -215,8 +244,16 @@ def select(
         if context is None:
             selection.left.append((row.current_path, problem))
             continue
-        selection.targets.append(Target(row, context, keep_category, keep_name))
+        selection.targets.append(Target(row, context, keep_category, keep_name, nested))
     return selection
+
+
+def _nested(row: FileRow, config: Config) -> bool:
+    """Deeper than ``output_root/<folder>/``: the user organized it further by hand."""
+    path = row.current_path
+    return path.is_relative_to(config.output_root) and (
+        len(path.relative_to(config.output_root).parts) > 2
+    )
 
 
 def _wanted(
@@ -269,7 +306,7 @@ def _check(row: FileRow, config: Config) -> tuple[FileContext | None, str]:
         created=float(getattr(st, "st_birthtime", st.st_mtime)),
         inode=st.st_ino,
     )
-    return build_context_safely(candidate, config), ""
+    return build_context_safely(candidate, config, also_named=(row.original_name,)), ""
 
 
 def _partly_in_cloud(path: Path) -> bool:
@@ -299,14 +336,21 @@ def estimate(targets: list[Target], provider: Provider, config: Config, store: S
             cached += 1
             continue
         to_ask += 1
-        cost += provider.cost_usd(_usage(ctx, rules, vision))
+        cost += provider.cost_usd(_usage(ctx, rules, config, vision))
     return Estimate(len(targets), cached, to_ask, cost)
 
 
-def _usage(ctx: FileContext, rules: Rules, vision: bool) -> Usage:
+def _usage(ctx: FileContext, rules: Rules, config: Config, vision: bool) -> Usage:
     chars = len(system_prompt(rules)) + len(user_message(ctx))
-    tokens = chars // CHARS_PER_TOKEN + (ATTACHMENT_TOKENS if vision else 0)
+    tokens = chars // CHARS_PER_TOKEN + (attachment_tokens(ctx, config) if vision else 0)
     return Usage(input_tokens=tokens, output_tokens=ANSWER_TOKENS)
+
+
+def attachment_tokens(ctx: FileContext, config: Config) -> int:
+    """At most what an image, or a scanned PDF's first pages, adds to a request."""
+    side = config.vision.max_image_px
+    pages = config.vision.max_pdf_pages if ctx.visual == "pdf" else 1
+    return side * side // PIXELS_PER_TOKEN * pages
 
 
 # --- 3. planning --------------------------------------------------------------------
@@ -350,15 +394,19 @@ def plan_reprocess(
             result.kept.append((path, f"stays in {row.category} ({item.reason})"))
             continue
         category = item.classification.category if item.status is FileStatus.ORGANIZED else None
+        destination = item.destination
+        if target.nested and (item.status, category) == (row.status, row.category):
+            destination = None  # in the sub-folder the user chose
         relocation = Relocation(
             file_id=row.id,
             context=item.context,
-            destination=item.destination,
+            destination=destination,
             status=item.status,
             category=category,
             reason=_reason(item.reason, target),
             answer=item.classification,
             name_choice=item.name_choice,
+            previous=(row.status, row.category),
         )
         result.changes.append(Change(row, relocation))
     for ctx in classified.deferred:
@@ -417,6 +465,7 @@ def plan_rename(config: Config, store: Store, old: str, new: str) -> ReprocessPl
             status=FileStatus.ORGANIZED,
             category=target.name,
             reason=f"category {old} renamed to {target.name}",
+            previous=(row.status, row.category),
         )
         result.changes.append(Change(row, relocation))
     return result
@@ -434,6 +483,7 @@ def plan_to_review(targets: list[Target], config: Config) -> ReprocessPlan:
             status=FileStatus.REVIEW,
             category=None,
             reason="its category was removed",
+            previous=(target.row.status, target.row.category),
         )
         result.changes.append(Change(target.row, relocation))
     return result
@@ -449,19 +499,61 @@ def apply(
     *,
     provider: str | None = None,
     model: str | None = None,
-) -> RunReport:
-    """Carry out the plan as one ``reprocess`` run; ``flib undo`` reverts it."""
+) -> Applied:
+    """Carry out the plan as one ``reprocess`` run; ``flib undo`` reverts it.
+
+    The caller holds the instance lock. The index side of a category rename
+    is written and journaled in one transaction with the run's start, before
+    any file moves, so undo finds it whatever happens next.
+    """
+    run_id = store.start_run(RunMode.RUN, RunTrigger.REPROCESS)
+    changed = 0
     if planned.rename is not None:
+        old, new = planned.rename
         with store.transaction():
-            store.rename_category(*planned.rename, organized=planned.same_folder)
-    return relocate(
+            renamed = [r.id for r in store.all_files() if r.category == old]
+            changed = store.rename_category(run_id, old, new, organized=planned.same_folder)
+        if planned.same_folder:
+            changed += _rename_tags(config, store, run_id, renamed, old, new)
+    report = relocate(
         [c.relocation for c in planned.changes],
         config,
         store,
+        run_id=run_id,
         provider=provider,
         model=model,
         deferred=planned.deferred,
     )
+    return Applied(report, changed)
+
+
+def _rename_tags(
+    config: Config, store: Store, run_id: int, file_ids: list[int], old: str, new: str
+) -> int:
+    """A category renamed only in case: the Finder tag flib set follows, in the journal too.
+
+    Files only in iCloud are left as they are (writing a tag could download them).
+    """
+    if not config.finder_tags.enabled:
+        return 0
+    changed = 0
+    for file_id in file_ids:
+        row = store.file_by_id(file_id)
+        op = store.last_tag_operation(file_id)
+        if row.status is not FileStatus.ORGANIZED or op is None or op.finder_tag is None:
+            continue
+        if op.finder_tag.casefold() != old.casefold() or op.finder_tag == new:
+            continue
+        path = row.current_path
+        if not os.path.lexists(path) or in_cloud_only(path):
+            continue
+        if untag_restored(path, op.finder_tag) is not None:
+            continue
+        tag_moved(path, new)
+        with store.transaction():
+            store.change_index(run_id, "operations.finder_tag", op.id, op.finder_tag, new)
+        changed += 1
+    return changed
 
 
 def empty_folder(config: Config, category: str) -> Path | None:

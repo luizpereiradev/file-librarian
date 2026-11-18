@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import errno
+import os
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 from typer.testing import CliRunner
 
-from file_librarian import context, executor, pipeline
+from file_librarian import context, executor, fsops, pipeline
 from file_librarian import reprocess as rp
 from file_librarian.cli import app
 from file_librarian.config import Config
@@ -16,23 +19,29 @@ from file_librarian.db.store import Store
 from file_librarian.executor import RunReport, recover
 from file_librarian.finder_tags import read_tags
 from file_librarian.fix import fix_file
+from file_librarian.fsops import CrossVolumeError
+from file_librarian.lock import instance_lock
 from file_librarian.models import (
     Classification,
     FileContext,
     FileStatus,
     OperationStatus,
     Rules,
+    RunMode,
     RunTrigger,
 )
 from file_librarian.providers.base import Usage
 from file_librarian.providers.fake import FakeProvider
+from file_librarian.reconcile import reconcile
 from file_librarian.scanner import Candidate
-from file_librarian.undo import undo_run
+from file_librarian.undo import undo_file, undo_run
 from tests._helpers import (
     Crash,
     answer,
+    context_for,
     fake_config,
     library,
+    make_image,
     make_old,
     mark_cloud_only,
     organize,
@@ -57,7 +66,7 @@ def reprocess(
     cfg: Config,
     provider: FakeProvider,
     *,
-    keep_names: bool = False,
+    rename: bool = False,
     override_corrections: bool = False,
     removed: str | None = None,
     fresh: bool = True,
@@ -71,12 +80,12 @@ def reprocess(
             cfg,
             store,
             removed=removed,
-            keep_names=keep_names,
+            rename=rename,
             override_corrections=override_corrections,
         )
         planned = rp.plan_reprocess(selection.targets, provider, cfg, store)
-        report = rp.apply(planned, cfg, store, provider="fake", model="x")
-    return planned, report
+        applied = rp.apply(planned, cfg, store, provider="fake", model="x")
+    return planned, applied.report
 
 
 def where(cfg: Config, original: str) -> tuple[FileStatus, str | None, Path]:
@@ -113,8 +122,8 @@ def test_reprocess_renames_under_new_naming_rules_and_keeps_names_on_request(
     lib = library(downloads)
     sure = answer("Finance", "power bill", 0.95, description="fresh")
     provider = FakeProvider({"scan.txt": sure})
-    planned, _ = reprocess(cfg, provider, keep_names=True)
-    assert planned.moves() == []  # same category, and names are kept
+    planned, _ = reprocess(cfg, provider)
+    assert planned.moves() == []  # same category, and names are kept by default
     _, _, path = where(cfg, "scan.txt")
     assert path == lib / "Finance" / "scan.txt"
     # The description is refreshed even when nothing moves.
@@ -122,6 +131,8 @@ def test_reprocess_renames_under_new_naming_rules_and_keeps_names_on_request(
 
     cfg = config(downloads, naming={"pattern": "{subject}"})
     planned, _ = reprocess(cfg, provider)
+    assert planned.moves() == []  # new naming rules rename nothing unless asked
+    planned, _ = reprocess(cfg, provider, rename=True)
     assert where(cfg, "scan.txt")[2] == lib / "Finance" / "power-bill.txt"
 
 
@@ -160,9 +171,9 @@ def test_failed_classification_and_sensitive_files_are_left_alone(
     read: list[Path] = []
     real = context.build_context_safely
 
-    def reading(candidate: Candidate, cf: Config) -> FileContext:
+    def reading(candidate: Candidate, cf: Config, **kw: Any) -> FileContext:
         read.append(candidate.path)
-        return real(candidate, cf)
+        return real(candidate, cf, **kw)
 
     monkeypatch.setattr(rp, "build_context_safely", reading)
     provider = FakeProvider({})  # no answer: the classification fails
@@ -209,6 +220,10 @@ def test_a_corrected_category_is_kept(downloads: Path) -> None:
     planned, _ = reprocess(cfg, provider)
     assert where(cfg, "a.txt")[1] == "Finance"  # the user's choice stands
     assert where(cfg, "b.txt")[1] == "Contracts"
+    # Its category is kept and names are kept: nothing could change, so it is not sent.
+    assert [c.path.name for c in provider.calls] == ["b.txt"]
+    planned, _ = reprocess(cfg, provider, rename=True)  # a new name could come: it is sent
+    assert where(cfg, "a.txt")[1] == "Finance"
     assert any("your category kept" in c.relocation.reason for c in planned.changes)
 
     # Only an explicit flag overrides it.
@@ -521,7 +536,7 @@ def test_cli_asks_before_sending_and_before_moving(downloads: Path, tmp_path: Pa
     result = runner.invoke(app, args, input="y\n")
     assert result.exit_code == 0, result.stderr
     assert "Reprocess run" in result.stdout
-    assert [p.name.endswith("_a.txt") for p in (lib / "Archive").iterdir()] == [True]
+    assert (lib / "Archive" / "a.txt").exists()  # names are kept by default
     result = runner.invoke(app, [*args, "--yes"])
     assert "Nothing to move" in result.stdout
     result = runner.invoke(app, ["undo", "-c", str(path)])
@@ -572,3 +587,320 @@ def test_files_only_in_icloud_are_not_read(
         ("a.txt", "only in iCloud"),
         ("photos", "something inside is only in iCloud"),
     ]
+
+
+# --- review findings ------------------------------------------------------------------------
+
+
+def docs_config(tmp_path: Path, downloads: Path, name: str) -> Path:
+    return write_config(
+        tmp_path,
+        downloads,
+        extra=f"categories: [{{name: Finance}}, {{name: Contracts}}, {{name: Other}}, "
+        f"{{name: {name}}}]\n",
+    )
+
+
+def test_undo_after_a_case_only_rename_reverts_the_index_not_the_earlier_run(
+    downloads: Path, tmp_path: Path
+) -> None:
+    cfg = config(downloads, [*CATEGORIES, {"name": "docs"}])
+    organize(downloads, cfg, {"a.txt": (b"x", "docs")})
+    lib = library(downloads)
+    assert read_tags(lib / "docs" / "a.txt") == ["docs"]
+    path = docs_config(tmp_path, downloads, "Docs")
+    args = ["reprocess", "-c", str(path), "--rename-category", "docs", "Docs", "--yes"]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0, result.stderr
+    assert "index change(s). `flib undo` reverts it." in result.stdout
+    assert where(cfg, "a.txt")[1] == "Docs"
+    assert read_tags(lib / "docs" / "a.txt") == ["Docs"]  # the tag follows the new case
+    [tagged] = rows(cfg, "SELECT finder_tag FROM operations WHERE finder_tag IS NOT NULL")
+    assert tagged[0] == "Docs"
+
+    result = runner.invoke(app, ["undo", "-c", str(path)])
+    assert result.exit_code == 0, result.stderr
+    assert "2 index change(s) reverted" in result.stdout
+    # The earlier run that filed the file is not undone; the index is back.
+    assert where(cfg, "a.txt") == (FileStatus.ORGANIZED, "docs", lib / "docs" / "a.txt")
+    assert read_tags(lib / "docs" / "a.txt") == ["docs"]
+    result = runner.invoke(app, ["undo", "-c", str(path)])
+    assert result.exit_code == 1 and "nothing left to undo" in result.stderr
+    assert (lib / "docs" / "a.txt").exists()
+
+
+def test_a_reprocess_that_changed_nothing_is_not_undone_in_place_of_an_earlier_run(
+    downloads: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = cli_config(tmp_path, downloads)
+    cfg = fake_config(downloads)
+    organize(downloads, cfg, {"a.txt": (b"x", "Finance")})
+    lib = library(downloads)
+
+    def refuse(*_args: Any, **_kwargs: Any) -> None:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(executor, "_move", refuse)
+    result = runner.invoke(app, ["reprocess", "-c", str(path), "--yes"])
+    assert result.exit_code == 0, result.stderr
+    assert "1 failed, 0 skipped. Nothing changed." in result.stdout
+    assert "flib undo" not in result.stdout.splitlines()[-2]
+    result = runner.invoke(app, ["undo", "-c", str(path)])
+    assert result.exit_code == 1
+    assert "the newest reprocess (run 2) changed nothing" in result.stderr
+    assert "--run ID" in result.stderr
+    assert (lib / "Finance" / "a.txt").exists()
+
+
+def test_a_crash_after_the_rename_in_the_index_is_undone(
+    downloads: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = config(downloads, [*CATEGORIES, {"name": "Docs"}])
+    organize(downloads, cfg, {"a.txt": (b"x", "Other")})
+    lib = library(downloads)
+    with Store.open(cfg.database) as store:
+        fix_file(cfg, store, lib / "Other" / "a.txt", category="Docs")
+    cfg = config(downloads, [*CATEGORIES, {"name": "Documents"}])
+
+    def crash(*_args: Any, **_kwargs: Any) -> None:
+        raise Crash
+
+    monkeypatch.setattr(rp, "relocate", crash)
+    with Store.open(cfg.database) as store:
+        planned = rp.plan_rename(cfg, store, "Docs", "Documents")
+        with pytest.raises(Crash):
+            rp.apply(planned, cfg, store)
+    assert [tuple(r) for r in rows(cfg, "SELECT new_value FROM corrections")] == [("Documents",)]
+    with Store.open(cfg.database) as store:
+        report = undo_run(store, config=cfg)
+    assert report.reverted == 1
+    assert [tuple(r) for r in rows(cfg, "SELECT new_value FROM corrections")] == [("Docs",)]
+    assert where(cfg, "a.txt") == (FileStatus.ORGANIZED, "Docs", lib / "Docs" / "a.txt")
+
+
+def test_a_correction_is_respected_again_after_a_rename_is_undone(downloads: Path) -> None:
+    cfg = config(downloads, [*CATEGORIES, {"name": "Docs"}])
+    organize(downloads, cfg, {"b.txt": (b"y", "Other")})
+    lib = library(downloads)
+    with Store.open(cfg.database) as store:
+        fix_file(cfg, store, lib / "Other" / "b.txt", category="Docs")
+    renamed = config(downloads, [*CATEGORIES, {"name": "Documents"}])
+    with Store.open(cfg.database) as store:
+        rp.apply(rp.plan_rename(renamed, store, "Docs", "Documents"), renamed, store)
+        assert store.corrected_fields() == {1: {"category"}}
+        undo_run(store, config=renamed)
+        # Docs is back in the configuration too: the correction is in effect again.
+        assert store.corrected_fields() == {1: {"category"}}
+    provider = FakeProvider(default=answer("Finance"))
+    reprocess(cfg, provider)
+    assert where(cfg, "b.txt") == (FileStatus.ORGANIZED, "Docs", lib / "Docs" / "b.txt")
+    assert provider.calls == []
+
+
+def test_files_in_a_sub_folder_stay_unless_their_category_changes(downloads: Path) -> None:
+    cfg = config(downloads)
+    organize(downloads, cfg, {"a.txt": (b"x", "Finance"), "b.txt": (b"y", "Finance")})
+    lib = library(downloads)
+    for name in ("a.txt", "b.txt"):
+        put(lib / "Finance" / "2024", name, (lib / "Finance" / name).read_bytes())
+        (lib / "Finance" / name).unlink()
+    with Store.open(cfg.database) as store:
+        reconcile(cfg, store)
+    provider = FakeProvider(
+        {"a.txt": answer("Finance", "new name", 0.95), "b.txt": answer("Contracts", "z", 0.95)}
+    )
+    planned, _ = reprocess(cfg, provider, rename=True)
+    assert where(cfg, "a.txt")[2] == lib / "Finance" / "2024" / "a.txt"
+    # A new category: to its folder, the name the user kept.
+    assert where(cfg, "b.txt") == (FileStatus.ORGANIZED, "Contracts", lib / "Contracts" / "b.txt")
+    assert len(planned.moves()) == 1
+
+
+def test_never_send_and_sensitive_names_apply_to_the_original_name(downloads: Path) -> None:
+    # Filed while secret detection was off, so the key file got a new name too.
+    cfg = config(downloads, naming={"pattern": "{subject}"}, sensitive={"detect_secrets": False})
+    organize(
+        downloads,
+        cfg,
+        {
+            "bank-x.txt": (b"bank stuff", answer("Finance", "statement", 0.95)),
+            "id_rsa-old.txt": (b"plain words", answer("Other", "notes", 0.95)),
+        },
+    )
+    lib = library(downloads)
+    assert (lib / "Finance" / "statement.txt").exists() and (lib / "Other" / "notes.txt").exists()
+    cfg = config(downloads, naming={"pattern": "{subject}"}, never_send=["*bank*"])
+    provider = FakeProvider(default=answer("Contracts", "statement", 0.95))
+    planned, _ = reprocess(cfg, provider)
+    assert [(c.path.name, c.text) for c in provider.calls] == [("statement.txt", None)]
+    assert any(p.name == "notes.txt" and "sensitive" in why for p, why in planned.kept)
+    assert where(cfg, "id_rsa-old.txt")[1] == "Other"
+
+
+def test_undo_makes_a_deleted_category_folder_again(downloads: Path, tmp_path: Path) -> None:
+    cfg = config(downloads, [*CATEGORIES, {"name": "Docs"}])
+    organize(downloads, cfg, {"a.txt": (b"x", "Docs")})
+    lib = library(downloads)
+    path = docs_config(tmp_path, downloads, "Documents")
+    args = ["reprocess", "-c", str(path), "--rename-category", "Docs", "Documents", "--yes"]
+    result = runner.invoke(app, args)
+    assert "Keep it until you are sure" in result.stdout
+    (lib / "Docs").rmdir()
+    renamed = config(downloads, [*CATEGORIES, {"name": "Documents"}])
+    with Store.open(cfg.database) as store:
+        report = undo_run(store, config=renamed)
+    assert report.skipped == []
+    assert where(cfg, "a.txt") == (FileStatus.ORGANIZED, "Docs", lib / "Docs" / "a.txt")
+
+
+def test_prompts_happen_outside_the_lock_and_the_plan_is_checked_again(
+    downloads: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = cli_config(tmp_path, downloads)
+    cfg = fake_config(downloads)
+    organize(downloads, cfg, {"a.txt": (b"x", "Finance"), "b.txt": (b"y", "Finance")})
+    lib = library(downloads)
+    asked: list[str] = []
+
+    def confirm(question: str, default: bool = False) -> bool:
+        asked.append(question)
+        with instance_lock(cfg.database):  # free: a scheduled run could start now
+            pass
+        if question.startswith("Move"):
+            with Store.open(cfg.database) as store:  # the user fixes a file meanwhile
+                fix_file(cfg, store, lib / "Finance" / "a.txt", category="Contracts")
+        return True
+
+    monkeypatch.setattr("file_librarian.cli.typer.confirm", confirm)
+    result = runner.invoke(app, ["reprocess", "-c", str(path)])
+    assert result.exit_code == 0, result.stderr
+    assert [q.split()[0] for q in asked] == ["Send", "Move"]
+    assert "changed in the index since the plan" in result.stdout
+    assert where(cfg, "a.txt")[1] == "Contracts"  # the fix stands
+    assert where(cfg, "b.txt")[1] == "Archive"
+
+
+def test_a_file_changed_after_the_plan_is_skipped(downloads: Path) -> None:
+    cfg = config(downloads)
+    organize(downloads, cfg, {"a.txt": (b"x", "Finance")})
+    lib = library(downloads)
+    with Store.open(cfg.database) as store:
+        store.conn.execute("DELETE FROM classification_cache")
+        targets = rp.select(cfg, store).targets
+        planned = rp.plan_reprocess(targets, FakeProvider(default=answer("Contracts")), cfg, store)
+        os.utime(lib / "Finance" / "a.txt", (1, 1))
+        applied = rp.apply(planned, cfg, store)
+    [item] = applied.report.items
+    assert (item.status, item.note) == (FileStatus.SKIPPED, "changed since it was checked")
+    assert not applied.undoable
+    assert where(cfg, "a.txt")[1] == "Finance"
+
+
+def test_undo_gives_back_the_recorded_status_not_one_guessed_from_the_folder(
+    downloads: Path,
+) -> None:
+    cfg = config(downloads)
+    organize(downloads, cfg, {"a.txt": (b"x", answer("Finance", confidence=0.2))})
+    lib = library(downloads)
+    cfg = config(downloads, [*CATEGORIES, {"name": "Manuals"}])
+    reprocess(cfg, FakeProvider(default=answer("Manuals")))
+    # The review folder is renamed in the configuration before the undo.
+    renamed = config(downloads, [*CATEGORIES, {"name": "Manuals"}], review_folder="_Check")
+    with Store.open(cfg.database) as store:
+        undo_run(store, config=renamed)
+    assert where(cfg, "a.txt") == (FileStatus.REVIEW, None, lib / "_Review" / "a.txt")
+
+
+def test_undo_file_of_a_reprocess_move(downloads: Path) -> None:
+    cfg = config(downloads)
+    organize(downloads, cfg, {"a.txt": (b"x", "Finance"), "b.txt": (b"y", "Finance")})
+    lib = library(downloads)
+    reprocess(cfg, FakeProvider(default=answer("Contracts")))
+    with Store.open(cfg.database) as store:
+        undo_file(store, lib / "Contracts" / "a.txt", config=cfg)
+    assert where(cfg, "a.txt") == (FileStatus.ORGANIZED, "Finance", lib / "Finance" / "a.txt")
+    assert where(cfg, "b.txt")[1] == "Contracts"
+
+
+def test_swapping_tags_ignores_case(downloads: Path) -> None:
+    cfg = config(downloads, [*CATEGORIES, {"name": "docs"}])
+    organize(downloads, cfg, {"a.txt": (b"x", "docs")})
+    lib = library(downloads)
+    cfg = config(downloads, [*CATEGORIES, {"name": "Docs"}])
+    with Store.open(cfg.database) as store:
+        # Only the index is renamed here, not the tag: the file keeps "docs".
+        run_id = store.start_run(RunMode.RUN, RunTrigger.REPROCESS)
+        store.rename_category(run_id, "docs", "Docs", organized=True)
+    reprocess(cfg, FakeProvider(default=answer("Contracts")))
+    assert read_tags(lib / "Contracts" / "a.txt") == ["Contracts"]
+
+
+def test_the_estimate_prices_images_by_their_size(downloads: Path) -> None:
+    cfg = config(downloads, vision={"enabled": True})
+    ctx = context_for(make_image(downloads / "p.jpg", 4000, 3000), cfg)
+    assert ctx.visual == "image"
+    assert rp.attachment_tokens(ctx, cfg) == 1568 * 1568 // 750
+    pdf = replace(ctx, visual="pdf")
+    assert rp.attachment_tokens(pdf, cfg) == 1568 * 1568 // 750 * 3
+
+
+def test_only_files_inside_category_folders_are_selected(downloads: Path, tmp_path: Path) -> None:
+    cfg = config(downloads)
+    organize(downloads, cfg, {"a.txt": (b"x", "Finance"), "b.txt": (b"y", "Finance")})
+    lib = library(downloads)
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (lib / "Finance" / "link").symlink_to(outside)
+    (lib / "Finance" / "a.txt").rename(outside / "a.txt")
+    (lib / "Finance" / "b.txt").rename(lib / "b.txt")
+    with Store.open(cfg.database) as store:
+        a, b = row_for(cfg, "a.txt"), row_for(cfg, "b.txt")
+        store.relocate_file(a.id, lib / "Finance" / "link" / "a.txt", a.status, a.category)
+        store.relocate_file(b.id, lib / "b.txt", b.status, b.category)
+        assert rp.select(cfg, store) == rp.Selection()
+
+
+@pytest.mark.parametrize(("crash_at", "finished"), [("_discard", True), ("_copyfile", False)])
+def test_a_cross_volume_reprocess_move_is_recovered(
+    downloads: Path, monkeypatch: pytest.MonkeyPatch, crash_at: str, finished: bool
+) -> None:
+    cfg = config(downloads)
+    organize(downloads, cfg, {"a.txt": (b"x", "Finance")})
+    lib = library(downloads)
+
+    def exdev(src: Path, dst: Path) -> None:
+        raise CrossVolumeError(errno.EXDEV, "cross-device link", str(dst))
+
+    real = getattr(fsops, crash_at)
+
+    def crash(*args: Any, **kwargs: Any) -> Any:
+        if not finished:
+            real(*args, **kwargs)
+        raise Crash
+
+    with monkeypatch.context() as patch:
+        patch.setattr(executor, "move_no_replace", exdev)
+        patch.setattr(fsops, crash_at, crash)
+        with pytest.raises(Crash):
+            reprocess(cfg, FakeProvider(default=answer("Contracts")))
+    with Store.open(cfg.database) as store:
+        assert recover(store, cfg) == 1
+    if finished:
+        assert where(cfg, "a.txt") == (
+            FileStatus.ORGANIZED,
+            "Contracts",
+            lib / "Contracts" / "a.txt",
+        )
+        assert read_tags(lib / "Contracts" / "a.txt") == ["Contracts"]
+        assert not (lib / "Finance" / "a.txt").exists()
+    else:
+        assert where(cfg, "a.txt") == (FileStatus.ORGANIZED, "Finance", lib / "Finance" / "a.txt")
+        assert not (lib / "Contracts" / "a.txt").exists()
+
+
+def test_rename_cannot_go_with_a_migration(downloads: Path, tmp_path: Path) -> None:
+    path = cli_config(tmp_path, downloads)
+    result = runner.invoke(
+        app, ["reprocess", "-c", str(path), "--remove-category", "Misc", "--rename"]
+    )
+    assert result.exit_code == 1 and "keeps file names" in result.stderr

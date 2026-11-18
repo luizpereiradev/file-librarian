@@ -121,6 +121,8 @@ def test_migration_0009_keeps_runs_and_their_references(
         runs = store.conn.execute("SELECT id, trigger FROM runs ORDER BY id").fetchall()
         assert [tuple(r) for r in runs] == [(1, "manual"), (2, "mcp")]
         assert store.conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        [op] = store.operations()
+        assert op.previous is None and store.index_changes(2) == []
         store.conn.execute(
             "INSERT INTO runs (mode, trigger, started_at) VALUES ('run', 'reprocess', 'x')"
         )

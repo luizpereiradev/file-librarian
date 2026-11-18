@@ -558,4 +558,8 @@ def test_a_reprocess_shows_in_history_and_is_the_last_run(downloads: Path, cfg: 
         "Finance",
     )
     last = ok(call(cfg, "get_stats"))["last_run"]
-    assert (last["run_id"], last["trigger"], last["files_moved"]) == (done.run_id, "reprocess", 1)
+    assert (last["run_id"], last["trigger"], last["files_moved"]) == (
+        done.report.run_id,
+        "reprocess",
+        1,
+    )

@@ -187,7 +187,9 @@ def swap_tag(
     """
     warnings = []
     old_tag = store.last_finder_tag(file_id)
-    if old_tag is not None and old_tag == old and (warning := untag_restored(path, old_tag)):
+    # Finder ignores case in tags, so a category renamed only in case still matches.
+    same = old_tag is not None and old is not None and old_tag.casefold() == old.casefold()
+    if same and old_tag is not None and (warning := untag_restored(path, old_tag)):
         warnings.append(warning)
     if config.finder_tags.enabled:
         added, warning = tag_moved(path, new)
