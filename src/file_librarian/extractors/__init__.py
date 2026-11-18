@@ -10,7 +10,7 @@ from file_librarian.extractors.base import ExtractionError, Extractor
 _BY_EXTENSION: dict[str, Extractor] = {}
 
 # Built-in extractor modules, imported on first lookup. Each calls ``register``.
-BUILTIN: tuple[str, ...] = ("text", "office", "pdf", "archive")
+BUILTIN: tuple[str, ...] = ("text", "office", "pdf", "archive", "mail")
 _loaded = False
 
 

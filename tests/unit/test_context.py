@@ -7,7 +7,7 @@ import pytest
 
 from file_librarian.models import BundleInfo, FileMetadata
 from file_librarian.sensitive import find_secrets, sensitive_name
-from tests._helpers import context_for, fake_config, make_docx, make_pdf
+from tests._helpers import context_for, fake_config, make_docx, make_eml, make_pdf
 
 # Synthetic, clearly fake secrets assembled at runtime so scanners do not flag the repo.
 FAKE = {
@@ -61,6 +61,21 @@ def test_secret_in_document_marks_sensitive_and_sends_nothing(tmp_path: Path) ->
     assert ctx.text is None
     assert ctx.metadata == FileMetadata(sensitive="AWS access key")
     assert FAKE["AWS access key"] not in repr(ctx)
+
+
+@pytest.mark.parametrize("kind", ["connection string with password", "GitHub token"])
+def test_secret_in_an_email_body_marks_it_sensitive(tmp_path: Path, kind: str) -> None:
+    path = make_eml(tmp_path / "message.eml", f"Access for the new server:\n{FAKE[kind]}\n")
+    ctx = context_for(path)
+    assert ctx.sensitive is True
+    assert ctx.metadata == FileMetadata(sensitive=kind)
+
+
+def test_email_is_sent_without_full_addresses(tmp_path: Path) -> None:
+    path = make_eml(tmp_path / "message.eml", "Your bill is ready.", to="me@mail.example")
+    ctx = context_for(path)
+    assert ctx.text is not None and "Your bill is ready." in ctx.text
+    assert "billing@" not in ctx.text and "me@" not in ctx.text
 
 
 def test_secret_beyond_the_sent_excerpt_is_still_caught(tmp_path: Path) -> None:

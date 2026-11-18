@@ -294,6 +294,37 @@ def make_pdf(path: Path, text: str) -> Path:
     return path
 
 
+def make_eml(
+    path: Path,
+    body: str = "Your October bill is ready.",
+    *,
+    html: str | None = None,
+    subject: str = "Electricity bill",
+    sender: str = "Power Co <billing@power.example>",
+    to: str = "someone@mail.example",
+    attachments: dict[str, bytes] | None = None,
+) -> Path:
+    """A synthetic e-mail message: a plain body, an optional HTML one, attachments."""
+    from email.message import EmailMessage
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = sender
+    msg["To"] = to
+    msg["Date"] = "Mon, 05 Oct 2026 10:00:00 -0300"
+    if body:
+        msg.set_content(body)
+    if html is not None:
+        if body:
+            msg.add_alternative(html, subtype="html")
+        else:
+            msg.set_content(html, subtype="html")
+    for name, data in (attachments or {}).items():
+        msg.add_attachment(data, maintype="application", subtype="octet-stream", filename=name)
+    path.write_bytes(msg.as_bytes())
+    return path
+
+
 def make_image(path: Path, width: int, height: int) -> Path:
     """A synthetic image only the fake sips (tests/fake_sips.py) can read."""
     path.write_bytes(f"FAKEIMG {width} {height}\n".encode() + b"\0" * 64)
