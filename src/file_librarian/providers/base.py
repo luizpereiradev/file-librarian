@@ -1,8 +1,9 @@
 """The interface every AI provider implements.
 
-Adding a provider must not require changes outside ``providers/``: write a
-module with a class satisfying ``Provider`` and register it in
-``providers/__init__.py``. See docs/adding-a-provider.md.
+A new provider is a module with a class satisfying ``Provider``, registered
+in ``providers/__init__.py`` and named in ``config.PROVIDER_NAMES``; a key or
+settings of its own touch ``credentials.py`` and ``config.py``. See
+docs/adding-a-provider.md for the full list.
 """
 
 from __future__ import annotations

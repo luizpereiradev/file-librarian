@@ -273,6 +273,23 @@ flib search --ext pdf --until 2025-12-31 --json
 An unknown category, a malformed extension or date, or `--since` after
 `--until` stops with a message saying what is wrong.
 
+## What flib reads
+
+| Format | What is read |
+| --- | --- |
+| PDF | the text layer; a scanned PDF, only with [vision](#images-and-scanned-pdfs-vision) |
+| Word, Excel, PowerPoint (`.docx`, `.xlsx`, `.pptx` and their macro versions) | the text; for a workbook, the sheet names and cell text |
+| Plain text, Markdown, CSV, JSON, YAML, HTML, subtitles and source code | the text |
+| E-mail (`.eml`) | subject, date, sender and recipients (names and domains only), attachment names, and the body (plain text, else the HTML's text) |
+| Archives (`.zip`, `.tar.gz` and other tarballs) | the list of names inside; nothing is unpacked |
+| Folders and `.app` bundles | the names of up to 100 files inside; an app's name and version |
+| Images | nothing, unless [vision](#images-and-scanned-pdfs-vision) is on |
+| Anything else (`.doc`, videos, installers...) | nothing: classified from its name and metadata |
+
+A damaged or password-protected file is classified from its name and
+metadata too. To add a format, see
+[docs/adding-an-extractor.md](docs/adding-an-extractor.md).
+
 ## Configuration
 
 Everything you can tune lives in one YAML file; see the commented
@@ -502,7 +519,11 @@ for each file:
 - its name, extension, size, download date and the URL it was downloaded
   from;
 - at most `provider.max_chars_per_file` characters of its text (4,000 by
-  default), or for a folder, the names of up to 100 files inside it;
+  default), or for a folder, the names of up to 100 files inside it. For an
+  e-mail that text starts with its subject, date, the senders' and
+  recipients' names and the domains of their addresses (never the part
+  before the `@`), and its attachments' names; the body follows as it is,
+  like any document's text;
 - only with `vision.enabled` (off by default): for an image, the image
   itself, shrunk to `vision.max_image_px` and stripped of its metadata; for a
   PDF with no text layer, its first `vision.max_pdf_pages` pages. Secret
@@ -518,7 +539,7 @@ flagged sensitive.
 Two kinds of files are treated differently:
 
 - **Matching `never_send`:** only the metadata above is sent, never the
-  content.
+  content. Add `"*.eml"` to keep e-mail messages to their metadata.
 - **Credential names (`id_rsa`, `*.pem`…) or secrets found in the content:**
   nothing at all is sent, the file stays where it is, and the index records
   only that it is sensitive.
@@ -587,8 +608,9 @@ issue.
 
 Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md),
 [docs/architecture.md](docs/architecture.md) and the
-[requirements](docs/requirements.md). Adding an AI provider or a file format
-has its own guide in [docs/](docs/). Questions go to
+[requirements](docs/requirements.md). Adding a file format or an AI provider
+has its own guide: [docs/adding-an-extractor.md](docs/adding-an-extractor.md)
+and [docs/adding-a-provider.md](docs/adding-a-provider.md). Questions go to
 [Discussions](https://github.com/luizpereiradev/file-librarian/discussions).
 
 ## License

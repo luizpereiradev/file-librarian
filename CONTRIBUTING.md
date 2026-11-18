@@ -29,6 +29,21 @@ A new branch of behaviour, especially a failure path, comes with a test.
 
 `uv run ruff format .` fixes formatting; `uv run ruff check --fix .` fixes most lint findings.
 
+## Your first contribution
+
+1. Run the setup and the four checks above, so you know they pass before you
+   change anything.
+2. Read [docs/architecture.md](docs/architecture.md) (ten minutes) and
+   "Writing tests" below.
+3. Pick one:
+   - **a file format** flib does not read yet:
+     [docs/adding-an-extractor.md](docs/adding-an-extractor.md).
+     `extractors/mail.py` is a complete example;
+   - **an AI provider:** [docs/adding-a-provider.md](docs/adding-a-provider.md);
+   - or an issue labelled `good first issue`.
+4. Open a draft pull request early; the guide's checklist goes in its
+   description.
+
 ## Writing tests
 
 - **Helpers** (plain functions and classes) live in `tests/_helpers.py`:
@@ -40,7 +55,9 @@ A new branch of behaviour, especially a failure path, comes with a test.
 - **Fixtures** live in `tests/conftest.py`. The safety guards there are
   autouse: no network or DNS, a temporary `HOME`, and fakes of the Keychain,
   launchctl, sips and `claude` (the `tests/fake_*.py` scripts). `downloads`
-  and `cfg` give a test a Downloads folder and the fake provider's config.
+  and `cfg` give a test a Downloads folder and the fake provider's config;
+  `fake_openai` (opt-in) runs an OpenAI-compatible server on 127.0.0.1 for
+  that test only.
 - A helper needed by more than one test module goes into `tests/_helpers.py`;
   test modules never import from each other.
 

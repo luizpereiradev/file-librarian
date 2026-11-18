@@ -8,6 +8,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- E-mail messages (`.eml`) are read, with the standard library: subject,
+  date, sender and recipients, attachment names (never their content) and
+  the body (the plain-text part, else the HTML part's text without tags,
+  scripts or styles). Addresses keep only their domain (`Power Co
+  <…@power.example>`), in every header line. The body goes through the
+  secret scan like any document. At most 8 MB of a message is read and 200
+  MIME parts visited; a damaged message is classified from its metadata.
+  The README lists every format flib reads.
+- The guides for adding an extractor and a provider
+  (`docs/adding-an-extractor.md`, `docs/adding-a-provider.md`) cover the
+  whole path, checked by following them: the contract, every file to touch
+  (configuration, credentials, the test suite's key isolation), test fakes,
+  fuzz tests, documentation and a pull request checklist. CONTRIBUTING.md
+  has a "Your first contribution" path (#35).
 - `flib reprocess` (RF-37): files already in the library (organized or in
   review) are classified again after the rules change (categories, hints,
   naming, model) and only those whose answer changed move. File names are
