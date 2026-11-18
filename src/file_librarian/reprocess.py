@@ -54,7 +54,7 @@ from file_librarian.config import Config, folder_key, is_within
 from file_librarian.context import build_context_safely
 from file_librarian.db.store import FileRow, Store
 from file_librarian.executor import Relocation, RunReport, relocate
-from file_librarian.hashing import same_content
+from file_librarian.hashing import same_content, unit_manifest
 from file_librarian.models import Decision, FileContext, FileStatus, Rules
 from file_librarian.pipeline import rules_for
 from file_librarian.planner import plan
@@ -255,6 +255,8 @@ def _check(row: FileRow, config: Config) -> tuple[FileContext | None, str]:
         st = os.lstat(path)
     except OSError:
         return None, "not at its recorded place; run `flib reconcile`"
+    if row.is_unit and _partly_in_cloud(path):
+        return None, "something inside is only in iCloud; download it to reprocess it"
     if not same_content(path, row.sha256):
         return None, "changed or moved since it was indexed; run `flib reconcile`"
     candidate = Candidate(
@@ -268,6 +270,13 @@ def _check(row: FileRow, config: Config) -> tuple[FileContext | None, str]:
         inode=st.st_ino,
     )
     return build_context_safely(candidate, config), ""
+
+
+def _partly_in_cloud(path: Path) -> bool:
+    try:
+        return unit_manifest(path).dataless
+    except OSError:
+        return False
 
 
 # --- 2. estimating ------------------------------------------------------------------

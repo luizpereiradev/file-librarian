@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from file_librarian import context, executor
+from file_librarian import context, executor, pipeline
 from file_librarian import reprocess as rp
 from file_librarian.cli import app
 from file_librarian.config import Config
@@ -33,6 +33,8 @@ from tests._helpers import (
     answer,
     fake_config,
     library,
+    make_old,
+    mark_cloud_only,
     organize,
     put,
     row_for,
@@ -549,3 +551,24 @@ def test_cli_filters_and_bad_combinations(downloads: Path, tmp_path: Path) -> No
     ]:
         result = runner.invoke(app, [*args, *bad])
         assert result.exit_code == 1 and message in result.stderr
+
+
+def test_files_only_in_icloud_are_not_read(
+    downloads: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = config(downloads)
+    make_old(put(downloads / "photos", "one.txt", b"1").parent)
+    put(downloads, "a.txt", b"x")
+    put(downloads, "b.txt", b"y")
+    pipeline.run(cfg, FakeProvider({"photos": answer("Other")}, answer()), simulate=False)
+    lib = library(downloads)
+    unit = lib / "Other" / "photos"
+    assert where(cfg, "photos")[2] == unit
+    mark_cloud_only(monkeypatch, lib / "Finance" / "a.txt", unit / "one.txt")
+    with Store.open(cfg.database) as store:
+        selection = rp.select(cfg, store)
+    assert [t.row.original_name for t in selection.targets] == ["b.txt"]
+    assert sorted((p.name, why.split(";")[0]) for p, why in selection.left) == [
+        ("a.txt", "only in iCloud"),
+        ("photos", "something inside is only in iCloud"),
+    ]
