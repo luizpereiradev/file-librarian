@@ -1,11 +1,11 @@
 """AI providers, one module per provider.
 
-| name          | milestone | auth                              |
-|---------------|-----------|-----------------------------------|
-| anthropic     | M1        | ANTHROPIC_API_KEY                 |
-| claude-code   | M2        | the logged-in ``claude`` CLI      |
-| ollama        | M3        | none, local model                 |
-| openai-compat | M3        | key + URL of a compatible API     |
+| name          | milestone | auth                                              |
+|---------------|-----------|---------------------------------------------------|
+| anthropic     | M1        | ANTHROPIC_API_KEY                                 |
+| claude-code   | M2        | the logged-in ``claude`` CLI                      |
+| openai-compat | M3        | ``provider.base_url`` + optional key              |
+| ollama        | M3        | none, local model (preset of ``openai-compat``)   |
 """
 
 from __future__ import annotations
@@ -32,13 +32,28 @@ def _claude_code(config: ProviderConfig) -> Provider:
     return ClaudeCodeProvider(config)
 
 
+def _openai_compat(config: ProviderConfig) -> Provider:
+    from file_librarian.providers.openai_compat import OpenAICompatProvider
+
+    return OpenAICompatProvider(config)
+
+
+def _ollama(config: ProviderConfig) -> Provider:
+    from file_librarian.providers.ollama import OllamaProvider
+
+    return OllamaProvider(config)
+
+
 REGISTRY: dict[str, ProviderFactory] = {
     "fake": lambda _cfg: FakeProvider(echo=True),
     "anthropic": _anthropic,
     "claude-code": _claude_code,
+    "openai-compat": _openai_compat,
+    "ollama": _ollama,
 }
 
-PLANNED = {"ollama": "M3", "openai-compat": "M3"}
+# Provider names the configuration accepts before they are implemented, with their milestone.
+PLANNED: dict[str, str] = {}
 
 
 def known_providers() -> frozenset[str]:

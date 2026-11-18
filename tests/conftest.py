@@ -23,10 +23,18 @@ import pytest
 
 from file_librarian.config import Config
 from tests._helpers import FakeClaude, fake_config
+from tests.fake_openai import FakeOpenAI
 
 
 class NetworkBlockedError(RuntimeError):
     pass
+
+
+# The real functions, saved before any test patches them, for ``loopback_network``.
+_REAL_CONNECT = socket.socket.connect
+_REAL_GETADDRINFO = socket.getaddrinfo
+_REAL_CREATE_CONNECTION = socket.create_connection
+LOOPBACK = "127.0.0.1"
 
 
 @pytest.fixture(autouse=True)
@@ -38,6 +46,35 @@ def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(socket.socket, "connect_ex", guard)
     monkeypatch.setattr(socket, "create_connection", guard)
     monkeypatch.setattr(socket, "getaddrinfo", guard)
+
+
+@pytest.fixture
+def loopback_network(_no_network: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opt-in for one test: connections to 127.0.0.1 only, for an in-process fake server.
+
+    Names are not resolved (not even ``localhost``) and every other address stays
+    blocked, so a test using it still cannot reach a real server.
+    """
+
+    def getaddrinfo(host: Any, *args: Any, **kwargs: Any) -> Any:
+        if host != LOOPBACK:
+            raise NetworkBlockedError(f"only {LOOPBACK} is allowed in this test, not {host!r}")
+        return _REAL_GETADDRINFO(host, *args, **kwargs)
+
+    def connect(sock: socket.socket, address: Any) -> None:
+        if not (isinstance(address, tuple) and address[0] == LOOPBACK):
+            raise NetworkBlockedError(f"only {LOOPBACK} is allowed in this test, not {address!r}")
+        _REAL_CONNECT(sock, address)
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(socket.socket, "connect", connect)
+    monkeypatch.setattr(socket, "create_connection", _REAL_CREATE_CONNECTION)
+
+
+@pytest.fixture(autouse=True)
+def no_local_ollama(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``flib init`` finds no Ollama unless a test says otherwise; nothing is probed."""
+    monkeypatch.setattr("file_librarian.onboarding.probe_ollama", lambda: None)
 
 
 def _shim(folder: Path, name: str, script: str) -> Path:
@@ -115,7 +152,8 @@ def fake_home(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Monk
     home = tmp_path_factory.mktemp("home")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("FLIB_CONFIG", raising=False)
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    for name in ("ANTHROPIC_API_KEY", "FLIB_OPENAI_COMPAT_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
     return home
 
 
@@ -130,3 +168,10 @@ def downloads(fake_home: Path) -> Iterator[Path]:
 def cfg(downloads: Path) -> Config:
     """The fake provider's config, watching ``downloads``."""
     return fake_config(downloads)
+
+
+@pytest.fixture
+def fake_openai(loopback_network: None) -> Iterator[FakeOpenAI]:
+    """A running OpenAI-compatible server on 127.0.0.1 (see ``tests/fake_openai.py``)."""
+    with FakeOpenAI().running() as server:
+        yield server

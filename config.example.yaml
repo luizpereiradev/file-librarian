@@ -26,22 +26,34 @@ inputs:
 # database: ~/Library/Application Support/file-librarian/library.db
 
 provider:
-  name: anthropic            # anthropic | claude-code (your Claude subscription, no key) | fake (offline, for trying flib) | ollama, openai-compat (M3)
+  name: anthropic            # anthropic | claude-code (your Claude subscription, no key) | ollama (a local model) | openai-compat (any OpenAI-compatible API) | fake (offline, for trying flib)
   model: claude-haiku-5-5    # fast and cheap; for harder files try claude-sonnet-5-5 or claude-opus-5-5
-  effort: low                # low | medium | high | xhigh | max: classification needs little
+  effort: low                # low | medium | high | xhigh | max: classification needs little (anthropic)
   max_chars_per_file: 4000   # only this much text is ever sent
   max_examples: 10           # recent corrections (flib fix, reconcile) sent as examples; 0 = none
-  requests_per_minute: 30
+  requests_per_minute: 30    # not applied to a provider on this Mac (ollama, or base_url on localhost)
   max_retries: 3
-  timeout_seconds: 60
+  timeout_seconds: 60        # raise it for a slow local model
   # Where the API key comes from (never from this file):
-  #   auto: ANTHROPIC_API_KEY, then the macOS Keychain (`flib key set`), then env_file
+  #   auto: the environment variable (ANTHROPIC_API_KEY, or for openai-compat the one
+  #   below), then the macOS Keychain (`flib key set`), then env_file
   api_key_source: auto       # auto | environment | keychain | env_file
   # env_file: ~/.config/file-librarian/.env   # a file with ANTHROPIC_API_KEY=..., mode 600
   # claude-code only: the `claude` executable. Unset, it is looked up on PATH and in
   # ~/.local/bin, ~/.claude/local, /opt/homebrew/bin and /usr/local/bin; `flib schedule`
   # tells you when the daily run needs it set.
   # command: ~/.local/bin/claude
+  #
+  # openai-compat and ollama only:
+  # base_url: https://api.openai.com/v1   # the part before /chat/completions; required for
+  #                                       # openai-compat; ollama: http://localhost:11434/v1
+  # api_key_env: FLIB_OPENAI_COMPAT_API_KEY   # openai-compat: the variable holding the key
+  #                                       # (optional; `flib key set --provider openai-compat`
+  #                                       # stores it in the Keychain instead). ollama takes none.
+  # price_input_per_mtok: 0    # US$ per million input tokens. While both prices are 0 the
+  # price_output_per_mtok: 0   # cost counts as 0 and limits.max_cost_usd_per_run cannot stop a run
+  # vision: false              # true when the model reads images (with vision.enabled);
+  #                            # scanned PDFs are never sent to these providers
 
 limits:
   max_files_per_run: 200
@@ -49,6 +61,7 @@ limits:
   max_attempts: 3            # after this many failures a file becomes "failed"
   confidence_threshold: 0.7  # below this, the file goes to review_folder
   max_cost_usd_per_run: 1.00 # estimated; files left over wait for the next run (null = no cap)
+                             # (cannot stop a provider whose prices are 0 = unknown, see above)
 
 naming:
   pattern: "{date}_{subject}"   # e.g. 2026-11-16_electricity-invoice.pdf

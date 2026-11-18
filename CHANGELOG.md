@@ -8,6 +8,33 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `ollama` provider (#33): classification by a local model through Ollama's
+  OpenAI-compatible endpoint (default `http://localhost:11434/v1`), with no
+  key. A preset of `openai-compat`. On this Mac it is `local`, which only
+  drops the requests-per-minute spacing: `never_send` and sensitive files are
+  withheld exactly as with a remote provider. Pointed at another machine it is
+  treated as remote. `flib check-config` checks that Ollama answers and the
+  model is pulled (one `GET /v1/models`, no file content), and `flib init`
+  offers it, as the default after a logged-in Claude Code, when it is running
+  with a model pulled.
+- `openai-compat` provider (#34): any server that speaks the OpenAI Chat
+  Completions API, at `provider.base_url` (required; http(s), no credentials,
+  query or fragment). Structured output with `response_format: json_schema`
+  (the same schema as the Claude providers); a server that rejects it gets
+  `json_object` with the schema in the instructions, remembered for the run,
+  and every answer is validated strictly. 401/403/404 and redirects stop the
+  run (redirects are never followed); 408/409/429/5xx, timeouts and connection
+  errors are retried. Optional key from `FLIB_OPENAI_COMPAT_API_KEY` (or the
+  variable `provider.api_key_env` names; `OPENAI_API_KEY` is not read unless
+  named), the Keychain account `openai-compat-api-key` (`flib key set
+  --provider openai-compat`) or `provider.env_file`. Cost from
+  `provider.price_input_per_mtok` and `price_output_per_mtok` (default 0 =
+  unknown, so the per-run cost cap cannot stop a run; `flib check-config`
+  warns). Images with `provider.vision: true`; scanned PDFs are never sent.
+  Plain `urllib`, no new dependency; loopback requests skip proxies.
+  `flib key set|status|delete` take `--provider` and act on the configured
+  provider's key by default, each provider with its own Keychain account;
+  `flib doctor` redacts `base_url` and every stored key.
 - MCP: three more read-only tools and file history (#52). `list_recent`
   lists the newest organized files (optionally one category), `list_review`
   what waits in the review folder with the AI's confidence (and the

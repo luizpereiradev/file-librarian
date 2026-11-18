@@ -10,6 +10,7 @@ from file_librarian.models import CategoryRule, Classification, FileContext, Rul
 from file_librarian.providers import Provider, ProviderError, get_provider
 from file_librarian.providers.base import Usage
 from file_librarian.providers.fake import FakeProvider
+from tests._helpers import planned
 
 RULES = Rules(categories=(CategoryRule("Finance"), CategoryRule("Other")), language="en")
 ANSWER = Classification(
@@ -37,10 +38,17 @@ def test_registry() -> None:
     assert get_provider(ProviderConfig(name="fake", model="x")).name == "fake"
     assert get_provider(ProviderConfig(name="anthropic", model="x")).name == "anthropic"
     assert get_provider(ProviderConfig(name="claude-code", model="x")).name == "claude-code"
-    with pytest.raises(ProviderError, match="planned for M3"):
-        get_provider(ProviderConfig(name="ollama", model="x"))
+    assert get_provider(ProviderConfig(name="ollama", model="x")).name == "ollama"
+    compat = ProviderConfig(name="openai-compat", model="x", base_url="https://api.example.com/v1")
+    assert get_provider(compat).name == "openai-compat"
     with pytest.raises(ValidationError, match="unknown provider"):
         ProviderConfig(name="nope", model="x")
+
+
+def test_a_planned_provider_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    planned(monkeypatch, "ollama")
+    with pytest.raises(ProviderError, match="planned for M9"):
+        get_provider(ProviderConfig(name="ollama", model="x"))
 
 
 @pytest.mark.parametrize(

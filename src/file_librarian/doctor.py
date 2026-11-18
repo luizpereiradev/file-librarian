@@ -49,6 +49,7 @@ from file_librarian.config import (
     default_config_path,
     default_database_path,
     inactive_options_set,
+    is_loopback_url,
     load_config,
 )
 from file_librarian.db.store import load_migrations
@@ -436,6 +437,11 @@ def redacted_config(config: Config, r: Redactor) -> list[str]:
     for key in ("env_file", "command"):
         if provider.get(key) is not None:
             provider[key] = f"<{key.replace('_', '-')}>"
+    if config.provider.base_url is not None:
+        # The host can name a private server; keep only what helps a bug report.
+        url = config.provider.base_url
+        where = "this Mac" if is_loopback_url(url) else "remote"
+        provider["base_url"] = f"<{url.partition(':')[0]}, {where}>"
     for category in data["categories"]:
         if category.get("hint"):
             category["hint"] = f"<hint, {len(category['hint'])} characters>"
@@ -457,9 +463,13 @@ def _api_key(section: Section, r: Redactor, config: Config | None) -> None:
     if config is None:
         section.lines.append("source: unknown (the configuration did not load)")
         return
-    found = credentials.resolve(config.provider)
-    if found.value:
-        r.secrets.append(found.value)
+    specs = credentials.all_specs(config.provider)
+    for spec in specs:  # every key flib could find, so none can leak through a log line
+        value = credentials.resolve(config.provider, spec).value
+        if value:
+            r.secrets.append(value)
+    # A provider without a key reports the Anthropic one, as before keys were per provider.
+    found = credentials.resolve(config.provider, specs[0])
     section.lines.append(f"provider: {config.provider.name}")
     section.lines.append(f"api_key_source setting: {config.provider.api_key_source}")
     section.lines.append(f"source: {found.source}")

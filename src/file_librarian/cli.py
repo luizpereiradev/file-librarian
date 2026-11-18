@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Annotated, NoReturn, cast
 
 import typer
+from pydantic import ValidationError
 
 from file_librarian import __version__, credentials, keychain, onboarding, pipeline, scheduler
 from file_librarian.config import (
@@ -26,6 +27,7 @@ from file_librarian.config import (
     ScheduleConfig,
     default_config_path,
     inactive_options_set,
+    is_loopback_url,
     load_config,
 )
 from file_librarian.db.store import Store
@@ -120,15 +122,24 @@ def check_config(config: ConfigOption = None) -> None:
     typer.echo(f"  review_folder: {cfg.review_folder}")
     typer.echo(f"  categories: {', '.join(c.name for c in cfg.categories)}")
     typer.echo(f"  provider: {cfg.provider.name} ({cfg.provider.model})")
-    if cfg.provider.name == "anthropic":
+    spec = credentials.key_spec(cfg.provider)
+    if spec is not None:
         found = credentials.resolve(cfg.provider)
-        typer.echo(
-            f"  api key: {found.source} ({found.hint})"
-            if found.value
-            else "  api key: not found (run `flib key set`, or set ANTHROPIC_API_KEY)"
-        )
+        if found.value:
+            typer.echo(f"  api key: {found.source} ({found.hint})")
+        elif spec.provider == "anthropic":
+            typer.echo("  api key: not found (run `flib key set`, or set ANTHROPIC_API_KEY)")
+        else:
+            typer.echo(
+                "  api key: none (fine for a server that needs none; otherwise run "
+                f"`flib key set --provider {spec.provider}`, or set {spec.env_var})"
+            )
     if cfg.provider.name == "claude-code":
         _report_claude(cfg)
+    if cfg.provider.name in COMPAT_PROVIDERS:
+        _report_compat(cfg)
+    else:
+        _warn_compat_only_options(cfg.provider)
     env_file = cfg.provider.env_file
     if env_file is not None and env_file.exists() and not credentials.env_file_is_private(env_file):
         typer.echo(f"warning: {env_file} is readable by other users; run chmod 600 on it", err=True)
@@ -145,6 +156,61 @@ def check_config(config: ConfigOption = None) -> None:
             "your value is accepted but ignored.",
             err=True,
         )
+
+
+COMPAT_PROVIDERS = ("openai-compat", "ollama")
+COMPAT_ONLY_OPTIONS = (
+    "base_url", "api_key_env", "price_input_per_mtok", "price_output_per_mtok", "vision",
+)  # fmt: skip
+
+
+def _warn_compat_only_options(provider: ProviderConfig) -> None:
+    for option in COMPAT_ONLY_OPTIONS:
+        if option in provider.model_fields_set:
+            typer.echo(
+                f"warning: provider.{option} applies to openai-compat and ollama only; "
+                f"{provider.name} ignores it.",
+                err=True,
+            )
+
+
+def _report_compat(cfg: Config) -> None:
+    """Where file content goes, what the cost cap can do, and (Ollama) whether it answers."""
+    p = cfg.provider
+    url = p.base_url or ""
+    local = is_loopback_url(url)
+    where = "this Mac; no rate limit, never_send still applies" if local else "a remote server"
+    typer.echo(f"  base_url: {url} ({where})")
+    if not local and url.startswith("http://"):
+        typer.echo(
+            "warning: provider.base_url uses http:// to another machine; file content "
+            "would travel unencrypted. Use https://.",
+            err=True,
+        )
+    if p.name == "ollama" and not local:
+        typer.echo(
+            "warning: provider.base_url is not this Mac: file content leaves it, and Ollama "
+            "is treated as a remote provider.",
+            err=True,
+        )
+    priced = p.price_input_per_mtok > 0 or p.price_output_per_mtok > 0
+    if not priced and not local and cfg.limits.max_cost_usd_per_run is not None:
+        typer.echo(
+            "warning: provider.price_input_per_mtok and price_output_per_mtok are not set, so "
+            "the cost of each file counts as 0 and limits.max_cost_usd_per_run cannot stop a "
+            "run. Set them to your provider's prices.",
+            err=True,
+        )
+    if cfg.vision.enabled and not p.vision:
+        typer.echo("  vision: off for this model (set provider.vision: true if it reads images)")
+    if p.name == "ollama":
+        from file_librarian.providers import ollama
+
+        ready, line = ollama.check(p)
+        if ready:
+            typer.echo(f"  ollama: {line}")
+        else:
+            typer.echo(f"warning: {line}", err=True)
 
 
 def _report_claude(cfg: Config) -> None:
@@ -273,48 +339,83 @@ def _index_entry(database: Path | None, digest: str | None) -> dict[str, object]
 # --- API key ---------------------------------------------------------------------------
 
 key_app = typer.Typer(
-    help="Store the Anthropic API key in the macOS Keychain.", no_args_is_help=True
+    help="Store a provider's API key in the macOS Keychain (anthropic, openai-compat).",
+    no_args_is_help=True,
 )
 app.add_typer(key_app, name="key")
 
+KeyProviderOption = Annotated[
+    str | None,
+    typer.Option(
+        "--provider",
+        help="anthropic or openai-compat (default: the configured provider, else anthropic).",
+    ),
+]
+
+
+def _key_spec(provider: str | None, config: Path | None) -> credentials.KeySpec:
+    """The key to act on: ``--provider``, else the configured provider's, else Anthropic's."""
+    if provider is None:
+        try:
+            cfg = load_config(config)
+        except ConfigError:
+            cfg = None
+        found = credentials.key_spec(cfg.provider) if cfg is not None else None
+        return found or cast(credentials.KeySpec, credentials.spec_for("anthropic"))
+    spec = credentials.spec_for(provider)
+    if spec is None:
+        _fatal(f"--provider must be anthropic or openai-compat; {provider} takes no key")
+    return spec
+
 
 @key_app.command("set")
-def key_set() -> None:
+def key_set(provider: KeyProviderOption = None, config: ConfigOption = None) -> None:
     """Save the API key in the Keychain (asked for, never shown)."""
-    problem = _save_key()
+    problem = _save_key(_key_spec(provider, config))
     if problem is not None:
         _fatal(problem)
 
 
-def _save_key() -> str | None:
+def _save_key(spec: credentials.KeySpec) -> str | None:
     """Ask for the API key without echoing it and store it; the error, if any."""
-    value = typer.prompt("Anthropic API key", hide_input=True).strip()
-    if not value.startswith("sk-ant-"):
+    value = typer.prompt(spec.label, hide_input=True).strip()
+    if spec.provider == "anthropic" and not value.startswith("sk-ant-"):
         typer.echo("warning: Anthropic keys usually start with sk-ant-", err=True)
     try:
-        keychain.write(value)
+        keychain.write(value, spec.account)
     except (keychain.KeychainError, ValueError) as exc:
         return str(exc)
-    typer.echo(f"Saved in the Keychain (service {keychain.SERVICE!r}). Scheduled runs will use it.")
+    typer.echo(
+        f"Saved in the Keychain (service {keychain.SERVICE!r}, account {spec.account!r}). "
+        "Scheduled runs will use it."
+    )
     return None
 
 
 @key_app.command("status")
 def key_status(config: ConfigOption = None) -> None:
-    """Show where the key would come from, without showing the key."""
+    """Show where the configured provider's key would come from, without showing the key."""
     cfg = _load(config)
+    spec = credentials.key_spec(cfg.provider)
+    if spec is None:
+        typer.echo(f"Provider {cfg.provider.name} takes no API key.")
+        return
     found = credentials.resolve(cfg.provider)
     if found.value is None:
-        typer.echo("No API key found (environment, Keychain, env_file). Run `flib key set`.")
+        typer.echo(
+            f"No API key found ({spec.env_var}, Keychain, env_file). Run `flib key set"
+            + ("`." if spec.provider == "anthropic" else f" --provider {spec.provider}`.")
+        )
         raise typer.Exit(EXIT_ERROR)
     typer.echo(f"Using the key from: {found.source} ({found.hint})")
 
 
 @key_app.command("delete")
-def key_delete() -> None:
+def key_delete(provider: KeyProviderOption = None, config: ConfigOption = None) -> None:
     """Remove the API key from the Keychain."""
+    spec = _key_spec(provider, config)
     try:
-        removed = keychain.delete()
+        removed = keychain.delete(spec.account)
     except keychain.KeychainError as exc:
         _fatal(str(exc))
     typer.echo("Removed from the Keychain." if removed else "There was no key in the Keychain.")
@@ -603,7 +704,7 @@ def schedule(
         bool | None,
         typer.Option(
             "--save-key/--no-save-key",
-            help="Copy ANTHROPIC_API_KEY from this shell to the Keychain (default: ask).",
+            help="Copy the API key from this shell's environment to the Keychain (default: ask).",
         ),
     ] = None,
     check: Annotated[
@@ -676,19 +777,21 @@ def _print_schedule_status() -> None:
 
 
 def _ensure_key_for_schedule(cfg: Config, save_key: bool | None) -> None:
-    if cfg.provider.name != "anthropic":
+    spec = credentials.key_spec(cfg.provider)
+    if spec is None:
         return
     found = credentials.resolve(cfg.provider)
     if found.value is None:
-        typer.echo(
-            "warning: no API key found; the daily run will fail until you run `flib key set`.",
-            err=True,
-        )
-        return
+        if spec.provider == "anthropic":
+            typer.echo(
+                "warning: no API key found; the daily run will fail until you run `flib key set`.",
+                err=True,
+            )
+        return  # openai-compat: a server that needs no key is fine
     if found.source != "environment":
         return  # Keychain or env_file: launchd can read those
     try:
-        in_keychain = keychain.read() is not None
+        in_keychain = keychain.read(spec.account) is not None
     except keychain.KeychainError:
         in_keychain = False
     if in_keychain:
@@ -701,7 +804,7 @@ def _ensure_key_for_schedule(cfg: Config, save_key: bool | None) -> None:
         )
     if save_key:
         try:
-            keychain.write(found.value)
+            keychain.write(found.value, spec.account)
             typer.echo("API key saved to the Keychain.")
         except (keychain.KeychainError, ValueError) as exc:
             typer.echo(f"warning: could not save the key: {exc}", err=True)
@@ -911,14 +1014,21 @@ def _ask_answers(ask: _Asker) -> onboarding.Answers:
             if ask.yes:
                 _fatal(str(exc))
             typer.echo(f"error: {exc}\nLet's try the folders again.", err=True)
-    provider, command = _ask_provider(ask)
+    choice = _ask_provider(ask)
     vision = False
-    if provider == "anthropic":
+    if choice.provider == "anthropic":
         typer.echo(VISION_NOTE)
         vision = ask.confirm("Send images and scanned PDFs to the model?", default=False)
     else:
         typer.echo("Images and scanned PDFs are classified from their name and metadata.")
-    return dataclasses.replace(answers, provider=provider, vision=vision, command=command)
+    return dataclasses.replace(
+        answers,
+        provider=choice.provider,
+        vision=vision,
+        command=choice.command,
+        model_name=choice.model,
+        base_url=choice.base_url,
+    )
 
 
 def _user_path(raw: str) -> Path:
@@ -943,10 +1053,19 @@ def _ask_folders(ask: _Asker, language: Language) -> onboarding.Answers:
     return onboarding.Answers(language, folder, _user_path(out), review, "anthropic")
 
 
-def _ask_provider(ask: _Asker) -> tuple[str, Path | None]:
-    """The provider, and the ``claude`` to pin when the daily run would not find it.
+@dataclasses.dataclass(frozen=True, slots=True)
+class _ProviderChoice:
+    provider: str
+    command: Path | None = None
+    model: str | None = None
+    base_url: str | None = None
 
-    Claude Code is the default when it is installed and logged in: nothing to set up.
+
+def _ask_provider(ask: _Asker) -> _ProviderChoice:
+    """The provider and what it needs: the ``claude`` to pin, or a model and URL.
+
+    Claude Code is the default when it is installed and logged in, then Ollama when
+    it is running with a model pulled: nothing to set up either way.
     """
     from file_librarian.providers import claude_code
 
@@ -957,19 +1076,48 @@ def _ask_provider(ask: _Asker) -> tuple[str, Path | None]:
         state = "not found"
     else:
         state = "found, logged in" if ready else "found, not logged in"
-    typer.echo(
-        "\nWhich AI classifies your files?\n"
-        f"  claude-code  your Claude subscription through Claude Code ({state}); no API key\n"
-        "  anthropic    the Anthropic API with an API key, billed per use "
-        "(a fraction of a cent per file)"
-    )
-    default = "claude-code" if ready else "anthropic"
-    name = ask.choice("Provider", ["claude-code", "anthropic"], default)
+    local_models = onboarding.probe_ollama()
+    options = ["claude-code", "anthropic"]
+    lines = [
+        f"  claude-code    your Claude subscription through Claude Code ({state}); no API key",
+        "  anthropic      the Anthropic API with an API key, billed per use "
+        "(a fraction of a cent per file)",
+    ]
+    if local_models:
+        options.append("ollama")
+        lines.append(
+            f"  ollama         a local model through Ollama ({len(local_models)} pulled); "
+            "nothing leaves this Mac"
+        )
+    options.append("openai-compat")
+    lines.append("  openai-compat  any OpenAI-compatible API, with its URL and an optional key")
+    typer.echo("\nWhich AI classifies your files?\n" + "\n".join(lines))
+    default = "claude-code" if ready else ("ollama" if local_models else "anthropic")
+    name = ask.choice("Provider", options, default)
+    if name == "ollama" and local_models:
+        preferred = onboarding.DEFAULT_MODELS["ollama"]
+        suggestion = next((m for m in local_models if m.split(":")[0] == preferred), None)
+        model = ask.text("Ollama model", suggestion or local_models[0])
+        return _ProviderChoice(name, model=model)
+    if name == "openai-compat":
+        while True:
+            url = ask.text("API base URL (the part before /chat/completions)",
+                           onboarding.OPENAI_COMPAT_URL)  # fmt: skip
+            try:
+                url = ProviderConfig(name=name, model="-", base_url=url).base_url or url
+                break
+            except ValidationError as exc:
+                problem = exc.errors()[0]["msg"].removeprefix("Value error, ")
+                if ask.yes:  # pragma: no cover - --yes never picks openai-compat
+                    _fatal(problem)
+                typer.echo(f"error: {problem}", err=True)
+        model = ask.text("Model", onboarding.DEFAULT_MODELS["openai-compat"])
+        return _ProviderChoice(name, model=model, base_url=url)
     if name != "claude-code" or executable is None:
-        return name, None
+        return _ProviderChoice(name)
     # launchd's PATH is minimal: pin an executable the daily run would not find by itself.
     hidden = claude_code.find_claude(probe, search_path=scheduler.SAFE_PATH) is None
-    return name, executable if hidden else None
+    return _ProviderChoice(name, command=executable if hidden else None)
 
 
 def _provider_ready(cfg: Config, ask: _Asker) -> bool:
@@ -983,12 +1131,35 @@ def _provider_ready(cfg: Config, ask: _Asker) -> bool:
         if not ask.yes and ask.confirm(
             "No Anthropic API key found. Store one in the macOS Keychain now?", default=True
         ):
-            problem = _save_key()
+            problem = _save_key(cast(credentials.KeySpec, credentials.key_spec(cfg.provider)))
             if problem is None:
                 return True
             typer.echo(f"warning: {problem}", err=True)
         typer.echo("warning: no API key yet; run `flib key set` to add one.", err=True)
         return False
+    if name == "openai-compat":
+        found = credentials.resolve(cfg.provider)
+        if found.value is not None:
+            typer.echo(f"API key: found in the {found.source} ({found.hint}).")
+            return True
+        local = is_loopback_url(cfg.provider.base_url or "")
+        if not ask.yes and ask.confirm(
+            "No API key found for this server (a local one usually needs none). "
+            "Store one in the macOS Keychain now?",
+            default=not local,
+        ):
+            spec = cast(credentials.KeySpec, credentials.key_spec(cfg.provider))
+            problem = _save_key(spec)
+            if problem is not None:
+                typer.echo(f"warning: {problem}", err=True)
+        return True
+    if name == "ollama":
+        from file_librarian.providers import ollama
+
+        ready, line = ollama.check(cfg.provider)
+        if not ready:
+            typer.echo(f"warning: {line}.", err=True)
+        return ready
     if name == "claude-code":
         from file_librarian.providers import claude_code
 

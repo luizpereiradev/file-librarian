@@ -2,7 +2,8 @@
 
 Scheduled runs start from launchd, which does not see your shell's
 environment or the repository's ``.env``. Keeping the API key in the login
-Keychain lets them find it without a secret in any text file.
+Keychain lets them find it without a secret in any text file. Each provider
+that takes a key has its own account under the same service.
 
 The secret is passed on standard input, never as an argument, so it does not
 show up in the process list. Nothing here logs or prints a secret.
@@ -15,6 +16,8 @@ import subprocess
 SECURITY = "/usr/bin/security"
 SERVICE = "file-librarian"
 ACCOUNT = "anthropic-api-key"
+OPENAI_COMPAT_ACCOUNT = "openai-compat-api-key"
+"""One account per provider, so an ``openai-compat`` key never replaces the Anthropic one."""
 _NOT_FOUND = 44
 _TIMEOUT = 10
 

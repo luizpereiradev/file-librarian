@@ -17,7 +17,7 @@ from file_librarian.cli import app
 from file_librarian.config import default_config_path, default_database_path, load_config
 from file_librarian.providers import claude_code
 from file_librarian.providers.fake import FakeProvider
-from tests._helpers import OLD, FakeClaude, answer, fake_config, put, write_config
+from tests._helpers import OLD, FakeClaude, answer, fake_config, planned, put, write_config
 
 runner = CliRunner()
 KEY = "sk-ant-" + "init-" + "k" * 24
@@ -205,7 +205,7 @@ def test_claude_code_not_found(
     answers = "\n\n\n\nclaude-code\nn\n"
     result = runner.invoke(app, ["init", "-c", str(path)], input=answers)
     assert result.exit_code == 0, result.stdout + result.stderr
-    assert "claude-code  your Claude subscription through Claude Code (not found)" in (
+    assert "claude-code    your Claude subscription through Claude Code (not found)" in (
         result.stdout
     )
     assert "Claude Code was not found" in result.stderr
@@ -319,10 +319,13 @@ def test_unreadable_schedule_is_reported(
     assert "cannot read the schedule: launchctl is gone" in result.stderr
 
 
-def test_planned_provider_in_an_existing_config(downloads: Path, tmp_path: Path) -> None:
-    path = write_config(tmp_path, downloads, "{name: ollama, model: m}")
+def test_planned_provider_in_an_existing_config(
+    downloads: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    planned(monkeypatch, "fake")
+    path = write_config(tmp_path, downloads, "{name: fake, model: m}")
     result = runner.invoke(app, ["init", "--yes", "-c", str(path)])
-    assert "provider 'ollama' is not available yet" in result.stderr
+    assert "provider 'fake' is not available yet" in result.stderr
 
 
 # --- onboarding ------------------------------------------------------------------------
