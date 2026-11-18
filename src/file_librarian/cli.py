@@ -1,9 +1,9 @@
 """The ``flib`` command line.
 
 Each command loads and validates the configuration, then calls one module:
-``pipeline`` for ``run``/``simulate``, ``undo``, ``search``. Commands of later
-milestones exist already and exit with code 2, naming their milestone and
-requirement, so the interface can be reviewed before they land.
+``pipeline`` for ``run``/``simulate``, ``undo``, ``search``, ``reprocess``...
+Every command but ``reprocess`` (which handles it) warns when organized files
+still use a category the configuration no longer has (RF-37).
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import dataclasses
 import json
 import os
 import shlex
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Annotated, NoReturn, cast
@@ -20,6 +21,7 @@ import typer
 from pydantic import ValidationError
 
 from file_librarian import __version__, credentials, keychain, onboarding, pipeline, scheduler
+from file_librarian import reprocess as reprocess_mod
 from file_librarian.config import (
     Config,
     ConfigError,
@@ -30,7 +32,7 @@ from file_librarian.config import (
     is_loopback_url,
     load_config,
 )
-from file_librarian.db.store import Store
+from file_librarian.db.store import MigrationError, Store
 from file_librarian.executor import RunReport, recover
 from file_librarian.extractors.origin import download_origin
 from file_librarian.fix import FixError, fix_file
@@ -40,6 +42,7 @@ from file_librarian.lock import AlreadyRunningError, instance_lock
 from file_librarian.models import FileStatus, RunTrigger
 from file_librarian.planner import Plan
 from file_librarian.providers import PLANNED, ProviderError, get_provider, is_implemented
+from file_librarian.providers.base import Provider
 from file_librarian.reconcile import in_cloud_only
 from file_librarian.reconcile import reconcile as run_reconcile
 from file_librarian.runlog import logs_dir, write_log
@@ -56,7 +59,6 @@ from file_librarian.search import to_json as search_json
 from file_librarian.undo import NothingToUndoError, undo_file, undo_run
 
 EXIT_ERROR = 1
-EXIT_NOT_IMPLEMENTED = 2
 
 app = typer.Typer(
     name="flib",
@@ -75,14 +77,6 @@ ConfigOption = Annotated[
         dir_okay=False,
     ),
 ]
-
-
-def _not_implemented(command: str, milestone: str, requirement: str) -> NoReturn:
-    typer.echo(
-        f"flib {command} is not implemented yet (planned for {milestone}, {requirement}).",
-        err=True,
-    )
-    raise typer.Exit(EXIT_NOT_IMPLEMENTED)
 
 
 def _version_callback(value: bool) -> None:
@@ -150,6 +144,7 @@ def check_config(config: ConfigOption = None) -> None:
             "classification commands will not run until then.",
             err=True,
         )
+    _warn_orphan_categories(cfg)
     for option, milestone in inactive_options_set(cfg):
         typer.echo(
             f"warning: {option} is planned for {milestone} and does nothing yet; "
@@ -446,11 +441,27 @@ def _fatal(message: str) -> NoReturn:
     raise typer.Exit(EXIT_ERROR)
 
 
-def _load(config: Path | None) -> Config:
+def _load(config: Path | None, *, warn_orphans: bool = True) -> Config:
     try:
-        return load_config(config)
+        cfg = load_config(config)
     except ConfigError as exc:
         _fatal(str(exc))
+    if warn_orphans:
+        _warn_orphan_categories(cfg)
+    return cfg
+
+
+def _warn_orphan_categories(cfg: Config) -> None:
+    """Categories the index still uses but the configuration lost need a migration (RF-37)."""
+    if not cfg.database.exists():
+        return
+    try:
+        with Store.open(cfg.database) as store:
+            orphans = reprocess_mod.orphan_categories(cfg, store)
+    except (sqlite3.Error, MigrationError, OSError):
+        return  # the command itself reports a database it cannot use
+    if orphans:
+        typer.echo(f"warning: {reprocess_mod.orphan_message(orphans)}", err=True)
 
 
 def _pipeline(
@@ -1270,9 +1281,238 @@ def mcp(config: ConfigOption = None) -> None:
 
 
 @app.command()
-def reprocess(config: ConfigOption = None) -> None:
-    """Reclassify files after a rules change."""
-    _not_implemented("reprocess", "M3", "RF-37")
+def reprocess(
+    category: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--category", help="Only files of this category. Repeat it or use commas for several."
+        ),
+    ] = None,
+    since: Annotated[
+        str | None,
+        typer.Option("--since", help="Only files processed on or after this day (YYYY-MM-DD)."),
+    ] = None,
+    until: Annotated[
+        str | None,
+        typer.Option("--until", help="Only files processed on or before this day (YYYY-MM-DD)."),
+    ] = None,
+    ext: Annotated[
+        list[str] | None,
+        typer.Option("--ext", help="Only this extension (pdf or .pdf). Repeat it or use commas."),
+    ] = None,
+    keep_names: Annotated[
+        bool, typer.Option("--keep-names", help="Change categories only; rename nothing.")
+    ] = False,
+    override_corrections: Annotated[
+        bool,
+        typer.Option(
+            "--override-corrections",
+            help="Reclassify files you corrected (flib fix) too; by default your choice stays.",
+        ),
+    ] = False,
+    rename_category: Annotated[
+        tuple[str, str] | None,
+        typer.Option(
+            "--rename-category",
+            metavar="OLD NEW",
+            help="You renamed category OLD to NEW in the config: move its files over.",
+        ),
+    ] = None,
+    remove_category: Annotated[
+        str | None,
+        typer.Option(
+            "--remove-category",
+            metavar="OLD",
+            help="You removed category OLD from the config: reclassify its files.",
+        ),
+    ] = None,
+    to_review: Annotated[
+        bool,
+        typer.Option(
+            "--to-review", help="With --remove-category: send its files to review, no AI."
+        ),
+    ] = False,
+    simulate: Annotated[
+        bool, typer.Option("--simulate", help="Show the plan and change nothing.")
+    ] = False,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Do not ask: send the files and apply the plan.")
+    ] = False,
+    config: ConfigOption = None,
+) -> None:
+    """Reclassify organized files after the rules change (categories, hints, names, model).
+
+    Shows the estimated cost and asks before sending anything, then shows the
+    plan and asks before moving. Files you corrected keep your choice. It is
+    one run: `flib undo` reverts all of it. A category renamed or removed in
+    the configuration needs --rename-category or --remove-category first.
+    """
+    if rename_category is not None and remove_category is not None:
+        _fatal("use either --rename-category or --remove-category, not both")
+    migrating = rename_category is not None or remove_category is not None
+    has_filters = bool(split_values(category) or split_values(ext) or since or until)
+    if migrating and (has_filters or override_corrections):
+        _fatal("a category migration takes the whole category; leave out the filters")
+    if to_review and remove_category is None:
+        _fatal("--to-review goes with --remove-category")
+    cfg = _load(config, warn_orphans=False)
+    provider: Provider | None = None
+    if rename_category is None and not to_review:
+        try:
+            provider = get_provider(cfg.provider)
+        except ProviderError as exc:
+            _fatal(str(exc))
+    try:
+        with instance_lock(cfg.database), Store.open(cfg.database) as store:
+            recovered = recover(store, cfg)
+            if recovered:
+                typer.echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
+            planned = _reprocess_plan(
+                cfg,
+                store,
+                provider,
+                filters=(category, ext, since, until),
+                keep_names=keep_names,
+                override_corrections=override_corrections,
+                rename=rename_category,
+                remove=remove_category,
+                yes=yes,
+            )
+            if planned is None:
+                return
+            _print_reprocess_plan(planned, cfg)
+            if simulate:
+                typer.echo("Simulation: nothing changed.")
+                return
+            if not planned.moves() and not planned.same_folder:
+                typer.echo("Nothing to move: the library already follows the rules.")
+                return
+            question = f"Move {len(planned.moves())} file(s)? `flib undo` reverts it"
+            if planned.same_folder:
+                question = "Rename the category in the index?"
+            if not yes and not typer.confirm(question, default=False):
+                typer.echo("Nothing changed.")
+                return
+            report = reprocess_mod.apply(
+                planned,
+                cfg,
+                store,
+                provider=provider.name if provider is not None else None,
+                model=cfg.provider.model if provider is not None else None,
+            )
+    except (reprocess_mod.ReprocessError, ProviderError, AlreadyRunningError) as exc:
+        _fatal(str(exc))
+    _print_reprocess_report(report, cfg, planned)
+
+
+def _reprocess_plan(
+    cfg: Config,
+    store: Store,
+    provider: Provider | None,
+    *,
+    filters: tuple[list[str] | None, list[str] | None, str | None, str | None],
+    keep_names: bool,
+    override_corrections: bool,
+    rename: tuple[str, str] | None,
+    remove: str | None,
+    yes: bool,
+) -> reprocess_mod.ReprocessPlan | None:
+    """The plan, after the cost question; ``None`` when there is nothing to do."""
+    if rename is not None:
+        return reprocess_mod.plan_rename(cfg, store, *rename)
+    category, ext, since, until = filters
+    known = [c.name for c in cfg.categories] + store.categories()
+    selection = reprocess_mod.select(
+        cfg,
+        store,
+        filters=_search_filters(known, category, ext, since, until),
+        removed=remove,
+        keep_names=keep_names,
+        override_corrections=override_corrections,
+    )
+    for path, reason in selection.left:
+        typer.echo(f"  leave   {_short(path, cfg)}  ({reason})")
+    if not selection.targets:
+        typer.echo("Nothing to reprocess.")
+        return None
+    if provider is None:
+        return reprocess_mod.plan_to_review(selection.targets, cfg)
+    estimate = reprocess_mod.estimate(selection.targets, provider, cfg, store)
+    cap = cfg.limits.max_cost_usd_per_run
+    limit = f"; the limit per run is US$ {cap:.2f}" if cap is not None else ""
+    typer.echo(
+        f"{estimate.files} file(s) to reclassify: {estimate.cached} answered by the cache, "
+        f"{estimate.to_ask} to send to {provider.name} "
+        f"(estimated US$ {estimate.cost_usd:.4f}{limit})."
+    )
+    if (
+        estimate.to_ask
+        and not yes
+        and not typer.confirm(f"Send {estimate.to_ask} file(s) to {provider.name}?", default=False)
+    ):
+        typer.echo("Nothing sent, nothing changed.")
+        return None
+    planned = reprocess_mod.plan_reprocess(selection.targets, provider, cfg, store)
+    if planned.cost_usd:
+        typer.echo(f"Estimated provider cost: US$ {planned.cost_usd:.4f}")
+    if planned.cached:
+        typer.echo(f"{planned.cached} classification(s) reused from the cache at no cost.")
+    return planned
+
+
+def _print_reprocess_plan(planned: reprocess_mod.ReprocessPlan, cfg: Config) -> None:
+    for change in planned.moves():
+        item = change.relocation
+        source = _short(item.context.path, cfg)
+        target = _short(item.destination, cfg) if item.destination is not None else "?"
+        typer.echo(f"  move    {source}  ->  {target}  ({item.reason})")
+    for path, reason in planned.kept:
+        typer.echo(f"  keep    {_short(path, cfg)}  ({reason})")
+    if planned.rename is not None and planned.same_folder:
+        old, new = planned.rename
+        typer.echo(f"  rename  category {old} -> {new} in the index (the same folder on macOS)")
+    unchanged = len(planned.changes) - len(planned.moves())
+    typer.echo(
+        f"Plan: {len(planned.moves())} would move, {unchanged} already in place, "
+        f"{len(planned.kept)} kept as they are."
+    )
+    if planned.deferred:
+        typer.echo(
+            f"{planned.deferred} file(s) were not sent: the cost limit was reached. "
+            "Run `flib reprocess` again to go on."
+        )
+
+
+def _print_reprocess_report(
+    report: RunReport, cfg: Config, planned: reprocess_mod.ReprocessPlan
+) -> None:
+    lines = []
+    for item in report.items:
+        if item.destination is not None:
+            lines.append(
+                f"  moved   {_short(item.source, cfg)}  ->  {_short(item.destination, cfg)}"
+            )
+            if item.warning:
+                lines.append(f"  warning {_short(item.destination, cfg)}  ({item.warning})")
+        elif item.status in {FileStatus.FAILED, FileStatus.SKIPPED}:
+            lines.append(f"  {item.status.value:<8}{_short(item.source, cfg)}  ({item.note})")
+    lines.append(
+        f"Reprocess run {report.run_id}: {report.count(FileStatus.ORGANIZED, moved=True)} "
+        f"filed, {report.count(FileStatus.REVIEW, moved=True)} to review, "
+        f"{report.errors} failed, {report.count(FileStatus.SKIPPED)} skipped. "
+        "`flib undo` reverts it."
+    )
+    for line in lines:
+        typer.echo(line)
+    if planned.rename is not None and not planned.same_folder:
+        folder = reprocess_mod.empty_folder(cfg, planned.rename[0])
+        if folder is not None:
+            typer.echo(f"The folder {_short(folder, cfg)} is empty now; delete it when you like.")
+    if report.run_id is not None:
+        try:
+            typer.echo(f"Log: {write_log(cfg.database, report.run_id, lines)}")
+        except OSError as exc:
+            typer.echo(f"warning: could not write the run log: {exc}", err=True)
 
 
 @app.command()

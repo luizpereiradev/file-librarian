@@ -320,6 +320,12 @@ class Store:
             (_now(), seen, moved, review, errors, run_id),
         )
 
+    def run_trigger(self, run_id: int) -> RunTrigger:
+        row = self.conn.execute("SELECT trigger FROM runs WHERE id = ?", (run_id,)).fetchone()
+        if row is None:
+            raise LookupError(f"no run with id {run_id}")
+        return RunTrigger(row[0])
+
     def last_run_with_operations(self) -> int | None:
         """The newest run that actually moved something (done or since undone)."""
         row = self.conn.execute(
@@ -406,6 +412,74 @@ class Store:
                ORDER BY c.id DESC"""
         )
         return [CorrectionRow.from_row(r) for r in rows]
+
+    def corrected_fields(self) -> dict[int, set[str]]:
+        """Per file id, the fields (``category``, ``name``) with a correction still in effect.
+
+        The same rule as ``current_corrections``: the newest correction per file
+        and field, and only while the file still has the value it set.
+        """
+        rows = self.conn.execute(
+            """SELECT c.file_id, c.field
+               FROM corrections c JOIN files f ON f.id = c.file_id
+               WHERE c.id = (SELECT MAX(id) FROM corrections
+                             WHERE file_id = c.file_id AND field = c.field)
+                 AND ((c.field = 'category' AND f.status = 'organized'
+                       AND f.category = c.new_value)
+                      OR (c.field = 'name' AND f.current_name = c.new_value))"""
+        )
+        fields: dict[int, set[str]] = {}
+        for row in rows:
+            fields.setdefault(int(row[0]), set()).add(str(row[1]))
+        return fields
+
+    def rename_category(self, old: str, new: str, *, organized: bool = False) -> None:
+        """A category renamed in the configuration (``flib reprocess --rename-category``).
+
+        Rows outside the category folders (missing ones, say) and past
+        corrections take the new name, so a correction to ``old`` stays in
+        effect. Organized files are moved one by one, by the executor, unless
+        ``organized``: the two names are the same folder on macOS (only the
+        case differs), so their rows are renamed here too.
+        """
+        statuses = "1" if organized else "status != 'organized'"
+        self.conn.execute(
+            f"UPDATE files SET category = ? WHERE category = ? AND {statuses}",  # noqa: S608
+            (new, old),
+        )
+        for column in ("old_value", "new_value"):
+            self.conn.execute(
+                f"UPDATE corrections SET {column} = ? "  # noqa: S608 - fixed column names
+                f"WHERE field = 'category' AND {column} = ?",
+                (new, old),
+            )
+
+    def organized_categories(self) -> list[str]:
+        """Every category an organized file has (others keep no folder to move)."""
+        rows = self.conn.execute(
+            """SELECT DISTINCT category FROM files
+               WHERE status = 'organized' AND category IS NOT NULL ORDER BY category"""
+        )
+        return [str(r[0]) for r in rows]
+
+    def set_file_answer(
+        self,
+        file_id: int,
+        record: FileRecord,
+    ) -> None:
+        """What a new classification says about a file already indexed: description,
+        tags, confidence, provider, model and name choice (not where it is)."""
+        r = record
+        self.conn.execute(
+            """UPDATE files SET description = ?, tags = ?, confidence = ?, provider = ?,
+                                model = ?, name_choice = ?, name_choice_reason = ?,
+                                processed_at = ?
+               WHERE id = ?""",
+            (
+                r.description, json.dumps(list(r.tags), ensure_ascii=False), r.confidence,
+                r.provider, r.model, r.name_choice, r.name_choice_reason, _now(), file_id,
+            ),
+        )  # fmt: skip
 
     def set_file_identity(self, file_id: int, sha256: str) -> bool:
         """A folder unit's new manifest digest after a copy to another file system.
@@ -518,8 +592,9 @@ class Store:
         ).fetchone()[0]
         last = self.conn.execute(
             """SELECT * FROM runs r WHERE finished_at IS NOT NULL
-                 AND NOT EXISTS (SELECT 1 FROM operations o
-                                 WHERE o.run_id = r.id AND o.fix_status IS NOT NULL)
+                 AND (r.trigger = 'reprocess'
+                      OR NOT EXISTS (SELECT 1 FROM operations o
+                                     WHERE o.run_id = r.id AND o.fix_status IS NOT NULL))
                ORDER BY id DESC LIMIT 1"""
         ).fetchone()
         return LibraryStats(

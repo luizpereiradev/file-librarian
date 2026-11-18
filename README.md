@@ -246,7 +246,7 @@ provider:
 | `flib fix PATH [--category NAME] [--name NAME]` | Correct one file's category or name; flib learns from it | M2 (available) |
 | `flib init [--yes] [--sample N] [--force]` | Guided setup with a trial on copies of recent files | M2 (available) |
 | `flib mcp` | Local MCP server for AI assistants ([Use it from Claude](#use-it-from-claude)) | M2 (available) |
-| `flib reprocess` | Reclassify after a rules change | M3 |
+| `flib reprocess [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--keep-names] [--simulate] [--yes]` | Reclassify organized files after the rules change; `--rename-category OLD NEW` and `--remove-category OLD [--to-review]` migrate a category ([Changing your rules](#changing-your-rules)) | M3 (available) |
 | `flib doctor [--stdout \| -o PATH] [--format markdown]` | A redacted diagnostics report for bug reports ([Troubleshooting](#troubleshooting)) | M3 (available) |
 
 ### Searching
@@ -374,6 +374,50 @@ file as it was. Corrections,
 these and the moves or renames `flib reconcile` finds, are sent as examples
 with later requests, so the classifier stops repeating the mistake.
 `provider.max_examples` caps how many (10 by default; `0` sends none).
+
+### Changing your rules
+
+New files follow the configuration as it is when they arrive. After you
+change categories, their hints, the naming rules or the model, file what is
+already organized again:
+
+```sh
+flib reprocess --simulate          # show what would move; nothing changes
+flib reprocess                     # asks before sending, then before moving
+flib reprocess --category finance --since 2026-01-01 --keep-names
+```
+
+It works on files in the library only (organized or in review), never on the
+input folders, and never sends a file flagged sensitive. Before anything is
+sent it says how many files the cache already answers and estimates the cost
+of the rest, and asks; the per-run cost limit
+(`limits.max_cost_usd_per_run`) still applies, and running it again goes on
+where it stopped, the cache answering what was done. Then it shows the plan
+and asks again (`--yes` answers both). A file whose answer did not change
+stays as it is; one the AI is now unsure about stays in its category.
+`--keep-names` changes categories only. The filters are the ones of
+`flib search` (`--category`, `--since`, `--until`, `--ext`).
+
+Your corrections win: a category or a name you set with `flib fix` (or by
+moving the file and running `flib reconcile`) is kept, unless you add
+`--override-corrections`. Everything moved is one run: `flib undo` puts the
+whole reprocess back, Finder tags included.
+
+Renaming or removing a category needs one explicit step. Edit the
+configuration first; every command then warns that organized files still use
+a category it no longer has, and plain `flib reprocess` refuses until you
+say what happened:
+
+```sh
+flib reprocess --rename-category Docs Documents  # move Docs/ into Documents/, no AI
+flib reprocess --remove-category Misc            # reclassify Misc among the others
+flib reprocess --remove-category Misc --to-review  # or send all of it to review
+```
+
+A rename keeps file names (a taken one gets `-2`), and your corrections to
+the old name now point at the new one. Files the AI is unsure about after a
+removal go to review. The emptied folder stays, so `flib undo` can put the
+files back; delete it when you are done.
 
 ## Use it from Claude
 

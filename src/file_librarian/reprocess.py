@@ -1,0 +1,465 @@
+"""File the library again after the rules change: ``flib reprocess`` (RF-37).
+
+Categories, hints, naming rules or the model change; the files already
+organized were filed under the old ones. Reprocessing asks the provider
+again about files in the library (``organized`` or in review) and moves the
+ones whose answer now differs, in four steps the command line runs in order:
+
+1. ``select`` picks the files: index rows inside ``output_root``, narrowed by
+   the search filters, each still at its recorded path with the same content
+   (a file only in iCloud is not read: that would download it). Sensitive
+   files are never selected: they were never sent and are not sent now.
+2. ``estimate`` counts what the classification cache already answers and
+   prices the rest, before anything is sent.
+3. ``plan_reprocess`` classifies (the cost cap and the cache apply as in a
+   run) and plans with the normal planner. A file the provider is now unsure
+   about stays in its category; one that cannot be classified stays where it
+   is. What the user corrected (``flib fix``, or a move by hand that ``flib
+   reconcile`` recorded) is kept: a corrected category is not changed, a
+   corrected name is not renamed, and a file with both is not even sent;
+   ``override_corrections`` lifts that.
+4. ``apply`` moves through the executor (``executor.relocate``) as one run
+   with trigger ``reprocess``, journaled, recovered after a crash and undone
+   as a whole by ``flib undo``; Finder tags follow the category.
+
+A category renamed or removed in the configuration while files still use it
+(an *orphan* category, see ``orphan_categories``) is never guessed at: plain
+reprocessing refuses until an explicit migration ran. ``plan_rename`` moves
+its files to the new name's folder, and their corrections with them;
+``--remove-category`` reclassifies its files among the remaining categories
+(``plan_reprocess`` on ``select(..., removed=...)``) or sends them all to
+review (``plan_to_review``). The emptied folder is left in place: undo moves
+files back into it.
+
+Only files inside ``output_root`` are touched, and only to destinations the
+planner (or the migration) builds inside it.
+"""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Collection
+from dataclasses import dataclass, field
+from datetime import date
+from pathlib import Path
+
+from file_librarian.classifier import (
+    CACHE_DAYS,
+    classify_all,
+    rules_key,
+    vision_key,
+    wants_attachment,
+)
+from file_librarian.config import Config, folder_key, is_within
+from file_librarian.context import build_context_safely
+from file_librarian.db.store import FileRow, Store
+from file_librarian.executor import Relocation, RunReport, relocate
+from file_librarian.hashing import same_content
+from file_librarian.models import Decision, FileContext, FileStatus, Rules
+from file_librarian.pipeline import rules_for
+from file_librarian.planner import plan
+from file_librarian.providers.base import Provider, Usage
+from file_librarian.providers.prompt import system_prompt, user_message
+from file_librarian.reconcile import in_cloud_only
+from file_librarian.scanner import Candidate
+from file_librarian.search import SearchFilters
+
+_REPROCESSABLE = {FileStatus.ORGANIZED, FileStatus.REVIEW}
+
+# A rough price of one request: about four characters per token, the answer
+# with its thinking, and an image or a few scanned pages when vision applies.
+CHARS_PER_TOKEN = 4
+ANSWER_TOKENS = 600
+ATTACHMENT_TOKENS = 1600
+
+
+class ReprocessError(ValueError):
+    """Reprocessing cannot start as asked; nothing was changed. The message says why."""
+
+
+@dataclass(frozen=True, slots=True)
+class Target:
+    """A file selected for reprocessing, as it is now."""
+
+    row: FileRow
+    context: FileContext
+    keep_category: bool = False
+    """The user corrected its category: it stays."""
+    keep_name: bool = False
+    """The user corrected its name (or asked to keep names): it is not renamed."""
+
+
+@dataclass(slots=True)
+class Selection:
+    targets: list[Target] = field(default_factory=list)
+    left: list[tuple[Path, str]] = field(default_factory=list)
+    """Files of the library left out, and why."""
+
+
+@dataclass(frozen=True, slots=True)
+class Estimate:
+    files: int
+    cached: int
+    """Answered by the classification cache, at no cost."""
+    to_ask: int
+    cost_usd: float
+    """A rough upper estimate for the ``to_ask`` files."""
+
+
+@dataclass(frozen=True, slots=True)
+class Change:
+    """One file and what reprocessing does with it."""
+
+    row: FileRow
+    relocation: Relocation
+
+    @property
+    def moves(self) -> bool:
+        destination = self.relocation.destination
+        return destination is not None and destination != self.relocation.context.path
+
+
+@dataclass(slots=True)
+class ReprocessPlan:
+    changes: list[Change] = field(default_factory=list)
+    """Files that move, or stay with a fresh description."""
+    kept: list[tuple[Path, str]] = field(default_factory=list)
+    """Files that stay as they are, and why."""
+    deferred: int = 0
+    """Not sent because the cost cap was reached; the next reprocess goes on with them."""
+    cost_usd: float = 0.0
+    cached: int = 0
+    rename: tuple[str, str] | None = None
+    """For ``--rename-category``: the old and new names, applied to the index with the moves."""
+    same_folder: bool = False
+    """The rename only changes the case: the same folder, so only the index changes."""
+
+    def moves(self) -> list[Change]:
+        return [c for c in self.changes if c.moves]
+
+
+# --- orphan categories --------------------------------------------------------------
+
+
+def orphan_categories(config: Config, store: Store) -> list[str]:
+    """Categories organized files still have that the configuration no longer lists."""
+    configured = {c.name for c in config.categories}
+    return [name for name in store.organized_categories() if name not in configured]
+
+
+def orphan_message(orphans: list[str]) -> str:
+    """What to tell the user about categories files still use but the configuration lost."""
+    names = ", ".join(repr(name) for name in orphans)
+    first = orphans[0]
+    return (
+        f"organized files still use categories missing from the configuration: {names}. "
+        f"If you renamed one, run `flib reprocess --rename-category {_arg(first)} NEW`; "
+        f"if you removed it, run `flib reprocess --remove-category {_arg(first)}`"
+    )
+
+
+def _arg(name: str) -> str:
+    return f'"{name}"' if not name.replace("-", "").replace("_", "").isalnum() else name
+
+
+def _orphan(name: str, config: Config, store: Store) -> str:
+    """``name`` as an orphan category of the index (any case); refuses anything else."""
+    if config.category(name) is not None:
+        raise ReprocessError(
+            f"{name!r} is still a category in the configuration; "
+            "rename or remove it there first, then run this again"
+        )
+    found = [o for o in orphan_categories(config, store) if o.casefold() == name.casefold()]
+    if not found:
+        raise ReprocessError(f"no organized file has the category {name!r}; nothing to migrate")
+    return found[0]
+
+
+# --- 1. selecting -------------------------------------------------------------------
+
+
+def select(
+    config: Config,
+    store: Store,
+    *,
+    filters: SearchFilters | None = None,
+    removed: str | None = None,
+    keep_names: bool = False,
+    override_corrections: bool = False,
+) -> Selection:
+    """The library files to reprocess, checked to be where and what the index says.
+
+    ``removed``: only the organized files of that category, which the
+    configuration no longer has (``--remove-category``). Otherwise every
+    file of the library matching ``filters``; a category the configuration
+    lost must be migrated first.
+    """
+    if removed is not None:
+        removed = _orphan(removed, config, store)
+    else:
+        orphans = orphan_categories(config, store)
+        if orphans:
+            raise ReprocessError(orphan_message(orphans))
+    corrected = {} if override_corrections else store.corrected_fields()
+    selection = Selection()
+    for row in store.all_files():
+        if not _wanted(row, config, filters, removed):
+            continue
+        fields = corrected.get(row.id, set())
+        keep_category = "category" in fields and removed is None
+        keep_name = keep_names or "name" in fields
+        if keep_category and keep_name:
+            selection.left.append((row.current_path, "your correction is kept"))
+            continue
+        context, problem = _check(row, config)
+        if context is None:
+            selection.left.append((row.current_path, problem))
+            continue
+        selection.targets.append(Target(row, context, keep_category, keep_name))
+    return selection
+
+
+def _wanted(
+    row: FileRow, config: Config, filters: SearchFilters | None, removed: str | None
+) -> bool:
+    if row.status not in _REPROCESSABLE:
+        return False
+    root = config.output_root
+    if not row.current_path.is_relative_to(root) or row.current_path.parent == root:
+        return False
+    if not is_within(row.current_path, root):
+        return False  # a symlink on the way out of the library
+    if removed is not None:
+        return row.status is FileStatus.ORGANIZED and row.category == removed
+    if filters is None:
+        return True
+    if filters.categories and row.category not in filters.categories:
+        return False
+    if filters.extensions and _extension(row) not in filters.extensions:
+        return False
+    if filters.since is not None and row.processed_at < filters.since:
+        return False
+    return filters.until is None or row.processed_at < filters.until
+
+
+def _extension(row: FileRow) -> str:
+    return row.current_path.suffix.lower()
+
+
+def _check(row: FileRow, config: Config) -> tuple[FileContext | None, str]:
+    """The file's context, or why it cannot be reprocessed now."""
+    path = row.current_path
+    if in_cloud_only(path):
+        return None, "only in iCloud; download it to reprocess it"
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return None, "not at its recorded place; run `flib reconcile`"
+    if not same_content(path, row.sha256):
+        return None, "changed or moved since it was indexed; run `flib reconcile`"
+    candidate = Candidate(
+        path=path,
+        sha256=row.sha256,
+        size_bytes=row.size_bytes if row.size_bytes is not None else st.st_size,
+        mtime=st.st_mtime,
+        is_unit=row.is_unit,
+        mtime_ns=st.st_mtime_ns,
+        created=float(getattr(st, "st_birthtime", st.st_mtime)),
+        inode=st.st_ino,
+    )
+    return build_context_safely(candidate, config), ""
+
+
+# --- 2. estimating ------------------------------------------------------------------
+
+
+def estimate(targets: list[Target], provider: Provider, config: Config, store: Store) -> Estimate:
+    """How many answers the cache has, and roughly what asking for the rest costs."""
+    rules = rules_for(config, store)
+    text_key = rules_key(provider, rules, config)
+    seen_key = vision_key(text_key, config)
+    cached = to_ask = 0
+    cost = 0.0
+    for target in targets:
+        ctx = target.context
+        if ctx.sensitive:
+            continue  # never sent
+        vision = wants_attachment(ctx, provider, config)
+        key = seen_key if vision else text_key
+        if store.cached_answer(ctx.sha256, key, max_age_days=CACHE_DAYS) is not None:
+            cached += 1
+            continue
+        to_ask += 1
+        cost += provider.cost_usd(_usage(ctx, rules, vision))
+    return Estimate(len(targets), cached, to_ask, cost)
+
+
+def _usage(ctx: FileContext, rules: Rules, vision: bool) -> Usage:
+    chars = len(system_prompt(rules)) + len(user_message(ctx))
+    tokens = chars // CHARS_PER_TOKEN + (ATTACHMENT_TOKENS if vision else 0)
+    return Usage(input_tokens=tokens, output_tokens=ANSWER_TOKENS)
+
+
+# --- 3. planning --------------------------------------------------------------------
+
+
+def plan_reprocess(
+    targets: list[Target],
+    provider: Provider,
+    config: Config,
+    store: Store,
+    *,
+    today: date | None = None,
+) -> ReprocessPlan:
+    """Classify the targets again and plan where each now belongs."""
+    by_path = {t.context.path: t for t in targets}
+    classified = classify_all(
+        [t.context for t in targets], provider, rules_for(config, store), config, cache=store
+    )
+    decisions = [_respect_correction(d, by_path[d.context.path]) for d in classified.decisions]
+    keep_names: Collection[Path] = {t.context.path for t in targets if t.keep_name}
+    planned = plan(decisions, config, today=today, keep_names=keep_names)
+    result = ReprocessPlan(
+        deferred=len(classified.deferred), cost_usd=classified.cost_usd, cached=classified.cached
+    )
+    for item in planned.items:
+        target = by_path[item.context.path]
+        row = target.row
+        path = item.context.path
+        if item.status is FileStatus.SENSITIVE:
+            result.kept.append((path, f"{item.reason}; left as it is"))
+            continue
+        if item.status is FileStatus.FAILED or item.classification is None:
+            result.kept.append((path, f"{item.reason}; left as it is"))
+            continue
+        if (
+            item.status is FileStatus.REVIEW
+            and row.status is FileStatus.ORGANIZED
+            and row.category is not None
+            and config.category(row.category) is not None
+        ):
+            result.kept.append((path, f"stays in {row.category} ({item.reason})"))
+            continue
+        category = item.classification.category if item.status is FileStatus.ORGANIZED else None
+        relocation = Relocation(
+            file_id=row.id,
+            context=item.context,
+            destination=item.destination,
+            status=item.status,
+            category=category,
+            reason=_reason(item.reason, target),
+            answer=item.classification,
+            name_choice=item.name_choice,
+        )
+        result.changes.append(Change(row, relocation))
+    for ctx in classified.deferred:
+        result.kept.append((ctx.path, "cost limit reached; run `flib reprocess` again"))
+    return result
+
+
+def _respect_correction(decision: Decision, target: Target) -> Decision:
+    """A category the user chose stays, whatever the provider says now."""
+    answer = decision.classification
+    category = target.row.category
+    if not target.keep_category or answer is None or category is None:
+        return decision
+    return Decision(decision.context, answer.model_copy(update={"category": category}))
+
+
+def _reason(reason: str, target: Target) -> str:
+    return f"{reason}, your category kept" if target.keep_category else reason
+
+
+def plan_rename(config: Config, store: Store, old: str, new: str) -> ReprocessPlan:
+    """``--rename-category OLD NEW``: the files of ``old`` go to ``new``'s folder, names kept.
+
+    ``new`` must be a category of the configuration and ``old`` no longer one.
+    """
+    target = config.category(new) or next(
+        (c for c in config.categories if c.name.casefold() == new.casefold()), None
+    )
+    if target is None:
+        known = ", ".join(c.name for c in config.categories)
+        raise ReprocessError(
+            f"{new!r} is not a category in the configuration (configured: {known}); "
+            "add it there first"
+        )
+    old = _orphan(old, config, store)
+    result = ReprocessPlan(rename=(old, target.name))
+    if folder_key(old) == folder_key(target.name):
+        # Only the case differs: the same folder on macOS. Nothing moves; the
+        # index takes the new spelling.
+        result.same_folder = True
+        return result
+    old_folder = config.output_root / old
+    for row in store.all_files():
+        if not _wanted(row, config, None, old):
+            continue
+        context, problem = _check(row, config)
+        if context is None:
+            result.kept.append((row.current_path, problem))
+            continue
+        path = context.path
+        inside = path.relative_to(old_folder) if path.is_relative_to(old_folder) else path.name
+        relocation = Relocation(
+            file_id=row.id,
+            context=context,
+            destination=config.output_root / target.name / inside,
+            status=FileStatus.ORGANIZED,
+            category=target.name,
+            reason=f"category {old} renamed to {target.name}",
+        )
+        result.changes.append(Change(row, relocation))
+    return result
+
+
+def plan_to_review(targets: list[Target], config: Config) -> ReprocessPlan:
+    """``--remove-category OLD --to-review``: every file of ``OLD`` to review, names kept."""
+    result = ReprocessPlan()
+    folder = config.output_root / config.review_folder
+    for target in targets:
+        relocation = Relocation(
+            file_id=target.row.id,
+            context=target.context,
+            destination=folder / target.context.path.name,
+            status=FileStatus.REVIEW,
+            category=None,
+            reason="its category was removed",
+        )
+        result.changes.append(Change(target.row, relocation))
+    return result
+
+
+# --- 4. applying --------------------------------------------------------------------
+
+
+def apply(
+    planned: ReprocessPlan,
+    config: Config,
+    store: Store,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+) -> RunReport:
+    """Carry out the plan as one ``reprocess`` run; ``flib undo`` reverts it."""
+    if planned.rename is not None:
+        with store.transaction():
+            store.rename_category(*planned.rename, organized=planned.same_folder)
+    return relocate(
+        [c.relocation for c in planned.changes],
+        config,
+        store,
+        provider=provider,
+        model=model,
+        deferred=planned.deferred,
+    )
+
+
+def empty_folder(config: Config, category: str) -> Path | None:
+    """The folder of a migrated category, if nothing but hidden files is left in it."""
+    folder = config.output_root / category
+    try:
+        entries = [e for e in folder.iterdir() if not e.name.startswith(".")]
+    except OSError:
+        return None
+    return None if entries else folder

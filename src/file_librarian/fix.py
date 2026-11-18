@@ -160,7 +160,7 @@ def _complete(
         name_change = (row.current_name, destination.name)
     warnings: list[str] = []
     if category_change is not None and config is not None:
-        warnings = _swap_tag(config, store, row.id, op_id, destination, *category_change)
+        warnings = swap_tag(config, store, row.id, op_id, destination, *category_change)
     with store.transaction():
         store.set_operation(op_id, OperationStatus.DONE, destination)
         store.relocate_file(row.id, destination, status, category)
@@ -178,7 +178,7 @@ def _complete(
     return category_change, name_change, warnings
 
 
-def _swap_tag(
+def swap_tag(
     config: Config, store: Store, file_id: int, op_id: int, path: Path, old: str | None, new: str
 ) -> list[str]:
     """The tag flib set for the old category goes; the new category's comes (RF-36).

@@ -57,6 +57,8 @@ class RunTrigger(StrEnum):
     SCHEDULE = "schedule"
     MANUAL = "manual"
     MCP = "mcp"
+    REPROCESS = "reprocess"
+    """``flib reprocess``: files already in the library, filed again under new rules."""
 
 
 @dataclass(frozen=True, slots=True)

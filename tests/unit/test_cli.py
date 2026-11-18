@@ -8,7 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from file_librarian import config as config_module
-from file_librarian.cli import EXIT_NOT_IMPLEMENTED, app
+from file_librarian.cli import app
 from file_librarian.extractors.origin import WHERE_FROMS
 from tests._helpers import REPO_ROOT, mark_cloud_only, planned, write_xattr
 
@@ -40,18 +40,6 @@ def test_help_lists_every_command() -> None:
         "inspect",
     ):
         assert command in result.stdout
-
-
-@pytest.mark.parametrize(
-    ("args", "requirement"),
-    [
-        (["reprocess"], "RF-37"),
-    ],
-)
-def test_planned_commands_exit_non_zero(args: list[str], requirement: str) -> None:
-    result = runner.invoke(app, args)
-    assert result.exit_code == EXIT_NOT_IMPLEMENTED
-    assert requirement in result.stderr
 
 
 def test_check_config_ok() -> None:

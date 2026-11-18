@@ -51,6 +51,13 @@ model.
   crash, recovery finishes the whole fix (index, correction, Finder tag) if
   the file reached its destination, and otherwise fails the entry and leaves
   the file's row untouched.
+- A `flib reprocess` move (RF-37) is all or nothing in the same way: its
+  entry, in a run with trigger `reprocess`, records the status and category
+  the file gets, and the file's row is not touched until the file is at its
+  destination; then the row, the entry and the Finder tags change together.
+  After a crash, recovery finishes it if the file got there (including a
+  cross-volume copy finished by its phase) and otherwise fails the entry and
+  leaves the row as it was: the file is still in its old folder.
 - `flib undo` walks a run's operations in reverse, checks each file's hash, and
   skips (and lists) files that were edited or whose original path is taken.
 - A move to another volume (RF-33), where a rename is impossible, is copy,
@@ -151,6 +158,15 @@ Found in the safety review of M1 and accepted for now:
 - **`flib fix` stays on one volume.** A correction is a rename inside the
   library; a category folder that is the mount point of another volume
   fails the fix with nothing changed.
+- **Reprocessing holds the lock while it asks.** `flib reprocess` takes the
+  instance lock before reading the index and keeps it through its two
+  questions (send? move?), so a scheduled run that starts meanwhile stops
+  with "already running" and the next day's run catches up.
+- **Undoing a category rename keeps the renamed corrections.** `flib undo`
+  of `--rename-category OLD NEW` moves the files back to `OLD` (still
+  organized there, so every command again points at the missing category),
+  but corrections stay renamed to `NEW` and are no longer in effect for
+  those files until the rename is run again.
 - **Duplicates wait.** A second copy with the same content as one processed
   in the same run stays in place (moving duplicates is RF-21).
 
@@ -162,13 +178,49 @@ One SQLite file, outside the organized folders (default
 | Table | Holds |
 | --- | --- |
 | `files` | one row per file: original and current name/path, hash, origin, category, description, tags, status, attempts |
-| `runs` | one row per `flib run`, with counts (simulations record none) |
-| `operations` | the journal behind `flib undo`, including the Finder tag each move added, the phase of a cross-volume copy in progress and, for `flib fix`, the status and category it sets |
+| `runs` | one row per `flib run`, `flib fix` or `flib reprocess`, with what started it (`trigger`: schedule, manual, mcp, reprocess) and counts (simulations record none) |
+| `operations` | the journal behind `flib undo`, including the Finder tag each move added, the phase of a cross-volume copy in progress and, for `flib fix` and `flib reprocess`, the status and category it sets |
 | `corrections` | user recategorizations and renames (`flib fix`, `flib reconcile`); the latest per file and field, while still in effect, are sent as examples and are part of the cache key |
 | `files_fts` | FTS5 index over names, description and tags; accents ignored |
 
 Schema changes are new numbered files in `db/migrations/`; the applied version
 is `PRAGMA user_version`. Names and paths are stored in Unicode NFC.
+
+## Reprocessing
+
+`flib reprocess` (`reprocess.py`, RF-37) runs files already in the library
+through stages 2 to 5 again when the rules change: categories, hints,
+naming, the model. It never scans the input folders.
+
+1. **Select.** Index rows that are `organized` or in review and live inside
+   `output_root`, narrowed by the search filters. Each must still be at its
+   recorded path with its indexed content (otherwise: run `flib reconcile`);
+   one only in iCloud is not read. Rows `sensitive` are never selected.
+2. **Estimate.** Answers already in the classification cache are free; the
+   rest are priced from the prompt's length before anything is sent, and
+   the user is asked.
+3. **Classify and plan** with the same classifier (cache, cost cap,
+   sensitive check, `never_send`) and planner. A file's own name is free for
+   it, so a file whose answer did not change stays exactly where it is. A
+   file the provider is now unsure about stays in its category; one that
+   cannot be classified stays where it is. Corrections in effect are the
+   user's: a corrected category is kept, a corrected name is not renamed,
+   and a file with both is not even sent (`--override-corrections` lifts
+   this).
+4. **Apply** through `executor.relocate`: one run with trigger `reprocess`,
+   journaled and recovered as above, undone as a whole by `flib undo`, Finder
+   tags swapped as `flib fix` does.
+
+A category that organized files still use but the configuration no longer
+lists is an *orphan*. Every command warns about it, and plain reprocessing
+refuses until an explicit migration ran: `--rename-category OLD NEW` moves
+the files to the new folder (no AI) and renames the category in the index
+and in past corrections, so they stay in effect; `--remove-category OLD`
+reclassifies its files among the remaining categories (unsure ones go to
+review), or with `--to-review` sends them all to review without asking
+anyone. The emptied folder is left in place, since undo moves files back
+into it. A rename that only changes case is the same folder on macOS: only
+the index changes.
 
 ## The MCP server
 

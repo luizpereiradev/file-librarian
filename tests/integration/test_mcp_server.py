@@ -23,7 +23,7 @@ from mcp.client.stdio import StdioServerParameters
 from mcp_types import CallToolResult
 from typer.testing import CliRunner
 
-from file_librarian import mcp_server, pipeline
+from file_librarian import mcp_server, pipeline, reprocess
 from file_librarian.cli import app
 from file_librarian.config import Config
 from file_librarian.db.store import Store
@@ -539,3 +539,23 @@ def test_flib_mcp_over_stdio(downloads: Path, cfg: Config, tmp_path: Path) -> No
 
 def _where_froms() -> bytes:
     return plistlib.dumps(["https://example.com/bill.txt"], fmt=plistlib.FMT_BINARY)
+
+
+def test_a_reprocess_shows_in_history_and_is_the_last_run(downloads: Path, cfg: Config) -> None:
+    organize(downloads, cfg, {"bill.txt": (b"electricity bill", answer("Other"))})
+    with Store.open(cfg.database) as store:
+        store.conn.execute("DELETE FROM classification_cache")  # as if the rules changed
+        targets = reprocess.select(cfg, store).targets
+        planned = reprocess.plan_reprocess(
+            targets, FakeProvider(default=answer("Finance")), cfg, store
+        )
+        done = reprocess.apply(planned, cfg, store, provider="fake", model="x")
+    moved = library(downloads) / "Finance" / "bill.txt"
+    newest = ok(call(cfg, "get_file", path=str(moved)))["history"][0]
+    assert (newest["by"], newest["trigger"], newest["category"]) == (
+        "reprocess",
+        "reprocess",
+        "Finance",
+    )
+    last = ok(call(cfg, "get_stats"))["last_run"]
+    assert (last["run_id"], last["trigger"], last["files_moved"]) == (done.run_id, "reprocess", 1)

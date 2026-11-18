@@ -12,8 +12,8 @@ back an undo a crash cut off. Restored files are marked
 ``skipped`` in the index, so the next run leaves them where you put them, and
 lose the Finder tag the move added (if any), keeping every other tag.
 Given the configuration, a file restored into the library (undoing ``flib
-fix``) gets back the status and category of the folder it returns to, and
-the Finder tag flib had given it there.
+fix`` or ``flib reprocess``) gets back the status and category of the folder
+it returns to, and the Finder tag flib had given it there.
 """
 
 from __future__ import annotations
@@ -143,7 +143,7 @@ def record_restored(store: Store, op: OperationRow, config: Config | None) -> li
     warnings: list[str] = []
     row = store.file_by_id(op.file_id)
     identity = unit_identity(src, row.sha256) if row.is_unit else None
-    status, category = place(config, src) if config else (FileStatus.SKIPPED, None)
+    status, category = _restored_place(config, src)
     with store.transaction():
         store.set_operation(op.id, OperationStatus.UNDONE)
         if identity is not None:
@@ -162,6 +162,23 @@ def record_restored(store: Store, op: OperationRow, config: Config | None) -> li
             if warning:
                 warnings.append(warning)
     return warnings
+
+
+def _restored_place(config: Config | None, src: Path) -> tuple[FileStatus, str | None]:
+    """The status and category of an item back at ``src``.
+
+    Back in a folder of the library that is no longer a category (undoing
+    ``flib reprocess --rename-category`` or ``--remove-category``), it is
+    still organized under that folder's name, so flib keeps pointing out the
+    category missing from the configuration instead of forgetting the file.
+    """
+    if config is None:
+        return FileStatus.SKIPPED, None
+    status, category = place(config, src)
+    root = config.output_root
+    if status is FileStatus.SKIPPED and src.is_relative_to(root) and src.parent != root:
+        return FileStatus.ORGANIZED, src.relative_to(root).parts[0]
+    return status, category
 
 
 def unit_identity(path: Path, current: str) -> str | None:
