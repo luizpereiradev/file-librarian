@@ -8,6 +8,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- MCP: three more read-only tools and file history (#52). `list_recent`
+  lists the newest organized files (optionally one category), `list_review`
+  what waits in the review folder with the AI's confidence (and the
+  threshold, and how many wait in all), and `get_stats` counts files by
+  status and by category, the total size filed and the last run (single-file
+  fixes not counted). `get_file` now returns the file's journaled moves,
+  newest first, at most 20: whether a run or a fix made each one, what
+  started it, moved and/or renamed, and whether it was undone. Like the
+  other read tools they take no lock, never create the library and never
+  show a sensitive file's description or tags.
+
 - Moves to another volume (RF-33). A destination on another volume used to
   fail the item; now it is copied with `copyfile(3)` (extended attributes
   such as the download origin and Finder tags, ACLs, permissions, flags and

@@ -307,7 +307,10 @@ network and reads the same database as `flib search`.
 | Tool | What it does |
 | --- | --- |
 | `search_files` | Full-text search over names, descriptions and tags, with the same category, extension and period filters as `flib search` |
-| `get_file` | Everything the index knows about one file: where it is and was, category, description, tags, hash, size, download origin, whether it is only in iCloud |
+| `get_file` | Everything the index knows about one file: where it is and was, category, description, tags, hash, size, download origin, whether it is only in iCloud, and its history (moves, renames, fixes, undos; newest first, last 20) |
+| `list_recent` | The files organized most recently, newest first, optionally in one category |
+| `list_review` | What waits in the review folder, newest first, with the AI's confidence |
+| `get_stats` | Counts by status and by category, total size filed, and the last run |
 | `recategorize_file` | Move a file to another configured category and/or rename it, like `flib fix` |
 | `undo` | Revert a run or the last move of one file, like `flib undo` |
 
@@ -326,7 +329,7 @@ Results carry metadata and descriptions, never file content; sensitive files
 show no description, tags or origin. The write tools go through the same
 journal as the CLI, so `flib undo` reverts what an assistant did, and they
 refuse to run while a run is in progress. Set `mcp.read_only: true` to offer
-only the two read tools.
+only the read tools.
 
 **2. Add it to Claude Code:**
 
