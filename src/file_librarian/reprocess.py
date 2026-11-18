@@ -158,7 +158,8 @@ class ReprocessPlan:
 class Applied:
     report: RunReport
     index_changes: int = 0
-    """Index changes journaled with the run (a category rename)."""
+    """Index changes journaled with the run: a category rename, and new descriptions
+    and tags of files the run did not move."""
 
     @property
     def undoable(self) -> bool:
@@ -504,17 +505,20 @@ def apply(
 
     The caller holds the instance lock. The index side of a category rename
     is written and journaled in one transaction with the run's start, before
-    any file moves, so undo finds it whatever happens next.
+    any file moves, so undo finds it whatever happens next. What an earlier
+    rename of the same category, cut off by a crash, left in the index is
+    adopted by this run, so one undo reverts all of it.
     """
-    run_id = store.start_run(RunMode.RUN, RunTrigger.REPROCESS)
-    changed = 0
-    if planned.rename is not None:
-        old, new = planned.rename
-        with store.transaction():
+    renamed: list[int] = []
+    with store.transaction():
+        run_id = store.start_run(RunMode.RUN, RunTrigger.REPROCESS)
+        if planned.rename is not None:
+            old, new = planned.rename
             renamed = [r.id for r in store.all_files() if r.category == old]
-            changed = store.rename_category(run_id, old, new, organized=planned.same_folder)
-        if planned.same_folder:
-            changed += _rename_tags(config, store, run_id, renamed, old, new)
+            store.adopt_index_changes(run_id, old, new)
+            store.rename_category(run_id, old, new, organized=planned.same_folder)
+    if planned.rename is not None and planned.same_folder:
+        _rename_tags(config, store, run_id, renamed, *planned.rename)
     report = relocate(
         [c.relocation for c in planned.changes],
         config,
@@ -524,7 +528,7 @@ def apply(
         model=model,
         deferred=planned.deferred,
     )
-    return Applied(report, changed)
+    return Applied(report, store.count_index_changes(run_id))
 
 
 def _rename_tags(

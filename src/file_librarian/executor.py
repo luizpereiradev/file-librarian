@@ -272,7 +272,7 @@ def _relocate_one(
     if item.destination is None or item.destination == ctx.path:
         if record is not None:
             with store.transaction():
-                store.set_file_answer(item.file_id, record)
+                store.set_file_answer(item.file_id, record, run_id=run_id)
         return ItemResult(ctx.path, item.status, None, item.reason)
     identity = _unchanged(ctx)
     if identity is None:
@@ -355,7 +355,7 @@ def finish_relocation(
         store.set_operation(op_id, OperationStatus.DONE, destination)
         store.relocate_file(file_id, destination, status, category)
         if record is not None:
-            store.set_file_answer(file_id, record)
+            store.set_file_answer(file_id, record, run_id=store.operation_by_id(op_id).run_id)
         if unit is not None:
             store.set_file_identity(file_id, unit)
     return warnings

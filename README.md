@@ -405,6 +405,8 @@ stays there unless its category changes. File names are kept: only
 ones of `flib search` (`--category`, `--since`, `--until`, `--ext`). The
 questions are asked before flib takes its lock, so a scheduled run is never
 held up by an unanswered one; each file is checked again before it moves.
+Only one `flib reprocess` runs at a time. `flib undo` also gives back the
+descriptions and tags it replaced.
 
 Your corrections win: a category or a name you set with `flib fix` (or by
 moving the file and running `flib reconcile`) is kept, unless you add

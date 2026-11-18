@@ -38,7 +38,12 @@ All notable changes to this project are documented here. The format follows
   `flib undo` refuses instead of undoing an earlier run. An item's own name
   no longer counts as taken when the planner re-plans it into its folder.
   In the MCP server, `get_file` history marks these moves `by: reprocess`
-  and `get_stats` counts a reprocess as the last run.
+  and `get_stats` counts a reprocess as the last run. Only one reprocess
+  runs at a time (its own lock file), and it finishes interrupted moves
+  before planning; `flib reconcile` now does too, so flib's own interrupted
+  move is never recorded as a correction. New descriptions, tags and
+  confidence are journaled and undone with the run, and `flib undo --file`
+  of a reprocessed file also reverts that run's index changes for it.
 - `ollama` provider (#33): classification by a local model through Ollama's
   OpenAI-compatible endpoint (default `http://localhost:11434/v1`), with no
   key. A preset of `openai-compat`. On this Mac it is `local`, which only

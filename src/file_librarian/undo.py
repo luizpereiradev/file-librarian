@@ -112,6 +112,12 @@ def undo_file(store: Store, path: Path, *, config: Config | None = None) -> Undo
         raise NothingToUndoError(f"{path} has no move to undo")
     report = UndoReport()
     _undo_one(store, op, report, config)
+    if report.restored:
+        # What the same run changed in the index about this file goes back with it
+        # (its renamed corrections, its new description), and nothing else of the run.
+        for change in reversed(store.index_changes(op.run_id)):
+            if store.index_change_file(change) == row.id:
+                _revert(store, change, report)
     return report
 
 

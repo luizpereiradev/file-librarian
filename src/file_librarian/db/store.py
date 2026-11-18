@@ -260,8 +260,18 @@ class IndexChange:
 
 
 # The columns ``index_changes`` may point at. Only these fixed names ever reach SQL.
+_ANSWER_COLUMNS = (
+    "description",
+    "tags",
+    "confidence",
+    "provider",
+    "model",
+    "name_choice",
+    "name_choice_reason",
+)
 _INDEX_TARGETS = {
     "files.category": ("files", "category"),
+    **{f"files.{c}": ("files", c) for c in (*_ANSWER_COLUMNS, "processed_at")},
     "corrections.old_value": ("corrections", "old_value"),
     "corrections.new_value": ("corrections", "new_value"),
     "operations.finder_tag": ("operations", "finder_tag"),
@@ -562,24 +572,66 @@ class Store:
         )
         return [str(r[0]) for r in rows]
 
-    def set_file_answer(
-        self,
-        file_id: int,
-        record: FileRecord,
-    ) -> None:
+    def set_file_answer(self, file_id: int, record: FileRecord, *, run_id: int) -> int:
         """What a new classification says about a file already indexed: description,
-        tags, confidence, provider, model and name choice (not where it is)."""
+        tags, confidence, provider, model and name choice (not where it is).
+
+        Only values that differ are written, each journaled with ``run_id`` so
+        undo puts it back; ``processed_at`` moves only when something changed.
+        Returns how many values changed.
+        """
         r = record
-        self.conn.execute(
-            """UPDATE files SET description = ?, tags = ?, confidence = ?, provider = ?,
-                                model = ?, name_choice = ?, name_choice_reason = ?,
-                                processed_at = ?
-               WHERE id = ?""",
-            (
-                r.description, json.dumps(list(r.tags), ensure_ascii=False), r.confidence,
-                r.provider, r.model, r.name_choice, r.name_choice_reason, _now(), file_id,
-            ),
-        )  # fmt: skip
+        new: dict[str, object] = {
+            "description": r.description,
+            "tags": json.dumps(list(r.tags), ensure_ascii=False),
+            "confidence": r.confidence,
+            "provider": r.provider,
+            "model": r.model,
+            "name_choice": r.name_choice,
+            "name_choice_reason": r.name_choice_reason,
+        }
+        old = self.conn.execute(
+            f"SELECT {', '.join(_ANSWER_COLUMNS)}, processed_at FROM files "  # noqa: S608
+            "WHERE id = ?",
+            (file_id,),
+        ).fetchone()
+        changed = [c for c in _ANSWER_COLUMNS if old[c] != new[c]]
+        for column in changed:
+            self.change_index(
+                run_id, f"files.{column}", file_id, _as_text(old[column]), _as_text(new[column])
+            )
+        if changed:
+            self.change_index(run_id, "files.processed_at", file_id, old["processed_at"], _now())
+        return len(changed)
+
+    def index_change_file(self, change: IndexChange) -> int | None:
+        """The id of the file an index change is about (``None`` if it is gone)."""
+        table, _ = _INDEX_TARGETS[change.target]
+        if table == "files":
+            return change.row_id
+        row = self.conn.execute(
+            f"SELECT file_id FROM {table} WHERE id = ?",  # noqa: S608 - fixed names
+            (change.row_id,),
+        ).fetchone()
+        return None if row is None else int(row[0])
+
+    def adopt_index_changes(self, run_id: int, old: str, new: str) -> int:
+        """Bring the still-done changes of an earlier, interrupted rename of ``old`` to
+        ``new`` into ``run_id``, so undoing this run reverts all of them."""
+        cur = self.conn.execute(
+            """UPDATE index_changes SET run_id = ?
+               WHERE status = 'done' AND run_id != ? AND old_value IS ? AND new_value IS ?
+                 AND target IN ('files.category', 'corrections.old_value',
+                                'corrections.new_value')""",
+            (run_id, run_id, old, new),
+        )
+        return cur.rowcount
+
+    def count_index_changes(self, run_id: int) -> int:
+        row = self.conn.execute(
+            "SELECT COUNT(*) FROM index_changes WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        return int(row[0])
 
     def set_file_identity(self, file_id: int, sha256: str) -> bool:
         """A folder unit's new manifest digest after a copy to another file system.
@@ -896,6 +948,14 @@ class Store:
         tb: TracebackType | None,
     ) -> None:
         self.close()
+
+
+def _as_text(value: object) -> str | None:
+    """A column value as ``index_changes`` keeps it; SQLite's column affinity turns it
+    back into a number when it is written to a REAL column."""
+    if value is None:
+        return None
+    return repr(value) if isinstance(value, float) else str(value)
 
 
 def _rowid(cur: sqlite3.Cursor) -> int:

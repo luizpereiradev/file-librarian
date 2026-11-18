@@ -38,7 +38,7 @@ from file_librarian.extractors.origin import download_origin
 from file_librarian.fix import FixError, fix_file
 from file_librarian.hashing import file_sha256, unit_manifest
 from file_librarian.locales import LOCALES, Language
-from file_librarian.lock import AlreadyRunningError, instance_lock
+from file_librarian.lock import AlreadyRunningError, instance_lock, reprocess_lock
 from file_librarian.models import FileStatus, RunTrigger
 from file_librarian.planner import Plan
 from file_librarian.providers import PLANNED, ProviderError, get_provider, is_implemented
@@ -896,9 +896,13 @@ def reconcile(config: ConfigOption = None) -> None:
     cfg = _load(config)
     try:
         with instance_lock(cfg.database), Store.open(cfg.database) as store:
+            # flib's own interrupted moves are finished first, never taken for the user's.
+            recovered = recover(store, cfg)
             report = run_reconcile(cfg, store)
     except AlreadyRunningError as exc:
         _fatal(str(exc))
+    if recovered:
+        typer.echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
     for old, new in report.moved:
         typer.echo(f"  moved   {_short(old, cfg)}  ->  {_short(new, cfg)}")
     for path, old_category, new_category in report.recategorized:
@@ -1375,50 +1379,85 @@ def reprocess(
         except ProviderError as exc:
             _fatal(str(exc))
     try:
-        # Planning and both questions happen without the instance lock, so a
-        # question left unanswered never blocks the scheduled run.
-        with Store.open(cfg.database) as store:
-            planned = _reprocess_plan(
+        # One reprocess at a time, from planning to the last move.
+        with reprocess_lock(cfg.database):
+            applied, planned = _reprocess(
                 cfg,
-                store,
                 provider,
                 filters=(category, ext, since, until),
                 rename_files=rename,
                 override_corrections=override_corrections,
                 rename=rename_category,
                 remove=remove_category,
+                simulate=simulate,
                 yes=yes,
-            )
-        if planned is None:
-            return
-        _print_reprocess_plan(planned, cfg)
-        if simulate:
-            typer.echo("Simulation: nothing moved or changed.")
-            return
-        if not planned.moves() and not planned.same_folder:
-            typer.echo("Nothing to move: the library already follows the rules.")
-            return
-        question = f"Move {len(planned.moves())} file(s)? `flib undo` reverts it"
-        if planned.same_folder:
-            question = "Rename the category in the index? `flib undo` reverts it"
-        if not yes and not typer.confirm(question, default=False):
-            typer.echo("Nothing changed.")
-            return
-        # Each item is checked again under the lock (index row and file).
-        with instance_lock(cfg.database), Store.open(cfg.database) as store:
-            recovered = recover(store, cfg)
-            if recovered:
-                typer.echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
-            applied = reprocess_mod.apply(
-                planned,
-                cfg,
-                store,
-                provider=provider.name if provider is not None else None,
-                model=cfg.provider.model if provider is not None else None,
             )
     except (reprocess_mod.ReprocessError, ProviderError, AlreadyRunningError) as exc:
         _fatal(str(exc))
-    _print_reprocess_report(applied, cfg, planned)
+    if applied is not None and planned is not None:
+        _print_reprocess_report(applied, cfg, planned)
+
+
+def _reprocess(
+    cfg: Config,
+    provider: Provider | None,
+    *,
+    filters: tuple[list[str] | None, list[str] | None, str | None, str | None],
+    rename_files: bool,
+    override_corrections: bool,
+    rename: tuple[str, str] | None,
+    remove: str | None,
+    simulate: bool,
+    yes: bool,
+) -> tuple[reprocess_mod.Applied | None, reprocess_mod.ReprocessPlan | None]:
+    """Recover, plan, ask, apply. Only recovering and applying hold the instance lock."""
+    # The journal is finished first, so the plan reads an index that matches the disk.
+    with instance_lock(cfg.database), Store.open(cfg.database) as store:
+        recovered = recover(store, cfg)
+    if recovered:
+        typer.echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
+    # Planning and both questions happen without the instance lock, so a
+    # question left unanswered never blocks the scheduled run.
+    with Store.open(cfg.database) as store:
+        planned = _reprocess_plan(
+            cfg,
+            store,
+            provider,
+            filters=filters,
+            rename_files=rename_files,
+            override_corrections=override_corrections,
+            rename=rename,
+            remove=remove,
+            yes=yes,
+        )
+    if planned is None:
+        return None, None
+    _print_reprocess_plan(planned, cfg)
+    if simulate:
+        typer.echo("Simulation: nothing moved or changed.")
+        return None, planned
+    if not planned.moves() and not planned.same_folder:
+        typer.echo("Nothing to move: the library already follows the rules.")
+        return None, planned
+    question = f"Move {len(planned.moves())} file(s)? `flib undo` reverts it"
+    if planned.same_folder:
+        question = "Rename the category in the index? `flib undo` reverts it"
+    if not yes and not typer.confirm(question, default=False):
+        typer.echo("Nothing changed.")
+        return None, planned
+    # Each item is checked again under the lock (index row and file).
+    with instance_lock(cfg.database), Store.open(cfg.database) as store:
+        recovered = recover(store, cfg)
+        if recovered:
+            typer.echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
+        applied = reprocess_mod.apply(
+            planned,
+            cfg,
+            store,
+            provider=provider.name if provider is not None else None,
+            model=cfg.provider.model if provider is not None else None,
+        )
+    return applied, planned
 
 
 def _reprocess_plan(

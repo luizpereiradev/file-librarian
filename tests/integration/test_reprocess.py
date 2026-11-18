@@ -20,7 +20,7 @@ from file_librarian.executor import RunReport, recover
 from file_librarian.finder_tags import read_tags
 from file_librarian.fix import fix_file
 from file_librarian.fsops import CrossVolumeError
-from file_librarian.lock import instance_lock
+from file_librarian.lock import instance_lock, reprocess_lock
 from file_librarian.models import (
     Classification,
     FileContext,
@@ -904,3 +904,212 @@ def test_rename_cannot_go_with_a_migration(downloads: Path, tmp_path: Path) -> N
         app, ["reprocess", "-c", str(path), "--remove-category", "Misc", "--rename"]
     )
     assert result.exit_code == 1 and "keeps file names" in result.stderr
+
+
+# --- second review ---------------------------------------------------------------------------
+
+
+def renamed_setup(downloads: Path) -> tuple[Path, Config, Config]:
+    """a.txt filed in Docs, b.txt corrected into Docs; then Docs is renamed Documents."""
+    before = config(downloads, [*CATEGORIES, {"name": "Docs"}])
+    organize(downloads, before, {"a.txt": (b"x", "Docs"), "b.txt": (b"y", "Other")})
+    lib = library(downloads)
+    with Store.open(before.database) as store:
+        fix_file(before, store, lib / "Other" / "b.txt", category="Docs")
+    return lib, before, config(downloads, [*CATEGORIES, {"name": "Documents"}])
+
+
+def corrected(cfg: Config) -> dict[int, set[str]]:
+    with Store.open(cfg.database) as store:
+        return store.corrected_fields()
+
+
+def test_a_rename_run_again_after_a_crash_is_undone_as_a_whole(
+    downloads: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lib, before, after = renamed_setup(downloads)
+
+    def crash(*_args: Any, **_kwargs: Any) -> None:
+        raise Crash
+
+    with Store.open(after.database) as store:
+        planned = rp.plan_rename(after, store, "Docs", "Documents")
+        with monkeypatch.context() as patch:
+            patch.setattr(rp, "relocate", crash)
+            with pytest.raises(Crash):
+                rp.apply(planned, after, store)
+        applied = rp.apply(rp.plan_rename(after, store, "Docs", "Documents"), after, store)
+        assert applied.index_changes == 1  # the first run's change, adopted
+        report = undo_run(store, config=after)
+    assert (len(report.restored), report.reverted) == (2, 1)
+    assert corrected(before) == {2: {"category"}}
+    for name in ("a.txt", "b.txt"):
+        assert where(before, name) == (FileStatus.ORGANIZED, "Docs", lib / "Docs" / name)
+
+
+def test_undoing_one_file_of_a_rename_brings_its_correction_back(downloads: Path) -> None:
+    lib, before, after = renamed_setup(downloads)
+    with Store.open(after.database) as store:
+        rp.apply(rp.plan_rename(after, store, "Docs", "Documents"), after, store)
+        report = undo_file(store, lib / "Documents" / "b.txt", config=after)
+    assert report.reverted == 1
+    assert where(before, "b.txt") == (FileStatus.ORGANIZED, "Docs", lib / "Docs" / "b.txt")
+    assert corrected(before) == {2: {"category"}}
+    assert where(before, "a.txt")[1] == "Documents"  # the rest of the run stands
+
+
+def test_a_rename_cut_off_mid_moves_is_recovered_and_undone(
+    downloads: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lib, before, after = renamed_setup(downloads)
+    real = executor.finish_relocation
+    calls = 0
+
+    def second_crashes(*args: Any, **kwargs: Any) -> list[str]:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise Crash
+        return real(*args, **kwargs)
+
+    with Store.open(after.database) as store:
+        planned = rp.plan_rename(after, store, "Docs", "Documents")
+        with monkeypatch.context() as patch:
+            patch.setattr(executor, "finish_relocation", second_crashes)
+            with pytest.raises(Crash):
+                rp.apply(planned, after, store)
+        assert recover(store, after) == 1
+        undo_run(store, config=after)
+    for name in ("a.txt", "b.txt"):
+        assert where(before, name) == (FileStatus.ORGANIZED, "Docs", lib / "Docs" / name)
+    assert corrected(before) == {2: {"category"}}
+
+
+def test_a_stale_plan_never_overwrites_and_respects_a_fix_made_meanwhile(
+    downloads: Path,
+) -> None:
+    cfg = config(downloads)
+    organize(downloads, cfg, {"a.txt": (b"x", "Finance"), "b.txt": (b"y", "Finance")})
+    lib = library(downloads)
+    with Store.open(cfg.database) as store:
+        store.conn.execute("DELETE FROM classification_cache")
+        targets = rp.select(cfg, store).targets
+        planned = rp.plan_reprocess(targets, FakeProvider(default=answer("Contracts")), cfg, store)
+        fix_file(cfg, store, lib / "Finance" / "a.txt", category="Other")
+        put(lib / "Contracts", "b.txt", b"someone else")
+        applied = rp.apply(planned, cfg, store)
+    notes = {i.source.name: i.note for i in applied.report.items}
+    assert notes["a.txt"] == "changed in the index since the plan"
+    assert (lib / "Contracts" / "b.txt").read_bytes() == b"someone else"
+    assert where(cfg, "b.txt")[2] == lib / "Contracts" / "b-2.txt"
+    assert where(cfg, "a.txt")[1] == "Other"
+
+
+def test_a_category_changed_between_plan_and_apply_skips_the_file(downloads: Path) -> None:
+    cfg = config(downloads)
+    organize(downloads, cfg, {"a.txt": (b"x", "Finance")})
+    with Store.open(cfg.database) as store:
+        store.conn.execute("DELETE FROM classification_cache")
+        targets = rp.select(cfg, store).targets
+        planned = rp.plan_reprocess(targets, FakeProvider(default=answer("Contracts")), cfg, store)
+        row = row_for(cfg, "a.txt")
+        store.relocate_file(row.id, row.current_path, FileStatus.ORGANIZED, "Other")
+        applied = rp.apply(planned, cfg, store)
+    [item] = applied.report.items
+    assert (item.status, item.note) == (FileStatus.SKIPPED, "changed in the index since the plan")
+    assert where(cfg, "a.txt")[1] == "Other"
+
+
+def test_undo_reverts_only_values_still_as_the_run_left_them(downloads: Path) -> None:
+    cfg = config(downloads, [*CATEGORIES, {"name": "Docs"}])
+    organize(downloads, cfg, {"a.txt": (b"x", "Other"), "b.txt": (b"y", "Other")})
+    lib = library(downloads)
+    with Store.open(cfg.database) as store:
+        fix_file(cfg, store, lib / "Other" / "a.txt", category="Docs")
+        fix_file(cfg, store, lib / "Other" / "b.txt", category="Docs")
+        fix_file(cfg, store, lib / "Docs" / "b.txt", category="Finance")
+    after = config(downloads, [*CATEGORIES, {"name": "Documents"}])
+    with Store.open(after.database) as store:
+        rp.apply(rp.plan_rename(after, store, "Docs", "Documents"), after, store)
+        # The user changes one renamed correction by hand meanwhile.
+        store.conn.execute("UPDATE corrections SET new_value = 'Mine' WHERE id = 1")
+        before = [tuple(r) for r in store.conn.execute("SELECT * FROM corrections WHERE id != 1")]
+        undo_run(store, config=after)
+        values = [
+            tuple(r) for r in store.conn.execute("SELECT id, old_value, new_value FROM corrections")
+        ]
+    assert values[0] == (1, "Other", "Mine")  # changed since: left alone
+    assert values[1] == (2, "Other", "Docs")  # renamed by the run: back
+    assert values[2] == (3, "Docs", "Finance")  # the run's old_value change: back
+    assert len(before) == 2
+
+
+def test_undo_restores_the_description_of_a_file_that_did_not_move(downloads: Path) -> None:
+    cfg = config(downloads)
+    organize(downloads, cfg, {"a.txt": (b"x", "Finance"), "b.txt": (b"y", "Finance")})
+    old = row_for(cfg, "a.txt")
+    provider = FakeProvider(
+        {
+            "a.txt": answer("Finance", description="better", tags=["new"], confidence=0.9),
+            "b.txt": answer("Contracts"),
+        }
+    )
+    reprocess(cfg, provider)
+    assert row_for(cfg, "a.txt").description == "better"
+    with Store.open(cfg.database) as store:
+        undo_run(store, config=cfg)
+    back = row_for(cfg, "a.txt")
+    assert (back.description, back.tags, back.processed_at) == (
+        old.description,
+        old.tags,
+        old.processed_at,
+    )
+    [conf] = rows(cfg, f"SELECT confidence FROM files WHERE id = {old.id}")  # noqa: S608
+    assert conf[0] == pytest.approx(0.75)
+
+
+def test_an_unchanged_answer_is_not_journaled(downloads: Path) -> None:
+    cfg = config(downloads)
+    organize(downloads, cfg, {"a.txt": (b"x", "Finance")})
+    with Store.open(cfg.database) as store:
+        targets = rp.select(cfg, store).targets  # the cached answer: the same as before
+        planned = rp.plan_reprocess(targets, FakeProvider({}), cfg, store)
+        applied = rp.apply(planned, cfg, store, provider="fake", model="x")
+    assert planned.cached == 1 and not applied.undoable
+
+
+def test_reprocess_and_reconcile_finish_an_interrupted_move_first(
+    downloads: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = cli_config(tmp_path, downloads)
+    cfg = fake_config(downloads)
+    organize(downloads, cfg, {"a.txt": (b"x", "Finance")})
+    lib = library(downloads)
+
+    def crash(*_args: Any, **_kwargs: Any) -> None:
+        raise Crash
+
+    for command in ("reconcile", "reprocess"):
+        with monkeypatch.context() as patch:
+            patch.setattr(executor, "finish_relocation", crash)
+            with pytest.raises(Crash):
+                reprocess(cfg, FakeProvider(default=answer("Contracts")))
+        result = runner.invoke(app, [command, "-c", str(path)], input="n\n")
+        assert result.exit_code == 0, result.stderr
+        assert "Recovered 1 move(s)" in result.stdout
+        assert "run `flib reconcile`" not in result.stdout
+        assert corrected(cfg) == {}  # flib's own move is not taken for the user's
+        with Store.open(cfg.database) as store:
+            undo_run(store, config=cfg)
+        assert (lib / "Finance" / "a.txt").exists()
+
+
+def test_only_one_reprocess_at_a_time(downloads: Path, tmp_path: Path) -> None:
+    path = cli_config(tmp_path, downloads)
+    cfg = fake_config(downloads)
+    organize(downloads, cfg, {"a.txt": (b"x", "Finance")})
+    with reprocess_lock(cfg.database):
+        result = runner.invoke(app, ["reprocess", "-c", str(path), "--yes"])
+        assert result.exit_code == 1 and "another flib reprocess" in result.stderr
+        with instance_lock(cfg.database):  # a run is not held up by it
+            pass

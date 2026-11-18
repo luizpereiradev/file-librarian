@@ -171,7 +171,7 @@ One SQLite file, outside the organized folders (default
 | `files` | one row per file: original and current name/path, hash, origin, category, description, tags, status, attempts |
 | `runs` | one row per `flib run`, `flib fix` or `flib reprocess`, with what started it (`trigger`: schedule, manual, mcp, reprocess) and counts (simulations record none) |
 | `operations` | the journal behind `flib undo`, including the Finder tag each move added, the phase of a cross-volume copy in progress, for `flib fix` and `flib reprocess` the status and category it sets and, for `flib reprocess`, the ones the file had before (undo gives those back) |
-| `index_changes` | what a run changed in the index without moving a file (a category renamed in rows and corrections, a Finder tag renamed in the journal), reverted by `flib undo` with the run |
+| `index_changes` | what a run changed in the index without moving a file (a category renamed in rows and corrections, a Finder tag renamed in the journal, a new description, tags or confidence), reverted by `flib undo` with the run, and with one file by `flib undo --file` |
 | `corrections` | user recategorizations and renames (`flib fix`, `flib reconcile`); the latest per file and field, while still in effect, are sent as examples and are part of the cache key |
 | `files_fts` | FTS5 index over names, description and tags; accents ignored |
 
@@ -204,11 +204,17 @@ naming, the model. It never scans the input folders.
    this).
 4. **Apply** through `executor.relocate`: one run with trigger `reprocess`,
    journaled and recovered as above, undone as a whole by `flib undo`, Finder
-   tags swapped as `flib fix` does. Steps 1 to 3 and both questions run
+   tags swapped as `flib fix` does. A new description, tags or confidence
+   is written only where it differs, journaled in `index_changes` so undo
+   gives the old ones back. The command first takes the instance lock just
+   long enough to finish any interrupted move (`recover`), so it plans on an
+   index that matches the disk. Steps 1 to 3 and both questions then run
    without the instance lock, so an unanswered question never blocks a
-   scheduled run; the executor then checks each item again under the lock
-   (its index row, and the file's inode, size and modification time) and
-   skips what changed. File names are kept unless `--rename`; a file the
+   scheduled run, but under a second lock of their own
+   (`flib-reprocess.lock`): two reprocesses never plan, and pay, at once.
+   The executor then checks each item again under the instance lock (its
+   index row, and the file's inode, size and modification time) and skips
+   what changed. File names are kept unless `--rename`; a file the
    user put in a sub-folder of its category stays there unless its category
    changes.
 
@@ -223,7 +229,8 @@ anyone. The index side of a rename (rows that do not move, corrections, and
 for a rename that only changes case, which is the same folder on macOS, the
 organized rows and the Finder tags flib set) is written in `index_changes`
 with the run before any file moves, so `flib undo` reverts all of it, even
-after a crash in between. The emptied folder is left in place; undo makes a
+after a crash in between; a rename run again after such a crash takes over
+what the first left, so one undo reverts both. The emptied folder is left in place; undo makes a
 missing folder inside `output_root` again. After a reprocess that changed
 nothing, plain `flib undo` refuses rather than reach back to an earlier run.
 

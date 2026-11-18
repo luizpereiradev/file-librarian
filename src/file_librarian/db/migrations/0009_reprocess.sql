@@ -12,7 +12,9 @@
 --
 -- index_changes journals what a run changed in the index without moving a
 -- file (a category renamed in rows and corrections, a Finder tag renamed in
--- the journal), so `flib undo` reverts it together with the run's moves.
+-- the journal, a file's description and the rest of a new classification),
+-- so `flib undo` reverts it together with the run's moves. Values are kept
+-- as text; NULL is NULL.
 
 PRAGMA defer_foreign_keys = ON;
 
@@ -46,7 +48,10 @@ CREATE TABLE index_changes (
   id         INTEGER PRIMARY KEY,
   run_id     INTEGER NOT NULL REFERENCES runs(id),
   target     TEXT NOT NULL
-             CHECK (target IN ('files.category', 'corrections.old_value',
+             CHECK (target IN ('files.category', 'files.description', 'files.tags',
+                               'files.confidence', 'files.provider', 'files.model',
+                               'files.name_choice', 'files.name_choice_reason',
+                               'files.processed_at', 'corrections.old_value',
                                'corrections.new_value', 'operations.finder_tag')),
   row_id     INTEGER NOT NULL,
   old_value  TEXT,
