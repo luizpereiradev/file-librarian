@@ -11,11 +11,14 @@ them; the planner still checks every destination again.
 
 from __future__ import annotations
 
+import ipaddress
 import os
+import re
 import string
 import unicodedata
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
 import yaml
 from pydantic import (
@@ -37,6 +40,9 @@ NAMING_PLACEHOLDERS = frozenset({"date", "subject"})
 # Every provider name a configuration may use. Kept here, not imported from
 # providers/, so config does not depend on provider code; a test keeps the two in step.
 PROVIDER_NAMES = frozenset({"anthropic", "fake", "claude-code", "ollama", "openai-compat"})
+
+OLLAMA_BASE_URL = "http://localhost:11434/v1"
+"""Ollama's OpenAI-compatible endpoint on this Mac, the ``ollama`` provider's default."""
 
 Fraction = Annotated[float, Field(ge=0.0, le=1.0)]
 PositiveInt = Annotated[int, Field(gt=0)]
@@ -101,6 +107,40 @@ class _Section(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+def is_loopback_url(url: str) -> bool:
+    """``url`` points at this Mac: ``localhost`` or a loopback address."""
+    host = (urlsplit(url).hostname or "").rstrip(".").lower()
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _base_url(value: str) -> str:
+    """An http(s) URL with a host and nothing that could hide a secret or change the path."""
+    value = value.strip()
+    try:
+        parts = urlsplit(value)
+        parts.port  # noqa: B018 - raises ValueError on a bad port
+    except ValueError as exc:
+        raise ValueError(f"provider.base_url is not a valid URL: {exc}") from exc
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError("provider.base_url must be an http:// or https:// URL with a host")
+    if parts.username is not None or parts.password is not None:
+        raise ValueError(
+            "provider.base_url must not contain a user name or password; "
+            "the API key goes in the Keychain or an environment variable"
+        )
+    if parts.query or parts.fragment:
+        raise ValueError("provider.base_url must not have a query (?) or fragment (#)")
+    return value.rstrip("/")
+
+
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
 class ProviderConfig(_Section):
     name: str = "anthropic"
     model: str = Field(min_length=1)
@@ -119,6 +159,43 @@ class ProviderConfig(_Section):
     command: AbsolutePath | None = None
     """The ``claude`` executable for the ``claude-code`` provider; found on PATH and in
     the usual install folders when unset."""
+    base_url: Annotated[str, AfterValidator(_base_url)] | None = None
+    """``openai-compat`` (required) and ``ollama``: the API root, the part before
+    ``/chat/completions``. ``ollama`` defaults to ``OLLAMA_BASE_URL``."""
+    api_key_env: str | None = None
+    """``openai-compat``: the environment variable holding the key; unset, it is
+    ``FLIB_OPENAI_COMPAT_API_KEY``."""
+    price_input_per_mtok: Annotated[float, Field(ge=0)] = 0.0
+    """``openai-compat`` and ``ollama``: US$ per million input tokens; ``0`` means
+    unknown (or free), and then ``limits.max_cost_usd_per_run`` cannot stop a run."""
+    price_output_per_mtok: Annotated[float, Field(ge=0)] = 0.0
+    """US$ per million output tokens, like ``price_input_per_mtok``."""
+    vision: bool = False
+    """``openai-compat`` and ``ollama``: the model reads images, so with ``vision.enabled``
+    they are sent to it. Scanned PDFs are never sent to these providers."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _ollama_default_url(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("name") == "ollama" and not data.get("base_url"):
+            data = dict(data) | {"base_url": OLLAMA_BASE_URL}
+        return data
+
+    @model_validator(mode="after")
+    def _openai_compat_needs_a_url(self) -> ProviderConfig:
+        if self.name == "openai-compat" and self.base_url is None:
+            raise ValueError(
+                "provider.base_url is required for openai-compat "
+                "(for example https://api.openai.com/v1)"
+            )
+        return self
+
+    @field_validator("api_key_env")
+    @classmethod
+    def _env_name(cls, value: str | None) -> str | None:
+        if value is not None and not _ENV_NAME.fullmatch(value):
+            raise ValueError("provider.api_key_env must be an environment variable name")
+        return value
 
     @field_validator("name")
     @classmethod

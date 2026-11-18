@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 from file_librarian import config as config_module
 from file_librarian.cli import EXIT_NOT_IMPLEMENTED, app
 from file_librarian.extractors.origin import WHERE_FROMS
-from tests._helpers import REPO_ROOT, mark_cloud_only, write_xattr
+from tests._helpers import REPO_ROOT, mark_cloud_only, planned, write_xattr
 
 runner = CliRunner()
 
@@ -60,12 +60,15 @@ def test_check_config_ok() -> None:
     assert "Finance" in result.stdout
 
 
-def test_check_config_warns_about_planned_provider(tmp_path: Path) -> None:
+def test_check_config_warns_about_planned_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    planned(monkeypatch, "fake")
     cfg = tmp_path / "config.yaml"
-    cfg.write_text("provider: {name: ollama, model: x}\n", encoding="utf-8")
+    cfg.write_text("provider: {name: fake, model: x}\n", encoding="utf-8")
     result = runner.invoke(app, ["check-config", "-c", str(cfg)])
     assert result.exit_code == 0
-    assert "planned for M3" in result.stderr
+    assert "planned for M9" in result.stderr
 
 
 def test_check_config_warns_about_inactive_option(
@@ -193,14 +196,15 @@ def test_simulate_run_and_undo_end_to_end(downloads: Path, tmp_path: Path) -> No
     assert "nothing left to undo" in again.stderr
 
 
-def test_run_with_unimplemented_provider_fails_cleanly(downloads: Path, tmp_path: Path) -> None:
+def test_run_with_unimplemented_provider_fails_cleanly(
+    downloads: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    planned(monkeypatch, "fake")
     cfg = tmp_path / "config.yaml"
-    cfg.write_text(
-        f"inputs: [{downloads}]\nprovider: {{name: ollama, model: x}}\n", encoding="utf-8"
-    )
+    cfg.write_text(f"inputs: [{downloads}]\nprovider: {{name: fake, model: x}}\n", "utf-8")
     result = runner.invoke(app, ["run", "-c", str(cfg)])
     assert result.exit_code == 1
-    assert "planned for M3" in result.stderr
+    assert "planned for M9" in result.stderr
 
 
 def test_simulate_lists_cloud_only_files(

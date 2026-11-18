@@ -41,7 +41,29 @@ DEFAULT_SAMPLE = 30
 MAX_ITEM_BYTES = 20 * 1024 * 1024
 """Larger files and folders are left out of the trial: copying them takes too long."""
 MAX_UNIT_ENTRIES = 500
-DEFAULT_MODELS = {"anthropic": "claude-haiku-5-5", "claude-code": "haiku"}
+DEFAULT_MODELS = {
+    "anthropic": "claude-haiku-5-5",
+    "claude-code": "haiku",
+    "openai-compat": "gpt-5-mini",
+    "ollama": "llama3.2",
+}
+OPENAI_COMPAT_URL = "https://api.openai.com/v1"
+"""What ``init`` suggests for ``openai-compat``; any compatible server works."""
+OLLAMA_PROBE_SECONDS = 1.0
+
+
+def probe_ollama() -> list[str] | None:
+    """The models a local Ollama has pulled, or ``None`` when it does not answer.
+
+    One ``GET /v1/models`` to this Mac, with no file content; used by ``init`` to
+    offer Ollama only when it is there.
+    """
+    from file_librarian.providers import ProviderError, ollama
+
+    try:
+        return ollama.installed_models(timeout=OLLAMA_PROBE_SECONDS)
+    except ProviderError:
+        return None
 
 
 def detect_language(environ: Mapping[str, str] | None = None) -> Language:
@@ -79,10 +101,14 @@ class Answers:
     vision: bool = False
     command: Path | None = None
     """The ``claude`` executable, when the daily run would not find it on its own."""
+    model_name: str | None = None
+    """The model, when it was asked for (``openai-compat``, ``ollama``)."""
+    base_url: str | None = None
+    """``openai-compat``: the server's API root."""
 
     @property
     def model(self) -> str:
-        return DEFAULT_MODELS.get(self.provider, "offline")
+        return self.model_name or DEFAULT_MODELS.get(self.provider, "offline")
 
 
 def _q(value: str) -> str:
@@ -97,6 +123,14 @@ def render_config(answers: Answers) -> str:
         if answers.command is not None
         else ""
     )
+    if answers.base_url is not None:
+        command += f"\n  base_url: {_q(answers.base_url)}"
+    if answers.provider == "openai-compat":
+        command += (
+            "\n  # US$ per million tokens; while both are 0 the cost cap below cannot stop a run"
+            "\n  price_input_per_mtok: 0"
+            "\n  price_output_per_mtok: 0"
+        )
     return f"""\
 # file-librarian configuration, written by `flib init`.
 # Everything not set here has a default; config.example.yaml in the repository
@@ -118,6 +152,9 @@ review_folder: {_q(answers.review_folder)}
 provider:
   # anthropic: the Anthropic API, key in the macOS Keychain (`flib key set`)
   # claude-code: your Claude subscription through the Claude Code CLI, no key
+  # ollama: a local model through Ollama, nothing leaves this Mac
+  # openai-compat: any OpenAI-compatible API at base_url
+  #   (key: `flib key set --provider openai-compat`)
   name: {answers.provider}
   model: {answers.model}{command}
 
@@ -127,7 +164,8 @@ limits:
 vision:
   # true sends images (shrunk, without EXIF or GPS metadata) and the first pages
   # of scanned PDFs to the model; false classifies them from name and metadata.
-  # Has no effect with claude-code.
+  # Has no effect with claude-code; ollama and openai-compat also need
+  # provider.vision: true, and read images only.
   enabled: {"true" if answers.vision else "false"}
 
 schedule:

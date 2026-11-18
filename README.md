@@ -41,7 +41,9 @@ commands keep these guarantees:
   installs Python 3.11+ for you
 - An Anthropic API key for the default provider, or
   [Claude Code](https://code.claude.com) logged in to your Claude
-  subscription for the `claude-code` provider
+  subscription for the `claude-code` provider, or
+  [Ollama](https://ollama.com) with a model pulled for the `ollama` provider,
+  or any OpenAI-compatible API for `openai-compat`
 
 ## Install
 
@@ -59,8 +61,11 @@ Every question has a default, so pressing Enter all the way gives a working
 setup (`flib init --yes` takes them all without asking):
 
 - **Provider:** `claude-code` when Claude Code is installed and logged in
-  (nothing more to set up), otherwise `anthropic`, and then it offers to store
-  your API key in the Keychain (typed hidden, never shown).
+  (nothing more to set up), then `ollama` when Ollama is running on this Mac
+  with a model pulled (it is offered only then, and the trial checks the model
+  is there), otherwise `anthropic`, and then it offers to store your API key in
+  the Keychain (typed hidden, never shown). `openai-compat` is always offered:
+  it asks for the server's URL and the model, and offers to store a key.
 - **Configuration:** written to `~/.config/file-librarian/config.yaml` (or
   `--config PATH`), readable only by you. If one exists, it is kept unless you
   confirm replacing it (`--force` replaces it without asking).
@@ -80,7 +85,7 @@ To set it up by hand instead:
 ```sh
 mkdir -p ~/.config/file-librarian
 cp config.example.yaml ~/.config/file-librarian/config.yaml
-flib key set              # stores your Anthropic API key in the macOS Keychain
+flib key set              # stores your API key in the macOS Keychain (anthropic, openai-compat)
 flib check-config         # validates the configuration and finds the key
 flib simulate             # shows what would happen; nothing moves
 ```
@@ -112,9 +117,15 @@ everything is filed under the last category, offline.
 
 `provider.api_key_source: auto` (the default) uses the first it finds:
 
-1. `ANTHROPIC_API_KEY` in the environment;
+1. `ANTHROPIC_API_KEY` in the environment (for `openai-compat`, the variable
+   below);
 2. the macOS Keychain (`flib key set`; `flib key status` shows which is used);
 3. the `.env` file named by `provider.env_file`, if you set one.
+
+Each provider keeps its own key: `flib key set --provider openai-compat`
+stores the `openai-compat` key in a separate Keychain entry, so it never
+replaces the Anthropic one (`flib key set`, `status` and `delete` act on the
+configured provider's key when `--provider` is not given).
 
 Scheduled runs don't see your shell's environment, so the Keychain is the
 easiest choice for them. Set `api_key_source` to `environment`, `keychain` or
@@ -154,6 +165,71 @@ Scheduled runs have a minimal PATH. flib also looks in the usual install
 folders (`~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`,
 `/usr/local/bin`); if yours is elsewhere, `flib schedule` tells you to set
 `provider.command` to the path it found in your shell.
+
+### A local model with Ollama (`ollama`)
+
+With [Ollama](https://ollama.com) running on your Mac, files are classified by
+a model on your own machine: nothing leaves it, and there is no key and no bill.
+
+```yaml
+provider:
+  name: ollama
+  model: llama3.2            # any model you have pulled: `ollama pull llama3.2`
+  # base_url: http://localhost:11434/v1   # the default
+  timeout_seconds: 120       # local models can be slow on the first file
+```
+
+`flib check-config` asks Ollama for its model list (no file content is sent)
+and tells you if it is not running (`ollama serve`) or the model is not pulled.
+Small models make more mistakes than Claude: try `flib simulate` first and
+keep `limits.confidence_threshold` where it is, so doubtful files go to review.
+
+What being local changes, precisely: requests are not spaced by
+`provider.requests_per_minute`, and loopback requests skip any HTTP proxy.
+Nothing else is relaxed: files matching `never_send` still send only their
+metadata, and files with credential names or secrets in them are still never
+sent at all, even though the model is on your Mac. If you point `base_url` at
+another machine, flib treats it as remote (with rate limiting) and
+`flib check-config` warns that file content leaves your Mac.
+
+### Any OpenAI-compatible API (`openai-compat`)
+
+Any server that speaks the OpenAI Chat Completions API works: OpenAI,
+OpenRouter, Groq, vLLM, LM Studio, llama.cpp's server and others.
+
+```yaml
+provider:
+  name: openai-compat
+  base_url: https://api.openai.com/v1   # required: the part before /chat/completions
+  model: gpt-5-mini
+  price_input_per_mtok: 0.25            # US$ per million tokens, from your provider's price list
+  price_output_per_mtok: 2.00
+  # api_key_env: OPENAI_API_KEY         # default: FLIB_OPENAI_COMPAT_API_KEY
+  # vision: true                        # the model reads images (also needs vision.enabled)
+```
+
+- **Key:** optional (a local server usually needs none). It comes from the
+  environment variable `FLIB_OPENAI_COMPAT_API_KEY`, or the one
+  `provider.api_key_env` names, then the Keychain (`flib key set --provider
+  openai-compat`), then `provider.env_file`. `OPENAI_API_KEY` is not read
+  unless you name it in `api_key_env`, so a key you set for other tools never
+  goes to a server you did not pair it with.
+- **Cost:** flib cannot know your server's prices. With
+  `price_input_per_mtok` and `price_output_per_mtok` left at 0, every file
+  counts as free and **`limits.max_cost_usd_per_run` cannot stop a run**;
+  `flib check-config` warns about it for a remote server. `limits.max_files_per_run`
+  still caps how many files a run sends.
+- **Answers:** flib asks for structured output with a JSON schema. A server
+  that rejects that is asked again with plain JSON mode and the schema in the
+  instructions, and flib keeps using JSON mode for the rest of the run. Every
+  answer is validated the same way: a category outside your list fails the
+  file.
+- **Images:** sent only with `provider.vision: true` and `vision.enabled`.
+  Scanned PDFs are never sent to this provider; they are classified from their
+  metadata.
+- **Where data goes:** only to `base_url`. Redirects are refused, user names
+  or passwords in the URL are rejected (use the Keychain), and `flib
+  check-config` warns about `http://` to another machine.
 
 ## Commands
 
@@ -259,7 +335,9 @@ new PDF, which is sent as a document. Because the model then sees the content,
 these files can be renamed like any document (`IMG_4512.HEIC` becomes, say,
 `2026-11-02_beach-at-sunset.HEIC`). If an image cannot be converted, or the
 provider cannot read images, the file is classified from its metadata as with
-vision off. Answers given with vision are cached apart from answers without
+vision off. `anthropic` reads images and scanned PDFs; `ollama` and
+`openai-compat` read images only, and only with `provider.vision: true` (set it
+when the model is a vision model); `claude-code` reads neither. Answers given with vision are cached apart from answers without
 it, so turning it on or off never reuses the other kind.
 
 **Estimated cost** on the default model (Claude Haiku 5.5, US$0.10 per
@@ -386,11 +464,15 @@ Two kinds of files are treated differently:
   only that it is sensitive.
 
 With `claude-code` the same goes to Anthropic through the `claude` CLI, except
-images and PDF pages, which it never sends.
+images and PDF pages, which it never sends. With `openai-compat` it goes to
+the server at `provider.base_url`, except PDF pages, which it never sends.
+
+With `ollama` on this Mac (the default `base_url`), nothing leaves the
+machine. The same rules still apply: `never_send` files send only their
+metadata to the local model and sensitive files send nothing.
 
 The index and the logs stay on your Mac. The MCP server sends an assistant
-only what `flib search` would show you, never file content. A local provider (Ollama) is planned
-for M3, for anyone who wants nothing to leave the machine.
+only what `flib search` would show you, never file content.
 
 ## Troubleshooting
 

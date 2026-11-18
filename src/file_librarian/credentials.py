@@ -1,13 +1,25 @@
-"""Where the Anthropic API key comes from (``provider.api_key_source``).
+"""Where a provider's API key comes from (``provider.api_key_source``).
+
+Two providers take a key, each with its own variable and Keychain account
+(``KeySpec``), so one never picks up the other's:
+
+- ``anthropic``: ``ANTHROPIC_API_KEY``, Keychain account ``anthropic-api-key``;
+- ``openai-compat``: ``provider.api_key_env``, else ``FLIB_OPENAI_COMPAT_API_KEY``,
+  Keychain account ``openai-compat-api-key``.
+
+``openai-compat`` does not read ``OPENAI_API_KEY`` unless ``api_key_env`` names
+it: the key goes to whatever ``base_url`` says, and an OpenAI key set for other
+tools must not reach another server by accident.
 
 ``auto`` (the default) tries, in order:
 
-1. the ``ANTHROPIC_API_KEY`` environment variable;
+1. the environment variable;
 2. the macOS Keychain (``flib key set`` stores it there);
-3. the ``.env`` file named by ``provider.env_file``, if set.
+3. the ``.env`` file named by ``provider.env_file``, if set (same variable name).
 
-When none has a key, the Anthropic SDK's own resolution still applies (for
-example an ``ant auth login`` profile). Keys are never logged or printed.
+For ``anthropic``, when none has a key, the SDK's own resolution still applies
+(for example an ``ant auth login`` profile). For ``openai-compat`` the key is
+optional: a local server usually needs none. Keys are never logged or printed.
 """
 
 from __future__ import annotations
@@ -21,6 +33,36 @@ from file_librarian import keychain
 from file_librarian.config import ProviderConfig
 
 ENV_VAR = "ANTHROPIC_API_KEY"
+OPENAI_COMPAT_ENV_VAR = "FLIB_OPENAI_COMPAT_API_KEY"
+
+
+@dataclass(frozen=True, slots=True)
+class KeySpec:
+    """Where one provider's key lives."""
+
+    provider: str
+    env_var: str
+    account: str
+    label: str
+    """How the key is named to the user, e.g. "Anthropic API key"."""
+
+
+def key_spec(config: ProviderConfig) -> KeySpec | None:
+    """The key ``config``'s provider uses, or ``None`` when it takes no key."""
+    return spec_for(config.name, config.api_key_env)
+
+
+def spec_for(provider: str, api_key_env: str | None = None) -> KeySpec | None:
+    if provider == "anthropic":
+        return KeySpec(provider, ENV_VAR, keychain.ACCOUNT, "Anthropic API key")
+    if provider == "openai-compat":
+        return KeySpec(
+            provider,
+            api_key_env or OPENAI_COMPAT_ENV_VAR,
+            keychain.OPENAI_COMPAT_ACCOUNT,
+            "openai-compat API key",
+        )
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,21 +103,35 @@ def env_file_is_private(path: Path) -> bool:
         return True
 
 
-def resolve(config: ProviderConfig) -> ResolvedKey:
+def all_specs(config: ProviderConfig) -> list[KeySpec]:
+    """Every provider's key, ``config``'s own first; for redacting them all."""
+    specs = [key_spec(config), spec_for("anthropic"), spec_for("openai-compat")]
+    found: list[KeySpec] = []
+    for spec in specs:
+        if spec is not None and all(s.provider != spec.provider for s in found):
+            found.append(spec)
+    return found
+
+
+def resolve(config: ProviderConfig, spec: KeySpec | None = None) -> ResolvedKey:
+    """The key for ``spec`` (default: ``config``'s provider's), as ``api_key_source`` says."""
+    spec = spec or key_spec(config)
+    if spec is None:
+        return ResolvedKey(None, "none")
     source = config.api_key_source
     if source in ("auto", "environment"):
-        value = os.environ.get(ENV_VAR, "").strip()
+        value = os.environ.get(spec.env_var, "").strip()
         if value:
             return ResolvedKey(value, "environment")
     if source in ("auto", "keychain"):
         try:
-            value = keychain.read() or ""
+            value = keychain.read(spec.account) or ""
         except keychain.KeychainError:
             value = ""
         if value:
             return ResolvedKey(value, "keychain")
     if source in ("auto", "env_file") and config.env_file is not None:
-        value = read_env_file(config.env_file) or ""
+        value = read_env_file(config.env_file, spec.env_var) or ""
         if value:
             return ResolvedKey(value, "env_file")
     return ResolvedKey(None, "none")

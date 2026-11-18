@@ -388,3 +388,13 @@ class FakeClient:
         if isinstance(item, Exception):
             raise item
         return item
+
+
+def planned(monkeypatch: pytest.MonkeyPatch, name: str, milestone: str = "M9") -> None:
+    """Pretend provider ``name`` is accepted by the configuration but not implemented yet."""
+    from file_librarian import providers
+
+    registry = {k: v for k, v in providers.REGISTRY.items() if k != name}
+    monkeypatch.setattr(providers, "REGISTRY", registry)
+    monkeypatch.setattr(providers, "PLANNED", {name: milestone})
+    monkeypatch.setattr("file_librarian.cli.PLANNED", {name: milestone})
