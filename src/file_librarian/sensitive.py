@@ -25,7 +25,9 @@ SENSITIVE_NAMES = (
     "credentials", "credentials.json", "*credentials*.json", "service-account*.json",
 )  # fmt: skip
 
-_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+# (kind, pattern) pairs. Public so the diagnostics report (doctor.py) redacts the same
+# secrets this module detects; callers report the kind, never the matched value.
+SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("private key", re.compile(r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY(?: BLOCK)?-----")),
     ("AWS access key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
     ("GitHub token", re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_\w{40,})")),
@@ -56,7 +58,7 @@ def sensitive_name(name: str) -> bool:
 
 def find_secrets(text: str) -> list[str]:
     """Kinds of secrets found in ``text``, in a stable order, without the values."""
-    return [kind for kind, pattern in _PATTERNS if pattern.search(text)]
+    return [kind for kind, pattern in SECRET_PATTERNS if pattern.search(text)]
 
 
 def withheld_by_config(name: str, never_send: Iterable[str]) -> bool:

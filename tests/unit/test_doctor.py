@@ -23,6 +23,7 @@ from file_librarian.cli import app
 from file_librarian.config import load_config
 from file_librarian.doctor import Options, Redactor, build_report
 from file_librarian.runlog import logs_dir, write_log
+from file_librarian.sensitive import SECRET_PATTERNS, find_secrets
 from tests._helpers import put
 
 runner = CliRunner()
@@ -191,6 +192,21 @@ def test_free_text_rules() -> None:
     assert r.text("/a/b/src/file_librarian/cli.py") == "<src>/file_librarian/cli.py"
     assert r.log_line("# flib run 3 finished 2026-01-01T00:00:00+00:00").startswith("# flib run 3")
     assert Redactor(home=Path("/u/ab")).text("ab") == "ab"  # short account names stay
+
+
+def test_the_report_redacts_every_kind_of_secret_the_scanner_detects() -> None:
+    # Built at run time so no real-looking token sits in the source.
+    samples = {
+        "GitHub token": "ghp_" + "a1" * 18,
+        "Slack token": "xoxb-" + "1234567890",
+        "Stripe key": "sk_live_" + "b2" * 10,
+        "Anthropic API key": "sk-ant-" + "c3" * 10,
+    }
+    r = Redactor(home=Path("/Users/someone"))
+    for kind, value in samples.items():
+        assert find_secrets(f"token {value} here") == [kind]
+        assert r.secrets_and_contacts(f"token {value} here") == f"token <secret: {kind}> here"
+    assert {kind for kind, _ in SECRET_PATTERNS} >= samples.keys()
 
 
 def test_cli_writes_a_private_report_in_the_logs_folder(fake_home: Path, downloads: Path) -> None:
