@@ -88,6 +88,8 @@ class FileRow:
     name_choice: str | None = None
     """``original`` or ``proposed`` (#59); ``None`` when no rename was considered."""
     name_choice_reason: str | None = None
+    confidence: float | None = None
+    """The model's confidence in its answer; ``None`` if it was not classified."""
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> FileRow:
@@ -112,6 +114,7 @@ class FileRow:
             is_unit=bool(row["is_unit"]),
             name_choice=row["name_choice"],
             name_choice_reason=row["name_choice_reason"],
+            confidence=None if row["confidence"] is None else float(row["confidence"]),
         )
 
 
@@ -157,6 +160,56 @@ class OperationRow:
             copy_key=row["copy_key"],
             copy_volumes=(row["copy_src_dev"], row["copy_dst_dev"]),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class RunRow:
+    """A row of ``runs`` as read back."""
+
+    id: int
+    trigger: RunTrigger
+    started_at: str
+    finished_at: str | None
+    files_seen: int | None
+    files_moved: int | None
+    files_review: int | None
+    errors: int | None
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> RunRow:
+        return cls(
+            id=int(row["id"]),
+            trigger=RunTrigger(row["trigger"]),
+            started_at=str(row["started_at"]),
+            finished_at=row["finished_at"],
+            files_seen=row["files_seen"],
+            files_moved=row["files_moved"],
+            files_review=row["files_review"],
+            errors=row["errors"],
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class HistoryRow:
+    """One journaled move of a file, with what started it."""
+
+    operation: OperationRow
+    trigger: RunTrigger
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class LibraryStats:
+    """Counts over the whole index (the MCP ``get_stats`` tool)."""
+
+    by_status: dict[str, int]
+    """Every status, zero included."""
+    by_category: dict[str, int]
+    """Organized files per category, most first."""
+    filed_bytes: int
+    """Indexed size of the files flib filed: organized or in review."""
+    last_run: RunRow | None
+    """The newest finished run that was not a single-file ``flib fix``."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -397,6 +450,7 @@ class Store:
         extensions: Sequence[str] = (),
         since: str | None = None,
         until: str | None = None,
+        statuses: Sequence[FileStatus] = (),
         limit: int,
     ) -> list[FileRow]:
         """Rows matching an FTS5 query and the filters.
@@ -417,6 +471,9 @@ class Store:
         if extensions:
             where.append(f"lower(f.extension) IN ({', '.join('?' * len(extensions))})")
             params.extend(extensions)
+        if statuses:
+            where.append(f"f.status IN ({', '.join('?' * len(statuses))})")
+            params.extend(s.value for s in statuses)
         if since is not None:
             where.append("f.processed_at >= ?")
             params.append(since)
@@ -443,6 +500,34 @@ class Store:
             "SELECT DISTINCT category FROM files WHERE category IS NOT NULL ORDER BY category"
         )
         return [str(r[0]) for r in rows]
+
+    def stats(self) -> LibraryStats:
+        by_status = dict.fromkeys((s.value for s in FileStatus), 0)
+        for row in self.conn.execute("SELECT status, COUNT(*) FROM files GROUP BY status"):
+            by_status[str(row[0])] = int(row[1])
+        by_category = {
+            str(row[0]): int(row[1])
+            for row in self.conn.execute(
+                """SELECT category, COUNT(*) FROM files
+                   WHERE status = 'organized' AND category IS NOT NULL
+                   GROUP BY category ORDER BY COUNT(*) DESC, category"""
+            )
+        }
+        filed = self.conn.execute(
+            "SELECT COALESCE(SUM(size_bytes), 0) FROM files WHERE status IN ('organized', 'review')"
+        ).fetchone()[0]
+        last = self.conn.execute(
+            """SELECT * FROM runs r WHERE finished_at IS NOT NULL
+                 AND NOT EXISTS (SELECT 1 FROM operations o
+                                 WHERE o.run_id = r.id AND o.fix_status IS NOT NULL)
+               ORDER BY id DESC LIMIT 1"""
+        ).fetchone()
+        return LibraryStats(
+            by_status=by_status,
+            by_category=by_category,
+            filed_bytes=int(filed),
+            last_run=None if last is None else RunRow.from_row(last),
+        )
 
     # --- classification cache --------------------------------------------------------
 
@@ -578,6 +663,19 @@ class Store:
             (file_id,),
         ).fetchone()
         return None if row is None else OperationRow.from_row(row)
+
+    def file_history(self, file_id: int, *, limit: int) -> list[HistoryRow]:
+        """The file's journaled moves, newest first, at most ``limit``."""
+        rows = self.conn.execute(
+            """SELECT o.*, r.trigger AS run_trigger FROM operations o
+               JOIN runs r ON r.id = o.run_id
+               WHERE o.file_id = ? ORDER BY o.id DESC LIMIT ?""",
+            (file_id, limit),
+        )
+        return [
+            HistoryRow(OperationRow.from_row(r), RunTrigger(r["run_trigger"]), str(r["created_at"]))
+            for r in rows
+        ]
 
     def last_finder_tag(self, file_id: int) -> str | None:
         """The Finder tag of the newest move still in effect that added one."""

@@ -23,7 +23,7 @@ from mcp.client.stdio import StdioServerParameters
 from mcp_types import CallToolResult
 from typer.testing import CliRunner
 
-from file_librarian import pipeline
+from file_librarian import mcp_server, pipeline
 from file_librarian.cli import app
 from file_librarian.config import Config
 from file_librarian.db.store import Store
@@ -42,6 +42,8 @@ from tests._helpers import (
 )
 
 pytestmark = pytest.mark.integration
+
+READ_TOOLS = {"search_files", "get_file", "list_recent", "list_review", "get_stats"}
 
 SECRET = "token = " + "ghp_" + "a" * 36
 
@@ -104,13 +106,19 @@ def runs(cfg: Config) -> list[tuple[int, str]]:
 
 def test_every_tool_has_a_description_and_schemas(cfg: Config) -> None:
     tools = tool_names(cfg)
-    assert set(tools) == {"search_files", "get_file", *WRITE_TOOLS}
+    assert set(tools) == {*READ_TOOLS, *WRITE_TOOLS}
     for tool in tools.values():
         assert len(tool.description) > 40
         assert tool.input_schema["type"] == "object"
         assert tool.output_schema["type"] == "object"
         for spec in tool.input_schema["properties"].values():
             assert spec["description"]
+    for name in READ_TOOLS:
+        assert tools[name].annotations.read_only_hint is True
+        if name != "get_stats":  # counts only, no names or descriptions
+            assert "untrusted" in tools[name].description
+    assert "Finance" in tools["list_recent"].input_schema["properties"]["category"]["description"]
+    assert {"history", "history_truncated"} <= set(tools["get_file"].output_schema["properties"])
     assert "required" not in tools["search_files"].input_schema  # a filter alone is enough
     filters = tools["search_files"].input_schema["properties"]
     assert {"categories", "extensions", "since", "until"} <= set(filters)
@@ -125,7 +133,7 @@ def test_every_tool_has_a_description_and_schemas(cfg: Config) -> None:
 def test_read_only_hides_the_write_tools(downloads: Path) -> None:
     cfg = fake_config(downloads, mcp={"read_only": True})
     organize(downloads, cfg, {"bill.txt": (b"electricity bill", answer("Other"))})
-    assert set(tool_names(cfg)) == {"search_files", "get_file"}
+    assert set(tool_names(cfg)) == READ_TOOLS
     target = library(downloads) / "Other" / "bill.txt"
     result = call(cfg, "recategorize_file", path=str(target), category="Finance")
     assert "Unknown tool" in error_text(result)
@@ -138,6 +146,9 @@ def test_bad_arguments_are_rejected_by_the_schema(cfg: Config) -> None:
     assert "give a query" in error_text(call(cfg, "search_files"))
     assert "not a date" in error_text(call(cfg, "search_files", since="yesterday"))
     assert "unknown category" in error_text(call(cfg, "search_files", categories=["Nope"]))
+    assert "unknown category" in error_text(call(cfg, "list_recent", category="Nope"))
+    assert "limit" in error_text(call(cfg, "list_recent", limit=0))
+    assert "limit" in error_text(call(cfg, "list_review", limit=1000))
 
 
 # --- Reading ---------------------------------------------------------------------------
@@ -145,7 +156,140 @@ def test_bad_arguments_are_rejected_by_the_schema(cfg: Config) -> None:
 
 def test_search_before_any_run_finds_nothing(cfg: Config) -> None:
     assert ok(call(cfg, "search_files", query="bill")) == {"files": []}
+    assert ok(call(cfg, "list_recent", category="finance")) == {"files": []}
+    review = ok(call(cfg, "list_review"))
+    assert (review["total"], review["files"]) == (0, [])
+    stats = ok(call(cfg, "get_stats"))
+    assert (stats["total_files"], stats["last_run"], stats["by_category"]) == (0, None, {})
+    assert stats["by_status"]["organized"] == 0
     assert not cfg.database.exists()  # a read never creates the library
+
+
+def test_list_recent_newest_first_and_by_category(downloads: Path, cfg: Config) -> None:
+    organize(downloads, cfg, {"bill.txt": (b"electricity bill", answer("Finance"))})
+    organize(
+        downloads,
+        cfg,
+        {
+            "notes.md": (b"meeting notes", answer("Other")),
+            "unsure.txt": (b"who knows", answer("Finance", confidence=0.2)),
+        },
+    )
+    with sqlite3.connect(cfg.database) as conn:  # the second run is later, whatever the clock
+        conn.execute("UPDATE files SET processed_at = '2026-01-01T00:00:00+00:00' WHERE id = 1")
+    recent = ok(call(cfg, "list_recent"))["files"]
+    # Only organized files: the one in review is listed by list_review.
+    assert [f["original_name"] for f in recent] == ["notes.md", "bill.txt"]
+    assert recent[1]["path"] == str(library(downloads) / "Finance" / "bill.txt")
+    assert recent[1]["description"] == "A finance document."
+    finance = ok(call(cfg, "list_recent", category="finance", limit=5))["files"]
+    assert [f["original_name"] for f in finance] == ["bill.txt"]
+    assert [f["original_name"] for f in ok(call(cfg, "list_recent", limit=1))["files"]] == [
+        "notes.md"
+    ]
+
+
+def test_list_review_shows_confidence(downloads: Path, cfg: Config) -> None:
+    organize(
+        downloads,
+        cfg,
+        {
+            "unsure.txt": (b"who knows", answer("Finance", confidence=0.2)),
+            "odd.txt": (b"odd", answer("Recipes", confidence=0.9)),  # not a configured category
+            "bill.txt": (b"electricity bill", answer("Finance")),
+        },
+    )
+    review = ok(call(cfg, "list_review"))
+    assert review["review_folder"] == cfg.review_folder
+    assert review["confidence_threshold"] == cfg.limits.confidence_threshold
+    assert review["total"] == 2
+    by_name = {f["original_name"]: f for f in review["files"]}
+    assert set(by_name) == {"unsure.txt", "odd.txt"}
+    assert by_name["unsure.txt"]["confidence"] == 0.2
+    assert by_name["odd.txt"]["confidence"] == 0.9
+    assert by_name["unsure.txt"]["status"] == "review"
+    assert by_name["unsure.txt"]["exists"] is True
+    assert cfg.review_folder in by_name["unsure.txt"]["path"]
+    limited = ok(call(cfg, "list_review", limit=1))
+    assert (limited["total"], len(limited["files"])) == (2, 1)
+
+
+def test_get_stats(downloads: Path, cfg: Config) -> None:
+    secret = downloads / "notes.txt"
+    secret.write_text(SECRET, encoding="utf-8")
+    make_old(secret)
+    organize(
+        downloads,
+        cfg,
+        {
+            "bill.txt": (b"electricity bill", answer("Finance")),
+            "tax.txt": (b"tax", answer("Finance")),
+            "memo.md": (b"memo", answer("Other")),
+            "unsure.txt": (b"who knows", answer("Finance", confidence=0.2)),
+        },
+    )
+    stats = ok(call(cfg, "get_stats"))
+    assert stats["total_files"] == 5
+    assert stats["by_status"] == {
+        "organized": 3,
+        "review": 1,
+        "skipped": 0,
+        "missing": 0,
+        "failed": 0,
+        "sensitive": 1,
+    }
+    assert stats["by_category"] == {"Finance": 2, "Other": 1}
+    assert stats["filed_size_bytes"] == len(b"electricity bill" + b"tax" + b"memo" + b"who knows")
+    last = stats["last_run"]
+    assert (last["trigger"], last["files_moved"], last["files_review"], last["errors"]) == (
+        "manual",
+        3,
+        1,
+        0,
+    )
+    assert last["finished_at"] is not None
+    # A fix is its own run but not "the last run".
+    memo = library(downloads) / "Other" / "memo.md"
+    fixed = ok(call(cfg, "recategorize_file", path=str(memo), category="Finance"))
+    after = ok(call(cfg, "get_stats"))
+    assert after["last_run"]["run_id"] == last["run_id"] != fixed["run_id"]
+    assert after["by_category"] == {"Finance": 3}
+    assert "ghp_" not in json.dumps(after)
+
+
+def test_get_file_history_newest_first(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    organize(downloads, cfg, {"bill.txt": (b"electricity bill", answer("Other"))})
+    first = library(downloads) / "Other" / "bill.txt"
+    [filed] = ok(call(cfg, "get_file", path=str(first)))["history"]
+    assert filed["from_path"] == str(downloads / "bill.txt")
+    assert filed["to_path"] == str(first)
+    assert (filed["by"], filed["trigger"], filed["change"], filed["status"]) == (
+        "run",
+        "manual",
+        "moved",
+        "done",
+    )
+    assert filed["category"] is None
+
+    renamed = ok(call(cfg, "recategorize_file", path=str(first), name="power"))
+    moved = ok(call(cfg, "recategorize_file", path=renamed["destination"], category="Finance"))
+    ok(call(cfg, "undo", run_id=moved["run_id"]))  # back to Other/power.txt
+    detail = ok(call(cfg, "get_file", path=renamed["destination"]))
+    history = detail["history"]
+    assert [(h["by"], h["trigger"], h["change"], h["status"]) for h in history] == [
+        ("fix", "mcp", "moved", "undone"),
+        ("fix", "mcp", "renamed", "done"),
+        ("run", "manual", "moved", "done"),
+    ]
+    assert history[0]["category"] == "Finance"
+    assert history[0]["run_id"] == moved["run_id"]
+    assert detail["history_truncated"] is False
+
+    monkeypatch.setattr(mcp_server, "MAX_HISTORY", 2)
+    capped = ok(call(cfg, "get_file", path=renamed["destination"]))
+    assert len(capped["history"]) == 2 and capped["history_truncated"] is True
 
 
 def test_search_filters(downloads: Path, cfg: Config) -> None:
@@ -251,9 +395,13 @@ def test_sensitive_files_never_show_their_text(downloads: Path, cfg: Config) -> 
     assert (hit["status"], hit["description"], hit["tags"]) == ("sensitive", None, [])
     detail = ok(call(cfg, "get_file", path=str(secret)))
     assert (detail["description"], detail["tags"], detail["source_urls"]) == (None, [], [])
+    assert ok(call(cfg, "get_file", path=str(secret)))["history"] == []  # it never moved
     for result in (
         call(cfg, "search_files", query="notes"),
         call(cfg, "get_file", path=str(secret)),
+        call(cfg, "list_recent"),
+        call(cfg, "list_review"),
+        call(cfg, "get_stats"),
     ):
         assert "ghp_" not in result.model_dump_json()
 
