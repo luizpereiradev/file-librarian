@@ -388,6 +388,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- The classification cache tells servers apart: answers from one
+  `openai-compat` or `ollama` server are no longer reused for another server
+  with the same model name (#71).
 - `flib reconcile` and `flib inspect` no longer download iCloud files that
   exist only in the cloud (#44). `reconcile` neither hashes such a file nor
   lists such a folder: as a match found elsewhere it does not count, and an

@@ -120,3 +120,20 @@ def test_no_cap() -> None:
     prov = ScriptedProvider([])
     result, _ = run([ctx(n) for n in "abcde"], prov, config(limits={"max_cost_usd_per_run": None}))
     assert len(prov.calls) == 5 and result.deferred == []
+
+
+def test_the_cache_key_tells_servers_apart() -> None:
+    from file_librarian.classifier import rules_key
+    from file_librarian.providers.fake import FakeProvider
+
+    provider = FakeProvider()
+
+    def key(**extra: Any) -> str:
+        cfg = fake_config(provider={"name": "openai-compat", "model": "m"} | extra)
+        return rules_key(provider, RULES, cfg)
+
+    one = key(base_url="http://127.0.0.1:8080/v1")
+    assert key(base_url="http://127.0.0.1:9090/v1") != one
+    assert key(base_url="https://llm.example.com/v1") != one
+    # Scheme and host ignore case; a trailing slash is already dropped by the config.
+    assert key(base_url="HTTP://127.0.0.1:8080/v1/") == one

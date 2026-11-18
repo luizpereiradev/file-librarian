@@ -37,6 +37,7 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from typing import Protocol
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import ValidationError
 
@@ -69,25 +70,36 @@ class AnswerCache(Protocol):
 def rules_key(provider: Provider, rules: Rules, config: Config) -> str:
     """Identify everything that shapes an answer; any change means a fresh one."""
     p = config.provider
+    shape: dict[str, object] = {
+        "v": PROMPT_VERSION,
+        "provider": provider.name,
+        "model": p.model,
+        "effort": p.effort,
+        "max_chars": p.max_chars_per_file,
+        "language": rules.language,
+        "date_order": rules.date_order,
+        "categories": [[c.name, c.hint] for c in rules.categories],
+        "examples": [
+            [e.field, e.old_value, e.new_value, e.extension, e.is_unit, e.description]
+            for e in rules.examples
+        ],
+    }
+    if p.base_url is not None:
+        # Two servers can serve models with the same name; their answers differ.
+        # Added only when set, so keys for providers without a URL don't change.
+        shape["base_url"] = _server(p.base_url)
     material = json.dumps(
-        {
-            "v": PROMPT_VERSION,
-            "provider": provider.name,
-            "model": p.model,
-            "effort": p.effort,
-            "max_chars": p.max_chars_per_file,
-            "language": rules.language,
-            "date_order": rules.date_order,
-            "categories": [[c.name, c.hint] for c in rules.categories],
-            "examples": [
-                [e.field, e.old_value, e.new_value, e.extension, e.is_unit, e.description]
-                for e in rules.examples
-            ],
-        },
+        shape,
         ensure_ascii=False,
         sort_keys=True,
     )
     return hashlib.sha256(material.encode()).hexdigest()
+
+
+def _server(url: str) -> str:
+    """The URL with its scheme and host in lower case (they ignore case)."""
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path, "", ""))
 
 
 def vision_key(text_key: str, config: Config) -> str:
