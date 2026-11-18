@@ -160,7 +160,7 @@ def _complete(
         name_change = (row.current_name, destination.name)
     warnings: list[str] = []
     if category_change is not None and config is not None:
-        warnings = _swap_tag(config, store, row.id, op_id, destination, *category_change)
+        warnings = swap_tag(config, store, row.id, op_id, destination, *category_change)
     with store.transaction():
         store.set_operation(op_id, OperationStatus.DONE, destination)
         store.relocate_file(row.id, destination, status, category)
@@ -178,7 +178,7 @@ def _complete(
     return category_change, name_change, warnings
 
 
-def _swap_tag(
+def swap_tag(
     config: Config, store: Store, file_id: int, op_id: int, path: Path, old: str | None, new: str
 ) -> list[str]:
     """The tag flib set for the old category goes; the new category's comes (RF-36).
@@ -187,7 +187,9 @@ def _swap_tag(
     """
     warnings = []
     old_tag = store.last_finder_tag(file_id)
-    if old_tag is not None and old_tag == old and (warning := untag_restored(path, old_tag)):
+    # Finder ignores case in tags, so a category renamed only in case still matches.
+    same = old_tag is not None and old is not None and old_tag.casefold() == old.casefold()
+    if same and old_tag is not None and (warning := untag_restored(path, old_tag)):
         warnings.append(warning)
     if config.finder_tags.enabled:
         added, warning = tag_moved(path, new)

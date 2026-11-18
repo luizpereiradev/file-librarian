@@ -93,3 +93,38 @@ def test_normalize_composes_decomposed_names() -> None:
     decomposed = unicodedata.normalize("NFD", "orçamento")
     assert decomposed != "orçamento"
     assert normalize(decomposed) == "orçamento"
+
+
+def test_migration_0009_keeps_runs_and_their_references(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "library.db"
+    before = [m for m in load_migrations() if m.version < 9]
+    monkeypatch.setattr("file_librarian.db.store.load_migrations", lambda: before)
+    with Store.open(path) as old:
+        file_id = insert_file(old, "a.pdf", "d")
+        old.conn.execute(
+            "INSERT INTO runs (id, mode, trigger, started_at) VALUES (2, 'run', 'mcp', 'x')"
+        )
+        old.conn.execute(
+            """INSERT INTO operations (run_id, file_id, src_path, dst_path, status, created_at)
+               VALUES (2, ?, '/in/a.pdf', '/out/a.pdf', 'done', 'x')""",
+            (file_id,),
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            old.conn.execute(
+                "INSERT INTO runs (mode, trigger, started_at) VALUES ('run', 'reprocess', 'x')"
+            )
+    monkeypatch.undo()
+    with Store.open(path) as store:
+        assert store.schema_version == len(load_migrations())
+        runs = store.conn.execute("SELECT id, trigger FROM runs ORDER BY id").fetchall()
+        assert [tuple(r) for r in runs] == [(1, "manual"), (2, "mcp")]
+        assert store.conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        [op] = store.operations()
+        assert op.previous is None and store.index_changes(2) == []
+        store.conn.execute(
+            "INSERT INTO runs (mode, trigger, started_at) VALUES ('run', 'reprocess', 'x')"
+        )
+        with pytest.raises(sqlite3.IntegrityError):  # references are still enforced
+            store.conn.execute("DELETE FROM runs WHERE id = 2")

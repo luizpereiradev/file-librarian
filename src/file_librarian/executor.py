@@ -16,10 +16,18 @@ The caller holds the instance lock. For each planned move:
    the journal entry so undo removes exactly that tag. A tag failure is only
    a warning: the move stands.
 
+``relocate`` does the same for files already in the library (``flib
+reprocess``, RF-37), as one run with trigger ``reprocess``: the index row is
+left as it is until the file is at its new place, and the entry carries the
+status and category the file gets there, so then the row, the entry and the
+Finder tags change together (or a failed move changes nothing).
+
 A crash between 1 and 5 leaves a ``planned`` entry that ``recover`` resolves
 at the start of the next run by looking at where the file actually is (for a
 copy, by its phase: see ``fsops.resume_copy``). An entry made by ``flib fix``
-is resolved as a whole fix (see ``fix``). Nothing is ever deleted, except the
+is resolved as a whole fix (see ``fix``); one made by ``flib reprocess`` is
+finished if the file reached its destination, and otherwise fails without
+touching the file's row. Nothing is ever deleted, except the
 source of a cross-volume move once its verified copy is in place.
 """
 
@@ -36,8 +44,8 @@ from pathlib import Path
 
 from file_librarian.config import Config
 from file_librarian.db.store import FileRow, OperationRow, Store
-from file_librarian.finder_tags import tag_moved
-from file_librarian.fix import complete_interrupted
+from file_librarian.finder_tags import tag_moved, untag_restored
+from file_librarian.fix import complete_interrupted, swap_tag
 from file_librarian.fsops import (
     CrossVolumeError,
     DestinationExistsError,
@@ -54,10 +62,12 @@ from file_librarian.fsops import (
 )
 from file_librarian.hashing import same_content, unit_manifest
 from file_librarian.models import (
+    Classification,
     CopyPhase,
     FileContext,
     FileRecord,
     FileStatus,
+    NameChoice,
     OperationStatus,
     RunMode,
     RunTrigger,
@@ -191,6 +201,164 @@ def _apply(
             store.set_file_identity(file_id, unit)
     warnings = [w for w in (kept, _tag(item, destination, config, store, op_id)) if w]
     return ItemResult(ctx.path, item.status, destination, item.reason, "; ".join(warnings) or None)
+
+
+@dataclass(frozen=True, slots=True)
+class Relocation:
+    """One file already in the library, and where ``flib reprocess`` files it now."""
+
+    file_id: int
+    context: FileContext
+    """The file where it is now, as checked when it was selected."""
+    destination: Path | None
+    """``None``, or its current path: it stays."""
+    status: FileStatus
+    """``organized`` or ``review`` at the destination."""
+    category: str | None
+    reason: str
+    answer: Classification | None = None
+    """The new classification, if one was asked for; its description and tags go to the index."""
+    name_choice: NameChoice | None = None
+    previous: tuple[FileStatus, str | None] | None = None
+    """The (status, category) the index had when it was planned; checked again before
+    anything changes, and given back by undo."""
+
+
+def relocate(
+    relocations: list[Relocation],
+    config: Config,
+    store: Store,
+    *,
+    run_id: int,
+    provider: str | None,
+    model: str | None,
+    deferred: int = 0,
+) -> RunReport:
+    """Move files already in the library, in the run ``run_id`` (trigger ``reprocess``).
+
+    The plan may be older than the lock (it was shown and confirmed first):
+    each item is applied only if its index row and the file itself are still
+    as planned.
+    """
+    report = RunReport(run_id, deferred=deferred)
+    for item in relocations:
+        report.items.append(_relocate_one(item, config, store, run_id, provider, model))
+    store.finish_run(
+        run_id,
+        seen=len(relocations),
+        moved=report.count(FileStatus.ORGANIZED, moved=True),
+        review=report.count(FileStatus.REVIEW, moved=True),
+        errors=report.errors,
+    )
+    return report
+
+
+def _relocate_one(
+    item: Relocation,
+    config: Config,
+    store: Store,
+    run_id: int,
+    provider: str | None,
+    model: str | None,
+) -> ItemResult:
+    ctx = item.context
+    record = _answer_record(item, provider, model)
+    row = store.file_by_id(item.file_id)
+    previous = (row.status, row.category)
+    if (row.current_path, row.sha256) != (ctx.path, ctx.sha256) or (
+        item.previous is not None and previous != item.previous
+    ):
+        return ItemResult(ctx.path, FileStatus.SKIPPED, None, "changed in the index since the plan")
+    if item.destination is None or item.destination == ctx.path:
+        if record is not None:
+            with store.transaction():
+                store.set_file_answer(item.file_id, record, run_id=run_id)
+        return ItemResult(ctx.path, item.status, None, item.reason)
+    identity = _unchanged(ctx)
+    if identity is None:
+        return ItemResult(ctx.path, FileStatus.SKIPPED, None, "changed since it was checked")
+    with store.transaction():
+        op_id = store.add_operation(
+            run_id,
+            item.file_id,
+            ctx.path,
+            item.destination,
+            identity=identity,
+            fix=(item.status, item.category),
+            previous=previous,
+        )
+    try:
+        ensure_folder(item.destination.parent, inside=config.output_root)
+        destination, kept = _move(ctx.path, item.destination, store, op_id, ctx.sha256)
+    except (OSError, ValueError) as exc:
+        # The file is still where it was, and so is its row.
+        with store.transaction():
+            store.set_operation(op_id, OperationStatus.FAILED)
+        return ItemResult(ctx.path, FileStatus.FAILED, None, f"move failed: {exc}"[:300])
+    warnings = finish_relocation(
+        config, store, op_id, item.file_id, destination, item.status, item.category, record
+    )
+    if kept:
+        warnings.insert(0, kept)
+    return ItemResult(ctx.path, item.status, destination, item.reason, "; ".join(warnings) or None)
+
+
+def _answer_record(item: Relocation, provider: str | None, model: str | None) -> FileRecord | None:
+    answer = item.answer
+    if answer is None:
+        return None
+    ctx = item.context
+    return FileRecord(
+        sha256=ctx.sha256,
+        original_path=ctx.path,
+        current_path=ctx.path,
+        status=item.status,
+        description=answer.description,
+        tags=tuple(answer.tags),
+        confidence=answer.confidence,
+        provider=provider,
+        model=model,
+        name_choice=item.name_choice,
+        name_choice_reason=answer.name_choice_reason if item.name_choice else None,
+    )
+
+
+def finish_relocation(
+    config: Config | None,
+    store: Store,
+    op_id: int,
+    file_id: int,
+    destination: Path,
+    status: FileStatus,
+    category: str | None,
+    record: FileRecord | None = None,
+) -> list[str]:
+    """Everything after a reprocess move: Finder tags, then the index and the journal.
+
+    The tag flib gave the old category goes and the new category's comes
+    (given ``config``); a tag is a convenience, so a failure is only a
+    warning. The entry stays ``planned`` until the row and the entry change
+    in one transaction, so a crash in between is finished by ``recover``
+    (doing the tags twice is harmless).
+    """
+    row = store.file_by_id(file_id)
+    warnings: list[str] = []
+    old = row.category if row.status is FileStatus.ORGANIZED else None
+    if config is not None and category != old:
+        if category is not None:
+            warnings = swap_tag(config, store, file_id, op_id, destination, old, category)
+        elif old is not None and store.last_finder_tag(file_id) == old:
+            warning = untag_restored(destination, old)
+            warnings = [warning] if warning else []
+    unit = unit_identity(destination, row.sha256) if row.is_unit else None
+    with store.transaction():
+        store.set_operation(op_id, OperationStatus.DONE, destination)
+        store.relocate_file(file_id, destination, status, category)
+        if record is not None:
+            store.set_file_answer(file_id, record, run_id=store.operation_by_id(op_id).run_id)
+        if unit is not None:
+            store.set_file_identity(file_id, unit)
+    return warnings
 
 
 def _require_safe_volume(src: Path, output_root: Path) -> None:
@@ -329,9 +497,28 @@ def _resolve(op: OperationRow, action: Callable[[], None]) -> int:
 def _recover_one(store: Store, op: OperationRow, config: Config | None) -> None:
     row = store.file_by_id(op.file_id)
     if op.copy_phase is not None and op.copy_key is not None:
-        _recover_copy(store, op, op.copy_phase, op.copy_key, row)
+        _recover_copy(store, op, op.copy_phase, op.copy_key, row, config)
     else:
         _recover_rename(store, op, row, config)
+
+
+def _reprocessed(store: Store, op: OperationRow) -> bool:
+    return op.fix is not None and store.run_trigger(op.run_id) is RunTrigger.REPROCESS
+
+
+def _settle_relocation(
+    store: Store, op: OperationRow, config: Config | None, final: Path | None
+) -> None:
+    """A reprocess move a crash cut off: finished if the file got there, else failed.
+
+    A failed one leaves the row as it was: the file never left its place.
+    """
+    if final is None or op.fix is None:
+        with store.transaction():
+            store.set_operation(op.id, OperationStatus.FAILED)
+        return
+    status, category = op.fix
+    finish_relocation(config, store, op.id, op.file_id, final, status, category)
 
 
 def _recover_rename(store: Store, op: OperationRow, row: FileRow, config: Config | None) -> None:
@@ -341,7 +528,9 @@ def _recover_rename(store: Store, op: OperationRow, row: FileRow, config: Config
     moved = has_exact_name(op.dst_path) and (
         _same_inode(op.dst_path, op.src_identity) or same_content(op.dst_path, row.sha256)
     )
-    if op.fix is not None:
+    if _reprocessed(store, op):
+        _settle_relocation(store, op, config, op.dst_path if moved else None)
+    elif op.fix is not None:
         complete_interrupted(config, store, op, moved=moved)
     elif moved:
         with store.transaction():
@@ -353,7 +542,14 @@ def _recover_rename(store: Store, op: OperationRow, row: FileRow, config: Config
             store.mark_file_failed(op.file_id, "interrupted before the move finished")
 
 
-def _recover_copy(store: Store, op: OperationRow, phase: CopyPhase, key: str, row: FileRow) -> None:
+def _recover_copy(
+    store: Store,
+    op: OperationRow,
+    phase: CopyPhase,
+    key: str,
+    row: FileRow,
+    config: Config | None = None,
+) -> None:
     final = resume_copy(
         op.src_path,
         op.dst_path,
@@ -363,6 +559,9 @@ def _recover_copy(store: Store, op: OperationRow, phase: CopyPhase, key: str, ro
         journal=_journal(store, op.id, key, op.src_path),
         volumes=op.copy_volumes,
     )
+    if _reprocessed(store, op):
+        _settle_relocation(store, op, config, final)
+        return
     unit = unit_identity(final, row.sha256) if final is not None and row.is_unit else None
     with store.transaction():
         if final is not None:

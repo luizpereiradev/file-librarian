@@ -51,6 +51,13 @@ model.
   crash, recovery finishes the whole fix (index, correction, Finder tag) if
   the file reached its destination, and otherwise fails the entry and leaves
   the file's row untouched.
+- A `flib reprocess` move (RF-37) is all or nothing in the same way: its
+  entry, in a run with trigger `reprocess`, records the status and category
+  the file gets, and the file's row is not touched until the file is at its
+  destination; then the row, the entry and the Finder tags change together.
+  After a crash, recovery finishes it if the file got there (including a
+  cross-volume copy finished by its phase) and otherwise fails the entry and
+  leaves the row as it was: the file is still in its old folder.
 - `flib undo` walks a run's operations in reverse, checks each file's hash, and
   skips (and lists) files that were edited or whose original path is taken.
 - A move to another volume (RF-33), where a rename is impossible, is copy,
@@ -162,13 +169,70 @@ One SQLite file, outside the organized folders (default
 | Table | Holds |
 | --- | --- |
 | `files` | one row per file: original and current name/path, hash, origin, category, description, tags, status, attempts |
-| `runs` | one row per `flib run`, with counts (simulations record none) |
-| `operations` | the journal behind `flib undo`, including the Finder tag each move added, the phase of a cross-volume copy in progress and, for `flib fix`, the status and category it sets |
+| `runs` | one row per `flib run`, `flib fix` or `flib reprocess`, with what started it (`trigger`: schedule, manual, mcp, reprocess) and counts (simulations record none) |
+| `operations` | the journal behind `flib undo`, including the Finder tag each move added, the phase of a cross-volume copy in progress, for `flib fix` and `flib reprocess` the status and category it sets and, for `flib reprocess`, the ones the file had before (undo gives those back) |
+| `index_changes` | what a run changed in the index without moving a file (a category renamed in rows and corrections, a Finder tag renamed in the journal, a new description, tags or confidence), reverted by `flib undo` with the run, and with one file by `flib undo --file` |
 | `corrections` | user recategorizations and renames (`flib fix`, `flib reconcile`); the latest per file and field, while still in effect, are sent as examples and are part of the cache key |
 | `files_fts` | FTS5 index over names, description and tags; accents ignored |
 
 Schema changes are new numbered files in `db/migrations/`; the applied version
 is `PRAGMA user_version`. Names and paths are stored in Unicode NFC.
+
+## Reprocessing
+
+`flib reprocess` (`reprocess.py`, RF-37) runs files already in the library
+through stages 2 to 5 again when the rules change: categories, hints,
+naming, the model. It never scans the input folders.
+
+1. **Select.** Index rows that are `organized` or in review and live inside
+   a folder of `output_root` (not through a symlink), narrowed by the search
+   filters. Each must still be at its recorded path with its indexed content
+   (otherwise: run `flib reconcile`); one only in iCloud is not read. Rows
+   `sensitive` are never selected, and a sensitive name or a `never_send`
+   match under the file's original name counts like one under its current
+   name.
+2. **Estimate.** Answers already in the classification cache are free; the
+   rest are priced from the prompt's length before anything is sent, and
+   the user is asked.
+3. **Classify and plan** with the same classifier (cache, cost cap,
+   sensitive check, `never_send`) and planner. A file's own name is free for
+   it, so a file whose answer did not change stays exactly where it is. A
+   file the provider is now unsure about stays in its category; one that
+   cannot be classified stays where it is. Corrections in effect are the
+   user's: a corrected category is kept, a corrected name is not renamed,
+   and a file with both is not even sent (`--override-corrections` lifts
+   this).
+4. **Apply** through `executor.relocate`: one run with trigger `reprocess`,
+   journaled and recovered as above, undone as a whole by `flib undo`, Finder
+   tags swapped as `flib fix` does. A new description, tags or confidence
+   is written only where it differs, journaled in `index_changes` so undo
+   gives the old ones back. The command first takes the instance lock just
+   long enough to finish any interrupted move (`recover`), so it plans on an
+   index that matches the disk. Steps 1 to 3 and both questions then run
+   without the instance lock, so an unanswered question never blocks a
+   scheduled run, but under a second lock of their own
+   (`flib-reprocess.lock`): two reprocesses never plan, and pay, at once.
+   The executor then checks each item again under the instance lock (its
+   index row, and the file's inode, size and modification time) and skips
+   what changed. File names are kept unless `--rename`; a file the
+   user put in a sub-folder of its category stays there unless its category
+   changes.
+
+A category that organized files still use but the configuration no longer
+lists is an *orphan*. Every command warns about it, and plain reprocessing
+refuses until an explicit migration ran: `--rename-category OLD NEW` moves
+the files to the new folder (no AI) and renames the category in the index
+and in past corrections, so they stay in effect; `--remove-category OLD`
+reclassifies its files among the remaining categories (unsure ones go to
+review), or with `--to-review` sends them all to review without asking
+anyone. The index side of a rename (rows that do not move, corrections, and
+for a rename that only changes case, which is the same folder on macOS, the
+organized rows and the Finder tags flib set) is written in `index_changes`
+with the run before any file moves, so `flib undo` reverts all of it, even
+after a crash in between; a rename run again after such a crash takes over
+what the first left, so one undo reverts both. The emptied folder is left in place; undo makes a
+missing folder inside `output_root` again. After a reprocess that changed
+nothing, plain `flib undo` refuses rather than reach back to an earlier run.
 
 ## The MCP server
 

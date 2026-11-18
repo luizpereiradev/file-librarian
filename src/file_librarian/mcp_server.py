@@ -171,8 +171,11 @@ class HistoryEntry(BaseModel):
 
     at: str = Field(description="When it was journaled (UTC, ISO 8601).")
     run_id: int = Field(description="The run it belongs to; undo with run_id reverts it.")
-    by: str = Field(description="'run' (a flib run filed it) or 'fix' (a correction).")
-    trigger: str = Field(description="What started it: schedule, manual or mcp.")
+    by: str = Field(
+        description="'run' (a flib run filed it), 'fix' (a correction) or 'reprocess' "
+        "(filed again after the rules changed)."
+    )
+    trigger: str = Field(description="What started it: schedule, manual, mcp or reprocess.")
     change: str = Field(description="'moved', 'renamed' or 'moved and renamed'.")
     status: str = Field(
         description="done, or undone if it was reverted since; planned, failed or skipped "
@@ -181,7 +184,7 @@ class HistoryEntry(BaseModel):
     from_path: str = Field(description="Where the file was.")
     to_path: str = Field(description="Where it went.")
     category: str | None = Field(
-        default=None, description="For a fix, the category it gave the file."
+        default=None, description="For a fix or a reprocess, the category it gave the file."
     )
 
 
@@ -213,7 +216,7 @@ class ReviewResult(BaseModel):
 
 class LastRun(BaseModel):
     run_id: int
-    trigger: str = Field(description="schedule, manual or mcp.")
+    trigger: str = Field(description="schedule, manual, mcp or reprocess.")
     started_at: str = Field(description="UTC, ISO 8601.")
     finished_at: str | None = Field(description="UTC, ISO 8601.")
     files_seen: int | None = Field(description="Files it looked at.")
@@ -536,7 +539,7 @@ def _history(entry: HistoryRow) -> HistoryEntry:
     return HistoryEntry(
         at=entry.created_at,
         run_id=op.run_id,
-        by="run" if op.fix is None else "fix",
+        by=_made_by(entry),
         trigger=entry.trigger.value,
         change=change,
         status=op.status.value,
@@ -544,6 +547,12 @@ def _history(entry: HistoryRow) -> HistoryEntry:
         to_path=str(op.dst_path),
         category=None if op.fix is None else op.fix[1],
     )
+
+
+def _made_by(entry: HistoryRow) -> str:
+    if entry.trigger is RunTrigger.REPROCESS:
+        return "reprocess"
+    return "run" if entry.operation.fix is None else "fix"
 
 
 def _last_run(run: RunRow) -> LastRun:

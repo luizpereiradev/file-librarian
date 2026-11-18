@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 LOCK_NAME = "flib.lock"
+REPROCESS_LOCK_NAME = "flib-reprocess.lock"
 
 
 class AlreadyRunningError(RuntimeError):
@@ -28,7 +29,29 @@ def lock_path(database: Path) -> Path:
 @contextmanager
 def instance_lock(database: Path) -> Iterator[None]:
     """Hold the lock for the duration of the block, or fail immediately."""
-    path = lock_path(database)
+    with _flock(
+        lock_path(database),
+        "another flib process (pid {pid}) is running; try again when it finishes",
+    ):
+        yield
+
+
+@contextmanager
+def reprocess_lock(database: Path) -> Iterator[None]:
+    """One ``flib reprocess`` at a time, from planning to the last move.
+
+    Separate from the instance lock, which a reprocess holds only to recover
+    and to apply: two reprocesses planning at once would both pay the provider.
+    """
+    with _flock(
+        database.parent / REPROCESS_LOCK_NAME,
+        "another flib reprocess (pid {pid}) is running; try again when it finishes",
+    ):
+        yield
+
+
+@contextmanager
+def _flock(path: Path, busy: str) -> Iterator[None]:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     try:
@@ -36,9 +59,7 @@ def instance_lock(database: Path) -> Iterator[None]:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             holder = os.pread(fd, 32, 0).decode(errors="replace").strip() or "unknown"
-            raise AlreadyRunningError(
-                f"another flib process (pid {holder}) is running; try again when it finishes"
-            ) from exc
+            raise AlreadyRunningError(busy.format(pid=holder)) from exc
         os.ftruncate(fd, 0)
         os.pwrite(fd, str(os.getpid()).encode(), 0)
         try:

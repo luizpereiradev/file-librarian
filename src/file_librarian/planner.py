@@ -22,11 +22,14 @@ This is where the model's answer stops being trusted. For each item:
 Every destination is ``output_root / <configured folder> / <safe name>``;
 ``_destination`` re-checks that before returning it. Names are unique against
 what is already on disk and earlier items in the same plan, compared the way
-APFS compares them. ``flib simulate`` stops after this stage.
+APFS compares them; an item's own current name is free for it, so a file
+``flib reprocess`` re-plans into the folder it is already in keeps its name.
+``flib simulate`` stops after this stage.
 """
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -73,11 +76,15 @@ class _Names:
     def __init__(self) -> None:
         self._taken: dict[Path, set[str]] = {}
 
-    def claim(self, folder: Path, name: str) -> str:
+    def claim(self, folder: Path, name: str, own: Path) -> str:
+        """A free name in ``folder``. ``own`` is where the item is now: its own
+        name is free for it (``flib reprocess`` re-plans files already in place)."""
         taken = self._taken.setdefault(folder, self._on_disk(folder))
+        mine = folder_key(own.name) if own.parent == folder else None
         for candidate in candidate_names(name):
-            if folder_key(candidate) not in taken:
-                taken.add(folder_key(candidate))
+            key = folder_key(candidate)
+            if key not in taken or key == mine:
+                taken.add(key)
                 return candidate
         raise UnsafeDestinationError(f"no free name for {name} in {folder}")
 
@@ -91,14 +98,24 @@ class _Names:
             raise UnsafeDestinationError(f"{folder} exists and is not a folder") from exc
 
 
-def plan(decisions: list[Decision], config: Config, *, today: date | None = None) -> Plan:
-    """Plan every decision. ``today`` names files that carry no other date."""
+def plan(
+    decisions: list[Decision],
+    config: Config,
+    *,
+    today: date | None = None,
+    keep_names: Collection[Path] = (),
+) -> Plan:
+    """Plan every decision. ``today`` names files that carry no other date.
+
+    Items at a path in ``keep_names`` are never renamed (``flib reprocess``:
+    a name the user chose).
+    """
     result = Plan()
     names = _Names()
     today = today or date.today()
     for decision in decisions:
         try:
-            item = _plan_one(decision, config, names, today)
+            item = _plan_one(decision, config, names, today, decision.context.path in keep_names)
         except (UnsafeDestinationError, OSError) as exc:
             # One odd item must never stop the run: it stays where it is.
             item = PlannedItem(
@@ -108,7 +125,9 @@ def plan(decisions: list[Decision], config: Config, *, today: date | None = None
     return result
 
 
-def _plan_one(decision: Decision, config: Config, names: _Names, today: date) -> PlannedItem:
+def _plan_one(
+    decision: Decision, config: Config, names: _Names, today: date, keep_name: bool
+) -> PlannedItem:
     ctx = decision.context
     if ctx.sensitive:
         reason = ctx.metadata.sensitive or "sensitive content"
@@ -130,7 +149,8 @@ def _plan_one(decision: Decision, config: Config, names: _Names, today: date) ->
     new_name = None
     choice: NameChoice | None = None
     if (
-        not ctx.is_unit
+        not keep_name
+        and not ctx.is_unit
         # a new name needs evidence from the content (text, or pixels the model saw)
         and (ctx.text or ctx.vision_used)
         and category.rename
@@ -185,7 +205,7 @@ def _destination(
         # A name that sanitizes to nothing (" ", "..."): give it a neutral one.
         safe = f"unnamed-{ctx.sha256[:8]}{split_name(file_name)[1]}"
     folder = config.output_root / folder_name
-    final = folder / names.claim(folder, safe)
+    final = folder / names.claim(folder, safe, ctx.path)
     if final.parent != folder or not final.is_relative_to(config.output_root):
         raise UnsafeDestinationError(f"{final} escapes {folder}")
     return final
