@@ -56,7 +56,7 @@ from file_librarian.models import FileStatus
 from file_librarian.runlog import logs_dir
 
 # The detection patterns of sensitive.py, reused to replace values instead of naming kinds.
-from file_librarian.sensitive import _PATTERNS as SECRET_PATTERNS
+from file_librarian.sensitive import SECRET_PATTERNS
 
 Format = Literal["text", "markdown"]
 
