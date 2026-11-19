@@ -33,10 +33,13 @@ class Outcome:
     """``None`` for a simulation."""
     recovered: int = 0
     cost_usd: float = 0.0
+    """Estimated provider cost; leaves out calls at unknown prices (see ``cost_known``)."""
     deferred: int = 0
     """Left for the next run: over ``max_files_per_run`` or the cost cap."""
     cached: int = 0
     """Classifications reused from an earlier simulate or run, at no cost."""
+    cost_known: bool = True
+    """False when the provider's prices are unknown; the run then records no cost."""
 
 
 def rules_for(config: Config, store: Store | None = None) -> Rules:
@@ -91,6 +94,7 @@ def _run(
             cost_usd=classified.cost_usd,
             deferred=deferred,
             cached=classified.cached,
+            cost_known=classified.cost_known,
         )
     report = execute(
         planned,
@@ -101,7 +105,15 @@ def _run(
         model=config.provider.model,
         seen=len(found.candidates),
         deferred=deferred,
+        cost_usd=classified.run_cost,
     )
     return Outcome(
-        found, planned, report, recovered, classified.cost_usd, deferred, classified.cached
+        found,
+        planned,
+        report,
+        recovered,
+        classified.cost_usd,
+        deferred,
+        classified.cached,
+        classified.cost_known,
     )

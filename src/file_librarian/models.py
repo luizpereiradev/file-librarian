@@ -61,6 +61,37 @@ class RunTrigger(StrEnum):
     """``flib reprocess``: files already in the library, filed again under new rules."""
 
 
+class ReviewReason(StrEnum):
+    """Why a file is in the review folder (``files.review_reason``)."""
+
+    LOW_CONFIDENCE = "low_confidence"
+    """The model's confidence was below ``limits.confidence_threshold``."""
+    UNKNOWN_CATEGORY = "unknown_category"
+    """The model chose a category the configuration does not have."""
+    CATEGORY_REMOVED = "category_removed"
+    """Its category was removed (``flib reprocess --remove-category --to-review``)."""
+    MOVED_BY_HAND = "moved_by_hand"
+    """``flib reconcile`` found it in the review folder, moved there outside flib."""
+
+
+def explain_review(
+    reason: ReviewReason | None, suggested: str | None, confidence: float | None
+) -> str:
+    """A review reason in words, for ``flib inspect`` and the MCP tools."""
+    if reason is ReviewReason.LOW_CONFIDENCE:
+        text = "the AI was not sure enough"
+        if confidence is not None:
+            text += f" (confidence {confidence:.2f})"
+        return text + (f"; it suggested {suggested}" if suggested else "")
+    if reason is ReviewReason.UNKNOWN_CATEGORY:
+        return f"the AI chose a category that is not configured: {suggested or '?'}"
+    if reason is ReviewReason.CATEGORY_REMOVED:
+        return "its category was removed from the configuration"
+    if reason is ReviewReason.MOVED_BY_HAND:
+        return "it was moved to the review folder outside flib"
+    return "unknown (filed before flib recorded review reasons)"
+
+
 @dataclass(frozen=True, slots=True)
 class FileState:
     """What the index knows about a content hash."""
@@ -243,6 +274,10 @@ class FileRecord:
     name_choice: NameChoice | None = None
     """The name choice the planner applied; ``None`` when no rename was considered."""
     name_choice_reason: str | None = None
+    review_reason: ReviewReason | None = None
+    """Why it goes to review; ``None`` unless ``status`` is ``review``."""
+    review_category: str | None = None
+    """The category the model suggested for a file in review, if any."""
 
 
 @dataclass(frozen=True, slots=True)

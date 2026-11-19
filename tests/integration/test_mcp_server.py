@@ -207,6 +207,22 @@ def test_list_review_shows_confidence(downloads: Path, cfg: Config) -> None:
     assert set(by_name) == {"unsure.txt", "odd.txt"}
     assert by_name["unsure.txt"]["confidence"] == 0.2
     assert by_name["odd.txt"]["confidence"] == 0.9
+    unsure, odd = by_name["unsure.txt"], by_name["odd.txt"]
+    assert (unsure["review_reason"], unsure["suggested_category"]) == ("low_confidence", "Finance")
+    assert unsure["review_explanation"].startswith("the AI was not sure enough (confidence 0.20)")
+    assert (odd["review_reason"], odd["suggested_category"]) == ("unknown_category", "Recipes")
+    detail = ok(call(cfg, "get_file", path=odd["path"]))
+    assert (detail["review_reason"], detail["suggested_category"]) == (
+        "unknown_category",
+        "Recipes",
+    )
+    assert detail["review_explanation"].endswith("not configured: Recipes")
+    bill = ok(call(cfg, "get_file", path=str(library(downloads) / "Finance" / "bill.txt")))
+    assert (bill["review_reason"], bill["suggested_category"], bill["review_explanation"]) == (
+        None,
+        None,
+        None,
+    )
     assert by_name["unsure.txt"]["status"] == "review"
     assert by_name["unsure.txt"]["exists"] is True
     assert cfg.review_folder in by_name["unsure.txt"]["path"]
@@ -248,6 +264,30 @@ def test_get_stats(downloads: Path, cfg: Config) -> None:
         0,
     )
     assert last["finished_at"] is not None
+    assert last["cost_usd"] == 0.0  # the fake provider costs nothing
+    assert (stats["cost_this_month_usd"], stats["runs_with_unknown_cost_this_month"]) == (0.0, 0)
+    with Store.open(cfg.database) as store:  # what earlier runs this month cost
+        store.conn.execute("UPDATE runs SET cost_usd = 0.75 WHERE id = ?", (last["run_id"],))
+        store.conn.execute(
+            """INSERT INTO runs (mode, trigger, started_at, finished_at, cost_usd)
+               VALUES ('run', 'schedule', '2020-01-01T00:00:00+00:00', '2020-01-01', 9.0)"""
+        )
+        store.conn.execute(
+            """INSERT INTO runs (mode, trigger, started_at, finished_at, cost_usd)
+               VALUES ('run', 'schedule', ?, ?, 0.25)""",
+            (last["started_at"], last["finished_at"]),
+        )
+    priced = ok(call(cfg, "get_stats"))
+    assert priced["cost_this_month_usd"] == pytest.approx(1.0)  # 2020 is not this month
+    assert priced["last_run"]["cost_usd"] == 0.25
+    with Store.open(cfg.database) as store:
+        store.conn.execute("UPDATE runs SET cost_usd = NULL WHERE trigger = 'schedule'")
+    unknown = ok(call(cfg, "get_stats"))
+    assert unknown["last_run"]["cost_usd"] is None
+    assert unknown["cost_this_month_usd"] == pytest.approx(0.75)
+    assert unknown["runs_with_unknown_cost_this_month"] == 1
+    with Store.open(cfg.database) as store:
+        store.conn.execute("DELETE FROM runs WHERE trigger = 'schedule'")
     # A fix is its own run but not "the last run".
     memo = library(downloads) / "Other" / "memo.md"
     fixed = ok(call(cfg, "recategorize_file", path=str(memo), category="Finance"))
@@ -283,6 +323,8 @@ def test_get_file_history_newest_first(
         ("fix", "mcp", "renamed", "done"),
         ("run", "manual", "moved", "done"),
     ]
+    assert history[0]["undone_at"] >= history[0]["at"]
+    assert [h["undone_at"] for h in history[1:]] == [None, None]
     assert history[0]["category"] == "Finance"
     assert history[0]["run_id"] == moved["run_id"]
     assert detail["history_truncated"] is False

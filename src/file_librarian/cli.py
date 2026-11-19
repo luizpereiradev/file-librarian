@@ -33,13 +33,13 @@ from file_librarian.config import (
     load_config,
 )
 from file_librarian.db.store import MigrationError, Store
-from file_librarian.executor import RunReport, recover
+from file_librarian.executor import ItemResult, RunReport, recover
 from file_librarian.extractors.origin import download_origin
 from file_librarian.fix import FixError, fix_file
 from file_librarian.hashing import file_sha256, unit_manifest
 from file_librarian.locales import LOCALES, Language
 from file_librarian.lock import AlreadyRunningError, instance_lock, reprocess_lock
-from file_librarian.models import FileStatus, RunTrigger
+from file_librarian.models import FileStatus, RunTrigger, explain_review
 from file_librarian.planner import Plan
 from file_librarian.providers import PLANNED, ProviderError, get_provider, is_implemented
 from file_librarian.providers.base import Provider
@@ -240,8 +240,8 @@ def inspect(
 
     A file or folder that exists only in iCloud is reported as such, not hashed:
     reading it would download it. If the file is in flib's index, also show its
-    status, category, and which name the AI judged better (original or its own)
-    and why.
+    status, category, why it is in review (if it is), and which name the AI
+    judged better (original or its own) and why.
     """
     database = _index_database(config)
     results: list[dict[str, object]] = []
@@ -294,6 +294,9 @@ def inspect(
         if isinstance(entry, dict):
             where = f", {entry['category']}" if entry["category"] else ""
             typer.echo(f"  index:  {entry['status']}{where}")
+            review = entry["review"]
+            if review is not None:
+                typer.echo(f"  review: {review}")
             choice = entry["name_choice"]
             if choice is not None:
                 said = "original name kept" if choice == "original" else "new name from the AI"
@@ -322,10 +325,16 @@ def _index_entry(database: Path | None, digest: str | None) -> dict[str, object]
     if row is None:
         return None
     sensitive = row.status is FileStatus.SENSITIVE
+    in_review = row.status is FileStatus.REVIEW
     return {
         "status": row.status.value,
         "category": row.category,
         "current_path": str(row.current_path),
+        "review_reason": row.review_reason.value if in_review and row.review_reason else None,
+        "review_category": row.review_category if in_review else None,
+        "review": explain_review(row.review_reason, row.review_category, row.confidence)
+        if in_review
+        else None,
         "name_choice": row.name_choice,
         "name_choice_reason": None if sensitive else row.name_choice_reason,
     }
@@ -476,14 +485,25 @@ def _pipeline(
     if outcome.recovered:
         typer.echo(f"Recovered {outcome.recovered} move(s) interrupted by an earlier crash.")
     skipped = _skipped_lines(outcome.scan.skipped, cfg)
+    cost = _cost_line(outcome.cost_usd, known=outcome.cost_known)
     if simulate:
         _print_plan(outcome.plan, outcome.deferred, cfg, skipped)
+        if cost:
+            typer.echo(cost)
     elif outcome.report is not None:
-        _print_report(outcome.report, cfg, skipped)
-    if outcome.cost_usd:
-        typer.echo(f"Estimated provider cost: US$ {outcome.cost_usd:.4f}")
+        _print_report(outcome.report, cfg, skipped, cost)
     if outcome.cached:
         typer.echo(f"{outcome.cached} classification(s) reused from the cache at no cost.")
+
+
+def _cost_line(cost_usd: float, *, known: bool) -> str | None:
+    """The provider cost for the summary and the run log; ``None`` when nothing was paid."""
+    if not known:
+        return (
+            "Provider cost: unknown (no prices configured for this provider; "
+            "set provider.price_input_per_mtok and price_output_per_mtok)"
+        )
+    return f"Estimated provider cost: US$ {cost_usd:.4f}" if cost_usd else None
 
 
 def _short(path: Path, cfg: Config) -> str:
@@ -529,12 +549,20 @@ def _print_plan(plan: Plan, deferred: int, cfg: Config, skipped: list[str]) -> N
         typer.echo(f"{deferred} more file(s) wait for a later run (file or cost limit).")
 
 
-def _print_report(report: RunReport, cfg: Config, skipped: list[str]) -> None:
+def _moved_line(source: str, item: ItemResult, cfg: Config) -> str:
+    """A moved item; one sent to review says why."""
+    line = f"  moved   {source}  ->  {_short(item.destination, cfg) if item.destination else '?'}"
+    return line + (f"  (review: {item.note})" if item.status is FileStatus.REVIEW else "")
+
+
+def _print_report(
+    report: RunReport, cfg: Config, skipped: list[str], cost: str | None = None
+) -> None:
     lines = []
     for item in report.items:
         source = _short(item.source, cfg)
         if item.destination is not None:
-            lines.append(f"  moved   {source}  ->  {_short(item.destination, cfg)}")
+            lines.append(_moved_line(source, item, cfg))
             if item.warning:
                 lines.append(f"  warning {_short(item.destination, cfg)}  ({item.warning})")
         else:
@@ -548,6 +576,8 @@ def _print_report(report: RunReport, cfg: Config, skipped: list[str]) -> None:
     )
     if report.deferred:
         lines.append(f"{report.deferred} more file(s) wait for the next run.")
+    if cost:
+        lines.append(cost)
     for line in lines:
         typer.echo(line)
     if report.run_id is not None:
@@ -1508,8 +1538,9 @@ def _reprocess_plan(
         typer.echo("Nothing sent, nothing changed.")
         return None
     planned = reprocess_mod.plan_reprocess(selection.targets, provider, cfg, store)
-    if planned.cost_usd:
-        typer.echo(f"Estimated provider cost: US$ {planned.cost_usd:.4f}")
+    cost = _cost_line(planned.cost_usd, known=planned.cost_known)
+    if cost:
+        typer.echo(cost)
     if planned.cached:
         typer.echo(f"{planned.cached} classification(s) reused from the cache at no cost.")
     return planned
@@ -1545,9 +1576,7 @@ def _print_reprocess_report(
     lines = []
     for item in report.items:
         if item.destination is not None:
-            lines.append(
-                f"  moved   {_short(item.source, cfg)}  ->  {_short(item.destination, cfg)}"
-            )
+            lines.append(_moved_line(_short(item.source, cfg), item, cfg))
             if item.warning:
                 lines.append(f"  warning {_short(item.destination, cfg)}  ({item.warning})")
         elif item.status in {FileStatus.FAILED, FileStatus.SKIPPED}:
@@ -1562,6 +1591,9 @@ def _print_reprocess_report(
     # Only a run that changed something can be undone; never point at an older one.
     summary += ". `flib undo` reverts it." if applied.undoable else ". Nothing changed."
     lines.append(summary)
+    cost = _cost_line(planned.cost_usd, known=planned.cost_known)
+    if cost:
+        lines.append(cost)
     for line in lines:
         typer.echo(line)
     if planned.rename is not None and not planned.same_folder:

@@ -13,7 +13,9 @@ Wraps any ``Provider`` with what the provider itself should not decide:
   answers;
 - the estimated cost of what was actually billed is tracked, and once it
   reaches ``limits.max_cost_usd_per_run`` the remaining files are deferred to
-  the next run (not counted as failures);
+  the next run (not counted as failures). A provider whose prices are not
+  known (``prices_known`` false: an ``openai-compat`` server with no prices
+  configured) makes the cost unknown rather than zero;
 - a ``visual`` context (``vision.enabled``: an image or a scanned PDF) gets
   its image or first pages attached only when the provider lists that media
   type in ``attachments``, and only right before the call; otherwise, or when
@@ -155,8 +157,16 @@ class Classified:
     deferred: list[FileContext] = field(default_factory=list)
     """Not sent because the cost cap was reached; retried next run."""
     cost_usd: float = 0.0
+    cost_known: bool = True
+    """False once a call was billed at prices the provider does not know (``prices_known``):
+    ``cost_usd`` then leaves those calls out."""
     cached: int = 0
     """Answers reused from the cache, at no cost."""
+
+    @property
+    def run_cost(self) -> float | None:
+        """What the run records in ``runs.cost_usd``: ``None`` when the cost is unknown."""
+        return self.cost_usd if self.cost_known else None
 
 
 def classify_all(
@@ -217,7 +227,7 @@ def classify_all(
             except FatalProviderError:
                 raise
             except ProviderError as exc:
-                result.cost_usd += _billed(provider)
+                _bill(result, provider)
                 error = f"classification failed: {exc}"[:500]
                 if exc.retryable and attempt < settings.max_retries:
                     sleep(min(2.0**attempt, 30.0))
@@ -225,10 +235,10 @@ def classify_all(
                 result.decisions.append(Decision(ctx, error=error))
                 break
             except ValidationError as exc:
-                result.cost_usd += _billed(provider)
+                _bill(result, provider)
                 result.decisions.append(Decision(ctx, error=f"invalid answer: {exc}"[:500]))
                 break
-            result.cost_usd += _billed(provider)
+            _bill(result, provider)
             # The decision keeps no attachment: the bytes are needed for the call only.
             result.decisions.append(Decision(replace(ctx, vision_used=vision), answer))
             if cache is not None:
@@ -237,8 +247,16 @@ def classify_all(
     return result
 
 
-def _billed(provider: Provider) -> float:
-    """Cost of the provider's last call; resets it so nothing is counted twice."""
-    billed = provider.cost_usd(provider.last_usage)
+def _bill(result: Classified, provider: Provider) -> None:
+    """Add the cost of the provider's last call; resets it so nothing is counted twice."""
+    usage = provider.last_usage
+    result.cost_usd += provider.cost_usd(usage)
+    if usage.cost_usd is None and not prices_known(provider):
+        result.cost_known = False
     provider.last_usage = Usage()
-    return billed
+
+
+def prices_known(provider: Provider) -> bool:
+    """Whether ``provider.cost_usd`` reflects real prices. A provider may say it does not
+    (an optional ``prices_known`` attribute); by default it does."""
+    return bool(getattr(provider, "prices_known", True))

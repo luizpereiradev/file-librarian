@@ -142,6 +142,9 @@ def test_inspect_shows_the_name_choice(downloads: Path, cfg: Config, tmp_path: P
         "status": "organized",
         "category": "Finance",
         "current_path": str(target),
+        "review_reason": None,
+        "review_category": None,
+        "review": None,
         "name_choice": "original",
         "name_choice_reason": "Names the cake.",
     }

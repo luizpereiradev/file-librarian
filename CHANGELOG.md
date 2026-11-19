@@ -8,6 +8,19 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- flib records why a file went to review, what each run cost and when a move
+  was undone (#68), in one migration (0010) that leaves earlier rows unknown.
+  The review reason is one of `low_confidence`, `unknown_category`,
+  `category_removed` or `moved_by_hand`, with the category the model
+  suggested; `flib inspect`, the MCP `list_review` and `get_file` show it,
+  and the `flib run` line of a file sent to review says why. `flib fix` and
+  `flib reprocess` clear it when a file leaves review, and `flib undo` gives
+  it back. Each run stores its estimated provider cost (`runs.cost_usd`; 0
+  for a fix, unknown rather than 0 for an `openai-compat` server with no
+  prices configured): the run log and summary show it, `flib doctor` lists it
+  for the last runs, and `get_stats` reports this month's total and the last
+  run's cost. Undo (of a run or of one file, and the recovery of an
+  interrupted undo) records when it happened, and `get_file` history shows it.
 - E-mail messages (`.eml`) are read, with the standard library: subject,
   date, sender and recipients, attachment names (never their content) and
   the body (the plain-text part, else the HTML part's text without tags,

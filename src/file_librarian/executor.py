@@ -11,7 +11,8 @@ The caller holds the instance lock. For each planned move:
    destination is on another volume, ``fsops.copy_move`` copies, verifies and
    only then deletes the source (RF-33), journaling each phase on the entry
    (``copy_phase``: copying, copied, placed);
-5. the journal entry becomes ``done`` and the index row points at the new place;
+5. the journal entry becomes ``done`` and the index row points at the new place
+   (with the review reason, for an item sent to review);
 6. an organized item gets its category as a Finder tag (RF-36), recorded on
    the journal entry so undo removes exactly that tag. A tag failure is only
    a warning: the move stands.
@@ -20,7 +21,12 @@ The caller holds the instance lock. For each planned move:
 reprocess``, RF-37), as one run with trigger ``reprocess``: the index row is
 left as it is until the file is at its new place, and the entry carries the
 status and category the file gets there, so then the row, the entry and the
-Finder tags change together (or a failed move changes nothing).
+Finder tags change together (or a failed move changes nothing). A change of
+review reason is journaled with the run (``index_changes``), so undo gives the
+old one back.
+
+Each run records its provider cost (``runs.cost_usd``) when it finishes:
+``None`` when the provider's prices are unknown.
 
 A crash between 1 and 5 leaves a ``planned`` entry that ``recover`` resolves
 at the start of the next run by looking at where the file actually is (for a
@@ -69,6 +75,7 @@ from file_librarian.models import (
     FileStatus,
     NameChoice,
     OperationStatus,
+    ReviewReason,
     RunMode,
     RunTrigger,
 )
@@ -124,7 +131,9 @@ def execute(
     model: str,
     seen: int,
     deferred: int = 0,
+    cost_usd: float | None = None,
 ) -> RunReport:
+    """Apply ``plan`` as one run. ``cost_usd``: what classifying it cost (``None``: unknown)."""
     run_id = store.start_run(RunMode.RUN, trigger)
     report = RunReport(run_id, deferred=deferred)
     for item in plan.items:
@@ -135,6 +144,7 @@ def execute(
         moved=report.count(FileStatus.ORGANIZED, moved=True),
         review=report.count(FileStatus.REVIEW, moved=True),
         errors=report.errors,
+        cost_usd=cost_usd,
     )
     return report
 
@@ -164,6 +174,8 @@ def file_record(
         model=model if answer else None,
         name_choice=item.name_choice if answer else None,
         name_choice_reason=answer.name_choice_reason if answer and item.name_choice else None,
+        review_reason=item.review_reason if status is FileStatus.REVIEW else None,
+        review_category=item.review_category if status is FileStatus.REVIEW else None,
     )
 
 
@@ -222,6 +234,14 @@ class Relocation:
     previous: tuple[FileStatus, str | None] | None = None
     """The (status, category) the index had when it was planned; checked again before
     anything changes, and given back by undo."""
+    review_reason: ReviewReason | None = None
+    """Why it goes to (or stays in) review; ``None`` for ``organized``."""
+    review_category: str | None = None
+    """The category the model suggested, for a file in review."""
+
+    @property
+    def review(self) -> tuple[ReviewReason | None, str | None]:
+        return self.review_reason, self.review_category
 
 
 def relocate(
@@ -233,6 +253,7 @@ def relocate(
     provider: str | None,
     model: str | None,
     deferred: int = 0,
+    cost_usd: float | None = None,
 ) -> RunReport:
     """Move files already in the library, in the run ``run_id`` (trigger ``reprocess``).
 
@@ -249,6 +270,7 @@ def relocate(
         moved=report.count(FileStatus.ORGANIZED, moved=True),
         review=report.count(FileStatus.REVIEW, moved=True),
         errors=report.errors,
+        cost_usd=cost_usd,
     )
     return report
 
@@ -270,9 +292,12 @@ def _relocate_one(
     ):
         return ItemResult(ctx.path, FileStatus.SKIPPED, None, "changed in the index since the plan")
     if item.destination is None or item.destination == ctx.path:
-        if record is not None:
-            with store.transaction():
+        review = item.review if item.status is FileStatus.REVIEW else (None, None)
+        with store.transaction():
+            if record is not None:
                 store.set_file_answer(item.file_id, record, run_id=run_id)
+            if row.status is FileStatus.REVIEW and item.status is FileStatus.REVIEW:
+                store.set_review(run_id, item.file_id, review, old=row.review)
         return ItemResult(ctx.path, item.status, None, item.reason)
     identity = _unchanged(ctx)
     if identity is None:
@@ -296,7 +321,15 @@ def _relocate_one(
             store.set_operation(op_id, OperationStatus.FAILED)
         return ItemResult(ctx.path, FileStatus.FAILED, None, f"move failed: {exc}"[:300])
     warnings = finish_relocation(
-        config, store, op_id, item.file_id, destination, item.status, item.category, record
+        config,
+        store,
+        op_id,
+        item.file_id,
+        destination,
+        item.status,
+        item.category,
+        record,
+        review=item.review,
     )
     if kept:
         warnings.insert(0, kept)
@@ -332,8 +365,13 @@ def finish_relocation(
     status: FileStatus,
     category: str | None,
     record: FileRecord | None = None,
+    *,
+    review: tuple[ReviewReason | None, str | None] | None = None,
 ) -> list[str]:
     """Everything after a reprocess move: Finder tags, then the index and the journal.
+
+    The review reason follows the status: cleared out of review, ``review`` in
+    it (``None``, when recovery finishes the move: the one the row has stays).
 
     The tag flib gave the old category goes and the new category's comes
     (given ``config``); a tag is a convenience, so a failure is only a
@@ -351,11 +389,15 @@ def finish_relocation(
             warning = untag_restored(destination, old)
             warnings = [warning] if warning else []
     unit = unit_identity(destination, row.sha256) if row.is_unit else None
+    if status is not FileStatus.REVIEW:
+        review = (None, None)
+    run_id = store.operation_by_id(op_id).run_id
     with store.transaction():
         store.set_operation(op_id, OperationStatus.DONE, destination)
         store.relocate_file(file_id, destination, status, category)
         if record is not None:
-            store.set_file_answer(file_id, record, run_id=store.operation_by_id(op_id).run_id)
+            store.set_file_answer(file_id, record, run_id=run_id)
+        store.set_review(run_id, file_id, row.review if review is None else review, old=row.review)
         if unit is not None:
             store.set_file_identity(file_id, unit)
     return warnings

@@ -108,7 +108,9 @@ grant covers flib only and not your other Python projects. After updating
 Python or flib, `./scripts/install.sh` refreshes it (`flib schedule
 --refresh`); macOS may then ask for access again. If the Mac is asleep at the
 scheduled time, the run happens on wake. Each run writes a log next to the
-database (`~/Library/Application Support/file-librarian/logs`).
+database (`~/Library/Application Support/file-librarian/logs`), ending with
+its estimated provider cost (or "unknown" when the provider's prices are not
+known).
 
 To try it without an API key, set `provider: {name: fake, model: offline}`:
 everything is filed under the last category, offline.
@@ -217,7 +219,8 @@ provider:
 - **Cost:** flib cannot know your server's prices. With
   `price_input_per_mtok` and `price_output_per_mtok` left at 0, every file
   counts as free and **`limits.max_cost_usd_per_run` cannot stop a run**;
-  `flib check-config` warns about it for a remote server. `limits.max_files_per_run`
+  `flib check-config` warns about it for a remote server, and the run's cost
+  is shown and recorded as unknown (a server on this Mac counts as free). `limits.max_files_per_run`
   still caps how many files a run sends.
 - **Answers:** flib asks for structured output with a JSON schema. A server
   that rejects that is asked again with plain JSON mode and the schema in the
@@ -236,7 +239,7 @@ provider:
 | Command | What it does | Milestone |
 | --- | --- | --- |
 | `flib check-config` | Validate the configuration without touching files | M0 |
-| `flib inspect FILE...` | Show hash, size and download origin (not the hash of a file only in iCloud), and for an indexed file its status, category and name choice | M0 |
+| `flib inspect FILE...` | Show hash, size and download origin (not the hash of a file only in iCloud), and for an indexed file its status, category, why it is in review (if it is) and name choice | M0 |
 | `flib simulate` | Print the full plan without changing anything | M1 (available) |
 | `flib run` | Classify, rename, move and index new files | M1 (available) |
 | `flib search [QUERY] [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--json]` | Full-text search over names, descriptions and tags, narrowed by category, period or extension ([Searching](#searching)) | M1 (available) |
@@ -462,12 +465,24 @@ network and reads the same database as `flib search`.
 | Tool | What it does |
 | --- | --- |
 | `search_files` | Full-text search over names, descriptions and tags, with the same category, extension and period filters as `flib search` |
-| `get_file` | Everything the index knows about one file: where it is and was, category, description, tags, hash, size, download origin, whether it is only in iCloud, and its history (moves, renames, fixes, undos; newest first, last 20) |
+| `get_file` | Everything the index knows about one file: where it is and was, category, description, tags, hash, size, download origin, whether it is only in iCloud, why it is in review (if it is), and its history (moves, renames, fixes, undos with when each was undone; newest first, last 20) |
 | `list_recent` | The files organized most recently, newest first, optionally in one category |
-| `list_review` | What waits in the review folder, newest first, with the AI's confidence |
-| `get_stats` | Counts by status and by category, total size filed, and the last run |
+| `list_review` | What waits in the review folder, newest first, with the AI's confidence and why each file is there (see below) |
+| `get_stats` | Counts by status and by category, total size filed, the last run and its provider cost, and this month's total cost |
 | `recategorize_file` | Move a file to another configured category and/or rename it, like `flib fix` |
 | `undo` | Revert a run or the last move of one file, like `flib undo` |
+
+A file in review says why it is there: `low_confidence` (the AI's confidence
+was below `limits.confidence_threshold`), `unknown_category` (the AI chose a
+category you have not configured), `category_removed` (`flib reprocess
+--remove-category --to-review`) or `moved_by_hand` (`flib reconcile` found it
+in the review folder). The first two come with the category the AI suggested.
+Files filed before flib recorded reasons show none.
+
+Costs are estimates, recorded per run (`flib run`, `flib reprocess`; a `flib
+fix` costs nothing). A provider whose prices flib does not know (an
+`openai-compat` server without `price_input_per_mtok`/`price_output_per_mtok`)
+records its cost as unknown, not as zero; `get_stats` counts those runs apart.
 
 **1. Enable it.** The MCP server is optional, because its SDK adds 16
 packages that the rest of flib does not need. Answer yes when
@@ -569,7 +584,7 @@ It writes one file, `doctor-<date>-<time>.txt`, and prints its path. The file
 holds flib's, Python's and macOS's versions, how flib was installed, whether
 the MCP extra is there, the configuration (validated), where the API key comes
 from, the schedule's state, the database's schema version and counts, the last
-runs and the last five run logs (`--logs N` for more). It is made to be posted
+runs with their cost and the last five run logs (`--logs N` for more). It is made to be posted
 in a public issue, so before it is written:
 
 - the API key is left out entirely, not even its last characters; only the

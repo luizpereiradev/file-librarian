@@ -29,6 +29,7 @@ from file_librarian.models import (
     FileState,
     FileStatus,
     OperationStatus,
+    ReviewReason,
     RunMode,
     RunTrigger,
 )
@@ -90,6 +91,14 @@ class FileRow:
     name_choice_reason: str | None = None
     confidence: float | None = None
     """The model's confidence in its answer; ``None`` if it was not classified."""
+    review_reason: ReviewReason | None = None
+    """Why it is in review; ``None`` outside review and for rows filed before #68."""
+    review_category: str | None = None
+    """The category the model suggested for a file in review, if any."""
+
+    @property
+    def review(self) -> tuple[ReviewReason | None, str | None]:
+        return self.review_reason, self.review_category
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> FileRow:
@@ -115,6 +124,10 @@ class FileRow:
             name_choice=row["name_choice"],
             name_choice_reason=row["name_choice_reason"],
             confidence=None if row["confidence"] is None else float(row["confidence"]),
+            review_reason=None
+            if row["review_reason"] is None
+            else ReviewReason(row["review_reason"]),
+            review_category=row["review_category"],
         )
 
 
@@ -142,6 +155,8 @@ class OperationRow:
     """Devices of that copy's source and destination folders when it started."""
     previous: tuple[FileStatus, str | None] | None = None
     """For a ``flib reprocess`` move, the (status, category) the file had before."""
+    undone_at: str | None = None
+    """When the move was undone (UTC, ISO 8601); ``None`` if it never was."""
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> OperationRow:
@@ -164,6 +179,7 @@ class OperationRow:
             previous=None
             if row["prev_status"] is None
             else (FileStatus(row["prev_status"]), row["prev_category"]),
+            undone_at=row["undone_at"],
         )
 
 
@@ -179,6 +195,8 @@ class RunRow:
     files_moved: int | None
     files_review: int | None
     errors: int | None
+    cost_usd: float | None = None
+    """Estimated provider cost; ``None`` when the prices are unknown."""
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> RunRow:
@@ -191,6 +209,7 @@ class RunRow:
             files_moved=row["files_moved"],
             files_review=row["files_review"],
             errors=row["errors"],
+            cost_usd=None if row["cost_usd"] is None else float(row["cost_usd"]),
         )
 
 
@@ -215,6 +234,10 @@ class LibraryStats:
     """Indexed size of the files flib filed: organized or in review."""
     last_run: RunRow | None
     """The newest finished run that was not a single-file ``flib fix``."""
+    month_cost_usd: float = 0.0
+    """Provider cost of the runs started this month, those with a known cost."""
+    month_unpriced_runs: int = 0
+    """Runs started this month whose cost is unknown (not in ``month_cost_usd``)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,8 +274,8 @@ class IndexChange:
     id: int
     run_id: int
     target: str
-    """``files.category``, ``corrections.old_value``, ``corrections.new_value`` or
-    ``operations.finder_tag``."""
+    """A key of ``_INDEX_TARGETS``: ``files.category``, ``files.review_reason``,
+    ``corrections.old_value``, ``operations.finder_tag``..."""
     row_id: int
     old_value: str | None
     new_value: str | None
@@ -272,6 +295,8 @@ _ANSWER_COLUMNS = (
 _INDEX_TARGETS = {
     "files.category": ("files", "category"),
     **{f"files.{c}": ("files", c) for c in (*_ANSWER_COLUMNS, "processed_at")},
+    "files.review_reason": ("files", "review_reason"),
+    "files.review_category": ("files", "review_category"),
     "corrections.old_value": ("corrections", "old_value"),
     "corrections.new_value": ("corrections", "new_value"),
     "operations.finder_tag": ("operations", "finder_tag"),
@@ -352,11 +377,21 @@ class Store:
         )
         return _rowid(cur)
 
-    def finish_run(self, run_id: int, *, seen: int, moved: int, review: int, errors: int) -> None:
+    def finish_run(
+        self,
+        run_id: int,
+        *,
+        seen: int,
+        moved: int,
+        review: int,
+        errors: int,
+        cost_usd: float | None,
+    ) -> None:
+        """``cost_usd``: the provider cost of the run; ``None`` when its prices are unknown."""
         self.conn.execute(
             """UPDATE runs SET finished_at = ?, files_seen = ?, files_moved = ?,
-                              files_review = ?, errors = ? WHERE id = ?""",
-            (_now(), seen, moved, review, errors, run_id),
+                              files_review = ?, errors = ?, cost_usd = ? WHERE id = ?""",
+            (_now(), seen, moved, review, errors, cost_usd, run_id),
         )
 
     def run_trigger(self, run_id: int) -> RunTrigger:
@@ -392,8 +427,9 @@ class Store:
             """INSERT INTO files (sha256, original_name, original_path, current_name,
                    current_path, extension, size_bytes, source_url, category, description,
                    tags, confidence, status, attempts, last_error, provider, model, run_id,
-                   processed_at, is_unit, name_choice, name_choice_reason)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   processed_at, is_unit, name_choice, name_choice_reason, review_reason,
+                   review_category)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(sha256) DO UPDATE SET
                    current_name = excluded.current_name, current_path = excluded.current_path,
                    category = excluded.category, description = excluded.description,
@@ -402,7 +438,9 @@ class Store:
                    last_error = excluded.last_error, provider = excluded.provider,
                    model = excluded.model, run_id = excluded.run_id,
                    processed_at = excluded.processed_at, name_choice = excluded.name_choice,
-                   name_choice_reason = excluded.name_choice_reason""",
+                   name_choice_reason = excluded.name_choice_reason,
+                   review_reason = excluded.review_reason,
+                   review_category = excluded.review_category""",
             (
                 r.sha256, normalize(r.original_path.name), normalize(str(r.original_path)),
                 normalize(r.current_path.name), normalize(str(r.current_path)), r.extension,
@@ -410,16 +448,20 @@ class Store:
                 json.dumps(list(r.tags), ensure_ascii=False), r.confidence, r.status.value,
                 r.attempts, r.last_error, r.provider, r.model, run_id, _now(), int(r.is_unit),
                 r.name_choice, r.name_choice_reason,
+                None if r.review_reason is None else r.review_reason.value, r.review_category,
             ),
         )  # fmt: skip
         row = self.conn.execute("SELECT id FROM files WHERE sha256 = ?", (r.sha256,)).fetchone()
         return int(row[0])
 
     def set_file_location(self, file_id: int, path: Path, status: FileStatus) -> None:
+        """Where the file is now. Out of review, it loses its review reason."""
         self.conn.execute(
-            "UPDATE files SET current_name = ?, current_path = ?, status = ? WHERE id = ?",
-            (normalize(path.name), normalize(str(path)), status.value, file_id),
-        )
+            f"""UPDATE files SET current_name = ?, current_path = ?, status = ?, {_KEEP_REVIEW}
+               WHERE id = ?""",  # noqa: S608 - a fixed fragment
+            (normalize(path.name), normalize(str(path)), status.value, status.value, status.value,
+             file_id),
+        )  # fmt: skip
 
     def all_files(self) -> list[FileRow]:
         return [FileRow.from_row(r) for r in self.conn.execute("SELECT * FROM files ORDER BY id")]
@@ -427,11 +469,40 @@ class Store:
     def relocate_file(
         self, file_id: int, path: Path, status: FileStatus, category: str | None
     ) -> None:
-        """Point a row at where the file really is now (``flib reconcile``)."""
+        """Point a row at where the file really is now (``flib reconcile``).
+
+        Out of review, it loses its review reason.
+        """
         self.conn.execute(
-            """UPDATE files SET current_name = ?, current_path = ?, status = ?, category = ?
-               WHERE id = ?""",
-            (normalize(path.name), normalize(str(path)), status.value, category, file_id),
+            f"""UPDATE files SET current_name = ?, current_path = ?, status = ?, category = ?,
+                                {_KEEP_REVIEW}
+               WHERE id = ?""",  # noqa: S608 - a fixed fragment
+            (normalize(path.name), normalize(str(path)), status.value, category, status.value,
+             status.value, file_id),
+        )  # fmt: skip
+
+    def set_review(
+        self,
+        run_id: int,
+        file_id: int,
+        new: tuple[ReviewReason | None, str | None],
+        *,
+        old: tuple[ReviewReason | None, str | None],
+    ) -> None:
+        """Give a file already indexed a new review reason, journaled with ``run_id`` so
+        undo gives back ``old`` (what the row had before the run changed it)."""
+        for target, before, after in (
+            ("files.review_reason", _code(old[0]), _code(new[0])),
+            ("files.review_category", old[1], new[1]),
+        ):
+            if before != after:
+                self.change_index(run_id, target, file_id, before, after)
+
+    def mark_review(self, file_id: int, reason: ReviewReason, category: str | None = None) -> None:
+        """Record why a file is in review, outside any run (``flib reconcile``)."""
+        self.conn.execute(
+            "UPDATE files SET review_reason = ?, review_category = ? WHERE id = ?",
+            (reason.value, category, file_id),
         )
 
     def set_file_status(self, file_id: int, status: FileStatus) -> None:
@@ -647,7 +718,8 @@ class Store:
     def mark_file_failed(self, file_id: int, error: str, *, attempt: bool = True) -> None:
         """``attempt=False`` for a cause outside the file (a full disk): retried every run."""
         self.conn.execute(
-            """UPDATE files SET status = 'failed', attempts = attempts + ?, last_error = ?
+            """UPDATE files SET status = 'failed', attempts = attempts + ?, last_error = ?,
+                                review_reason = NULL, review_category = NULL
                WHERE id = ?""",
             (int(attempt), error[:500], file_id),
         )
@@ -727,7 +799,9 @@ class Store:
         )
         return [str(r[0]) for r in rows]
 
-    def stats(self) -> LibraryStats:
+    def stats(self, *, month_start: str | None = None) -> LibraryStats:
+        """``month_start``: when this month began (UTC ISO text); by default the first
+        day of the current month, at midnight local time."""
         by_status = dict.fromkeys((s.value for s in FileStatus), 0)
         for row in self.conn.execute("SELECT status, COUNT(*) FROM files GROUP BY status"):
             by_status[str(row[0])] = int(row[1])
@@ -749,11 +823,18 @@ class Store:
                                      WHERE o.run_id = r.id AND o.fix_status IS NOT NULL))
                ORDER BY id DESC LIMIT 1"""
         ).fetchone()
+        month = self.conn.execute(
+            """SELECT COALESCE(SUM(cost_usd), 0), COUNT(*) - COUNT(cost_usd) FROM runs
+               WHERE finished_at IS NOT NULL AND started_at >= ?""",
+            (month_start or _month_start(),),
+        ).fetchone()
         return LibraryStats(
             by_status=by_status,
             by_category=by_category,
             filed_bytes=int(filed),
             last_run=None if last is None else RunRow.from_row(last),
+            month_cost_usd=float(month[0]),
+            month_unpriced_runs=int(month[1]),
         )
 
     # --- classification cache --------------------------------------------------------
@@ -813,19 +894,17 @@ class Store:
         return _rowid(cur)
 
     def set_operation(self, op_id: int, status: OperationStatus, dst: Path | None = None) -> None:
-        """Set the status (and destination); this ends any cross-volume copy phase."""
-        if dst is None:
-            self.conn.execute(
-                "UPDATE operations SET status = ?, copy_phase = NULL, copy_key = NULL WHERE id = ?",
-                (status.value, op_id),
-            )
-        else:
-            self.conn.execute(
-                """UPDATE operations SET status = ?, dst_path = ?, copy_phase = NULL,
-                                         copy_key = NULL
-                   WHERE id = ?""",
-                (status.value, str(dst), op_id),
-            )
+        """Set the status (and destination); this ends any cross-volume copy phase.
+
+        ``undone`` also records when (``undone_at``).
+        """
+        undone_at = _now() if status is OperationStatus.UNDONE else None
+        self.conn.execute(
+            """UPDATE operations SET status = ?, dst_path = coalesce(?, dst_path),
+                                     undone_at = ?, copy_phase = NULL, copy_key = NULL
+               WHERE id = ?""",
+            (status.value, None if dst is None else str(dst), undone_at, op_id),
+        )
 
     def set_copy_phase(
         self,
@@ -956,6 +1035,25 @@ def _as_text(value: object) -> str | None:
     if value is None:
         return None
     return repr(value) if isinstance(value, float) else str(value)
+
+
+# Keeps the review reason and suggested category only while the new status (bound
+# twice, after the status itself) is ``review``.
+_KEEP_REVIEW = (
+    "review_reason = CASE WHEN ? = 'review' THEN review_reason END, "
+    "review_category = CASE WHEN ? = 'review' THEN review_category END"
+)
+
+
+def _code(reason: ReviewReason | None) -> str | None:
+    return None if reason is None else reason.value
+
+
+def _month_start() -> str:
+    """Midnight on the first day of the current month, local time, as UTC ISO text."""
+    local = datetime.now().astimezone()
+    start = local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return start.astimezone(UTC).isoformat(timespec="seconds")
 
 
 def _rowid(cur: sqlite3.Cursor) -> int:

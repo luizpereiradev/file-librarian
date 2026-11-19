@@ -3,12 +3,14 @@ from __future__ import annotations
 import sqlite3
 import unicodedata
 from collections.abc import Iterator
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from file_librarian.db import Store, normalize
-from file_librarian.db.store import MigrationError, load_migrations
+from file_librarian.db.store import MigrationError, _month_start, load_migrations
+from file_librarian.models import RunMode, RunTrigger
 
 
 def insert_file(store: Store, name: str, description: str, sha: str = "abc") -> int:
@@ -128,3 +130,72 @@ def test_migration_0009_keeps_runs_and_their_references(
         )
         with pytest.raises(sqlite3.IntegrityError):  # references are still enforced
             store.conn.execute("DELETE FROM runs WHERE id = 2")
+
+
+def test_migration_0010_keeps_rows_and_leaves_the_new_values_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "library.db"
+    before = [m for m in load_migrations() if m.version < 10]
+    with monkeypatch.context() as patch:
+        patch.setattr("file_librarian.db.store.load_migrations", lambda: before)
+        old = Store.open(path)
+    with old:
+        assert old.schema_version == 9
+        file_id = insert_file(old, "a.pdf", "d")
+        old.conn.execute("UPDATE files SET status = 'review' WHERE id = ?", (file_id,))
+        old.conn.execute("UPDATE runs SET finished_at = '2026-11-16', files_seen = 1 WHERE id = 1")
+        old.conn.execute(
+            """INSERT INTO operations (run_id, file_id, src_path, dst_path, status, created_at)
+               VALUES (1, ?, '/in/a.pdf', '/out/a.pdf', 'undone', 'x')""",
+            (file_id,),
+        )
+        old.change_index(1, "files.description", file_id, "d", "new")
+        with pytest.raises(sqlite3.IntegrityError):  # not a target before 0010
+            old.conn.execute(
+                """INSERT INTO index_changes (run_id, target, row_id, status, created_at)
+                   VALUES (1, 'files.review_reason', ?, 'done', 'x')""",
+                (file_id,),
+            )
+    with Store.open(path) as store:
+        assert store.schema_version == len(load_migrations())
+        row = store.file_by_id(file_id)
+        assert (row.status.value, row.description, row.review) == ("review", "new", (None, None))
+        [op] = store.operations()
+        assert (op.status.value, op.undone_at) == ("undone", None)
+        run = store.conn.execute("SELECT files_seen, cost_usd FROM runs").fetchone()
+        assert tuple(run) == (1, None)
+        [change] = store.index_changes(1)
+        assert (change.target, change.old_value) == ("files.description", "d")
+        assert store.conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        # The new targets and codes are accepted, and only known codes.
+        store.change_index(1, "files.review_reason", file_id, None, "low_confidence")
+        with pytest.raises(sqlite3.IntegrityError):
+            store.conn.execute("UPDATE files SET review_reason = 'bored' WHERE id = ?", (file_id,))
+        stats = store.stats(month_start="2026-11-01")
+        assert (stats.month_cost_usd, stats.month_unpriced_runs) == (0.0, 1)
+
+
+def test_month_cost_counts_this_months_finished_runs(store: Store) -> None:
+    def finished(started: str, cost: float | None) -> None:
+        run_id = store.start_run(RunMode.RUN, RunTrigger.MANUAL)
+        store.conn.execute("UPDATE runs SET started_at = ? WHERE id = ?", (started, run_id))
+        store.finish_run(run_id, seen=1, moved=1, review=0, errors=0, cost_usd=cost)
+
+    finished("2026-10-31T23:59:59+00:00", 5.0)  # last month
+    finished("2026-11-01T00:00:00+00:00", 0.25)
+    finished("2026-11-17T10:00:00+00:00", 0.5)
+    finished("2026-11-18T10:00:00+00:00", None)  # prices unknown
+    store.start_run(RunMode.RUN, RunTrigger.MANUAL)  # still running: not counted
+    stats = store.stats(month_start="2026-11-01T00:00:00+00:00")
+    assert stats.month_cost_usd == pytest.approx(0.75)
+    assert stats.month_unpriced_runs == 1
+    assert stats.last_run is not None and stats.last_run.cost_usd is None
+
+
+def test_the_default_month_starts_at_local_midnight_on_the_first(store: Store) -> None:
+    run_id = store.start_run(RunMode.RUN, RunTrigger.MANUAL)
+    store.finish_run(run_id, seen=0, moved=0, review=0, errors=0, cost_usd=0.125)
+    assert store.stats().month_cost_usd == 0.125  # started now: this month
+    start = datetime.fromisoformat(_month_start()).astimezone()
+    assert (start.day, start.hour, start.minute) == (1, 0, 0)

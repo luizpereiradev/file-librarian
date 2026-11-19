@@ -51,7 +51,12 @@ class Provider(Protocol):
     """Set after every ``classify`` call, failed ones included; the classifier resets it."""
 
     def cost_usd(self, usage: Usage) -> float:
-        """What ``usage`` cost in US dollars, for ``limits.max_cost_usd_per_run``."""
+        """What ``usage`` cost in US dollars, for ``limits.max_cost_usd_per_run``.
+
+        A provider that cannot price its calls may also have a ``prices_known``
+        attribute that is false: the run's cost is then recorded as unknown, not
+        as the 0 this returns. Without the attribute, prices count as known.
+        """
         ...
 
     def classify(self, context: FileContext, rules: Rules) -> Classification:

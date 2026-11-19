@@ -5,7 +5,8 @@ This is where the model's answer stops being trusted. For each item:
 - sensitive files stay where they are (status ``sensitive``);
 - a provider failure leaves the file in place (status ``failed``);
 - a category outside the configuration, or confidence below
-  ``confidence_threshold``, goes to the review folder with its original name;
+  ``confidence_threshold``, goes to the review folder with its original name,
+  and the item says which (``ReviewReason``) and what the model suggested;
 - otherwise the file goes to its category folder, renamed only when the
   category allows it, confidence reaches ``rename_confidence_threshold`` and
   the suggestion yields a usable name. Files whose content the model could
@@ -35,7 +36,14 @@ from datetime import date
 from pathlib import Path
 
 from file_librarian.config import Config, folder_key
-from file_librarian.models import Classification, Decision, FileContext, FileStatus, NameChoice
+from file_librarian.models import (
+    Classification,
+    Decision,
+    FileContext,
+    FileStatus,
+    NameChoice,
+    ReviewReason,
+)
 from file_librarian.naming import (
     build_name,
     candidate_names,
@@ -56,6 +64,15 @@ class PlannedItem:
     renamed: bool = False
     name_choice: NameChoice | None = None
     """The subject the name was built from; ``None`` when no rename was considered."""
+    review_reason: ReviewReason | None = None
+    """Why it goes to review; ``None`` unless ``status`` is ``review``."""
+
+    @property
+    def review_category(self) -> str | None:
+        """The category the model suggested for an item going to review."""
+        if self.status is not FileStatus.REVIEW or self.classification is None:
+            return None
+        return self.classification.category[:MAX_SUGGESTED]
 
 
 @dataclass(slots=True)
@@ -64,6 +81,10 @@ class Plan:
 
     def moves(self) -> list[PlannedItem]:
         return [i for i in self.items if i.destination is not None]
+
+
+# How much of a suggested category outside the configuration is kept.
+MAX_SUGGESTED = 100
 
 
 class UnsafeDestinationError(RuntimeError):
@@ -140,10 +161,10 @@ def _plan_one(
     category = config.category(answer.category)
     if category is None:
         reason = f"model chose unknown category {answer.category[:40]!r}"
-        return _to_review(ctx, answer, config, names, reason)
+        return _to_review(ctx, answer, config, names, reason, ReviewReason.UNKNOWN_CATEGORY)
     if answer.confidence < limits.confidence_threshold:
         reason = f"confidence {answer.confidence:.2f} < {limits.confidence_threshold:.2f}"
-        return _to_review(ctx, answer, config, names, reason)
+        return _to_review(ctx, answer, config, names, reason, ReviewReason.LOW_CONFIDENCE)
 
     original = ctx.path.name
     new_name = None
@@ -181,7 +202,12 @@ def _plan_one(
 
 
 def _to_review(
-    ctx: FileContext, answer: Classification, config: Config, names: _Names, reason: str
+    ctx: FileContext,
+    answer: Classification,
+    config: Config,
+    names: _Names,
+    reason: str,
+    code: ReviewReason,
 ) -> PlannedItem:
     destination = _destination(config, config.review_folder, ctx.path.name, names, ctx)
     return PlannedItem(
@@ -191,6 +217,7 @@ def _to_review(
         reason,
         answer,
         renamed=destination.name != ctx.path.name,
+        review_reason=code,
     )
 
 
