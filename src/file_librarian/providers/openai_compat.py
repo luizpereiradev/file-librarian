@@ -26,7 +26,8 @@ Ollama (see ``providers/ollama.py``, a preset of this one) all accept
 - Cost: ``usage.prompt_tokens`` and ``completion_tokens`` times
   ``provider.price_input_per_mtok`` and ``price_output_per_mtok``. Both default
   to 0 (unknown): then every file costs US$ 0 and ``limits.max_cost_usd_per_run``
-  cannot stop the run; ``flib check-config`` warns about it.
+  cannot stop the run; ``flib check-config`` warns about it, and a run's cost is
+  recorded as unknown (``prices_known``) unless the server is on this Mac.
 - Vision: images go as a ``data:`` URL ``image_url`` part only with
   ``provider.vision: true`` (and ``vision.enabled``). Scanned PDFs are never
   sent: the Chat Completions API has no portable way to send a PDF, so they are
@@ -152,6 +153,13 @@ class OpenAICompatProvider:
     def mode(self) -> Mode:
         """``json_schema`` until the server rejects it once, then ``json_object``."""
         return self._mode
+
+    @property
+    def prices_known(self) -> bool:
+        """False when no price is configured for a remote server: its cost is unknown,
+        not zero. A server on this Mac costs nothing."""
+        cfg = self._config
+        return self.local or cfg.price_input_per_mtok > 0 or cfg.price_output_per_mtok > 0
 
     def cost_usd(self, usage: Usage) -> float:
         if usage.cost_usd is not None:

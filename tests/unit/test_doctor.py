@@ -21,7 +21,9 @@ from typer.testing import CliRunner
 from file_librarian import doctor, keychain, scheduler
 from file_librarian.cli import app
 from file_librarian.config import load_config
+from file_librarian.db.store import Store, load_migrations
 from file_librarian.doctor import Options, Redactor, build_report
+from file_librarian.models import RunMode, RunTrigger
 from file_librarian.runlog import logs_dir, write_log
 from file_librarian.sensitive import SECRET_PATTERNS, find_secrets
 from tests._helpers import put
@@ -326,3 +328,40 @@ def test_install_kind_and_mcp_extra(monkeypatch: pytest.MonkeyPatch) -> None:
     assert doctor._mcp_extra().startswith("installed")
     monkeypatch.setattr(importlib.util, "find_spec", lambda _name: None)
     assert doctor._mcp_extra() == "not installed"
+
+
+def test_last_runs_show_their_cost(
+    fake_home: Path, downloads: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = fake_home / "config.yaml"
+    config.write_text(
+        f"inputs: [{json.dumps(str(downloads))}]\nprovider: {{name: fake, model: x}}\n",
+        encoding="utf-8",
+    )
+    database = load_config(config).database
+    # A database an older flib wrote: no cost column yet, and the doctor never migrates.
+    before = [m for m in load_migrations() if m.version < 10]
+    with monkeypatch.context() as patch:
+        patch.setattr("file_librarian.db.store.load_migrations", lambda: before)
+        with Store.open(database) as old:
+            run_id = old.start_run(RunMode.RUN, RunTrigger.MANUAL)
+            old.conn.execute("UPDATE runs SET finished_at = 'x' WHERE id = ?", (run_id,))
+
+    def run_lines() -> list[str]:
+        printed = runner.invoke(app, ["doctor", "-c", str(config), "--stdout"])
+        assert printed.exit_code == 0, printed.stderr
+        assert "schema version" in printed.stdout and "cost US$" in printed.stdout
+        return [line.strip() for line in printed.stdout.splitlines()]
+
+    lines = run_lines()
+    assert "schema version: 9 (this flib knows 10)" in lines
+    assert any(line.startswith("1 ") and line.endswith(" unknown") for line in lines)
+
+    with Store.open(database) as store:
+        run_id = store.start_run(RunMode.RUN, RunTrigger.MANUAL)
+        store.finish_run(run_id, seen=1, moved=1, review=0, errors=0, cost_usd=0.0123)
+        store.start_run(RunMode.RUN, RunTrigger.MANUAL)  # still running
+    lines = run_lines()
+    assert any(line.startswith("2 ") and line.endswith(" 0.0123") for line in lines)
+    assert any(line.startswith("3 ") and line.endswith(" -") for line in lines)
+    assert any(line.startswith("1 ") and line.endswith(" unknown") for line in lines)

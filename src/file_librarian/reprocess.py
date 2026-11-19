@@ -14,7 +14,8 @@ ones whose answer now differs, in four steps the command line runs in order:
 3. ``plan_reprocess`` classifies (the cost cap and the cache apply as in a
    run) and plans with the normal planner. Names are kept unless renaming
    was asked for. A file the provider is now unsure about stays in its
-   category; one that cannot be classified stays where it is. A file the
+   category; one that cannot be classified stays where it is. A file that
+   goes to (or stays in) review gets the planner's review reason. A file the
    user put in a sub-folder of its category stays there unless its category
    changes (then it goes to the new category's folder, its name kept). What
    the user corrected (``flib fix``, or a move by hand that ``flib
@@ -66,7 +67,15 @@ from file_librarian.db.store import FileRow, Store
 from file_librarian.executor import Relocation, RunReport, relocate
 from file_librarian.finder_tags import tag_moved, untag_restored
 from file_librarian.hashing import same_content, unit_manifest
-from file_librarian.models import Decision, FileContext, FileStatus, Rules, RunMode, RunTrigger
+from file_librarian.models import (
+    Decision,
+    FileContext,
+    FileStatus,
+    ReviewReason,
+    Rules,
+    RunMode,
+    RunTrigger,
+)
 from file_librarian.pipeline import rules_for
 from file_librarian.planner import plan
 from file_librarian.providers.base import Provider, Usage
@@ -144,6 +153,8 @@ class ReprocessPlan:
     deferred: int = 0
     """Not sent because the cost cap was reached; the next reprocess goes on with them."""
     cost_usd: float = 0.0
+    cost_known: bool = True
+    """False when the provider's prices are unknown; the run then records no cost."""
     cached: int = 0
     rename: tuple[str, str] | None = None
     """For ``--rename-category``: the old and new names, applied to the index with the moves."""
@@ -374,7 +385,10 @@ def plan_reprocess(
     keep_names: Collection[Path] = {t.context.path for t in targets if t.keep_name}
     planned = plan(decisions, config, today=today, keep_names=keep_names)
     result = ReprocessPlan(
-        deferred=len(classified.deferred), cost_usd=classified.cost_usd, cached=classified.cached
+        deferred=len(classified.deferred),
+        cost_usd=classified.cost_usd,
+        cost_known=classified.cost_known,
+        cached=classified.cached,
     )
     for item in planned.items:
         target = by_path[item.context.path]
@@ -408,6 +422,8 @@ def plan_reprocess(
             answer=item.classification,
             name_choice=item.name_choice,
             previous=(row.status, row.category),
+            review_reason=item.review_reason,
+            review_category=item.review_category,
         )
         result.changes.append(Change(row, relocation))
     for ctx in classified.deferred:
@@ -485,6 +501,7 @@ def plan_to_review(targets: list[Target], config: Config) -> ReprocessPlan:
             category=None,
             reason="its category was removed",
             previous=(target.row.status, target.row.category),
+            review_reason=ReviewReason.CATEGORY_REMOVED,
         )
         result.changes.append(Change(target.row, relocation))
     return result
@@ -527,6 +544,7 @@ def apply(
         provider=provider,
         model=model,
         deferred=planned.deferred,
+        cost_usd=planned.cost_usd if planned.cost_known else None,
     )
     return Applied(report, store.count_index_changes(run_id))
 

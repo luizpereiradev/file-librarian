@@ -6,7 +6,9 @@ own run, ``planned`` before the move and ``done`` after, so ``flib undo``
 reverts it like any other. The index row follows the file (and with it the
 search index), and each change is recorded in ``corrections``, the same way
 ``flib reconcile`` records moves made by hand. The classifier then sends it
-as an example in later requests.
+as an example in later requests. A file fixed out of review loses its review
+reason; that change is journaled with the run (``index_changes``), so undo
+gives the reason back.
 
 The same safety rules as the executor apply: the file must still be the one
 indexed (same content), the destination is a configured folder under
@@ -103,7 +105,7 @@ def fix_file(
     except (OSError, ValueError) as exc:
         with store.transaction():
             store.set_operation(op_id, OperationStatus.FAILED)
-            store.finish_run(run_id, seen=1, moved=0, review=0, errors=1)
+            store.finish_run(run_id, seen=1, moved=0, review=0, errors=1, cost_usd=0.0)
         raise FixError(f"could not move {path}: {exc}") from exc
 
     category_change, name_change, warnings = _complete(
@@ -128,7 +130,7 @@ def complete_interrupted(
     if not moved:
         with store.transaction():
             store.set_operation(op.id, OperationStatus.FAILED)
-            store.finish_run(op.run_id, seen=1, moved=0, review=0, errors=1)
+            store.finish_run(op.run_id, seen=1, moved=0, review=0, errors=1, cost_usd=0.0)
         return
     row = store.file_by_id(op.file_id)
     status, category = op.fix
@@ -164,6 +166,9 @@ def _complete(
     with store.transaction():
         store.set_operation(op_id, OperationStatus.DONE, destination)
         store.relocate_file(row.id, destination, status, category)
+        if status is not FileStatus.REVIEW:
+            # Out of review: the reason goes, journaled so undo gives it back.
+            store.set_review(run_id, row.id, (None, None), old=row.review)
         if category_change is not None:
             store.add_correction(row.id, "category", *category_change)
         if name_change is not None:
@@ -174,6 +179,7 @@ def _complete(
             moved=int(status is FileStatus.ORGANIZED),
             review=int(status is FileStatus.REVIEW),
             errors=0,
+            cost_usd=0.0,  # nothing is sent to the provider
         )
     return category_change, name_change, warnings
 

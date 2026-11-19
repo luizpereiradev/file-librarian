@@ -9,7 +9,8 @@ every row of the index and looks at where the file really is:
   same size are hashed, so this stays cheap;
   - found inside a category folder: the row follows it. If the category
     changed, that is a correction by the user and is recorded (RF-29);
-  - found in the review folder: status ``review``;
+  - found in the review folder: status ``review``; one that had no review
+    reason gets ``moved_by_hand``;
   - found back in an input folder: status ``skipped``, so it is left alone;
 - found nowhere: status ``missing``; if it reappears later it is picked up
   again by the same search.
@@ -35,7 +36,7 @@ from pathlib import Path
 from file_librarian import hashing
 from file_librarian.config import Config, is_within
 from file_librarian.db.store import FileRow, Store
-from file_librarian.models import FileStatus
+from file_librarian.models import FileStatus, ReviewReason
 
 _TRACKED = {
     FileStatus.ORGANIZED,
@@ -185,6 +186,8 @@ def reconcile(config: Config, store: Store) -> ReconcileReport:
             status, category = FileStatus.SENSITIVE, None  # stays sensitive wherever it is
         with store.transaction():
             store.relocate_file(row.id, found, status, category)
+            if status is FileStatus.REVIEW and row.review_reason is None:
+                store.mark_review(row.id, ReviewReason.MOVED_BY_HAND)
             if status is FileStatus.ORGANIZED and category != row.category:
                 store.add_correction(row.id, "category", row.category, category or "")
                 report.recategorized.append((found, row.category, category or ""))

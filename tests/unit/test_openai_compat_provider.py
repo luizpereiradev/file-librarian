@@ -354,6 +354,18 @@ def test_cost_is_tokens_times_configured_prices(fake_openai: FakeOpenAI) -> None
     assert compat(fake_openai).cost_usd(Usage(1_000_000, 1_000_000)) == 0.0  # unknown
 
 
+def test_prices_are_unknown_only_for_a_remote_server_without_them() -> None:
+    def known(url: str, **prices: float) -> bool:
+        cfg = ProviderConfig(name="openai-compat", model="m", base_url=url, **prices)
+        return OpenAICompatProvider(cfg).prices_known
+
+    assert not known("https://api.example.com/v1")
+    assert known("https://api.example.com/v1", price_input_per_mtok=1.0)
+    assert known("https://api.example.com/v1", price_output_per_mtok=1.0)
+    assert known("http://127.0.0.1:1234/v1")  # a server on this Mac costs nothing
+    assert OllamaProvider(ProviderConfig(name="ollama", model="m")).prices_known
+
+
 def test_local_follows_the_base_url() -> None:
     def local(url: str) -> bool:
         cfg = ProviderConfig(name="openai-compat", model="m", base_url=url)

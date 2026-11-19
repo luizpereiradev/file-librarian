@@ -498,9 +498,11 @@ def test_recovery_of_an_undo_cut_off_mid_copy(
     if restored:
         assert (op.status, status) == (OperationStatus.UNDONE, FileStatus.SKIPPED)
         assert source.read_bytes() == b"mine" and not moved.exists()
+        assert op.undone_at is not None  # the recovered undo records when
     else:
         assert (op.status, status) == (OperationStatus.DONE, FileStatus.ORGANIZED)
         assert moved.read_bytes() == b"mine" and not source.exists()
+        assert op.undone_at is None
         with Store.open(cfg.database) as store:
             assert undo_run(store, config=cfg).restored == [(moved, source)]
     assert leftovers(downloads, finance(downloads)) == []

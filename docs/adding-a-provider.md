@@ -113,7 +113,10 @@ Rules for every provider:
     holds;
   - `cost_usd(usage)` turns that into dollars, with your provider's own price
     table kept in your module. If your backend reports the cost itself (the
-    `claude` CLI does), put it in `Usage(cost_usd=...)` and return it;
+    `claude` CLI does), put it in `Usage(cost_usd=...)` and return it. If
+    your provider cannot know its prices (a server whose prices the user did
+    not configure), add a `prices_known` attribute that is false then: runs
+    record their cost as unknown instead of 0;
   - `local = True` only when the model runs on this Mac. It skips the
     requests-per-minute spacing and nothing else: `never_send` and sensitive
     files are withheld from local providers too. Decide it from where the

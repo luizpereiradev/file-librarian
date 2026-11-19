@@ -524,23 +524,30 @@ def _database(section: Section, r: Redactor, config: Config | None, runs: int) -
                 section.lines.append(f"{table}: {count}")
             except sqlite3.OperationalError as exc:
                 section.lines.append(f"{table}: {r.text(str(exc))}")
-        rows = conn.execute(
-            "SELECT id, mode, trigger, started_at, finished_at, files_seen, files_moved,"
-            " files_review, errors FROM runs ORDER BY id DESC LIMIT ?",
-            (runs,),
-        ).fetchall()
+        # A database older than this flib (never migrated here) has no cost column yet.
+        columns = {str(c[1]) for c in conn.execute("PRAGMA table_info(runs)")}
+        cost = "cost_usd" if "cost_usd" in columns else "NULL"
+        query = (
+            "SELECT id, mode, trigger, started_at, finished_at, files_seen, files_moved,"  # noqa: S608 - a fixed column name
+            f" files_review, errors, {cost} FROM runs ORDER BY id DESC LIMIT ?"
+        )
+        rows = conn.execute(query, (runs,)).fetchall()
     finally:
         conn.close()
     if rows:
         header = (
             "id  mode      trigger   started                    finished  seen moved review errors"
+            "  cost US$"
         )
         block = [header]
         for row in rows:
-            run_id, mode, trigger, started, finished, *counts = row
+            run_id, mode, trigger, started, finished, *counts, usd = row
             done = "yes" if finished else "no"
             numbers = " ".join(f"{'-' if c is None else c:>5}" for c in counts)
-            block.append(f"{run_id:<3} {mode:<9} {trigger:<9} {started:<26} {done:<8} {numbers}")
+            price = "-" if not finished else "unknown" if usd is None else f"{usd:.4f}"
+            block.append(
+                f"{run_id:<3} {mode:<9} {trigger:<9} {started:<26} {done:<8} {numbers} {price:>9}"
+            )
         section.blocks.append((f"Last {len(rows)} run(s)", block))
 
 

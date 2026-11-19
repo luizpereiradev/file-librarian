@@ -13,7 +13,10 @@ back an undo a crash cut off. Restored files are marked
 lose the Finder tag the move added (if any), keeping every other tag.
 Given the configuration, a file restored into the library (undoing ``flib
 fix`` or ``flib reprocess``) gets back the status and category of the folder
-it returns to, and the Finder tag flib had given it there.
+it returns to, and the Finder tag flib had given it there. An undone entry
+records when (``operations.undone_at``). A file that leaves review loses its
+review reason; one that returns to review gets back the reason the run
+cleared, from the run's ``index_changes``.
 """
 
 from __future__ import annotations
