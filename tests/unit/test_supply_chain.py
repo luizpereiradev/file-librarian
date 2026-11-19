@@ -138,6 +138,7 @@ def test_guards_are_owned() -> None:
         "/scripts/",
         "/tests/conftest.py",
         "/tests/unit/test_supply_chain.py",
+        "/tests/unit/test_test_guards.py",
         "/SECURITY.md",
         "/docs/decisions/",
     ):

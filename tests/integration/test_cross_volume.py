@@ -91,6 +91,18 @@ def crash_in(monkeypatch: pytest.MonkeyPatch, name: str, *, after: bool = False)
     monkeypatch.setattr(fsops, name, crash)
 
 
+def crash_while_removing_trash(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make deleting the source moved aside (``*.delete``) crash; other deletions still work."""
+    real = fsops.remove_tree
+
+    def crash(path: Path) -> None:
+        if path.name.endswith(".delete"):
+            raise Crash
+        real(path)
+
+    monkeypatch.setattr(fsops, "remove_tree", crash)
+
+
 # --- the move -------------------------------------------------------------------------------
 
 
@@ -300,20 +312,13 @@ def test_recovery_after_a_crash_in_each_phase(
     finished: bool,
 ) -> None:
     source = put(downloads, "a.pdf", b"mine")
-    if where == "remove_tree":
-        real = fsops.remove_tree
-
-        def crash_on_trash(path: Path) -> None:
-            if path.name.endswith(".delete"):
-                raise Crash
-            real(path)
-
-        monkeypatch.setattr(fsops, "remove_tree", crash_on_trash)
-    else:
-        crash_in(monkeypatch, where, after=after)
-    with pytest.raises(Crash):
-        run(cfg)
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        if where == "remove_tree":
+            crash_while_removing_trash(m)
+        else:
+            crash_in(m, where, after=after)
+        with pytest.raises(Crash):
+            run(cfg)
 
     op, _, _ = only_op(cfg)
     assert (op.status, op.copy_phase) == (OperationStatus.PLANNED, phase)
@@ -349,10 +354,10 @@ def test_recovery_of_a_unit_cut_off_while_deleting_the_source(
             raise Crash
         real(path)
 
-    monkeypatch.setattr(fsops, "remove_tree", half_delete)
-    with pytest.raises(Crash):
-        run(cfg)
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        m.setattr(fsops, "remove_tree", half_delete)
+        with pytest.raises(Crash):
+            run(cfg)
     assert leftovers(downloads) == [".flib-1-k.delete"]
     with Store.open(cfg.database) as store:
         recover(store, cfg)
@@ -367,17 +372,10 @@ def test_recovery_puts_the_source_back_if_the_copy_vanished(
     downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = put(downloads, "a.pdf", b"mine")
-    real = fsops.remove_tree
-
-    def crash_on_trash(path: Path) -> None:
-        if path.name.endswith(".delete"):
-            raise Crash
-        real(path)
-
-    monkeypatch.setattr(fsops, "remove_tree", crash_on_trash)
-    with pytest.raises(Crash):
-        run(cfg)
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        crash_while_removing_trash(m)
+        with pytest.raises(Crash):
+            run(cfg)
     (finance(downloads) / "a.pdf").unlink()  # gone before the next run
     with Store.open(cfg.database) as store:
         recover(store, cfg)
@@ -392,10 +390,10 @@ def test_recovery_rolls_back_when_the_name_was_taken_meanwhile(
     downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = put(downloads, "a.pdf", b"mine")
-    crash_in(monkeypatch, "_place")
-    with pytest.raises(Crash):
-        run(cfg)
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        crash_in(m, "_place")
+        with pytest.raises(Crash):
+            run(cfg)
     other = put(downloads, "Organized/Finance/a.pdf", b"theirs")
     with Store.open(cfg.database) as store:
         recover(store, cfg)
@@ -411,10 +409,10 @@ def test_recovery_never_deletes_the_only_copy(
     downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch, verified: bool
 ) -> None:
     source = put(downloads, "a.pdf", b"mine")
-    crash_in(monkeypatch, "_copyfile", after=True)
-    with pytest.raises(Crash):
-        run(cfg)
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        crash_in(m, "_copyfile", after=True)
+        with pytest.raises(Crash):
+            run(cfg)
     staged = finance(downloads) / ".flib-1-k.copy" / "item"
     if not verified:
         staged.write_bytes(b"mi")  # a copy cut off half-way
@@ -626,17 +624,6 @@ def test_resume_with_nothing_left_anywhere_changes_nothing(tmp_path: Path) -> No
 # --- unreachable folders, locked entries, unsupported volumes ---------------------------------
 
 
-def crash_while_removing_trash(monkeypatch: pytest.MonkeyPatch) -> None:
-    real = fsops.remove_tree
-
-    def crash(path: Path) -> None:
-        if path.name.endswith(".delete"):
-            raise Crash
-        real(path)
-
-    monkeypatch.setattr(fsops, "remove_tree", crash)
-
-
 def tree(folder: Path) -> list[str]:
     return sorted(str(p.relative_to(folder)) for p in folder.rglob("*"))
 
@@ -653,13 +640,13 @@ def test_recovery_waits_while_the_destination_is_unavailable(
     put(downloads, "Project/a.txt", b"one")
     put(downloads, "Project/b.txt", b"two")
     make_old(downloads / "Project")
-    if where == "_place":
-        crash_in(monkeypatch, "_place")  # verified copy staged in the library
-    else:
-        crash_while_removing_trash(monkeypatch)  # source moved aside, copy in place
-    with pytest.raises(Crash):
-        run(cfg)
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        if where == "_place":
+            crash_in(m, "_place")  # verified copy staged in the library
+        else:
+            crash_while_removing_trash(m)  # source moved aside, copy in place
+        with pytest.raises(Crash):
+            run(cfg)
     op, _, _ = only_op(cfg)
     assert op.copy_volumes == (downloads.stat().st_dev, finance(downloads).stat().st_dev)
     library = downloads / "Organized"
@@ -692,10 +679,10 @@ def test_an_entry_that_cannot_be_recovered_does_not_stop_the_run(
     downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     put(downloads, "a.pdf", b"mine")
-    crash_in(monkeypatch, "_place")
-    with pytest.raises(Crash):
-        run(cfg)
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        crash_in(m, "_place")
+        with pytest.raises(Crash):
+            run(cfg)
 
     def broken(*_args: Any, **_kwargs: Any) -> None:
         raise PermissionError(errno.EACCES, "Permission denied")
@@ -763,10 +750,10 @@ def test_recovery_cleans_up_a_read_only_staged_copy(
     (downloads / "Project" / "sub").chmod(0o555)
     for folder in ("Project/sub", "Project"):
         make_old(downloads / folder)
-    crash_in(monkeypatch, "_copyfile", after=True)
-    with pytest.raises(Crash):
-        run(cfg)
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        crash_in(m, "_copyfile", after=True)
+        with pytest.raises(Crash):
+            run(cfg)
     with Store.open(cfg.database) as store:
         assert recover(store, cfg) == 1
     assert leftovers(downloads, finance(downloads)) == []
@@ -926,10 +913,10 @@ def test_recovery_keeps_a_source_edited_after_the_crash(
     downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     source = put(downloads, "a.pdf", b"mine")
-    crash_in(monkeypatch, "_discard")
-    with pytest.raises(Crash):
-        run(cfg)
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        crash_in(m, "_discard")
+        with pytest.raises(Crash):
+            run(cfg)
     source.write_bytes(b"MINE")  # same size, edited before the next run
     with Store.open(cfg.database) as store, caplog.at_level(logging.WARNING):
         recover(store, cfg)
@@ -948,10 +935,10 @@ def test_recovery_does_not_take_someone_elses_file_for_the_copy(
     downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = put(downloads, "a.pdf", b"mine")
-    crash_in(monkeypatch, "_place", after=True)  # renamed into place, phase still "copied"
-    with pytest.raises(Crash):
-        run(cfg)
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        crash_in(m, "_place", after=True)  # renamed into place, phase still "copied"
+        with pytest.raises(Crash):
+            run(cfg)
     moved = finance(downloads) / "a.pdf"
     moved.write_bytes(b"theirs")
     with Store.open(cfg.database) as store:
@@ -966,10 +953,10 @@ def test_recovery_finds_a_finished_copy_when_later_phases_were_lost(
     downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = put(downloads, "a.pdf", b"mine")
-    crash_in(monkeypatch, "_discard")
-    with pytest.raises(Crash):
-        run(cfg)
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        crash_in(m, "_discard")
+        with pytest.raises(Crash):
+            run(cfg)
     source.unlink()
     with Store.open(cfg.database) as store:
         store.conn.execute("UPDATE operations SET copy_phase = 'copying'")
@@ -1050,10 +1037,10 @@ def test_a_category_folder_deleted_on_a_mounted_volume_is_resolved(
     downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = put(downloads, "a.pdf", b"mine")
-    crash_in(monkeypatch, "_copyfile", after=True)
-    with pytest.raises(Crash):
-        run(cfg)
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        crash_in(m, "_copyfile", after=True)
+        with pytest.raises(Crash):
+            run(cfg)
     remove_tree(finance(downloads))  # deleted by hand, staged copy and all; the volume is there
     with Store.open(cfg.database) as store:
         assert recover(store, cfg) == 1
@@ -1083,10 +1070,10 @@ def test_recovery_does_not_take_another_folder_for_the_copied_unit(
 ) -> None:
     put(downloads, "Project/a.txt", b"one")
     make_old(downloads / "Project")
-    crash_in(monkeypatch, "_discard")  # copy in place, source still there
-    with pytest.raises(Crash):
-        run(cfg)
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        crash_in(m, "_discard")  # copy in place, source still there
+        with pytest.raises(Crash):
+            run(cfg)
     moved = finance(downloads) / "Project"
     remove_tree(moved)
     put(finance(downloads), "Project/other.txt", b"someone else's")  # same name, not ours
@@ -1152,10 +1139,10 @@ def test_recovery_without_a_source_does_not_take_another_folder_for_the_unit(
 ) -> None:
     put(downloads, "Project/a.txt", b"one")
     make_old(downloads / "Project")
-    crash_in(monkeypatch, "require_rename_excl")  # "copying" journaled, nothing copied yet
-    with pytest.raises(Crash):
-        run(cfg)
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        crash_in(m, "require_rename_excl")  # "copying" journaled, nothing copied yet
+        with pytest.raises(Crash):
+            run(cfg)
     remove_tree(downloads / "Project")  # the original deleted by hand
     foreign = put(finance(downloads), "Project/other.txt", b"someone else's")
     with Store.open(cfg.database) as store:

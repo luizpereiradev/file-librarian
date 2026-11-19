@@ -123,10 +123,10 @@ KNOWN = ["Finance", "Images", "Contracts"]
 @pytest.fixture
 def sao_paulo(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Local time UTC-3, so a local day and a UTC day differ."""
-    monkeypatch.setenv("TZ", "America/Sao_Paulo")
-    time.tzset()
-    yield
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        m.setenv("TZ", "America/Sao_Paulo")
+        time.tzset()
+        yield
     time.tzset()
 
 
