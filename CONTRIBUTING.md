@@ -58,6 +58,12 @@ A new branch of behaviour, especially a failure path, comes with a test.
   and `cfg` give a test a Downloads folder and the fake provider's config;
   `fake_openai` (opt-in) runs an OpenAI-compatible server on 127.0.0.1 for
   that test only.
+- **Never call `monkeypatch.undo()`.** The safety guards use the same
+  `monkeypatch` as the test, so `undo()` switches them off for the rest of it.
+  To patch something for part of a test, use
+  `with monkeypatch.context() as m:` and `m.setattr(...)`; only those patches
+  are reverted when the block ends. `tests/unit/test_test_guards.py` enforces
+  this.
 - A helper needed by more than one test module goes into `tests/_helpers.py`;
   test modules never import from each other.
 

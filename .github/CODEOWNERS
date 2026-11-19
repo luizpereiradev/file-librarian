@@ -10,6 +10,7 @@
 /scripts/                                @luizpereiradev
 /tests/conftest.py                       @luizpereiradev
 /tests/unit/test_supply_chain.py         @luizpereiradev
+/tests/unit/test_test_guards.py          @luizpereiradev
 
 # Security policy and architecture decisions
 /SECURITY.md                             @luizpereiradev

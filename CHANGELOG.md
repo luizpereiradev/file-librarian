@@ -415,6 +415,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Tests no longer call `monkeypatch.undo()`, which also switched off the
+  suite's safety guards (temporary HOME, no network) for the rest of a test; a
+  guard test keeps it from coming back.
 - The classification cache tells servers apart: answers from one
   `openai-compat` or `ollama` server are no longer reused for another server
   with the same model name (#71).
