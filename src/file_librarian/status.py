@@ -13,7 +13,7 @@ when some file has waited in review or failed for ``summary.min_age_days`` or
 more, it writes one line to the run log and, with ``summary.notify``, posts
 one macOS notification. The notification holds counts only, never a file
 name: notifications show on the lock screen. Whether it shows at all is up to
-macOS (see the README); the log and ``flib status`` are enough on their own,
+macOS (see docs/troubleshooting.md); the log and ``flib status`` are enough on their own,
 and a notification that fails never fails the run.
 
 All ``osascript`` calls go through ``OSASCRIPT`` (tests swap in a fake). The
@@ -325,7 +325,7 @@ def render(
     if status.database_exists:
         month = f"This month: US$ {status.month_cost_usd:.4f}"
         if status.month_unpriced_runs:
-            month += f" (plus {status.month_unpriced_runs} run(s) at unknown prices)"
+            month += f" (plus {status.month_unpriced_runs} run(s) without a recorded cost)"
         lines.append(month)
     return lines
 
@@ -369,7 +369,7 @@ def _last_run_lines(status: Status, config: Config) -> list[str]:
     when = _local(run.finished_at or run.started_at)
     names = {"schedule": "scheduled", "manual": "by hand", "mcp": "from an assistant"}
     trigger = names.get(run.trigger.value, run.trigger.value)
-    cost = "cost unknown" if run.cost_usd is None else f"US$ {run.cost_usd:.4f}"
+    cost = "no cost recorded" if run.cost_usd is None else f"US$ {run.cost_usd:.4f}"
     line = (
         f"Last run: {when}, {trigger}: {run.files_moved or 0} organized, "
         f"{run.files_review or 0} to review, "

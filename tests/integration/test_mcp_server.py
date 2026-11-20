@@ -119,6 +119,8 @@ def test_every_tool_has_a_description_and_schemas(cfg: Config) -> None:
             assert "untrusted" in tools[name].description
     assert "Finance" in tools["list_recent"].input_schema["properties"]["category"]["description"]
     assert {"history", "history_truncated"} <= set(tools["get_file"].output_schema["properties"])
+    unpriced = tools["get_stats"].output_schema["properties"]["runs_with_unknown_cost_this_month"]
+    assert "without a recorded cost" in unpriced["description"]
     assert "required" not in tools["search_files"].input_schema  # a filter alone is enough
     filters = tools["search_files"].input_schema["properties"]
     assert {"categories", "extensions", "since", "until"} <= set(filters)
@@ -128,6 +130,31 @@ def test_every_tool_has_a_description_and_schemas(cfg: Config) -> None:
     # The configured categories are named, so the assistant does not have to guess.
     category = tools["recategorize_file"].input_schema["properties"]["category"]
     assert "Finance" in category["description"]
+
+
+@pytest.mark.parametrize(
+    ("semantic", "leaves"),
+    [
+        ({}, False),  # semantic search off
+        ({"enabled": True}, False),  # Ollama on this Mac, the default
+        ({"enabled": True, "base_url": "http://127.0.0.1:8080/v1"}, False),
+        ({"enabled": False, "base_url": "https://embeddings.example.com/v1"}, False),
+        ({"enabled": True, "base_url": "https://embeddings.example.com/v1"}, True),
+    ],
+)
+def test_search_is_open_world_only_with_a_remote_embeddings_server(
+    downloads: Path, semantic: dict[str, Any], leaves: bool
+) -> None:
+    cfg = fake_config(downloads, search={"semantic": semantic})
+    tools = tool_names(cfg)
+    search = tools["search_files"]
+    assert search.annotations.open_world_hint is leaves
+    assert search.annotations.read_only_hint is True
+    assert ("outside this Mac" in search.description) is leaves
+    assert "untrusted" in search.description
+    for name, tool in tools.items():  # nothing else ever leaves the Mac
+        if name != "search_files":
+            assert tool.annotations.open_world_hint is False
 
 
 def test_read_only_hides_the_write_tools(downloads: Path) -> None:

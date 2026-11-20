@@ -3,7 +3,8 @@
 A provider turns a `FileContext` into a `Classification`. It only decides:
 it never reads, moves or names files. The reference implementations, all in
 `src/file_librarian/providers/`: `anthropic.py` (an SDK), `claude_code.py` (a
-CLI), `openai_compat.py` (plain HTTP with the standard library) and
+CLI), `openai_compat.py` (plain HTTP with the standard library, through the
+shared client in `http.py`) and
 `ollama.py` (a preset: a subclass that changes defaults and messages).
 
 ## What you will touch
@@ -139,9 +140,10 @@ Rules for every provider:
   models reject non-default values with HTTP 400.
 - **Over HTTP, send only to the configured URL.** Refuse redirects instead of
   following them, reject credentials in the URL, never log or echo the key,
-  and keep loopback traffic away from proxies (see `build_opener` in
-  `openai_compat.py`). Prefer the standard library to a new dependency
-  (CONTRIBUTING.md, "Dependencies").
+  and keep loopback traffic away from proxies. `JsonClient` and
+  `build_opener` in `providers/http.py` do all of this, for `openai-compat`
+  and semantic search's embeddings; reuse them. Prefer the standard library
+  to a new dependency (CONTRIBUTING.md, "Dependencies").
 - **Disable your SDK's own retries** (for example `max_retries=0`) so the
   classifier's backoff and rate limit are the only ones.
 - **Calling a CLI instead of an HTTP API** (like `claude-code`): pass the
@@ -209,8 +211,8 @@ REGISTRY = {..., "example": _example}
   account constant in `keychain.py`, a `KeySpec` in `credentials.spec_for`,
   and the spec in `credentials.all_specs` (which `flib doctor` uses to redact
   every key).
-- `flib key --provider <name>` works through `spec_for`; update the
-  provider names in its help and error texts in `cli.py`.
+- `flib key set|status|delete --provider <name>` works through `spec_for`;
+  update the provider names in its help and error texts in `cli.py`.
 - Add the variable to the list `fake_home` deletes in `tests/conftest.py`, so
   a key in your shell never reaches the test suite.
 
@@ -258,12 +260,13 @@ Cover, in `tests/unit/test_<name>_provider.py`:
 
 ## 6. Document it
 
-- **README.md:** the Requirements list, its own section (configuration,
-  where the key comes from, trade-offs), the Privacy section (what goes
-  where), and the vision paragraph if it reads images.
+- **README.md:** the Requirements list, its own section under Providers
+  (configuration, where the key comes from, trade-offs), a row in the
+  Privacy section's table (what goes where), and the vision paragraph if it
+  reads images.
 - **`config.example.yaml`:** the `provider.name` comment and its settings.
-- **CHANGELOG.md:** one entry at the top of `### Added` under
-  `## [Unreleased]`.
+- **CHANGELOG.md:** one entry under `### Added` in
+  `## [Unreleased]`, in the Providers group.
 
 ## Checklist for the pull request
 

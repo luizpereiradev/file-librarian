@@ -253,7 +253,8 @@ class LibraryStats:
     month_cost_usd: float = 0.0
     """Provider cost of the runs started this month, those with a known cost."""
     month_unpriced_runs: int = 0
-    """Runs started this month whose cost is unknown (not in ``month_cost_usd``)."""
+    """Runs started this month without a recorded cost (not in ``month_cost_usd``): the
+    provider's prices are unknown, or the run predates the cost column (migration 0010)."""
 
 
 @dataclass(frozen=True, slots=True)

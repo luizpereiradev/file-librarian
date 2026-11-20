@@ -180,7 +180,12 @@ def fake_home(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Monk
     home = tmp_path_factory.mktemp("home")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("FLIB_CONFIG", raising=False)
-    for name in ("ANTHROPIC_API_KEY", "FLIB_OPENAI_COMPAT_API_KEY", "OPENAI_API_KEY"):
+    for name in (
+        "ANTHROPIC_API_KEY",
+        "FLIB_OPENAI_COMPAT_API_KEY",
+        "OPENAI_API_KEY",
+        "FLIB_EMBEDDINGS_API_KEY",
+    ):
         monkeypatch.delenv(name, raising=False)
     return home
 

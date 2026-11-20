@@ -7,13 +7,16 @@ a complete, recent example to read alongside this guide.
 
 ## Where it runs
 
-`context.py` builds what the provider may see for each file, in this order:
+`context.py` builds what the provider may see for each file (folder units
+and `.app` bundles never reach an extractor), in this order:
 
 1. a sensitive name (`id_rsa`, `*.pem`...) or a `never_send` match: the
    extractor is **not** called;
 2. `extractor.extract(path, SCAN_WINDOW)`: note the limit is `SCAN_WINDOW`
    (256,000 characters), not `provider.max_chars_per_file`;
-3. the secret scan (`sensitive.find_secrets`) reads everything you returned.
+3. the secret scan (`sensitive.find_secrets`, on unless
+   `sensitive.detect_secrets` is turned off, like the name check in step 1)
+   reads everything you returned.
    A hit marks the file sensitive: nothing is sent and it stays where it is;
 4. only then is the text cut to `provider.max_chars_per_file` (4,000 by
    default) and sent.

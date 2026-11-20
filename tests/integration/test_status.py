@@ -139,6 +139,29 @@ def test_given_up_failures_say_so(downloads: Path) -> None:
     assert "    1  classification failed (gave up after 3 attempts; for 10 days)" in lines
 
 
+def test_runs_without_a_recorded_cost_are_counted_neutrally(downloads: Path) -> None:
+    # The index cannot tell unknown prices from a run recorded before costs were
+    # kept (migration 0010), so the wording names neither cause.
+    cfg = fake_config(downloads)
+    populate(downloads, cfg)
+    with Store.open(cfg.database) as store:
+        store.conn.execute("UPDATE runs SET cost_usd = 0.5")
+        store.conn.execute(
+            """INSERT INTO runs (mode, trigger, started_at, finished_at, cost_usd)
+               VALUES ('run', 'schedule', ?, ?, NULL)""",
+            (datetime.now(UTC).isoformat(), datetime.now(UTC).isoformat()),
+        )
+    state = st.collect(cfg)
+    lines = st.render(state, cfg)
+    assert "This month: US$ 0.5000 (plus 1 run(s) without a recorded cost)" in lines
+    assert any(
+        line.startswith("Last run: ") and line.endswith("; no cost recorded") for line in lines
+    )
+    assert not any("unknown prices" in line for line in lines)
+    month = json.loads(st.to_json(state, cfg))["month"]
+    assert month == {"cost_usd": 0.5, "runs_with_unknown_cost": 1}  # the key stays
+
+
 def test_status_takes_no_lock_and_writes_nothing(downloads: Path) -> None:
     cfg = fake_config(downloads)
     populate(downloads, cfg)

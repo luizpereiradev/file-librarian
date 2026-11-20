@@ -7,8 +7,10 @@ classifier, uses AI. Each stage is a module with typed input and output
 ```text
  input folders
       │
- 1. Scanner      scanner.py        new, stable files (by sha256); folders/.app as one unit;
-      │                            iCloud cloud-only items skipped from lstat, never read
+ 1. Scanner      scanner.py,       new, stable files (by sha256); folders/.app as one unit;
+      │          hashing.py        iCloud cloud-only items skipped from lstat, never read;
+      │                            files locked by Data Protection skipped as "locked";
+      │                            duplicates found here, never classified
  2. Extractor    context.py,       FileContext: metadata, download origin, text excerpt;
       │          extractors/,      secret detection here (sensitive.py): sensitive files stop
       │          sensitive.py      at this stage and stay where they are; with vision on,
@@ -19,12 +21,17 @@ classifier, uses AI. Each stage is a module with typed input and output
       │                            (extractors/visual.py) go to providers that read them
  4. Planner      planner.py        Operations: naming pattern, rename policy, collisions,
       │                            low confidence → review folder.   `flib simulate` stops here
- 5. Executor     executor.py,      single-instance lock; record "planned" → move → mark "done";
+ 5. Executor     executor.py,      record "planned" → move → mark "done"; crash recovery;
       │          fsops.py          another volume: copy → verify → place → delete, each journaled
       │
- 6. Indexer      db/, search.py,   file record, FTS index, category as Finder tag
-                 finder_tags.py
+ 6. Indexer      db/, search.py,   file record, FTS index, category as Finder tag;
+                 finder_tags.py,   with semantic search on, vectors for new and changed rows
+                 embeddings.py
 ```
+
+`pipeline.py` chains the stages for `flib run` and `flib simulate`. A real run
+holds the single-instance lock (`lock.py`) from its first read of the index to
+its last write, and first finishes any move a crash interrupted.
 
 ## The one rule
 
@@ -190,7 +197,7 @@ model.
 
 ## Known limits
 
-Found in the safety review of M1 and accepted for now:
+Found in safety reviews (the first one of M1) and accepted for now:
 
 - **Same-user races.** Between checking a category folder and renaming into
   it, another process running as you could swap the folder for a symlink.
@@ -225,14 +232,15 @@ One SQLite file, outside the organized folders (default
 
 | Table | Holds |
 | --- | --- |
-| `files` | one row per file: original and current name/path, hash, origin, category, description, tags, status, attempts; for a file in review, why (`review_reason`: `low_confidence`, `unknown_category`, `category_removed`, `moved_by_hand`) and the category the model suggested (`review_category`), both NULL outside review; for a duplicate (status `duplicate`, RF-21), the row of its original (`duplicate_of`). A content has one row besides its duplicates' (a partial unique index on `sha256`) |
-| `runs` | one row per `flib run`, `flib fix` or `flib reprocess`, with what started it (`trigger`: schedule, manual, mcp, reprocess), counts (with `files_duplicates`, the duplicates set aside) and the estimated provider cost (`cost_usd`: 0 for a fix, NULL when the provider's prices are unknown); simulations record none |
-| `operations` | the journal behind `flib undo`, including the Finder tag each move added, the phase of a cross-volume copy in progress, for `flib fix` and `flib reprocess` the status and category it sets and, for `flib reprocess`, the ones the file had before (undo gives those back), and when it was undone (`undone_at`, set by undo and by the recovery of an interrupted undo); for a move that takes over a `missing` row (RF-21), the record the row gets (`pending_record`) |
-| `index_changes` | what a run changed in the index without moving a file (a category renamed in rows and corrections, a Finder tag renamed in the journal, a new description, tags or confidence, a review reason set or cleared by `flib reprocess` or `flib fix`), reverted by `flib undo` with the run, and with one file by `flib undo --file` |
-| `corrections` | user recategorizations and renames (`flib fix`, `flib reconcile`); the latest per file and field, while still in effect, are sent as examples and are part of the cache key |
-| `files_fts` | FTS5 index over names, description and tags; accents ignored |
-| `meta` | flib's own bookkeeping as key and value; `summary.last_at` is when the periodic summary was last written |
-| `embeddings` | only with `search.semantic.enabled`: one vector per file for semantic search (float32, normalized, as a BLOB), with the model, dimension and a hash of the embedded text (names, category, tags, description; never content), so a changed row or model is embedded again; never for a sensitive or `never_send` file. Searched by brute-force cosine in pure Python (`embeddings.py`), no extension |
+| `files` | one row per file or folder unit. Identity: `sha256` (a folder unit's manifest digest, with `is_unit` 1), `extension`, `size_bytes`. Where: `original_name`/`original_path` and `current_name`/`current_path`. What: `source_url` (the download origin), `category`, `description`, `tags` (JSON array), `confidence`, and which name the model judged better (`name_choice`: `original` or `proposed`, with `name_choice_reason`; NULL when no rename was considered). State: `status` (`organized`, `review`, `skipped`, `missing`, `failed`, `sensitive`, `duplicate`), `attempts` and `last_error` (RF-30), `provider`, `model`, `run_id`, `processed_at`. For a file in review, why (`review_reason`: `low_confidence`, `unknown_category`, `category_removed`, `moved_by_hand`) and the category the model suggested (`review_category`), both NULL outside review. For a duplicate (status `duplicate`, RF-21), the row of its original (`duplicate_of`), kept whatever its status becomes later. A content has one row besides its duplicates' (a partial unique index on `sha256`) |
+| `runs` | one row per `flib run`, `flib fix` or `flib reprocess` (and each MCP `recategorize_file`), with `mode` (always `run`: simulations record none), what started it (`trigger`: `schedule`, `manual`, `mcp`, `reprocess`), `started_at`/`finished_at`, counts (`files_seen`, `files_moved`, `files_review`, `errors`, and `files_duplicates`, the duplicates set aside) and the estimated provider cost (`cost_usd`: 0 for a fix, NULL when the provider's prices are unknown and on runs recorded before migration 0010; `files_duplicates` is NULL on runs before 0013) |
+| `operations` | the journal behind `flib undo`: one entry per move (`src_path`, `dst_path`, `status`: `planned`, `done`, `undone`, `failed`, `skipped`), with the device and inode moved (`src_dev`, `src_ino`, so recovery and reconcile know the very item even if it was edited), the Finder tag the move added (`finder_tag`), the phase of a cross-volume copy in progress (`copy_phase`, with `copy_key` naming its staging and trash paths and `copy_src_dev`/`copy_dst_dev`), for `flib fix` and `flib reprocess` the status and category it sets (`fix_status`, `fix_category`) and, for `flib reprocess`, the ones the file had before (`prev_status`, `prev_category`; undo gives those back), when it was undone (`undone_at`, set by undo and by the recovery of an interrupted undo), and, for a move that takes over a `missing` row (RF-21), the record the row gets (`pending_record`, JSON) |
+| `index_changes` | what a run changed in the index without moving a file (a category renamed in rows and corrections, a Finder tag renamed in the journal, a new description, tags or confidence, a review reason set or cleared by `flib reprocess` or `flib fix`): `target` (one of a fixed list of columns), `row_id`, `old_value`, `new_value`, `status` (`done`, `undone`). Reverted by `flib undo` with the run, and with one file by `flib undo --file` |
+| `corrections` | user recategorizations and renames (`flib fix`, and those `flib reconcile` finds): `field` (`category` or `name`), `old_value`, `new_value`; the latest per file and field, while still in effect, are sent as examples and are part of the cache key |
+| `classification_cache` | answers already paid for, per content (`sha256`) and `rules_key` (a hash of provider, model, effort, categories and hints, language, examples and prompt version; answers that saw an image or PDF have a key of their own), kept 7 days (`classifier.CACHE_DAYS`), so `flib run` after `flib simulate`, or `flib reprocess`, does not pay twice |
+| `files_fts` | FTS5 index over `original_name`, `current_name`, `description` and `tags`, kept in step with `files` by triggers; accents ignored |
+| `meta` | flib's own bookkeeping as key and value: `summary.last_at` (when the periodic summary was last written), `duplicates.first_moved_at` and `duplicates.notice_seen_at` (for the one-time note about duplicates) |
+| `embeddings` | only with `search.semantic.enabled`: one vector per file for semantic search (`vector`, float32, normalized, as a BLOB), with `model`, `dimension` and `text_hash`, a hash of the embedded text (names, category, tags, description; never content), so a changed row or model is embedded again; never for a sensitive or `never_send` file, nor for a duplicate. Searched by brute-force cosine in pure Python (`embeddings.py`), no extension |
 
 Schema changes are new numbered files in `db/migrations/`; the applied version
 is `PRAGMA user_version`. Names and paths are stored in Unicode NFC.
@@ -303,7 +311,10 @@ and without it the command explains how to enable it:
 | Tool | Reuses |
 | --- | --- |
 | `search_files` | `search.py`, as `flib search`; `semantic` is `--semantic` |
-| `get_file` | the index row, plus the download origin and iCloud-only check `flib inspect` uses (a cloud-only file is never read) |
+| `get_file` | the index row and its journaled moves, plus the download origin and iCloud-only check `flib inspect` uses (a cloud-only file is never read) |
+| `list_recent` | the index: the newest organized files, optionally in one category |
+| `list_review` | the index: what waits in the review folder and why (`review_reason`) |
+| `get_stats` | `Store.stats()`, as `flib status`: counts by status and category, the size filed, the last run and this month's provider cost |
 | `recategorize_file` | `fix.fix_file`, as `flib fix`, with run trigger `mcp` |
 | `undo` | `undo.py`, as `flib undo` |
 
@@ -375,6 +386,31 @@ summary can fail the run: errors become a warning line in the log. macOS can
 drop such a notification without telling (it is attributed to Script Editor,
 whose notifications may be off, and Focus modes hide it); the log line and
 `flib status` do not depend on it.
+
+## Modules
+
+Everything is in `src/file_librarian/`:
+
+| Module | What it does |
+| --- | --- |
+| `cli.py`, `__main__.py` | the `flib` command (Typer); prompts and output only, the work is in the modules below |
+| `config.py`, `locales.py` | the YAML configuration, validated at startup; the defaults each `language` brings |
+| `models.py` | typed values passed between stages (`FileContext`, `Classification`, `Decision`...) |
+| `pipeline.py` | one run or simulation, stage by stage |
+| `scanner.py`, `hashing.py`, `globs.py` | stage 1; content identity (SHA-256, folder manifests, iCloud-only check); glob matching as the Mac compares names |
+| `context.py`, `sensitive.py`, `extractors/` | stage 2; secret detection; one extractor per format (`text`, `office`, `pdf`, `archive`, `mail`), plus `origin.py` (download origin) and `visual.py` (images and scanned PDFs for vision); the interface is in `extractors/base.py` |
+| `classifier.py`, `providers/` | stage 3; one module per provider (`anthropic`, `claude_code`, `openai_compat`, `ollama`, and `fake` for tests), the shared prompt (`prompt.py`), the HTTP client (`http.py`) and the interface (`base.py`) |
+| `planner.py`, `naming.py` | stage 4; safe file names and dates |
+| `executor.py`, `fsops.py` | stage 5 and crash recovery; `fsops.py` is the only code that moves, copies or deletes your files (the rest writes only flib's own: logs, reports, the trial copies of `flib init`) |
+| `db/store.py`, `db/migrations/` | the SQLite store and its numbered migrations |
+| `search.py`, `embeddings.py`, `finder_tags.py` | full-text search and filters; optional semantic search; the category as a Finder tag |
+| `lock.py`, `protection.py`, `catchup.py` | the instance and reprocess locks; Data Protection (files readable only while the Mac is unlocked); the wait for an unlock after a scheduled run |
+| `undo.py`, `fix.py`, `reconcile.py`, `reprocess.py` | `flib undo`, `flib fix`, `flib reconcile`, `flib reprocess` |
+| `status.py`, `doctor.py`, `runlog.py` | `flib status` and the periodic summary; the redacted `flib doctor` report; one log file per run |
+| `onboarding.py` | `flib init`, except its questions |
+| `scheduler/` | the launchd agent behind `flib schedule` |
+| `credentials.py`, `keychain.py` | where an API key comes from; the macOS Keychain through `/usr/bin/security` |
+| `mcp_server.py` | `flib mcp` (optional `mcp` extra) |
 
 ## Extension points
 
