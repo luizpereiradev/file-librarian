@@ -2027,6 +2027,131 @@ def doctor(
     typer.echo(f"  open -R {shlex.quote(str(path))}")
 
 
+@app.command("eval")
+def eval_command(
+    provider_name: Annotated[
+        str,
+        typer.Option(
+            "--provider", help="anthropic, claude-code, ollama, openai-compat or fake (offline)."
+        ),
+    ] = "anthropic",
+    model: Annotated[
+        str | None,
+        typer.Option(
+            "--model", help="The model [default: the provider's default, as `flib init` picks]."
+        ),
+    ] = None,
+    base_url: Annotated[
+        str | None,
+        typer.Option("--base-url", help="openai-compat (required) or ollama: the API root."),
+    ] = None,
+    language: Annotated[
+        str, typer.Option("--language", help="en or pt-BR: the categories and names to use.")
+    ] = "en",
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", min=1, help="Only a fixed sample of this many items."),
+    ] = None,
+    max_cost: Annotated[
+        float,
+        typer.Option("--max-cost", min=0.0001, help="Stop sending once this much (US$) is spent."),
+    ] = 1.0,
+    as_json: Annotated[bool, typer.Option("--json", help="Print the result as JSON.")] = False,
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="Save the result as JSON here, for --compare.", dir_okay=False),
+    ] = None,
+    compare: Annotated[
+        list[Path] | None,
+        typer.Option(
+            "--compare",
+            help="A saved result: compare this run with it. Twice: compare the two "
+            "saved results, without running.",
+            dir_okay=False,
+            exists=True,
+        ),
+    ] = None,
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Do not ask before sending to a paid provider.")
+    ] = False,
+) -> None:
+    """Measure classification quality on a built-in synthetic corpus of about 150 files.
+
+    The corpus is written to a temporary folder and run through the real
+    pipeline in simulate mode with a throwaway database: your configuration,
+    library, index and cache are never read, and nothing of yours moves.
+    Before sending anything to a provider that is not local, it shows the
+    estimated cost and asks. Reports category accuracy, the review rate,
+    whether descriptive names were kept, and cost and speed. See docs/quality.md.
+    """
+    from file_librarian.evals import harness
+    from file_librarian.evals import score as scoring
+
+    saved = compare or []
+    if len(saved) > 2:
+        _fatal("--compare takes one saved result (compared with a new run) or two")
+    if saved and as_json:
+        _fatal("--compare prints a table; save runs with --out and compare those")
+    try:
+        runs = [scoring.load(path) for path in saved]
+    except scoring.ResultError as exc:
+        _fatal(str(exc))
+    if len(runs) == 2:
+        for line in scoring.compare(runs[0], runs[1]):
+            typer.echo(line)
+        return
+    if language not in LOCALES:
+        _fatal(f"--language must be one of {', '.join(LOCALES)}, not {language!r}")
+    settings = harness.Settings(
+        provider=provider_name,
+        model=model,
+        language=language,
+        limit=limit,
+        max_cost_usd=max_cost,
+        base_url=base_url,
+    )
+    try:
+        with harness.prepared(settings) as prep:
+            provider = get_provider(prep.config.provider)
+            if not provider.local:
+                estimate = harness.estimate(prep, provider)
+                price = f"US$ {estimate.cost_usd:.4f}" if estimate.prices_known else "unknown"
+                typer.echo(
+                    f"{estimate.to_send} synthetic item(s) to send to {provider.name} "
+                    f"({prep.config.provider.model}): estimated cost {price}, stopping at "
+                    f"US$ {max_cost:.2f}. {estimate.withheld} sensitive item(s) are never sent.",
+                    err=True,
+                )
+                if not yes and not typer.confirm("Send them?", default=False, err=True):
+                    typer.echo("Nothing sent.", err=True)
+                    return
+            result = harness.run(prep, provider)
+    except (harness.SettingsError, ProviderError, ScanError) as exc:
+        _fatal(str(exc))
+    data = scoring.to_json(result)
+    if out is not None:
+        try:
+            out.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+        except OSError as exc:
+            _fatal(f"cannot write {out}: {exc}")
+    if as_json:
+        typer.echo(json.dumps(data, ensure_ascii=False, indent=1))
+    else:
+        for line in scoring.report_lines(result):
+            typer.echo(line)
+        if out is not None:
+            typer.echo(f"Saved to {out}.")
+        if runs:
+            typer.echo("")
+            for line in scoring.compare(runs[0], result):
+                typer.echo(line)
+    if result.leaked:
+        _fatal(
+            "a sensitive item reached the provider, which must never happen: "
+            + ", ".join(result.leaked)
+        )
+
+
 def main() -> None:
     if sys.platform != "darwin":
         typer.echo("file-librarian supports macOS only.", err=True)

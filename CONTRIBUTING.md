@@ -81,6 +81,23 @@ workflows (see [SECURITY.md](SECURITY.md#supply-chain)).
 - A helper needed by more than one test module goes into `tests/_helpers.py`;
   test modules never import from each other.
 
+## Changing the prompt or the classifier
+
+The prompt (`providers/prompt.py`), the answer schema and the planner's
+rename and review rules decide how well files are filed, and tests with fixed
+answers cannot see that. When you change them, bump `PROMPT_VERSION` in
+`classifier.py` and measure before and after with `flib eval` (a few US cents
+with the default model; [docs/quality.md](docs/quality.md)):
+
+```sh
+uv run flib eval --out before.json        # on main
+uv run flib eval --compare before.json    # on your branch
+```
+
+Paste the comparison into the pull request. The corpus is synthetic and
+public: a case it misses belongs in `src/file_librarian/evals/corpus.py`,
+never a real file.
+
 ## Questions
 
 Ask in [Discussions](https://github.com/luizpereiradev/file-librarian/discussions).
