@@ -20,10 +20,25 @@ This is where the model's answer stops being trusted. For each item:
   ``suggested_name``. Either way the naming rules (pattern, date, sanitising,
   length, extension) are applied here, never by the model.
 
-Every destination is ``output_root / <configured folder> / <safe name>``;
-``_destination`` re-checks that before returning it. Names are unique against
-what is already on disk and earlier items in the same plan, compared the way
-APFS compares them; an item's own current name is free for it, so a file
+Every destination is ``output_root / <configured folder> / <safe name>``, or,
+for a category with a ``layout``, ``output_root / <category> / <sub-folders> /
+<safe name>``; ``_destination`` re-checks that before returning it.
+
+Layouts (#86): each segment of the category's ``layout`` becomes one folder.
+``{year}`` and ``{month}`` (two digits) come from the document date the model
+read, else the file's download date, else the processing date: the same date
+the naming pattern uses, so a file's folder and its name agree. ``{issuer}``
+is the organisation the model named; its folder is matched against the
+sub-folders already there (and those planned earlier in the same plan) with
+``naming.match_issuer``, so the same company always lands in the same folder,
+spelled as it was the first time. A value that is unknown (no issuer) or
+unusable (nothing left once made a folder name, or something that is not a
+real folder already at that place) stops the layout there: the file goes
+to the deepest folder that could be resolved, at worst the category's own.
+
+Names are unique per final folder against what is already on disk and
+earlier items in the same plan, compared the way APFS compares them; an
+item's own current name is free for it, so a file
 ``flib reprocess`` re-plans into the folder it is already in keeps its name.
 Duplicates (RF-21) come last, unclassified: each goes to
 ``output_root / duplicates_folder`` under its own name (``-N`` if taken), once
@@ -36,13 +51,16 @@ the copy, and nothing is recorded about it.
 
 from __future__ import annotations
 
-from collections.abc import Collection
+import os
+import stat
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import cast
 
-from file_librarian.config import Config, folder_key
+from file_librarian.config import Category, Config, folder_key, layout_segments
+from file_librarian.hashing import is_dataless
 from file_librarian.models import (
     Classification,
     Decision,
@@ -54,6 +72,8 @@ from file_librarian.models import (
 from file_librarian.naming import (
     build_name,
     candidate_names,
+    issuer_folder_name,
+    match_issuer,
     original_subject,
     safe_component,
     split_name,
@@ -129,6 +149,101 @@ class _Names:
             raise UnsafeDestinationError(f"{folder} exists and is not a folder") from exc
 
 
+class _Folders:
+    """Sub-folders per parent folder: real folders on disk plus those already planned."""
+
+    def __init__(self) -> None:
+        self._known: dict[Path, list[str]] = {}
+
+    def issuer(self, parent: Path, issuer: str) -> str | None:
+        """The folder under ``parent`` for ``issuer``: one that already holds it, else a
+        new one spelled like ``issuer``; ``None`` when no folder name can be made."""
+        names = self._known.get(parent)
+        if names is None:
+            names = self._known[parent] = _real_folders(parent)
+        found = match_issuer(issuer, names)
+        if found is not None:
+            return found
+        name = issuer_folder_name(issuer)
+        if name is not None:
+            names.append(name)
+        return name
+
+
+def _real_folders(parent: Path) -> list[str]:
+    """The visible real folders in ``parent`` (no symlinks, no files), by name."""
+    try:
+        entries = list(os.scandir(parent))
+    except OSError:
+        return []
+    return sorted(
+        e.name for e in entries if not e.name.startswith(".") and e.is_dir(follow_symlinks=False)
+    )
+
+
+def _usable_folder(path: Path) -> bool:
+    """Nothing is at ``path`` yet, or a real folder is that is not only in iCloud
+    (listing it to find a free name would download it)."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return stat.S_ISDIR(st.st_mode) and not is_dataless(st)
+
+
+def layout_parts(
+    category: Category, folder: Path, when: date, issuer: str | None, folders: _Folders
+) -> tuple[str, ...]:
+    """The sub-folders ``category``'s layout gives a file, below its folder ``folder``.
+
+    The layout stops at the first value that is unknown or unusable: the file
+    goes to the deepest folder resolved (see the module docstring).
+    """
+    if category.layout is None:
+        return ()
+    parts: list[str] = []
+    for segment in layout_segments(category.layout):
+        name: str | None
+        if segment == "{issuer}":
+            name = folders.issuer(folder, issuer) if issuer else None
+        else:
+            name = segment.format(year=f"{when.year:04d}", month=f"{when.month:02d}")
+        if name is None or not _usable_folder(folder / name):
+            break
+        parts.append(name)
+        folder = folder / name
+    return tuple(parts)
+
+
+class Placement:
+    """The names and issuer folders one plan has taken so far, on disk and planned.
+
+    ``flib reprocess --apply-layout`` places files with it the way a run does.
+    """
+
+    def __init__(self) -> None:
+        self.names = _Names()
+        self.folders = _Folders()
+
+    def in_category(
+        self,
+        config: Config,
+        category: Category,
+        file_name: str,
+        ctx: FileContext,
+        *,
+        when: date,
+        issuer: str | None,
+    ) -> Path:
+        """Where ``ctx`` goes in ``category``, its layout applied, under ``file_name``
+        (or the next free ``-N``)."""
+        folder = config.output_root / category.name
+        sub = layout_parts(category, folder, when, issuer, self.folders)
+        return _destination(config, category.name, file_name, self.names, ctx, sub)
+
+
 def plan(
     decisions: list[Decision],
     config: Config,
@@ -136,19 +251,28 @@ def plan(
     today: date | None = None,
     keep_names: Collection[Path] = (),
     duplicates: Collection[Duplicate] = (),
+    filed_on: Mapping[Path, date] | None = None,
 ) -> Plan:
     """Plan every decision, then every duplicate. ``today`` names files that carry
     no other date.
 
     Items at a path in ``keep_names`` are never renamed (``flib reprocess``:
-    a name the user chose).
+    a name the user chose). ``filed_on`` gives files already in the library
+    the day they were filed, used instead of ``today`` by a layout's
+    ``{year}`` and ``{month}``, so reprocessing never moves a file to this
+    year's folder just because it carries no date.
     """
     result = Plan()
-    names = _Names()
+    placement = Placement()
+    names = placement.names
     today = today or date.today()
+    filed_on = filed_on or {}
     for decision in decisions:
+        path = decision.context.path
         try:
-            item = _plan_one(decision, config, names, today, decision.context.path in keep_names)
+            item = _plan_one(
+                decision, config, placement, today, path in keep_names, filed_on.get(path, today)
+            )
         except (UnsafeDestinationError, OSError) as exc:
             # One odd item must never stop the run: it stays where it is.
             item = PlannedItem(
@@ -217,9 +341,15 @@ _FILED = frozenset({FileStatus.ORGANIZED, FileStatus.REVIEW})
 
 
 def _plan_one(
-    decision: Decision, config: Config, names: _Names, today: date, keep_name: bool
+    decision: Decision,
+    config: Config,
+    placement: Placement,
+    today: date,
+    keep_name: bool,
+    filed: date,
 ) -> PlannedItem:
     ctx = decision.context
+    names = placement.names
     if ctx.sensitive:
         reason = ctx.metadata.sensitive or "sensitive content"
         return PlannedItem(ctx, FileStatus.SENSITIVE, None, f"sensitive: {reason}")
@@ -256,7 +386,14 @@ def _plan_one(
         if choice == "proposed":
             new_name = build_name(original, answer.suggested_name, when, config.naming)
     chosen = new_name or original
-    destination = _destination(config, category.name, chosen, names, ctx)
+    destination = placement.in_category(
+        config,
+        category,
+        chosen,
+        ctx,
+        when=answer.document_date or ctx.downloaded or filed,
+        issuer=answer.issuer,
+    )
     reason = f"category {category.name}"
     if choice == "original":
         reason += ", original name kept"
@@ -292,17 +429,37 @@ def _to_review(
 
 
 def _destination(
-    config: Config, folder_name: str, file_name: str, names: _Names, ctx: FileContext
+    config: Config,
+    folder_name: str,
+    file_name: str,
+    names: _Names,
+    ctx: FileContext,
+    sub: tuple[str, ...] = (),
 ) -> Path:
+    """``output_root / folder_name / *sub / <free safe name>``, checked.
+
+    ``sub``: a category layout's sub-folders, each a single plain folder name.
+    """
     allowed = {c.name for c in config.categories} | {config.review_folder, config.duplicates_folder}
     if folder_name not in allowed:
         raise UnsafeDestinationError(f"folder {folder_name!r} is not configured")
+    if sub and config.category(folder_name) is None:
+        raise UnsafeDestinationError(f"folder {folder_name!r} has no layout")
     safe = safe_component(file_name)
     if not safe.strip(" .\u00a0") or safe.startswith("."):
         # A name that sanitizes to nothing (" ", "..."): give it a neutral one.
         safe = f"unnamed-{ctx.sha256[:8]}{split_name(file_name)[1]}"
-    folder = config.output_root / folder_name
+    top = config.output_root / folder_name
+    folder = top
+    for part in sub:
+        if not part or part in {".", ".."} or safe_component(part) != part:
+            raise UnsafeDestinationError(f"sub-folder {part!r} is not a plain folder name")
+        folder = folder / part
     final = folder / names.claim(folder, safe, ctx.path)
-    if final.parent != folder or not final.is_relative_to(config.output_root):
+    if (
+        final.parent != folder
+        or len(final.relative_to(top).parts) != len(sub) + 1
+        or not final.is_relative_to(config.output_root)
+    ):
         raise UnsafeDestinationError(f"{final} escapes {folder}")
     return final

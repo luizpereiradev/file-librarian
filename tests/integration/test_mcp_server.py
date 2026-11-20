@@ -483,6 +483,18 @@ def test_sensitive_files_never_show_their_text(downloads: Path, cfg: Config) -> 
 # --- Writing ---------------------------------------------------------------------------
 
 
+def test_files_in_a_category_layout_are_found_and_renamed_in_place(downloads: Path) -> None:
+    categories = [{"name": "Finance", "layout": "{issuer}"}, {"name": "Other"}]
+    cfg = fake_config(downloads, categories=categories)
+    reply = answer("Finance").model_copy(update={"issuer": "Power Co"})
+    organize(downloads, cfg, {"bill.txt": (b"electricity bill", reply)})
+    source = library(downloads) / "Finance" / "Power Co" / "bill.txt"
+    [hit] = ok(call(cfg, "search_files", query="", categories=["Finance"]))["files"]
+    assert (hit["path"], hit["category"]) == (str(source), "Finance")
+    fixed = ok(call(cfg, "recategorize_file", path=str(source), name="power"))
+    assert fixed["destination"] == str(source.with_name("power.txt"))
+
+
 def test_recategorize_through_mcp_then_undo_the_run(downloads: Path, cfg: Config) -> None:
     organize(downloads, cfg, {"bill.txt": (b"electricity bill", answer("Other"))})
     source = library(downloads) / "Other" / "bill.txt"

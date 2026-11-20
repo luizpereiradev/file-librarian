@@ -97,6 +97,10 @@ class FileRow:
     """The category the model suggested for a file in review, if any."""
     duplicate_of: int | None = None
     """For a duplicate (RF-21), the id of the row of the file it is a copy of."""
+    document_date: str | None = None
+    """The date the document refers to (YYYY-MM-DD); ``None`` if unknown (#86)."""
+    issuer: str | None = None
+    """The organisation the document comes from; ``None`` if unknown (#86)."""
 
     @property
     def review(self) -> tuple[ReviewReason | None, str | None]:
@@ -131,6 +135,8 @@ class FileRow:
             else ReviewReason(row["review_reason"]),
             review_category=row["review_category"],
             duplicate_of=None if row["duplicate_of"] is None else int(row["duplicate_of"]),
+            document_date=row["document_date"],
+            issuer=row["issuer"],
         )
 
 
@@ -320,6 +326,8 @@ _ANSWER_COLUMNS = (
     "model",
     "name_choice",
     "name_choice_reason",
+    "document_date",
+    "issuer",
 )
 _INDEX_TARGETS = {
     "files.category": ("files", "category"),
@@ -482,8 +490,9 @@ class Store:
                    current_path, extension, size_bytes, source_url, category, description,
                    tags, confidence, status, attempts, last_error, provider, model, run_id,
                    processed_at, is_unit, name_choice, name_choice_reason, review_reason,
-                   review_category)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   review_category, document_date, issuer)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       ?, ?)
                ON CONFLICT(sha256) WHERE duplicate_of IS NULL DO UPDATE SET
                    current_name = excluded.current_name, current_path = excluded.current_path,
                    category = excluded.category, description = excluded.description,
@@ -494,7 +503,8 @@ class Store:
                    processed_at = excluded.processed_at, name_choice = excluded.name_choice,
                    name_choice_reason = excluded.name_choice_reason,
                    review_reason = excluded.review_reason,
-                   review_category = excluded.review_category""",
+                   review_category = excluded.review_category,
+                   document_date = excluded.document_date, issuer = excluded.issuer""",
             (
                 r.sha256, normalize(r.original_path.name), normalize(str(r.original_path)),
                 normalize(r.current_path.name), normalize(str(r.current_path)), r.extension,
@@ -503,6 +513,7 @@ class Store:
                 r.attempts, r.last_error, r.provider, r.model, run_id, _now(), int(r.is_unit),
                 r.name_choice, r.name_choice_reason,
                 None if r.review_reason is None else r.review_reason.value, r.review_category,
+                r.document_date, r.issuer,
             ),
         )  # fmt: skip
         row = self.conn.execute(
@@ -760,6 +771,8 @@ class Store:
             "model": r.model,
             "name_choice": r.name_choice,
             "name_choice_reason": r.name_choice_reason,
+            "document_date": r.document_date,
+            "issuer": r.issuer,
         }
         old = self.conn.execute(
             f"SELECT {', '.join(_ANSWER_COLUMNS)}, processed_at FROM files "  # noqa: S608
@@ -1059,6 +1072,15 @@ class Store:
             (sha256, rules_key, answer_json, _now()),
         )
 
+    def latest_cached_answer(self, sha256: str) -> str | None:
+        """The newest answer cached for ``sha256`` under any rules, whatever its age."""
+        row = self.conn.execute(
+            """SELECT answer FROM classification_cache WHERE sha256 = ?
+               ORDER BY created_at DESC LIMIT 1""",
+            (sha256,),
+        ).fetchone()
+        return None if row is None else str(row[0])
+
     def cached_answers(self) -> list[tuple[str, str, str]]:
         """Every cached ``(sha256, rules_key, answer)``, whatever its age."""
         rows = self.conn.execute("SELECT sha256, rules_key, answer FROM classification_cache")
@@ -1205,6 +1227,17 @@ class Store:
         ).fetchone()
         return None if row is None else OperationRow.from_row(row)
 
+    def done_moves(self) -> dict[int, list[tuple[Path, Path]]]:
+        """Every file's moves still in effect (``done``), newest first: ``(src, dst)``."""
+        moves: dict[int, list[tuple[Path, Path]]] = {}
+        rows = self.conn.execute(
+            "SELECT file_id, src_path, dst_path FROM operations WHERE status = 'done' "
+            "ORDER BY id DESC"
+        )
+        for r in rows:
+            moves.setdefault(int(r[0]), []).append((Path(r[1]), Path(r[2])))
+        return moves
+
     def file_history(self, file_id: int, *, limit: int) -> list[HistoryRow]:
         """The file's journaled moves, newest first, at most ``limit``."""
         rows = self.conn.execute(
@@ -1326,6 +1359,7 @@ def record_to_json(r: FileRecord) -> str:
             "sha256", "extension", "size_bytes", "is_unit", "source_url", "category",
             "description", "confidence", "attempts", "last_error", "provider", "model",
             "name_choice", "name_choice_reason", "review_category", "duplicate_of",
+            "document_date", "issuer",
         )
     }  # fmt: skip
     data |= {

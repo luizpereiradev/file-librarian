@@ -190,7 +190,15 @@ def file_record(
         name_choice_reason=answer.name_choice_reason if answer and item.name_choice else None,
         review_reason=item.review_reason if status is FileStatus.REVIEW else None,
         review_category=item.review_category if status is FileStatus.REVIEW else None,
+        document_date=_document_date(answer),
+        issuer=answer.issuer if answer else None,
     )
+
+
+def _document_date(answer: Classification | None) -> str | None:
+    """The answer's document date as the index stores it, for category layouts (#86)."""
+    when = answer.document_date if answer else None
+    return when.isoformat() if when else None
 
 
 def _apply(
@@ -451,6 +459,8 @@ def _answer_record(item: Relocation, provider: str | None, model: str | None) ->
         model=model,
         name_choice=item.name_choice,
         name_choice_reason=answer.name_choice_reason if item.name_choice else None,
+        document_date=_document_date(answer),
+        issuer=answer.issuer,
     )
 
 

@@ -176,6 +176,41 @@ def test_migration_0010_keeps_rows_and_leaves_the_new_values_unknown(
         assert (stats.month_cost_usd, stats.month_unpriced_runs) == (0.0, 1)
 
 
+def test_migration_0014_keeps_index_changes_and_leaves_layout_values_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "library.db"
+    before = [m for m in load_migrations() if m.version < 14]
+    with monkeypatch.context() as patch:
+        patch.setattr("file_librarian.db.store.load_migrations", lambda: before)
+        old = Store.open(path)
+    with old:
+        assert old.schema_version == 13
+        file_id = insert_file(old, "a.pdf", "d")
+        old.change_index(1, "files.description", file_id, "d", "new")
+        with pytest.raises(sqlite3.IntegrityError):  # not a target before 0014
+            old.conn.execute(
+                """INSERT INTO index_changes (run_id, target, row_id, status, created_at)
+                   VALUES (1, 'files.issuer', ?, 'done', 'x')""",
+                (file_id,),
+            )
+    with Store.open(path) as store:
+        assert store.schema_version == len(load_migrations())
+        row = store.file_by_id(file_id)
+        assert (row.description, row.document_date, row.issuer) == ("new", None, None)
+        [change] = store.index_changes(1)
+        assert (change.target, change.old_value, change.new_value) == (
+            "files.description",
+            "d",
+            "new",
+        )
+        store.change_index(1, "files.issuer", file_id, None, "Acme")
+        store.change_index(1, "files.document_date", file_id, None, "2026-01-02")
+        row = store.file_by_id(file_id)
+        assert (row.document_date, row.issuer) == ("2026-01-02", "Acme")
+        assert store.conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
 def test_month_cost_counts_this_months_finished_runs(store: Store) -> None:
     def finished(started: str, cost: float | None) -> None:
         run_id = store.start_run(RunMode.RUN, RunTrigger.MANUAL)

@@ -215,6 +215,35 @@ flib, not the model, builds the final name from `naming.pattern`
 (`{date}_{subject}` by default); [the guide](docs/guide.md#names) has the
 rules.
 
+### Sub-folders by year or issuer
+
+A category is one flat folder unless you give it a `layout`:
+
+```yaml
+categories:
+  - name: Finance
+    layout: "{year}"            # Finance/2026/…
+  - name: Contracts
+    layout: "{issuer}"          # Contracts/Acme/…
+```
+
+`{year}` and `{month}` come from the document's date (else the download
+date, else the day it was filed); `{issuer}` is the organisation the
+document comes from, as the AI names it (never a private person). The same
+company always lands in the same folder: `Acme Inc.`, `ACME` and `Acme Ltda`
+join the folder already there, spelled as it was the first time, while
+different names stay apart. Without an issuer, a file stops at the deepest
+folder known (`Finance/2026/` for `{year}/{issuer}`). To move what is
+already organized into a new layout, without the AI:
+
+```sh
+flib reprocess --apply-layout --simulate   # show what would move
+flib reprocess --apply-layout              # asks, then moves; flib undo reverts it
+```
+
+Files you put in a sub-folder yourself stay there. The details are in
+[the guide](docs/guide.md#sub-folders-inside-a-category).
+
 ### Duplicates
 
 A file with the same content as one flib already filed (the second
@@ -251,7 +280,7 @@ Every command takes `--config PATH` (`-c`); without it, flib reads
 | `flib status [--json]` | What waits for you: files in review and why, failures, files left in place as sensitive, the last and next run, this month's cost ([Staying on top of it](#staying-on-top-of-it)) |
 | `flib fix FILE [--category NAME] [--name NAME]` | Correct one file's category or name; flib learns from it ([Teaching it](#teaching-it)) |
 | `flib reconcile` | Update the index after you move, rename or delete files by hand; files only in iCloud are left unchecked |
-| `flib reprocess [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--rename] [--override-corrections] [--simulate] [--yes]` | Reclassify organized files after the rules change; `--rename-category OLD NEW` and `--remove-category OLD [--to-review]` migrate a category ([guide](docs/guide.md#changing-your-rules)); `--scrub-descriptions` removes identifiers from stored descriptions, no AI ([Privacy](#privacy)) |
+| `flib reprocess [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--rename] [--override-corrections] [--simulate] [--yes]` | Reclassify organized files after the rules change; `--rename-category OLD NEW` and `--remove-category OLD [--to-review]` migrate a category ([guide](docs/guide.md#changing-your-rules)); `--apply-layout [--category NAME] [--ask-issuer]` moves organized files into their category's layout ([Sub-folders](#sub-folders-by-year-or-issuer)); `--scrub-descriptions` removes identifiers from stored descriptions, no AI ([Privacy](#privacy)) |
 | `flib schedule [--at HH:MM \| --status \| --remove \| --refresh] [--no-save-key] [--no-check]` | Run every day via launchd, with an access check ([Run it every day](#run-it-every-day)) |
 | `flib inspect FILE... [--json]` | Show hash, size and download origin (no hash for a file only in iCloud), and for an indexed file its status, category, why it is in review and the name choice |
 | `flib mcp` | Local MCP server for AI assistants ([Use it from Claude](#use-it-from-claude)) |
@@ -522,7 +551,7 @@ The options you are most likely to change:
 | `language` | `en` | `en` or `pt-BR`: the language of generated names and descriptions, and of the default folders (`Organized`/`_Review` or `Organizado`/`_Revisar`) and categories |
 | `inputs` | `[~/Downloads]` | The folders to keep organized |
 | `output_root` | `~/Downloads/Organized` | Where category folders are created |
-| `categories` | 5 in `en`, 15 in `pt-BR` | The closed list the AI chooses from; each `hint` steers it, `rename: false` keeps original names |
+| `categories` | 5 in `en`, 15 in `pt-BR` | The closed list the AI chooses from; each `hint` steers it, `rename: false` keeps original names, `layout` files into sub-folders ([Sub-folders](#sub-folders-by-year-or-issuer)) |
 | `never_send` | `*.pem`, `*.key`, `.env*` in the example | Patterns classified from metadata only |
 | `limits.confidence_threshold` | `0.7` | Below this, a file goes to review |
 | `limits.max_cost_usd_per_run` | `1.00` | Estimated cost cap per run; the rest waits for the next run (`null` = no cap) |

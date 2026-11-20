@@ -82,8 +82,17 @@ naming:
 # categories:
 #   - name: Finance
 #     hint: invoices, bills, bank statements, receipts, tax documents
+#     layout: "{year}"       # optional sub-folders: Finance/2026/...
 #   - name: Contracts
 #     hint: contracts, terms, signed proposals
+#     layout: "{issuer}"     # Contracts/Acme/...; the same company, the same folder
+#
+# layout placeholders (each part between "/" is one folder, up to 3 levels):
+#   {year}, {month}  the document's date, else the download date, else the day filed
+#   {issuer}         the organisation it comes from, as the AI names it; alone in its part
+# A value that is unknown stops there: the file goes to the deepest folder known.
+# No layout (the default) keeps the category one flat folder. After adding one,
+# `flib reprocess --apply-layout` moves what is already organized (no AI).
 #   - name: Installers
 #     hint: applications, disk images and installer packages
 #     rename: false          # keep the original name

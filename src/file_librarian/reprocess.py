@@ -45,6 +45,20 @@ it was deleted.
 Only files inside ``output_root`` are touched, and only to destinations the
 planner (or the migration) builds inside it.
 
+``--apply-layout`` (#86) files organized files into their category's
+``layout`` without asking the provider: ``select_layout`` takes what the
+layout needs from the index (the stored document date and issuer, else the
+newest cached answer's), ``plan_layout`` places each file with the
+planner's ``Placement`` (issuer folders matched the same way, names kept,
+``-N`` on a collision) and ``apply`` moves them as one ``reprocess`` run
+that ``flib undo`` reverts. Files whose layout needs an issuer the index
+does not have stay, unless the provider is asked for it
+(``--ask-issuer``); then only the issuer and document date of the answer
+are kept, journaled with the run. Files the user placed in a sub-folder by
+hand (``placed_by_hand``), review, duplicates and sensitive files are never
+touched. A category without a layout gets the files flib had put in its
+sub-folders back to its top level.
+
 ``--scrub-descriptions`` is different: no provider call and no move. It runs
 ``privacy.scrub`` over what the index already stores (descriptions, tags and
 name-choice reasons written before #82), as one ``reprocess`` run whose index
@@ -70,7 +84,7 @@ from file_librarian.classifier import (
     rules_key,
     wants_attachment,
 )
-from file_librarian.config import Config, folder_key, is_within
+from file_librarian.config import Config, folder_key, is_within, layout_segments
 from file_librarian.context import build_context_safely
 from file_librarian.db.store import FileRow, Store
 from file_librarian.executor import Relocation, RunReport, relocate
@@ -86,11 +100,11 @@ from file_librarian.models import (
     RunTrigger,
 )
 from file_librarian.pipeline import rules_for
-from file_librarian.planner import plan
+from file_librarian.planner import Placement, UnsafeDestinationError, plan
 from file_librarian.privacy import scrub, scrub_name, scrub_tags
 from file_librarian.protection import LOCKED_NOW
 from file_librarian.providers.base import Provider, Usage
-from file_librarian.providers.prompt import system_prompt, user_message
+from file_librarian.providers.prompt import clean_issuer, system_prompt, user_message
 from file_librarian.reconcile import in_cloud_only
 from file_librarian.scanner import Candidate
 from file_librarian.search import SearchFilters
@@ -171,6 +185,11 @@ class ReprocessPlan:
     """For ``--rename-category``: the old and new names, applied to the index with the moves."""
     same_folder: bool = False
     """The rename only changes the case: the same folder, so only the index changes."""
+    learned: dict[int, tuple[str | None, str | None]] = field(default_factory=dict)
+    """For ``--apply-layout --ask-issuer``: file id -> (document date, issuer) the
+    provider gave where the index had none; written with the run, undone with it."""
+    in_place: int = 0
+    """For ``--apply-layout``: files already where their layout puts them."""
 
     def moves(self) -> list[Change]:
         return [c for c in self.changes if c.moves]
@@ -252,13 +271,14 @@ def select(
         if orphans:
             raise ReprocessError(orphan_message(orphans))
     corrected = {} if override_corrections else store.corrected_fields()
+    moves = store.done_moves()
     selection = Selection()
     for row in store.all_files():
         if not _wanted(row, config, filters, removed):
             continue
         fields = corrected.get(row.id, set())
         keep_category = "category" in fields and removed is None
-        nested = _nested(row, config)
+        nested = placed_by_hand(row, moves.get(row.id, []), config)
         keep_name = not rename or nested or "name" in fields
         if keep_category and keep_name:
             selection.left.append((row.current_path, "your correction is kept"))
@@ -271,12 +291,34 @@ def select(
     return selection
 
 
-def _nested(row: FileRow, config: Config) -> bool:
-    """Deeper than ``output_root/<folder>/``: the user organized it further by hand."""
-    path = row.current_path
+def _deep(path: Path, config: Config) -> bool:
+    """Deeper than ``output_root/<folder>/``."""
     return path.is_relative_to(config.output_root) and (
         len(path.relative_to(config.output_root).parts) > 2
     )
+
+
+def placed_by_hand(row: FileRow, moves: list[tuple[Path, Path]], config: Config) -> bool:
+    """The file is in a sub-folder of its folder that the user chose, not flib.
+
+    ``moves``: the file's moves still in effect, newest first (``Store.done_moves``).
+    A file deeper than ``output_root/<folder>/`` was put there by flib (a
+    category layout) only if flib's last move brought it exactly there, from
+    a top-level place or from another place flib had put it. A move by hand
+    (which ``flib reconcile`` records without a move of flib's) breaks that
+    chain, and so does a move that kept a sub-folder the user had made (a
+    category rename keeps it): such a file is the user's to place.
+    """
+    current = row.current_path
+    if not _deep(current, config):
+        return False
+    for src, dst in moves:
+        if dst != current:
+            return True
+        if not _deep(src, config):
+            return False
+        current = src
+    return True
 
 
 def _wanted(
@@ -306,8 +348,11 @@ def _extension(row: FileRow) -> str:
     return row.current_path.suffix.lower()
 
 
-def _check(row: FileRow, config: Config) -> tuple[FileContext | None, str]:
-    """The file's context, or why it cannot be reprocessed now."""
+def _check(row: FileRow, config: Config, *, read: bool = True) -> tuple[FileContext | None, str]:
+    """The file's context, or why it cannot be reprocessed now.
+
+    ``read``: extract its text for the provider; otherwise only what a move needs
+    (content checked all the same)."""
     path = row.current_path
     if in_cloud_only(path):
         return None, "only in iCloud; download it to reprocess it"
@@ -332,6 +377,18 @@ def _check(row: FileRow, config: Config) -> tuple[FileContext | None, str]:
         created=float(getattr(st, "st_birthtime", st.st_mtime)),
         inode=st.st_ino,
     )
+    if not read:
+        context = FileContext(
+            path=path,
+            sha256=row.sha256,
+            size_bytes=candidate.size_bytes,
+            extension=path.suffix.lower(),
+            mtime_ns=st.st_mtime_ns,
+            inode=st.st_ino,
+            downloaded=date.fromtimestamp(candidate.created) if candidate.created else None,
+            is_unit=row.is_unit,
+        )
+        return context, ""
     return build_context_safely(candidate, config, also_named=(row.original_name,)), ""
 
 
@@ -397,7 +454,8 @@ def plan_reprocess(
     )
     decisions = [_respect_correction(d, by_path[d.context.path]) for d in classified.decisions]
     keep_names: Collection[Path] = {t.context.path for t in targets if t.keep_name}
-    planned = plan(decisions, config, today=today, keep_names=keep_names)
+    filed_on = {t.context.path: _processed_on(t.row) for t in targets}
+    planned = plan(decisions, config, today=today, keep_names=keep_names, filed_on=filed_on)
     result = ReprocessPlan(
         deferred=len(classified.deferred),
         cost_usd=classified.cost_usd,
@@ -521,6 +579,228 @@ def plan_to_review(targets: list[Target], config: Config) -> ReprocessPlan:
     return result
 
 
+def _processed_on(row: FileRow) -> date:
+    """The day the index last filed ``row`` (``processed_at`` is an ISO time in UTC)."""
+    try:
+        return date.fromisoformat(row.processed_at[:10])
+    except ValueError:
+        return date.today()
+
+
+# --- category layouts (#86) -----------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _Placed:
+    """A library file and what its category's layout files it by."""
+
+    row: FileRow
+    when: date
+    issuer: str | None
+
+
+@dataclass(slots=True)
+class LayoutSelection:
+    """``--apply-layout``'s files, before any is checked or moved."""
+
+    ready: list[_Placed] = field(default_factory=list)
+    missing: list[Target] = field(default_factory=list)
+    """Their layout needs an issuer the index does not have; only asking the provider
+    (``--ask-issuer``) can place them. Contexts are read only when asking."""
+    left: list[tuple[Path, str]] = field(default_factory=list)
+
+
+def select_layout(
+    config: Config,
+    store: Store,
+    *,
+    categories: Collection[str] = (),
+    ask: bool = False,
+) -> LayoutSelection:
+    """The organized files ``--apply-layout`` places, with what each is filed by.
+
+    Only ``organized`` files in their category's folder: never review,
+    duplicates or sensitive files, and never a file the user put in a
+    sub-folder by hand (``placed_by_hand``). ``{year}`` and ``{month}`` come
+    from the stored document date, else the newest cached answer's, else the
+    file's download (birth) date, else the day it was filed; ``{issuer}``
+    from the stored issuer, else the cached answer's. A file whose layout
+    needs an issuer that is in neither is ``missing``; with ``ask`` its text
+    is read so the provider can be asked. Nothing is sent here.
+    """
+    orphans = orphan_categories(config, store)
+    if orphans:
+        raise ReprocessError(orphan_message(orphans))
+    wanted = set(categories)
+    unknown = sorted(wanted - {c.name for c in config.categories})
+    if unknown:
+        known = ", ".join(c.name for c in config.categories)
+        raise ReprocessError(f"unknown category {unknown[0]!r} (configured: {known})")
+    moves = store.done_moves()
+    selection = LayoutSelection()
+    for row in store.all_files():
+        category = config.category(row.category or "")
+        if row.status is not FileStatus.ORGANIZED or category is None:
+            continue
+        if wanted and category.name not in wanted:
+            continue
+        path = row.current_path
+        folder = config.output_root / category.name
+        if not path.is_relative_to(folder) or not is_within(path, folder):
+            selection.left.append((path, f"not in the {category.name} folder"))
+            continue
+        if placed_by_hand(row, moves.get(row.id, []), config):
+            selection.left.append((path, "in a sub-folder you chose; it stays"))
+            continue
+        try:
+            st = os.lstat(path)
+        except OSError:
+            selection.left.append((path, "not at its recorded place; run `flib reconcile`"))
+            continue
+        cached_date, cached_issuer = _cached_values(store, row.sha256)
+        born = getattr(st, "st_birthtime", None)
+        when = (
+            _iso(row.document_date)
+            or cached_date
+            or (date.fromtimestamp(born) if born else None)
+            or _processed_on(row)
+        )
+        issuer = row.issuer or cached_issuer
+        needs_issuer = category.layout is not None and "{issuer}" in layout_segments(
+            category.layout
+        )
+        if needs_issuer and issuer is None:
+            if not ask:
+                selection.left.append(
+                    (path, "issuer unknown; `--ask-issuer` asks the provider (it may cost)")
+                )
+                continue
+            context, problem = _check(row, config)
+            if context is None:
+                selection.left.append((path, problem))
+                continue
+            selection.missing.append(Target(row, context))
+            continue
+        selection.ready.append(_Placed(row, when, issuer))
+    return selection
+
+
+def _iso(value: str | None) -> date | None:
+    try:
+        return date.fromisoformat(value) if value else None
+    except ValueError:
+        return None
+
+
+def _cached_values(store: Store, sha256: str) -> tuple[date | None, str | None]:
+    """The document date and issuer of the newest answer cached for this content."""
+    text = store.latest_cached_answer(sha256)
+    if text is None:
+        return None, None
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None, None
+    if not isinstance(data, dict):
+        return None, None
+    when = data.get("document_date")
+    return _iso(when if isinstance(when, str) else None), clean_issuer(data.get("issuer"))
+
+
+def plan_layout(
+    selection: LayoutSelection,
+    config: Config,
+    store: Store,
+    *,
+    provider: Provider | None = None,
+) -> ReprocessPlan:
+    """Where each selected file goes under its category's layout; nothing moves here.
+
+    With ``provider``, the ``missing`` files are classified (cache and cost cap
+    as in a run) for their issuer and document date only: their category
+    and name stay. Without it, or when the answer names no issuer, they stay.
+    Names are kept; one taken in the new folder gets the next free ``-N``.
+    The content of every file that moves is checked first.
+    """
+    result = ReprocessPlan()
+    placed = list(selection.ready)
+    if selection.missing and provider is not None:
+        classified = classify_all(
+            [t.context for t in selection.missing],
+            provider,
+            rules_for(config, store),
+            config,
+            cache=store,
+        )
+        result.cost_usd = classified.cost_usd
+        result.cost_known = classified.cost_known
+        result.cached = classified.cached
+        result.deferred = len(classified.deferred)
+        by_path = {t.context.path: t for t in selection.missing}
+        for decision in classified.decisions:
+            row = by_path[decision.context.path].row
+            answer = decision.classification
+            if answer is None or answer.issuer is None:
+                why = decision.error or "the provider named no issuer"
+                if decision.context.sensitive:
+                    why = "sensitive: never sent"
+                result.kept.append((row.current_path, f"{why}; it stays"[:300]))
+                continue
+            stored = _iso(row.document_date)
+            when = stored or answer.document_date or decision.context.downloaded
+            when = when or _processed_on(row)
+            learned = None if stored else answer.document_date
+            result.learned[row.id] = (learned.isoformat() if learned else None, answer.issuer)
+            placed.append(_Placed(row, when, answer.issuer))
+        for ctx in classified.deferred:
+            result.kept.append((ctx.path, "cost limit reached; run it again"))
+    else:
+        for target in selection.missing:
+            result.kept.append((target.context.path, "issuer unknown; it stays"))
+    placement = Placement()
+    for item in sorted(placed, key=lambda p: p.row.id):
+        _place_in_layout(item, config, placement, result)
+    return result
+
+
+def _place_in_layout(
+    item: _Placed, config: Config, placement: Placement, result: ReprocessPlan
+) -> None:
+    row = item.row
+    category = config.category(row.category or "")
+    if category is None:  # selected as organized in a configured category
+        return
+    path = row.current_path
+    # Where it goes is worked out first: most files are already in place and are
+    # then neither read nor hashed.
+    light = FileContext(path=path, sha256=row.sha256, size_bytes=0, extension="")
+    try:
+        destination = placement.in_category(
+            config, category, path.name, light, when=item.when, issuer=item.issuer
+        )
+    except (UnsafeDestinationError, OSError) as exc:
+        result.kept.append((path, f"cannot plan: {exc}"[:300]))
+        return
+    if destination == path:
+        result.in_place += 1
+        return
+    context, problem = _check(row, config, read=False)
+    if context is None:
+        result.kept.append((path, problem))
+        return
+    where = destination.parent.relative_to(config.output_root)
+    relocation = Relocation(
+        file_id=row.id,
+        context=context,
+        destination=destination,
+        status=FileStatus.ORGANIZED,
+        category=category.name,
+        reason=f"layout of {category.name}: {where}",
+        previous=(row.status, row.category),
+    )
+    result.changes.append(Change(row, relocation))
+
+
 # --- 4. applying --------------------------------------------------------------------
 
 
@@ -548,6 +828,12 @@ def apply(
             renamed = [r.id for r in store.all_files() if r.category == old]
             store.adopt_index_changes(run_id, old, new)
             store.rename_category(run_id, old, new, organized=planned.same_folder)
+        for file_id, (when, issuer) in planned.learned.items():
+            row = store.file_by_id(file_id)
+            if issuer is not None and row.issuer is None:
+                store.change_index(run_id, "files.issuer", file_id, None, issuer)
+            if when is not None and row.document_date is None:
+                store.change_index(run_id, "files.document_date", file_id, None, when)
     if planned.rename is not None and planned.same_folder:
         _rename_tags(config, store, run_id, renamed, *planned.rename)
     report = relocate(

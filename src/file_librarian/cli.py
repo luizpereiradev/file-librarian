@@ -1775,6 +1775,22 @@ def reprocess(
             "tags already stored. Local only: no AI, no cost, nothing moves.",
         ),
     ] = False,
+    apply_layout: Annotated[
+        bool,
+        typer.Option(
+            "--apply-layout",
+            help="Move organized files into their category's layout (sub-folders by year, "
+            "month or issuer) from what the index stores. No AI unless --ask-issuer.",
+        ),
+    ] = False,
+    ask_issuer: Annotated[
+        bool,
+        typer.Option(
+            "--ask-issuer",
+            help="With --apply-layout: ask the AI for the issuer of files the index has none "
+            "for (shows the cost and asks first); without it they stay.",
+        ),
+    ] = False,
     simulate: Annotated[
         bool,
         typer.Option(
@@ -1795,7 +1811,28 @@ def reprocess(
     it. A category renamed or removed in the configuration needs
     --rename-category or --remove-category first. --scrub-descriptions only
     cleans what the index already stores, without asking the AI.
+    --apply-layout only moves files into their category's sub-folders.
     """
+    if ask_issuer and not apply_layout:
+        _fatal("--ask-issuer goes with --apply-layout")
+    if apply_layout:
+        others = (
+            split_values(ext) or since or until or rename or override_corrections
+            or rename_category or remove_category or to_review or scrub_descriptions
+        )  # fmt: skip
+        if others:
+            _fatal(
+                "--apply-layout only moves files into their layout; it takes --category, "
+                "--ask-issuer, --simulate and --yes, and no category migration"
+            )
+        _apply_layout(
+            _load(config, warn_orphans=False),
+            split_values(category),
+            ask=ask_issuer,
+            simulate=simulate,
+            yes=yes,
+        )
+        return
     if scrub_descriptions:
         others = (
             split_values(category) or split_values(ext) or since or until or rename
@@ -1875,6 +1912,85 @@ def _scrub_descriptions(cfg: Config, *, simulate: bool, yes: bool) -> None:
     if report.embeddings:
         line += f" {report.embeddings} embedding(s) removed; the next run makes them again."
     typer.echo(line)
+
+
+def _apply_layout(
+    cfg: Config, categories: list[str], *, ask: bool, simulate: bool, yes: bool
+) -> None:
+    """``flib reprocess --apply-layout``: organized files into their category's layout."""
+    names = {c.name.casefold(): c.name for c in cfg.categories}
+    wanted = [names.get(name.casefold(), name) for name in categories]
+    provider: Provider | None = None
+    if ask:
+        try:
+            provider = get_provider(cfg.provider)
+        except ProviderError as exc:
+            _fatal(str(exc))
+    try:
+        with reprocess_lock(cfg.database):
+            applied, planned = _layout_run(cfg, wanted, provider, simulate=simulate, yes=yes)
+    except (reprocess_mod.ReprocessError, ProviderError, AlreadyRunningError) as exc:
+        _fatal(str(exc))
+    if applied is not None and planned is not None:
+        _print_reprocess_report(applied, cfg, planned)
+
+
+def _layout_run(
+    cfg: Config, categories: list[str], provider: Provider | None, *, simulate: bool, yes: bool
+) -> tuple[reprocess_mod.Applied | None, reprocess_mod.ReprocessPlan | None]:
+    """Recover, plan, ask, apply, like ``_reprocess``; only recovering and applying lock."""
+    with instance_lock(cfg.database), Store.open(cfg.database) as store:
+        recovered = recover(store, cfg)
+    if recovered:
+        typer.echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
+    with Store.open(cfg.database) as store:
+        selection = reprocess_mod.select_layout(
+            cfg, store, categories=categories, ask=provider is not None
+        )
+        for path, reason in selection.left:
+            typer.echo(f"  leave   {_short(path, cfg)}  ({reason})")
+        if provider is not None and selection.missing:
+            estimate = reprocess_mod.estimate(selection.missing, provider, cfg, store)
+            typer.echo(
+                f"{estimate.files} file(s) need their issuer: {estimate.cached} answered by the "
+                f"cache, {estimate.to_ask} to send to {provider.name} "
+                f"(estimated US$ {estimate.cost_usd:.4f})."
+            )
+            if (
+                estimate.to_ask
+                and not yes
+                and not typer.confirm(
+                    f"Send {estimate.to_ask} file(s) to {provider.name}?", default=False
+                )
+            ):
+                typer.echo("Nothing sent; files without an issuer stay where they are.")
+                provider = None
+        planned = reprocess_mod.plan_layout(selection, cfg, store, provider=provider)
+    _print_reprocess_plan(planned, cfg)
+    if planned.in_place:
+        typer.echo(f"{planned.in_place} file(s) already follow their category's layout.")
+    if simulate:
+        typer.echo("Simulation: nothing moved or changed.")
+        return None, planned
+    if not planned.moves() and not planned.learned:
+        typer.echo("Nothing to move: the library already follows its layouts.")
+        return None, planned
+    question = f"Move {len(planned.moves())} file(s) into their layout? `flib undo` reverts it"
+    if not yes and not typer.confirm(question, default=False):
+        typer.echo("Nothing changed.")
+        return None, planned
+    with instance_lock(cfg.database), Store.open(cfg.database) as store:
+        recovered = recover(store, cfg)
+        if recovered:
+            typer.echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
+        applied = reprocess_mod.apply(
+            planned,
+            cfg,
+            store,
+            provider=provider.name if provider is not None else None,
+            model=cfg.provider.model if provider is not None else None,
+        )
+    return applied, planned
 
 
 def _reprocess(

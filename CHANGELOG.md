@@ -8,6 +8,22 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Sub-folders inside a category (#86): an optional `layout` per category,
+  with `{year}`, `{month}` and `{issuer}` (`"{year}"`, `"{issuer}/{year}"`...,
+  up to three levels, validated at load). The year and month come from the
+  document's date, else the download date, else the day filed; the issuer is
+  a new field of the answer (an organisation, never a private person; one
+  holding an identifier is dropped), stored in the index with the document
+  date (migration 0014; prompt version 6). Issuer folders are stable: a name
+  is matched with the folders already there ignoring case, accents,
+  punctuation and legal suffixes, then by a conservative similarity (a
+  plural, a doubled or swapped letter, never a different letter or word).
+  An unknown value stops at the deepest folder known.
+  `flib reprocess --apply-layout [--category NAME] [--ask-issuer]` moves
+  organized files into their layout from what the index stores, as one run
+  `flib undo` reverts; files you placed in a sub-folder stay. `flib fix
+  --name` now renames a file inside its sub-folder instead of moving it to
+  the category's top folder.
 - Local OCR (RF-26 done): the text in screenshots, photographed documents and
   scanned PDFs (first `ocr.max_pages`, 3) is recognised on the Mac with
   macOS's Vision framework, through a small `osascript` helper (no install,

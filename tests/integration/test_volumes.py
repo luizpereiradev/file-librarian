@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 from collections.abc import Iterator
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -163,3 +164,28 @@ def test_recovery_waits_for_an_unmounted_volume(
     moved = volume.mountpoint / "Library" / "Finance" / "Project"
     assert sorted(p.name for p in moved.iterdir()) == ["a.txt", "b.txt"]
     assert leftovers(downloads, volume.mountpoint / "Library") == []
+
+
+def test_a_layout_on_another_volume_is_created_moved_into_and_undone(
+    volume: Volume, downloads: Path
+) -> None:
+    """Category layouts (#86): nested folders made on the other volume, files copied in."""
+    if volume.fs == "ExFAT":
+        pytest.skip("nothing is copied to exFAT")
+    put(downloads, "a.pdf", b"one")
+    put(downloads, "b.pdf", b"two")
+    categories = [{"name": "Finance", "layout": "{year}/{issuer}"}, {"name": "Other"}]
+    config = fake_config(
+        downloads, output_root=str(volume.mountpoint / "Library"), categories=categories
+    )
+    one = answer().model_copy(update={"issuer": "Acme", "document_date": date(2024, 5, 1)})
+    two = answer().model_copy(update={"issuer": "ACME Inc.", "document_date": date(2024, 6, 1)})
+    pipeline.run(config, FakeProvider({"a.pdf": one, "b.pdf": two}), simulate=False)
+    folder = volume.mountpoint / "Library" / "Finance" / "2024" / "Acme"
+    assert sorted(p.name for p in folder.iterdir()) == ["a.pdf", "b.pdf"]
+    assert leftovers(downloads, volume.mountpoint / "Library") == []
+    with Store.open(config.database) as store:
+        report = undo_run(store, config=config)
+    assert report.skipped == []
+    assert (downloads / "a.pdf").read_bytes() == b"one"
+    assert (downloads / "b.pdf").read_bytes() == b"two"

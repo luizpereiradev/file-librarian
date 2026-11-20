@@ -211,6 +211,10 @@ class Classification(BaseModel):
     name_choice: NameChoice = "proposed"
     """Which describes the file better: its original name, or ``suggested_name``."""
     name_choice_reason: str | None = Field(default=None, max_length=300)
+    issuer: str | None = Field(default=None, min_length=1, max_length=100)
+    """The organisation the document comes from (a company, bank, public body or
+    brand), never a private person; ``None`` when there is none or it is unclear.
+    Category layouts with ``{issuer}`` file into a folder named after it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,6 +295,10 @@ class FileRecord:
     """The category the model suggested for a file in review, if any."""
     duplicate_of: int | None = None
     """For a duplicate (RF-21), the id of the row of the file it is a copy of."""
+    document_date: str | None = None
+    """The date the document refers to (YYYY-MM-DD), as the model read it."""
+    issuer: str | None = None
+    """The organisation the document comes from, as the model named it."""
 
 
 @dataclass(frozen=True, slots=True)

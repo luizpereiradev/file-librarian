@@ -255,10 +255,73 @@ class NamingConfig(_Section):
         return value
 
 
+LAYOUT_PLACEHOLDERS = frozenset({"year", "month", "issuer"})
+MAX_LAYOUT_DEPTH = 3
+"""Sub-folders a category's layout may add under its folder."""
+# What each placeholder stands for when a layout is checked: the longest value
+# ``year`` and ``month`` take, and a plain issuer folder name.
+_LAYOUT_SAMPLES = {"year": "2026", "month": "12", "issuer": "Acme"}
+
+
+def layout_segments(layout: str) -> tuple[str, ...]:
+    """A validated layout's sub-folder templates, outermost first."""
+    return tuple(layout.split("/"))
+
+
+def _layout(value: str) -> str:
+    """A category's sub-folder layout: ``{year}``, ``{year}/{month}``, ``{issuer}``...
+
+    Each ``/``-separated segment becomes one folder name: at least one
+    placeholder in the whole layout, only known placeholders, ``{issuer}``
+    alone in its segment (its folder is matched with the ones already there),
+    and every segment a safe folder name once filled in.
+    """
+    value = unicodedata.normalize("NFC", value)
+    segments = value.split("/")
+    if len(segments) > MAX_LAYOUT_DEPTH:
+        raise ValueError(f"layout may have at most {MAX_LAYOUT_DEPTH} levels of sub-folders")
+    used: set[str] = set()
+    for segment in segments:
+        if not segment:
+            raise ValueError("layout must not start or end with '/' nor contain '//'")
+        try:
+            parts = list(string.Formatter().parse(segment))
+        except ValueError as exc:
+            raise ValueError(f"layout is not a valid pattern: {exc}") from exc
+        fields = {name for _, name, _, _ in parts if name is not None}
+        unknown = fields - LAYOUT_PLACEHOLDERS
+        if unknown or "" in fields:
+            allowed = ", ".join(f"{{{p}}}" for p in sorted(LAYOUT_PLACEHOLDERS))
+            raise ValueError(f"layout: unknown placeholder(s) in {segment!r}; use {allowed}")
+        if any(spec or conv for _, name, spec, conv in parts if name is not None):
+            raise ValueError("layout placeholders take no format spec or conversion")
+        if "issuer" in fields and segment != "{issuer}":
+            raise ValueError("layout: {issuer} must be a whole sub-folder, alone between '/'")
+        literal = "".join(text for text, _, _, _ in parts)
+        if any(ch in literal for ch in ":\\"):
+            raise ValueError("layout: sub-folders are separated by '/' only (no ':' or '\\')")
+        filled = segment.format(**_LAYOUT_SAMPLES)
+        if filled in {".", ".."}:
+            raise ValueError(f"layout: {segment!r} is not a folder name")
+        try:
+            _safe_folder_name(filled)
+        except ValueError as exc:
+            raise ValueError(f"layout: sub-folder {segment!r} {exc}") from exc
+        if len(filled) > 64:
+            raise ValueError(f"layout: sub-folder {segment!r} is longer than 64 characters")
+        used |= fields
+    if not used:
+        raise ValueError("layout needs at least one placeholder: {year}, {month} or {issuer}")
+    return value
+
+
 class Category(_Section):
     name: SafeFolderName
     hint: str | None = None
     rename: bool = True
+    layout: Annotated[str, AfterValidator(_layout)] | None = None
+    """Sub-folders inside the category folder, such as ``"{year}"`` or
+    ``"{issuer}/{year}"``; ``None`` files everything at its top level."""
 
 
 class FinderTagsConfig(_Section):
