@@ -51,6 +51,13 @@ def test_check_config_ok() -> None:
     assert "Finance" in result.stdout
 
 
+def test_example_config_checks_without_warnings() -> None:
+    """The commented example is what new users copy: it must load cleanly as it is."""
+    result = runner.invoke(app, ["check-config", "-c", str(REPO_ROOT / "config.example.yaml")])
+    assert result.exit_code == 0, result.stderr
+    assert result.stderr == ""
+
+
 def test_check_config_warns_about_planned_provider(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
