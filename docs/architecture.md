@@ -324,7 +324,8 @@ and without it the command explains how to enable it:
   lock. An idle server holds neither the lock nor the database, so the daily
   run is never blocked by an assistant left open.
 - `mcp.read_only: true` does not register the write tools at all.
-- Results are metadata and model-written descriptions, never file content.
+- Results are metadata and model-written descriptions (scrubbed of
+  identifiers by the classifier, see `privacy.py`), never file content.
   Rows with status `sensitive` have description, tags and download origin
   withheld. Paths must be absolute and must be in the index; the server
   tells the client that names and descriptions are untrusted data.
@@ -399,7 +400,7 @@ Everything is in `src/file_librarian/`:
 | `pipeline.py` | one run or simulation, stage by stage |
 | `scanner.py`, `hashing.py`, `globs.py` | stage 1; content identity (SHA-256, folder manifests, iCloud-only check); glob matching as the Mac compares names |
 | `context.py`, `sensitive.py`, `extractors/` | stage 2; secret detection; one extractor per format (`text`, `office`, `pdf`, `archive`, `mail`), plus `origin.py` (download origin) and `visual.py` (images and scanned PDFs for vision); the interface is in `extractors/base.py` |
-| `classifier.py`, `providers/` | stage 3; one module per provider (`anthropic`, `claude_code`, `openai_compat`, `ollama`, and `fake` for tests), the shared prompt (`prompt.py`), the HTTP client (`http.py`) and the interface (`base.py`) |
+| `classifier.py`, `privacy.py`, `providers/` | stage 3; identifiers scrubbed from every answer before it is cached or stored (`privacy.descriptions`); one module per provider (`anthropic`, `claude_code`, `openai_compat`, `ollama`, and `fake` for tests), the shared prompt (`prompt.py`), the HTTP client (`http.py`) and the interface (`base.py`) |
 | `planner.py`, `naming.py` | stage 4; safe file names and dates |
 | `executor.py`, `fsops.py` | stage 5 and crash recovery; `fsops.py` is the only code that moves, copies or deletes your files (the rest writes only flib's own: logs, reports, the trial copies of `flib init`) |
 | `db/store.py`, `db/migrations/` | the SQLite store and its numbered migrations |

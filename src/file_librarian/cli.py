@@ -1677,6 +1677,14 @@ def reprocess(
             "--to-review", help="With --remove-category: send its files to review, no AI."
         ),
     ] = False,
+    scrub_descriptions: Annotated[
+        bool,
+        typer.Option(
+            "--scrub-descriptions",
+            help="Replace phone numbers, e-mails and document numbers in the descriptions and "
+            "tags already stored. Local only: no AI, no cost, nothing moves.",
+        ),
+    ] = False,
     simulate: Annotated[
         bool,
         typer.Option(
@@ -1695,8 +1703,18 @@ def reprocess(
     plan and asks before moving. File names are kept unless --rename. Files
     you corrected keep your choice. It is one run: `flib undo` reverts all of
     it. A category renamed or removed in the configuration needs
-    --rename-category or --remove-category first.
+    --rename-category or --remove-category first. --scrub-descriptions only
+    cleans what the index already stores, without asking the AI.
     """
+    if scrub_descriptions:
+        others = (
+            split_values(category) or split_values(ext) or since or until or rename
+            or override_corrections or rename_category or remove_category or to_review
+        )  # fmt: skip
+        if others:
+            _fatal("--scrub-descriptions takes the whole index; leave out the other options")
+        _scrub_descriptions(_load(config, warn_orphans=False), simulate=simulate, yes=yes)
+        return
     if rename_category is not None and remove_category is not None:
         _fatal("use either --rename-category or --remove-category, not both")
     migrating = rename_category is not None or remove_category is not None
@@ -1732,6 +1750,41 @@ def reprocess(
         _fatal(str(exc))
     if applied is not None and planned is not None:
         _print_reprocess_report(applied, cfg, planned)
+
+
+def _scrub_descriptions(cfg: Config, *, simulate: bool, yes: bool) -> None:
+    """``flib reprocess --scrub-descriptions``: privacy.scrub over the stored answers."""
+    try:
+        with reprocess_lock(cfg.database):
+            with Store.open(cfg.database) as store:
+                planned = reprocess_mod.plan_scrub(store)
+            for item in planned:
+                fields = ", ".join(c.replace("_", " ") for c in item.values)
+                typer.echo(f"  scrub   {_short(item.path, cfg)}  ({fields})")
+            if simulate:
+                typer.echo(f"Simulation: {len(planned)} file(s) to scrub; nothing changed.")
+                return
+            if planned and not yes:
+                question = f"Scrub {len(planned)} file(s) in the index? `flib undo` reverts it"
+                if not typer.confirm(question, default=False):
+                    typer.echo("Nothing changed.")
+                    return
+            with instance_lock(cfg.database), Store.open(cfg.database) as store:
+                report = reprocess_mod.apply_scrub(store)
+    except AlreadyRunningError as exc:
+        _fatal(str(exc))
+    if report.cached:
+        typer.echo(f"{report.cached} cached answer(s) scrubbed.")
+    if report.run_id is None:
+        typer.echo("Nothing to scrub: no stored description holds an identifier flib recognizes.")
+        return
+    line = (
+        f"Scrub run {report.run_id}: {report.files} file(s), {report.values} value(s) changed. "
+        "`flib undo` reverts it."
+    )
+    if report.embeddings:
+        line += f" {report.embeddings} embedding(s) removed; the next run makes them again."
+    typer.echo(line)
 
 
 def _reprocess(

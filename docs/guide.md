@@ -144,6 +144,23 @@ After a reprocess that changed nothing (every move failed or was skipped),
 plain `flib undo` refuses instead of undoing an earlier run; name that run
 with `--run ID` if you meant it.
 
+### Cleaning stored descriptions
+
+Descriptions written before flib kept identifiers out of them (see
+[Privacy](../README.md#privacy)) may hold a phone number or a document
+number the AI copied from a picture. Clean them without asking the AI again:
+
+```sh
+flib reprocess --scrub-descriptions --simulate   # list the files it would change
+flib reprocess --scrub-descriptions              # asks, then cleans; no AI, no cost
+```
+
+It replaces what `privacy.descriptions: redact` replaces in new answers, in
+the descriptions, tags and name-choice reasons of every file, and in the
+classification cache. Nothing moves and no file is renamed. Full-text search
+follows at once; the embeddings of the changed files are removed and made
+again by the next run. It is one run: `flib undo` puts the old text back.
+
 ## What vision costs
 
 Estimated on the default model (Claude Haiku 5.5, US$0.10 per million input

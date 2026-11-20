@@ -1069,6 +1069,30 @@ class Store:
             (sha256, rules_key, answer_json, _now()),
         )
 
+    def cached_answers(self) -> list[tuple[str, str, str]]:
+        """Every cached ``(sha256, rules_key, answer)``, whatever its age."""
+        rows = self.conn.execute("SELECT sha256, rules_key, answer FROM classification_cache")
+        return [(str(r[0]), str(r[1]), str(r[2])) for r in rows]
+
+    def replace_cached_answer(self, sha256: str, rules_key: str, answer_json: str) -> None:
+        """Rewrite a cached answer in place; its age stays."""
+        self.conn.execute(
+            "UPDATE classification_cache SET answer = ? WHERE sha256 = ? AND rules_key = ?",
+            (answer_json, sha256, rules_key),
+        )
+
+    def pending_records(self) -> list[tuple[int, str]]:
+        """``(operation id, record JSON)`` of every journaled move that carries a record."""
+        rows = self.conn.execute(
+            "SELECT id, pending_record FROM operations WHERE pending_record IS NOT NULL"
+        )
+        return [(int(r[0]), str(r[1])) for r in rows]
+
+    def replace_pending_record(self, op_id: int, record_json: str) -> None:
+        self.conn.execute(
+            "UPDATE operations SET pending_record = ? WHERE id = ?", (record_json, op_id)
+        )
+
     def prune_cache(self, *, max_age_days: int) -> int:
         cur = self.conn.execute(
             "DELETE FROM classification_cache WHERE created_at < ?", (_days_ago(max_age_days),)

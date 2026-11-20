@@ -94,7 +94,8 @@ All notable changes to this project are documented here. The format follows
   search filters). It estimates the cost and asks before sending and before
   moving (`--simulate`, `--yes`); `flib undo` reverts the whole run. A renamed
   or removed category needs `--rename-category OLD NEW` or `--remove-category
-  OLD` (`--to-review` skips the AI).
+  OLD` (`--to-review` skips the AI). `--scrub-descriptions` removes
+  identifiers from descriptions stored earlier, locally, also undoable.
 
 **Status, summary and doctor**
 
@@ -144,6 +145,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Security
 
+- Descriptions, tags and proposed names keep personal identifiers out of the
+  index (#82): the prompt asks the AI not to copy phone numbers, e-mail
+  addresses, document, account or card numbers, payment keys, addresses or
+  names of private people, and flib replaces what still looks like one with
+  `[phone]`, `[email]`, `[id number]`... before the answer is cached or
+  stored. `privacy.descriptions: verbatim` keeps the AI's text as written.
 - Secret detection marks credential files and content with keys, tokens or
   passwords `sensitive`: nothing is sent and the value is never stored.
   Sensitive files show no description or tags in search or MCP.

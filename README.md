@@ -250,7 +250,7 @@ Every command takes `--config PATH` (`-c`); without it, flib reads
 | `flib status [--json]` | What waits for you: files in review and why, failures, files left in place as sensitive, the last and next run, this month's cost ([Staying on top of it](#staying-on-top-of-it)) |
 | `flib fix FILE [--category NAME] [--name NAME]` | Correct one file's category or name; flib learns from it ([Teaching it](#teaching-it)) |
 | `flib reconcile` | Update the index after you move, rename or delete files by hand; files only in iCloud are left unchecked |
-| `flib reprocess [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--rename] [--override-corrections] [--simulate] [--yes]` | Reclassify organized files after the rules change; `--rename-category OLD NEW` and `--remove-category OLD [--to-review]` migrate a category ([guide](docs/guide.md#changing-your-rules)) |
+| `flib reprocess [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--rename] [--override-corrections] [--simulate] [--yes]` | Reclassify organized files after the rules change; `--rename-category OLD NEW` and `--remove-category OLD [--to-review]` migrate a category ([guide](docs/guide.md#changing-your-rules)); `--scrub-descriptions` removes identifiers from stored descriptions, no AI ([Privacy](#privacy)) |
 | `flib schedule [--at HH:MM \| --status \| --remove \| --refresh] [--no-save-key] [--no-check]` | Run every day via launchd, with an access check ([Run it every day](#run-it-every-day)) |
 | `flib inspect FILE... [--json]` | Show hash, size and download origin (no hash for a file only in iCloud), and for an indexed file its status, category, why it is in review and the name choice |
 | `flib mcp` | Local MCP server for AI assistants ([Use it from Claude](#use-it-from-claude)) |
@@ -503,6 +503,7 @@ The options you are most likely to change:
 | `summary.notify` | `true` | The periodic notification about files waiting for you |
 | `search.semantic.enabled` | `false` | [Semantic search](#semantic-search-optional) |
 | `mcp.read_only` | `false` | Offer only the read tools in `flib mcp` |
+| `privacy.descriptions` | `redact` | `verbatim` stores descriptions and tags exactly as the AI wrote them ([Privacy](#privacy)) |
 
 **Finder tags.** Each item moved into a category folder also gets the
 category name as a Finder tag, so Finder's sidebar and Spotlight
@@ -671,6 +672,37 @@ Two kinds of files are treated differently, with every provider:
 
 `flib status` and the periodic notification name no file, because
 notifications show on the lock screen.
+
+**What the index stores.** For each file: its original and current name and
+path, size, content hash, category, status, and what the AI wrote about it (a
+description of 1 to 3 sentences, a few tags, its confidence and why it kept
+or replaced the name), plus the journal of moves and corrections behind
+`flib undo`. Never the file's content. That description is what `flib search`,
+`flib inspect` and the MCP tools show, and what semantic search embeds, so it
+is kept free of personal identifiers in two ways:
+
+- The AI is asked to say what a file *is* without copying identifiers from
+  it: no phone numbers, e-mail addresses, document, ID or tax numbers, bank
+  account or card numbers, payment keys, street addresses, licence plates or
+  full names of private individuals (names of organisations, products and
+  public figures are fine). The proposed file name follows the same rule.
+- Before anything is stored, flib replaces what still looks like one with a
+  marker: `(00) 90000-0000` becomes `[phone]`, `user@example.com` becomes
+  `[email]`, and CPF, CNPJ, card, IBAN and other long numbers become
+  `[id number]`, `[card number]` or `[account number]` (secrets become
+  `[secret]`). Dates, amounts, version numbers and years are left alone. In a
+  proposed name the identifier is dropped. Names of people and street
+  addresses cannot be told apart from other words by a pattern: for those,
+  only the instruction to the AI applies.
+
+`privacy.descriptions: verbatim` turns the second step off and stores what
+the AI wrote (the instruction stays). Descriptions stored by an earlier
+version can be cleaned without asking the AI again, at no cost:
+`flib reprocess --scrub-descriptions` (`--simulate` to see which files first).
+It also cleans the classification cache, removes the embeddings of the files
+it changed (the next run makes them again) and is undone by `flib undo`; until
+you undo it, its undo journal in the index keeps the old text, shown nowhere.
+`flib doctor` never includes descriptions or tags.
 
 ## Troubleshooting
 

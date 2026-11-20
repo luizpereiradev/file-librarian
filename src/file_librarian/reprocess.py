@@ -44,10 +44,19 @@ it was deleted.
 
 Only files inside ``output_root`` are touched, and only to destinations the
 planner (or the migration) builds inside it.
+
+``--scrub-descriptions`` is different: no provider call and no move. It runs
+``privacy.scrub`` over what the index already stores (descriptions, tags and
+name-choice reasons written before #82), as one ``reprocess`` run whose index
+changes ``flib undo`` reverts (``plan_scrub``, ``apply_scrub``). Full-text
+search follows the rows; the embeddings of the files it changed are removed,
+to be made again from the scrubbed text. Cached answers and the records kept
+with journaled moves are scrubbed in place too.
 """
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Collection
 from dataclasses import dataclass, field
@@ -78,6 +87,7 @@ from file_librarian.models import (
 )
 from file_librarian.pipeline import rules_for
 from file_librarian.planner import plan
+from file_librarian.privacy import scrub, scrub_name, scrub_tags
 from file_librarian.protection import LOCKED_NOW
 from file_librarian.providers.base import Provider, Usage
 from file_librarian.providers.prompt import system_prompt, user_message
@@ -590,3 +600,117 @@ def empty_folder(config: Config, category: str) -> Path | None:
     except OSError:
         return None
     return None if entries else folder
+
+
+# --- scrubbing stored descriptions (#82) ---------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class Scrubbed:
+    """A file whose stored answer holds something ``privacy.scrub`` replaces."""
+
+    file_id: int
+    path: Path
+    values: dict[str, str | None]
+    """``files`` column -> its new value, as the index stores it (tags as JSON)."""
+
+
+@dataclass(frozen=True, slots=True)
+class ScrubReport:
+    run_id: int | None
+    """The run that journaled the changes; ``None`` when no file changed."""
+    files: int = 0
+    values: int = 0
+    embeddings: int = 0
+    """Vectors removed, made again from the scrubbed text by the next refresh."""
+    cached: int = 0
+    """Cached answers scrubbed in place."""
+
+
+def plan_scrub(store: Store) -> list[Scrubbed]:
+    """The files whose description, tags or name-choice reason would change."""
+    planned = []
+    for row in store.all_files():
+        values = _scrubbed_values(row)
+        if values:
+            planned.append(Scrubbed(row.id, row.current_path, values))
+    return planned
+
+
+def _scrubbed_values(row: FileRow) -> dict[str, str | None]:
+    values: dict[str, str | None] = {}
+    if row.description is not None and (new := scrub(row.description)) != row.description:
+        values["description"] = new
+    if row.tags and (tags := scrub_tags(row.tags)) != row.tags:
+        values["tags"] = json.dumps(tags, ensure_ascii=False)
+    reason = row.name_choice_reason
+    if reason is not None and (new := scrub(reason)) != reason:
+        values["name_choice_reason"] = new
+    return values
+
+
+def apply_scrub(store: Store) -> ScrubReport:
+    """Scrub the index as one ``reprocess`` run that ``flib undo`` reverts.
+
+    The caller holds the instance lock; the rows are read again here, so what
+    changed since the plan is scrubbed as it is now.
+    """
+    with store.transaction():
+        cached = _scrub_cache(store)
+        _scrub_pending_records(store)
+    rows = [r for r in store.all_files() if _scrubbed_values(r)]
+    if not rows:
+        return ScrubReport(None, cached=cached)
+    values = 0
+    with store.transaction():
+        run_id = store.start_run(RunMode.RUN, RunTrigger.REPROCESS)
+        for row in rows:
+            # As the index stores them (tags as the JSON list upsert_file writes).
+            stored = {
+                "description": row.description,
+                "tags": json.dumps(row.tags, ensure_ascii=False),
+                "name_choice_reason": row.name_choice_reason,
+            }
+            for column, new in _scrubbed_values(row).items():
+                store.change_index(run_id, f"files.{column}", row.id, stored[column], new)
+                values += 1
+        removed = store.delete_embeddings([r.id for r in rows])
+        store.finish_run(run_id, seen=len(rows), moved=0, review=0, errors=0, cost_usd=0.0)
+    return ScrubReport(run_id, len(rows), values, removed, cached)
+
+
+def _scrub_cache(store: Store) -> int:
+    changed = 0
+    for sha256, key, answer in store.cached_answers():
+        new = _scrub_json(answer, name="suggested_name")
+        if new is not None:
+            store.replace_cached_answer(sha256, key, new)
+            changed += 1
+    return changed
+
+
+def _scrub_pending_records(store: Store) -> None:
+    for op_id, record in store.pending_records():
+        new = _scrub_json(record)
+        if new is not None:
+            store.replace_pending_record(op_id, new)
+
+
+def _scrub_json(text: str, *, name: str | None = None) -> str | None:
+    """A stored answer or record (JSON) with its free text scrubbed; ``None`` if unchanged
+    or unreadable (an unreadable cached answer is never used anyway)."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    new = dict(data)
+    for key in ("description", "name_choice_reason"):
+        if isinstance(data.get(key), str):
+            new[key] = scrub(data[key])
+    if isinstance(data.get("tags"), list):
+        new["tags"] = scrub_tags(str(t) for t in data["tags"])
+    if name is not None and isinstance(data.get(name), str):
+        new[name] = scrub_name(data[name]) or "untitled"
+    return None if new == data else json.dumps(new, ensure_ascii=False)
