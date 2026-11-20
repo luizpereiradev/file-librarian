@@ -54,6 +54,7 @@ from file_librarian.config import (
     load_config,
 )
 from file_librarian.db.store import load_migrations
+from file_librarian.extractors import ocr
 from file_librarian.models import FileStatus
 from file_librarian.runlog import logs_dir
 
@@ -427,7 +428,19 @@ def _configuration(
         section.lines.append(f"input-{i}: {_folder_state(folder)}")
     output = _folder_state(config.output_root)
     section.lines.append(f"output: {output}")
+    section.lines.append(f"ocr: {_ocr_state(config, r)}")
     section.blocks.append(("Configuration (redacted)", redacted_config(config, r)))
+
+
+def _ocr_state(config: Config, r: Redactor) -> str:
+    if not config.ocr.enabled:
+        return "off"
+    found = ocr.availability()
+    if not found.available:
+        return f"on, unavailable ({r.text(found.reason or 'unknown')})"
+    unknown = [lang for lang in config.ocr.languages if lang not in found.languages]
+    missing = f"; not supported here: {', '.join(unknown)}" if unknown else ""
+    return f"on, available ({', '.join(config.ocr.languages)}{missing})"
 
 
 def _folder_state(folder: Path) -> str:

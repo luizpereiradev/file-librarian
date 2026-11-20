@@ -46,8 +46,10 @@ from file_librarian.config import (
     is_loopback_url,
     load_config,
 )
+from file_librarian.context import build_context_safely
 from file_librarian.db.store import MigrationError, Store
 from file_librarian.executor import ItemResult, RunReport, recover
+from file_librarian.extractors import ocr
 from file_librarian.extractors.origin import download_origin
 from file_librarian.fix import FixError, fix_file
 from file_librarian.hashing import file_sha256, unit_manifest
@@ -60,7 +62,7 @@ from file_librarian.providers.base import Provider
 from file_librarian.reconcile import in_cloud_only
 from file_librarian.reconcile import reconcile as run_reconcile
 from file_librarian.runlog import append_log, logs_dir, write_log
-from file_librarian.scanner import ScanError, ScanResult, SkipReason
+from file_librarian.scanner import Candidate, ScanError, ScanResult, SkipReason
 from file_librarian.search import (
     SearchError,
     SearchFilters,
@@ -160,6 +162,7 @@ def check_config(config: ConfigOption = None) -> None:
             "classification commands will not run until then.",
             err=True,
         )
+    _report_ocr(cfg)
     _report_semantic(cfg)
     _warn_orphan_categories(cfg)
     for option, milestone in inactive_options_set(cfg):
@@ -225,6 +228,34 @@ def _report_compat(cfg: Config) -> None:
             typer.echo(f"warning: {line}", err=True)
 
 
+def _report_ocr(cfg: Config) -> None:
+    """OCR: off, or on with its languages; a warning when this Mac cannot run it."""
+    settings = cfg.ocr
+    if not settings.enabled:
+        typer.echo("  ocr: off")
+        return
+    found = ocr.availability()
+    if not found.available:
+        typer.echo("  ocr: unavailable")
+        typer.echo(
+            f"warning: OCR is on but cannot run here ({found.reason}); images and scanned "
+            "PDFs are classified with vision if it is on, else from their name and metadata.",
+            err=True,
+        )
+        return
+    typer.echo(
+        f"  ocr: on, on this Mac ({', '.join(settings.languages)}; "
+        f"first {settings.max_pages} pages of a scanned PDF)"
+    )
+    unknown = [lang for lang in settings.languages if lang not in found.languages]
+    if unknown:
+        typer.echo(
+            f"warning: ocr.languages: macOS cannot recognise {', '.join(unknown)}; "
+            f"it can: {', '.join(found.languages)}",
+            err=True,
+        )
+
+
 def _report_semantic(cfg: Config) -> None:
     """Semantic search: off, or where the index's text goes to be embedded."""
     semantic = cfg.search.semantic
@@ -283,12 +314,17 @@ def inspect(
 ) -> None:
     """Show what flib reads from a file before any AI is involved: hash, size, download origin.
 
+    With a configuration, also how much text a run would send and where it
+    comes from (read from the file, or recognised by OCR on this Mac), never
+    the text itself.
+
     A file or folder that exists only in iCloud is reported as such, not hashed:
     reading it would download it. If the file is in flib's index, also show its
     status, category, why it is in review (if it is), and which name the AI
     judged better (original or its own) and why.
     """
-    database = _index_database(config)
+    cfg = _inspect_config(config)
+    database = cfg.database if cfg is not None and cfg.database.exists() else None
     results: list[dict[str, object]] = []
     for path in paths:
         cloud_only = in_cloud_only(path)
@@ -315,6 +351,9 @@ def inspect(
                 "size_bytes": size,
                 "source_urls": list(download_origin(path)),
                 "index": _index_entry(database, digest, path),
+                "text": _text_summary(path, digest, size, cfg)
+                if kind == "file" and digest is not None and size is not None
+                else None,
             }
         )
     if as_json:
@@ -335,6 +374,9 @@ def inspect(
                 typer.echo(f"  from:   {url}")
         else:
             typer.echo("  from:   (no download origin recorded)")
+        summary = item["text"]
+        if isinstance(summary, dict):
+            typer.echo(f"  text:   {_describe_text(summary)}")
         entry = item["index"]
         if isinstance(entry, dict):
             where = f", {entry['category']}" if entry["category"] else ""
@@ -373,16 +415,55 @@ def status(
         typer.echo(line)
 
 
-def _index_database(config: Path | None) -> Path | None:
-    """The index to look files up in, if there is one. ``inspect`` works without a
-    configuration; only one passed with ``--config`` must load."""
+def _inspect_config(config: Path | None) -> Config | None:
+    """The configuration ``inspect`` reads files with, if there is one. ``inspect``
+    works without one; only one passed with ``--config`` must load."""
     try:
-        database = load_config(config).database
+        return load_config(config)
     except ConfigError as exc:
         if config is not None:
             _fatal(str(exc))
         return None
-    return database if database.exists() else None
+
+
+def _text_summary(path: Path, digest: str, size: int, cfg: Config | None) -> dict[str, object]:
+    """What text a run would read from ``path`` and where it comes from; never the text."""
+    if cfg is None:
+        return {"chars": None, "source": None, "note": "no configuration; not read"}
+    st = path.stat()
+    candidate = Candidate(
+        path=path.absolute(),
+        sha256=digest,
+        size_bytes=size,
+        mtime=st.st_mtime,
+        is_unit=False,
+        mtime_ns=st.st_mtime_ns,
+        inode=st.st_ino,
+    )
+    ctx = build_context_safely(candidate, cfg)
+    meta = ctx.metadata
+    if ctx.sensitive:
+        note: str | None = f"sensitive ({meta.sensitive}); nothing is sent"
+    else:
+        note = meta.content or meta.extraction_error
+    if meta.ocr_error:
+        note = f"{note}; OCR failed: {meta.ocr_error}" if note else f"OCR failed: {meta.ocr_error}"
+    return {
+        "chars": len(ctx.text) if ctx.text else 0,
+        "source": meta.text_source or ("extracted" if ctx.text else None),
+        "note": note,
+    }
+
+
+def _describe_text(summary: dict[str, object]) -> str:
+    chars, source, note = summary["chars"], summary["source"], summary["note"]
+    if source == "ocr":
+        said = f"{chars} characters, recognised by OCR on this Mac"
+    elif source is not None:
+        said = f"{chars} characters"
+    else:
+        said = "none sent"
+    return f"{said} ({note})" if note else said
 
 
 def _index_entry(database: Path | None, digest: str | None, path: Path) -> dict[str, object] | None:

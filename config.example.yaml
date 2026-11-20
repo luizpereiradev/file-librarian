@@ -107,6 +107,12 @@ never_send:                  # classified from metadata only, never sent to the 
   - "*.key"
   - ".env*"
 
+ocr:                         # RF-26: read the text in images and scanned PDFs, on this Mac
+  enabled: true              # macOS's own text recognition; nothing is sent anywhere for it
+  # languages: [en-US]       # default from `language`: en -> [en-US], pt-BR -> [pt-BR, en-US]
+  max_pages: 3               # only the first pages of a PDF with no text layer are read (1-20)
+  min_chars: 40              # fewer letters and digits: a photo, not a document (vision or metadata)
+
 vision:                      # RF-05, RF-26: let the model look at images and scanned PDFs
   enabled: false             # off by default: when on, image pixels and scanned pages leave your Mac
   max_image_px: 1568         # images are shrunk so the longer side is at most this (256-2576)

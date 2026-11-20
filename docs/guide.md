@@ -5,11 +5,11 @@ details behind some of its sections.
 
 ## Names
 
-A file is renamed only when the model read its content (text, or the image
-with vision on), its category allows renaming (`rename: false` keeps original
-names), and the model is at least `naming.rename_confidence_threshold` sure
-(0.8 by default). Videos, installers, archives, folders and images with vision
-off keep their name.
+A file is renamed only when the model read its content (text, text recognised
+by OCR in an image or scanned PDF, or the image with vision on), its category
+allows renaming (`rename: false` keeps original names), and the model is at
+least `naming.rename_confidence_threshold` sure (0.8 by default). Videos,
+installers, archives, folders and photos with vision off keep their name.
 
 The model also compares the file's current name with the subject it proposes
 and says which describes the file better. A generic name (`scan001.pdf`,

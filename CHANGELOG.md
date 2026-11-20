@@ -8,6 +8,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Local OCR (RF-26 done): the text in screenshots, photographed documents and
+  scanned PDFs (first `ocr.max_pages`, 3) is recognised on the Mac with
+  macOS's Vision framework, through a small `osascript` helper (no install,
+  no network, works from the scheduled run). It is then the file's text: the
+  secret scan sees it (a screenshot of a key makes the file sensitive),
+  `never_send` and `max_chars_per_file` apply, every provider gets it and
+  the file can be renamed. Photos with less than `ocr.min_chars` (40) go to
+  vision when it is on, else are classified from metadata. `ocr.enabled`
+  (on), `ocr.languages` (from `language`); `flib check-config` and `flib
+  doctor` say whether OCR works, `flib inspect` whether a file's text came
+  from it.
 - `flib eval` measures classification quality on a public, synthetic corpus of
   154 downloads (formats flib reads, English and Portuguese, both locales'
   categories, generic and descriptive names, near-identical bills, items for

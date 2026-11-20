@@ -12,11 +12,20 @@ provider:
 4. With ``sensitive.detect_secrets``, a sensitive name or any secret found in
    that window marks the file ``sensitive``: nothing is sent and it stays put.
 5. What remains is cut to ``provider.max_chars_per_file`` for the provider.
+   With ``ocr.enabled`` (the default), an image or a PDF with no text layer
+   (scanned) is read on this Mac with macOS's text recognition first (see
+   ``extractors/ocr.py``). What it finds is the file's text from here on: the
+   secret scan of step 4 sees it, so a screenshot of a password or a key makes
+   the file sensitive and nothing is sent. Text with fewer than
+   ``ocr.min_chars`` letters and digits (a photo, not a document) is scanned
+   but not sent.
 6. With ``vision.enabled``, an image, or a PDF with no text layer (scanned),
-   is marked ``visual``; the classifier then sends a downscaled image or the
-   first pages to a provider that reads them (see ``extractors/visual.py``).
-   Steps 1, 2 and 4 come first, so ``never_send`` and sensitive names hold.
-   Pixels cannot be scanned for secrets, which is one reason vision is opt-in.
+   is marked ``visual``, unless OCR found enough text: then the text is sent
+   instead (cheaper, and it went through the secret scan). The classifier
+   sends a downscaled image or the first pages to a provider that reads them
+   (see ``extractors/visual.py``). Steps 1, 2 and 4 come first, so
+   ``never_send`` and sensitive names hold. Pixels cannot be scanned for
+   secrets, which is one reason vision is opt-in.
 
 Extraction failures never stop a run (RF-27): the file falls back to metadata.
 """
@@ -30,7 +39,7 @@ from datetime import date
 from pathlib import Path
 
 from file_librarian.config import Config
-from file_librarian.extractors import ExtractionError, extractor_for
+from file_librarian.extractors import ExtractionError, extractor_for, ocr
 from file_librarian.extractors.origin import download_origin
 from file_librarian.extractors.visual import is_image
 from file_librarian.models import BundleInfo, FileContext, FileMetadata, VisualKind
@@ -124,18 +133,38 @@ def build_context(
         # This is the boundary that keeps one damaged file from stopping every run (RF-27).
         error = f"{type(exc).__name__}: {exc}"[:200]
 
-    if detect and text:
-        kinds = find_secrets(text)
+    recognized: str | None = None
+    ocr_error: str | None = None
+    if config.ocr.enabled and error is None and _needs_ocr(base, text):
+        try:
+            recognized = ocr.recognize(path, config.ocr, SCAN_WINDOW) or None
+        except ocr.OcrError as exc:
+            ocr_error = str(exc)[:200]
+
+    # Recognised text is scanned for secrets even when too short to be sent.
+    scanned = "\n".join(t for t in (text, recognized) if t)
+    if detect and scanned:
+        kinds = find_secrets(scanned)
         if kinds:
             return replace(base, sensitive=True, metadata=FileMetadata(sensitive=", ".join(kinds)))
 
+    from_ocr = recognized is not None and ocr.enough_text(recognized, config.ocr)
+    if from_ocr:
+        text, sendable = recognized, True
     sent = text[: config.provider.max_chars_per_file] if (text and sendable) else None
     content: str | None = None
-    if extractor is None:
+    if from_ocr:
+        pass  # the recognised text is the content
+    elif extractor is None:
         content = "no extractor for this format"
-    elif text is None and error is None:
+    elif sent is None and error is None:
         content = "no readable text"
-    metadata = FileMetadata(content=content, extraction_error=error)
+    metadata = FileMetadata(
+        content=content,
+        extraction_error=error,
+        text_source="ocr" if from_ocr else None,
+        ocr_error=ocr_error,
+    )
     visual = _visual(base, sent, metadata, config)
     return replace(base, text=sent, metadata=metadata, visual=visual)
 
@@ -144,13 +173,18 @@ def _visual(
     base: FileContext, text: str | None, metadata: FileMetadata, config: Config
 ) -> VisualKind | None:
     """``"image"``, ``"pdf"`` (scanned: readable, but no text) or ``None``."""
-    if not config.vision.enabled:
-        return None
+    if not config.vision.enabled or metadata.text_source == "ocr":
+        return None  # with enough recognised text, the text is sent instead
     if is_image(base.path):
         return "image"
     if base.extension == ".pdf" and text is None and metadata.extraction_error is None:
         return "pdf"
     return None
+
+
+def _needs_ocr(base: FileContext, text: str | None) -> bool:
+    """An image, or a PDF the extractor found no text layer in."""
+    return is_image(base.path) or (base.extension == ".pdf" and text is None)
 
 
 def _sniff_text(path: Path) -> str | None:

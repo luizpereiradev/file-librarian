@@ -8,6 +8,7 @@ one test module belongs here, never in a test module another one imports.
 
 from __future__ import annotations
 
+import base64
 import builtins
 import ctypes
 import ctypes.util
@@ -284,6 +285,19 @@ class FakeProtection:
 def make_image(path: Path, width: int, height: int) -> Path:
     """A synthetic image only the fake sips (tests/fake_sips.py) can read."""
     path.write_bytes(f"FAKEIMG {width} {height}\n".encode() + b"\0" * 64)
+    return path
+
+
+def make_scan(path: Path, text: str, *, width: int = 1200, height: int = 1600) -> Path:
+    """An image (or, for ``.pdf``, a PDF with no text layer) whose "printed" text
+    only the fake OCR helper (tests/fake_ocr.py) can read."""
+    marker = b"\nFAKEOCR:" + base64.b64encode(text.encode("utf-8")) + b"\n"
+    if path.suffix.lower() == ".pdf":
+        make_blank_pdf(path, 1)
+        path.write_bytes(path.read_bytes() + b"%" + marker[1:])
+    else:
+        make_image(path, width, height)
+        path.write_bytes(path.read_bytes() + marker)
     return path
 
 
