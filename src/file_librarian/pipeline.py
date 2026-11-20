@@ -29,6 +29,7 @@ from file_librarian.models import CategoryRule, FileStatus, Rules, RunTrigger
 from file_librarian.planner import Plan, plan
 from file_librarian.providers.base import Provider
 from file_librarian.scanner import ScanResult, scan
+from file_librarian.status import DUPLICATES_MOVED
 
 
 @dataclass(slots=True)
@@ -48,12 +49,6 @@ class Outcome:
     """False when the provider's prices are unknown; the run then records no cost."""
     embedding: RefreshReport | None = None
     """Semantic search's vectors made after the run; ``None`` when it is off or simulated."""
-    first_duplicates: bool = False
-    """This run was the first to set duplicates aside (RF-21): say so, once."""
-
-
-DUPLICATES_NOTICE_KEY = "duplicates.first_moved_at"
-"""The ``meta`` key recording when duplicates were first set aside (UTC)."""
 
 
 log = logging.getLogger(__name__)
@@ -128,11 +123,9 @@ def _run(
         deferred=deferred,
         cost_usd=classified.run_cost,
     )
-    first = bool(report.count(FileStatus.DUPLICATE, moved=True)) and (
-        store.meta(DUPLICATES_NOTICE_KEY) is None
-    )
-    if first:
-        store.set_meta(DUPLICATES_NOTICE_KEY, datetime.now(UTC).isoformat(timespec="seconds"))
+    if report.count(FileStatus.DUPLICATE, moved=True) and store.meta(DUPLICATES_MOVED) is None:
+        # Remembered so the one-time note about duplicates is shown (``status.py``).
+        store.set_meta(DUPLICATES_MOVED, datetime.now(UTC).isoformat(timespec="seconds"))
     return Outcome(
         found,
         planned,
@@ -143,7 +136,6 @@ def _run(
         classified.cached,
         classified.cost_known,
         embed_after_run(config, store),
-        first,
     )
 
 

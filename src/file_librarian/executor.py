@@ -90,7 +90,7 @@ from file_librarian.models import (
 )
 from file_librarian.naming import candidate_names
 from file_librarian.planner import Plan, PlannedItem
-from file_librarian.reconcile import content_at, place
+from file_librarian.reconcile import content_at
 from file_librarian.undo import record_restored, unit_identity
 
 # A full disk or quota is not the file's fault: the item is retried every run.
@@ -204,6 +204,10 @@ def _apply(
     takeover = known.id if known is not None and known.status is FileStatus.MISSING else None
     if item.destination is None:
         if takeover is not None:
+            # The row stays ``missing``; a failure still counts toward max_attempts.
+            if item.status is FileStatus.FAILED:
+                with store.transaction():
+                    store.count_attempt(takeover, item.reason)
             return ItemResult(ctx.path, item.status, None, item.reason)
         error = item.reason if item.status is FileStatus.FAILED else None
         store.upsert_file(file_record(item, item.status, provider, model, error), run_id=run_id)
@@ -271,7 +275,14 @@ def _place(
     destination = item.destination
     with store.transaction():
         file_id = takeover if takeover is not None else store.upsert_file(record, run_id=run_id)
-        op_id = store.add_operation(run_id, file_id, ctx.path, destination, identity=identity)
+        op_id = store.add_operation(
+            run_id,
+            file_id,
+            ctx.path,
+            destination,
+            identity=identity,
+            pending=record if takeover is not None else None,
+        )
     try:
         _require_safe_volume(ctx.path, config.output_root)
         ensure_folder(destination.parent, inside=config.output_root)
@@ -285,6 +296,8 @@ def _place(
         if takeover is not None:
             with store.transaction():
                 store.set_operation(op_id, OperationStatus.FAILED)
+                if not environmental:
+                    store.count_attempt(takeover, error)
             return ItemResult(ctx.path, FileStatus.FAILED, None, error[:300])
         return _fail(store, op_id, file_id, ctx.path, error, attempt=not environmental)
     unit = unit_identity(destination, ctx.sha256) if ctx.is_unit else None
@@ -661,7 +674,7 @@ def _recover_rename(store: Store, op: OperationRow, row: FileRow, config: Config
     elif moved:
         with store.transaction():
             store.set_operation(op.id, OperationStatus.DONE)
-            _record_recovered(store, op.file_id, op.dst_path, row, config)
+            _record_recovered(store, op, op.dst_path, row)
     else:
         with store.transaction():
             store.set_operation(op.id, OperationStatus.FAILED)
@@ -669,18 +682,16 @@ def _recover_rename(store: Store, op: OperationRow, row: FileRow, config: Config
                 store.mark_file_failed(op.file_id, "interrupted before the move finished")
 
 
-def _record_recovered(
-    store: Store, file_id: int, path: Path, row: FileRow, config: Config | None
-) -> None:
+def _record_recovered(store: Store, op: OperationRow, path: Path, row: FileRow) -> None:
     """Where an interrupted move put the item. A ``missing`` row it was taking over
-    gets the status and category of the folder it reached (reconcile's rule)."""
+    gets the record journaled with the move (its new classification)."""
     if row.status is not FileStatus.MISSING:
-        store.set_file_location(file_id, path, row.status)
-    elif config is not None:
-        status, category = place(config, path)
-        store.relocate_file(file_id, path, status, category)
-    else:
-        store.set_file_location(file_id, path, FileStatus.MISSING)  # reconcile settles it
+        store.set_file_location(op.file_id, path, row.status)
+    elif op.pending is not None:
+        store.upsert_file(op.pending, run_id=op.run_id)
+        store.set_file_location(op.file_id, path, op.pending.status)
+    else:  # never journaled without its record; left for reconcile all the same
+        store.set_file_location(op.file_id, path, FileStatus.MISSING)
 
 
 def _recover_copy(
@@ -707,7 +718,7 @@ def _recover_copy(
     with store.transaction():
         if final is not None:
             store.set_operation(op.id, OperationStatus.DONE, final)
-            _record_recovered(store, op.file_id, final, row, config)
+            _record_recovered(store, op, final, row)
             if unit is not None:
                 store.set_file_identity(op.file_id, unit)
         else:

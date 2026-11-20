@@ -405,8 +405,10 @@ its own name. It is never deleted, and it is not sent to the AI, so it costs
 nothing. flib checks first that the filed copy is still there with the same
 content. If it is not where flib left it (you renamed, moved, edited or
 deleted it, or its disk is not connected), the new copy is left in Downloads
-with a note to run `flib reconcile`; once reconcile has found the filed copy
-gone, the next run files the new one in its place. A copy of a sensitive
+with a note to run `flib reconcile` (`flib status` counts these). Once
+reconcile has found the filed copy gone, the next run files the new one in
+its place. A file you dragged from the organized folder back to Downloads is
+recognised as the same file and left there. A copy of a sensitive
 file stays where it is, like the original.
 
 ```text
@@ -424,9 +426,10 @@ renames the folder.
 
 **Upgrading from an earlier version:** with the default `duplicates: move`,
 the first run also sets aside the copies that earlier runs left in Downloads
-(`report (1).pdf` next to a filed `report.pdf`). It says so once, in a note
-after the run. Nothing is deleted: `flib undo` puts them back, and
-`duplicates: leave` keeps them where they are.
+(`report (1).pdf` next to a filed `report.pdf`). A note after the run says
+so; scheduled runs write it to their log, and `flib status` shows it until
+you have seen it after a `flib run` in Terminal. Nothing is deleted: `flib
+undo` puts them back, and `duplicates: leave` keeps them where they are.
 
 ### Names
 

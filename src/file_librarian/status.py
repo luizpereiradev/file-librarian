@@ -41,13 +41,21 @@ from file_librarian.scanner import SkipReason
 
 OSASCRIPT = "/usr/bin/osascript"
 NOTIFICATION_TITLE = "file-librarian"
+DUPLICATES_MOVED = "duplicates.first_moved_at"
+"""The ``meta`` key holding when a run first set duplicates aside (UTC, RF-21)."""
+DUPLICATES_NOTICE_SEEN = "duplicates.notice_seen_at"
+"""The ``meta`` key holding when the note about it was shown at a terminal (UTC)."""
 SUMMARY_KEY = "summary.last_at"
 """The ``meta`` key holding when the last periodic summary was written (UTC)."""
 
 # The first schema with what status reads (review reasons, run costs).
 _MIN_SCHEMA = 10
 # The skips of the last run worth telling the user about, as its log words them.
-_LOGGED_SKIPS = {"unreadable": SkipReason.UNREADABLE, "cloud_only": SkipReason.CLOUD_ONLY}
+_LOGGED_SKIPS = {
+    "unreadable": SkipReason.UNREADABLE,
+    "cloud_only": SkipReason.CLOUD_ONLY,
+    "not_where_left": SkipReason.NOT_WHERE_LEFT,
+}
 _SKIP_LINE = re.compile(r"  skip    .*  \((.*)\)")
 _SCRIPT = (
     "-e", "on run argv",
@@ -111,6 +119,8 @@ class Status:
     month_cost_usd: float
     month_unpriced_runs: int
     last_summary: datetime | None
+    duplicates_notice: bool = False
+    """The one-time note about duplicates set aside was not seen at a terminal yet."""
     duplicates: int = 0
     """Copies set aside in the duplicates folder (RF-21)."""
 
@@ -147,6 +157,7 @@ def collect(config: Config, *, now: datetime | None = None) -> Status:
         waiting = store.waiting()
         stats = store.stats()
         last_summary = _last_summary(store)
+        notice = duplicates_notice_due(store)
     last = stats.last_run
     return Status(
         database_exists=True,
@@ -160,6 +171,7 @@ def collect(config: Config, *, now: datetime | None = None) -> Status:
         month_unpriced_runs=stats.month_unpriced_runs,
         last_summary=last_summary,
         duplicates=stats.by_status.get(FileStatus.DUPLICATE.value, 0),
+        duplicates_notice=notice,
     )
 
 
@@ -169,6 +181,30 @@ def _open_read_only(path: Path) -> Store:
     )
     conn.row_factory = sqlite3.Row
     return Store(conn)
+
+
+def duplicates_notice_due(store: Store) -> bool:
+    """Duplicates were set aside, and the note about it was not seen at a terminal."""
+    try:
+        moved = store.meta(DUPLICATES_MOVED)
+        seen = store.meta(DUPLICATES_NOTICE_SEEN)
+    except sqlite3.OperationalError:  # no meta table yet
+        return False
+    return moved is not None and seen is None
+
+
+def acknowledge_duplicates_notice(store: Store) -> None:
+    store.set_meta(DUPLICATES_NOTICE_SEEN, datetime.now(UTC).isoformat(timespec="seconds"))
+
+
+def duplicates_notice(config: Config) -> str:
+    """The note shown until a run by hand prints it to a terminal (RF-21)."""
+    return (
+        f"Note: files with the same content as one already filed were moved to "
+        f"{config.duplicates_folder} in the organized folder; nothing was deleted. "
+        "`flib undo` puts them back, and `duplicates: leave` in the configuration "
+        "leaves copies where they are."
+    )
 
 
 def _last_summary(store: Store) -> datetime | None:
@@ -192,7 +228,8 @@ def review_groups(rows: Iterable[WaitingRow]) -> list[ReviewGroup]:
 def failed_groups(rows: Iterable[WaitingRow], max_attempts: int) -> list[FailedGroup]:
     groups: dict[tuple[str, bool], list[WaitingRow]] = {}
     for row in rows:
-        if row.status is FileStatus.FAILED:
+        # A ``missing`` row in ``waiting`` is a copy that failed to take it over (RF-21).
+        if row.status in (FileStatus.FAILED, FileStatus.MISSING):
             key = (error_kind(row.last_error), row.attempts < max_attempts)
             groups.setdefault(key, []).append(row)
     found = [
@@ -274,6 +311,8 @@ def render(
         lines.extend(_failed_lines(status, config, now))
         if status.sensitive:
             lines.append(f"Left in place as sensitive: {_files(status.sensitive)}")
+        if status.duplicates_notice:
+            lines.append(duplicates_notice(config))
         if status.duplicates:
             lines.append(
                 f"Duplicates set aside in {config.duplicates_folder}: "
@@ -342,6 +381,11 @@ def _last_run_lines(status: Status) -> list[str]:
         parts.append(f"{skipped['unreadable']} unreadable")
     if skipped.get("cloud_only"):
         parts.append(f"{skipped['cloud_only']} only in iCloud")
+    if skipped.get("not_where_left"):
+        parts.append(
+            f"{skipped['not_where_left']} waiting for `flib reconcile` "
+            "(copies of filed files that are not where flib left them)"
+        )
     if parts:
         lines.append(f"  skipped: {', '.join(parts)} (see its log)")
     return lines
@@ -394,7 +438,11 @@ def to_json(status: Status, config: Config, *, now: datetime | None = None) -> s
             ],
         },
         "sensitive": status.sensitive,
-        "duplicates": {"folder": config.duplicates_folder, "total": status.duplicates},
+        "duplicates": {
+            "folder": config.duplicates_folder,
+            "total": status.duplicates,
+            "notice_pending": status.duplicates_notice,
+        },
         "last_run": None
         if run is None
         else {
@@ -448,21 +496,27 @@ def _local(text: str) -> str:
 # --- the periodic summary --------------------------------------------------------------
 
 
-def summary_text(review: int, failed: int) -> str:
+def summary_text(review: int, failed: int, not_where_left: int = 0) -> str:
     """The notification's body: counts only, nothing that names a file."""
     parts = []
     if review:
         parts.append(f"{_files(review)} {'waits' if review == 1 else 'wait'} for review")
     if failed:
         parts.append(f"{failed} failed")
+    if not_where_left:
+        parts.append(f"{not_where_left} wait for `flib reconcile`")
     return f"{', '.join(parts)}. Run `flib status` for details."
 
 
-def after_scheduled_run(config: Config, *, now: datetime | None = None) -> list[str]:
+def after_scheduled_run(
+    config: Config, *, now: datetime | None = None, not_where_left: int = 0
+) -> list[str]:
     """The periodic summary, when one is due: lines for the run log (else none).
 
-    Due when some file has waited in review or failed for ``min_age_days`` and
-    the last summary was ``every_days`` or more calendar days ago. The time is
+    Due when some file has waited in review or failed for ``min_age_days``, or
+    the run skipped ``not_where_left`` copies of filed files that are not where
+    flib left them (RF-21), and the last summary was ``every_days`` or more
+    calendar days ago. The time is
     recorded before notifying, so a notification that fails is not retried
     on every run.
     """
@@ -471,7 +525,7 @@ def after_scheduled_run(config: Config, *, now: datetime | None = None) -> list[
     with Store.open(config.database) as store:
         waiting = store.waiting()
         cutoff = now - timedelta(days=settings.min_age_days)
-        if not any(_when(row.processed_at) <= cutoff for row in waiting):
+        if not not_where_left and not any(_when(row.processed_at) <= cutoff for row in waiting):
             return []
         last = store.meta(SUMMARY_KEY)
         if last is not None:
@@ -480,7 +534,7 @@ def after_scheduled_run(config: Config, *, now: datetime | None = None) -> list[
                 return []
         store.set_meta(SUMMARY_KEY, now.astimezone(UTC).isoformat(timespec="seconds"))
     review = sum(1 for row in waiting if row.status is FileStatus.REVIEW)
-    text = summary_text(review, len(waiting) - review)
+    text = summary_text(review, len(waiting) - review, not_where_left)
     lines = [f"Summary: {text}"]
     if settings.notify:
         problem = notify(text)

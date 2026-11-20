@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from file_librarian import cli, executor, pipeline
+from file_librarian import cli, executor, fsops, pipeline
 from file_librarian.config import Config, ConfigError, parse_config
 from file_librarian.db.store import Store, load_migrations
 from file_librarian.embeddings import embeddable
@@ -677,7 +677,11 @@ def test_status_counts_duplicates(downloads: Path, cfg: Config) -> None:
     found = collect(cfg)
     assert found.duplicates == 1
     assert "Duplicates set aside in _Duplicates: 1 file" in "\n".join(render(found, cfg))
-    assert json.loads(to_json(found, cfg))["duplicates"] == {"folder": "_Duplicates", "total": 1}
+    assert json.loads(to_json(found, cfg))["duplicates"] == {
+        "folder": "_Duplicates",
+        "total": 1,
+        "notice_pending": True,
+    }
 
 
 def test_reconcile_never_reads_a_cloud_only_duplicate(
@@ -855,28 +859,112 @@ def test_runs_count_the_duplicates_they_set_aside(downloads: Path, cfg: Config) 
     assert json.loads(to_json(found, cfg))["last_run"]["files_duplicates"] == 1
 
 
-def test_the_first_duplicates_moved_come_with_a_note_once(tmp_path: Path, downloads: Path) -> None:
+NOTE = "Note: files with the same content as one already filed were moved to _Duplicates"
+
+
+def test_the_note_about_duplicates_waits_for_someone_at_a_terminal(
+    tmp_path: Path, downloads: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     config_file = write_config(tmp_path, downloads)
     put(downloads, "a.pdf", b"a")
     put(downloads, "a (1).pdf", b"a")
-    first = runner.invoke(cli.app, ["run", "-c", str(config_file)])
-    assert "Note: files with the same content as one already filed were moved to _Duplicates" in (
-        first.stdout
-    )
-    assert "nothing was deleted" in first.stdout and "duplicates: leave" in first.stdout
+    # A scheduled run: the note goes to its log, and is not used up.
+    scheduled = runner.invoke(cli.app, ["run", "--trigger", "schedule", "-c", str(config_file)])
+    assert NOTE in scheduled.stdout
+    assert "nothing was deleted" in scheduled.stdout and "duplicates: leave" in scheduled.stdout
+    status = runner.invoke(cli.app, ["status", "-c", str(config_file)])
+    assert NOTE in status.stdout
+    # A run by hand whose output is not a terminal (a pipe) shows it, and keeps it.
+    again = runner.invoke(cli.app, ["run", "-c", str(config_file)])
+    assert NOTE in again.stdout
+    # At a terminal it is shown once more, then never again.
+    monkeypatch.setattr(cli, "_interactive", lambda: True)
+    seen = runner.invoke(cli.app, ["run", "-c", str(config_file)])
+    assert NOTE in seen.stdout
     put(downloads, "b.pdf", b"b")
     put(downloads, "b (1).pdf", b"b")
-    second = runner.invoke(cli.app, ["run", "-c", str(config_file)])
-    assert "dup     b (1).pdf" in second.stdout
-    assert "Note: files with the same content" not in second.stdout
+    later = runner.invoke(cli.app, ["run", "-c", str(config_file)])
+    assert "dup     b (1).pdf" in later.stdout and NOTE not in later.stdout
+    assert NOTE not in runner.invoke(cli.app, ["status", "-c", str(config_file)]).stdout
 
 
-def test_a_takeover_recovered_without_the_configuration_is_settled_by_reconcile(
-    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_no_note_without_duplicates(tmp_path: Path, downloads: Path) -> None:
+    config_file = write_config(tmp_path, downloads)
+    put(downloads, "a.pdf", b"a")
+    assert NOTE not in runner.invoke(cli.app, ["run", "-c", str(config_file)]).stdout
+
+
+def row_of(cfg: Config) -> tuple[str, str | None, str | None, str]:
+    """(status, category, description, current name) of the only non-duplicate row."""
+    with Store.open(cfg.database) as store:
+        [row] = [r for r in store.all_files() if r.duplicate_of is None]
+    return row.status.value, row.category, row.description, row.current_name
+
+
+def test_following_the_advice_files_the_waiting_copy(downloads: Path, cfg: Config) -> None:
+    put(downloads, "bill.pdf", b"same")
+    run(cfg, FakeProvider(default=answer(description="old words")))
+    (finance(downloads) / "bill.pdf").unlink()
+    copy = put(downloads, "bill (1).pdf", b"same")
+    waiting = run(cfg)
+    assert (copy, SkipReason.NOT_WHERE_LEFT) in waiting.scan.skipped
+    with Store.open(cfg.database) as store:
+        report = reconcile(cfg, store)
+    # The copy in Downloads is not the file flib moved: the row is missing, not repointed.
+    assert report.missing == [finance(downloads) / "bill.pdf"] and report.moved == []
+    with Store.open(cfg.database) as store:
+        store.conn.execute("DELETE FROM classification_cache")
+    run(cfg, FakeProvider(default=answer("Contracts", description="new words")))
+    assert not copy.exists()
+    moved = library(downloads) / "Contracts" / "bill (1).pdf"
+    assert moved.read_bytes() == b"same"
+    # The row now carries the new classification.
+    assert row_of(cfg) == ("organized", "Contracts", "new words", "bill (1).pdf")
+
+
+def test_reconcile_follows_the_very_file_dragged_back(downloads: Path, cfg: Config) -> None:
+    put(downloads, "bill.pdf", b"same")
+    run(cfg)
+    dragged = downloads / "bill.pdf"
+    (finance(downloads) / "bill.pdf").rename(dragged)
+    with Store.open(cfg.database) as store:
+        report = reconcile(cfg, store)
+    assert report.moved == [(finance(downloads) / "bill.pdf", dragged)]
+    assert row_of(cfg)[0] == "skipped"
+    outcome = run(cfg)
+    assert outcome.report is not None and outcome.report.items == []
+    assert dragged.exists()
+
+
+def test_a_takeover_that_keeps_failing_stops_at_max_attempts(downloads: Path, cfg: Config) -> None:
     put(downloads, "bill.pdf", b"same")
     run(cfg)
     go_missing(cfg, downloads)
+    with Store.open(cfg.database) as store:
+        store.conn.execute("DELETE FROM classification_cache")
+    copy = put(downloads, "bill.pdf", b"same")
+    calls = 0
+    for _ in range(cfg.limits.max_attempts + 2):
+        provider = FakeProvider()  # no answer: the classification fails
+        run(cfg, provider)
+        calls += len(provider.calls)
+    assert calls == cfg.limits.max_attempts
+    assert copy.exists() and row_of(cfg)[0] == "missing"
+    found = collect(cfg)
+    assert found.failed_total == 1
+    [group] = found.failed
+    assert (group.attempts, group.retried) == (cfg.limits.max_attempts, False)
+
+
+@pytest.mark.parametrize("with_config", [True, False])
+def test_a_crash_after_a_takeover_move_writes_the_new_record(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch, with_config: bool
+) -> None:
+    put(downloads, "bill.pdf", b"same")
+    run(cfg, FakeProvider(default=answer(description="old words")))
+    go_missing(cfg, downloads)
+    with Store.open(cfg.database) as store:
+        store.conn.execute("DELETE FROM classification_cache")
     put(downloads, "bill.pdf", b"same")
 
     def move_then_crash(src: Path, dst: Path) -> None:
@@ -885,14 +973,56 @@ def test_a_takeover_recovered_without_the_configuration_is_settled_by_reconcile(
 
     with monkeypatch.context() as patch, pytest.raises(Crash):
         patch.setattr("file_librarian.executor.move_no_replace", move_then_crash)
+        run(cfg, FakeProvider(default=answer("Contracts", description="new words")))
+    with Store.open(cfg.database) as store:
+        assert executor.recover(store, cfg if with_config else None) == 1
+    assert row_of(cfg) == ("organized", "Contracts", "new words", "bill.pdf")
+    assert (library(downloads) / "Contracts" / "bill.pdf").exists()
+
+
+@pytest.mark.usefixtures("cross_volume")
+def test_a_cross_volume_takeover_rolled_back_leaves_the_row_missing(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    put(downloads, "bill.pdf", b"same")
+    run(cfg)
+    go_missing(cfg, downloads)
+    before = snapshot(cfg)
+    copy = put(downloads, "bill.pdf", b"same")
+    real = fsops._copyfile
+
+    def copy_then_crash(src: Path, dst: Path) -> None:
+        real(src, dst)
+        raise Crash
+
+    with monkeypatch.context() as patch, pytest.raises(Crash):
+        patch.setattr(fsops, "_copyfile", copy_then_crash)
         run(cfg)
-    moved = finance(downloads) / "bill.pdf"
     with Store.open(cfg.database) as store:
-        assert executor.recover(store) == 1
-    assert snapshot(cfg)[0][1:] == ("missing", str(moved))
-    with Store.open(cfg.database) as store:
-        assert reconcile(cfg, store).found_again == [moved]
-    assert snapshot(cfg)[0][1:] == ("organized", str(moved))
+        assert executor.recover(store, cfg) == 1
+        assert store.operations()[-1].status is OperationStatus.FAILED
+    assert snapshot(cfg) == before and copy.read_bytes() == b"same"
+
+
+def test_status_and_the_summary_count_copies_waiting_for_reconcile(
+    tmp_path: Path, downloads: Path
+) -> None:
+    config_file = write_config(tmp_path, downloads)
+    put(downloads, "bill.pdf", b"same")
+    runner.invoke(cli.app, ["run", "-c", str(config_file)])
+    (library(downloads) / "Other" / "bill.pdf").unlink()
+    put(downloads, "bill (1).pdf", b"same")
+    scheduled = runner.invoke(cli.app, ["run", "--trigger", "schedule", "-c", str(config_file)])
+    assert "Summary: 1 wait for `flib reconcile`. Run `flib status` for details." in (
+        scheduled.stdout
+    )
+    status = runner.invoke(cli.app, ["status", "-c", str(config_file)])
+    assert (
+        "1 waiting for `flib reconcile` (copies of filed files that are not where flib left them)"
+        in status.stdout
+    )
+    data = json.loads(runner.invoke(cli.app, ["status", "--json", "-c", str(config_file)]).stdout)
+    assert data["last_run"]["skipped"]["not_where_left"] == 1
 
 
 def test_reconcile_leaves_an_unreadable_duplicate_as_it_is(downloads: Path, cfg: Config) -> None:

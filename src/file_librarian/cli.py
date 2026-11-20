@@ -567,9 +567,10 @@ def _pipeline(
         if cost:
             typer.echo(cost)
     elif outcome.report is not None:
-        summary = _periodic_summary(cfg) if trigger is RunTrigger.SCHEDULE else []
-        if outcome.first_duplicates:
-            summary.insert(0, duplicates_notice(cfg))
+        summary = _periodic_summary(cfg, outcome.scan) if trigger is RunTrigger.SCHEDULE else []
+        notice = _duplicates_notice(cfg, trigger)
+        if notice:
+            summary.insert(0, notice)
         _print_report(outcome.report, cfg, skipped, cost, hint, summary)
     if outcome.cached:
         typer.echo(f"{outcome.cached} classification(s) reused from the cache at no cost.")
@@ -581,22 +582,35 @@ def _pipeline(
         )
 
 
-def _periodic_summary(cfg: Config) -> list[str]:
+def _periodic_summary(cfg: Config, scan: ScanResult) -> list[str]:
     """After a scheduled run, what waits for the user, when due (RF-40). Never fails the run."""
+    stuck = sum(1 for _, reason in scan.skipped if reason is SkipReason.NOT_WHERE_LEFT)
     try:
-        return status_mod.after_scheduled_run(cfg)
+        return status_mod.after_scheduled_run(cfg, not_where_left=stuck)
     except Exception as exc:  # the run itself succeeded; the summary is a courtesy
         return [f"warning: the periodic summary failed: {type(exc).__name__}: {exc}"]
 
 
-def duplicates_notice(cfg: Config) -> str:
-    """Said once, the first time a run sets duplicates aside (RF-21)."""
-    return (
-        f"Note: files with the same content as one already filed were moved to "
-        f"{cfg.duplicates_folder} in the organized folder; nothing was deleted. "
-        "`flib undo` puts them back, and `duplicates: leave` in the configuration "
-        "leaves copies where they are. This note is shown once."
-    )
+def _interactive() -> bool:
+    """Whether the output reaches a person at a terminal (not a log, not a pipe)."""
+    return sys.stdout.isatty()
+
+
+def _duplicates_notice(cfg: Config, trigger: RunTrigger) -> str | None:
+    """The one-time note about duplicates (RF-21), while nobody has seen it.
+
+    It goes to the run log every time until a run started by hand prints it to
+    a terminal; ``flib status`` shows it meanwhile.
+    """
+    try:
+        with Store.open(cfg.database) as store:
+            if not status_mod.duplicates_notice_due(store):
+                return None
+            if trigger is not RunTrigger.SCHEDULE and _interactive():
+                status_mod.acknowledge_duplicates_notice(store)
+    except (sqlite3.Error, OSError):
+        return None
+    return status_mod.duplicates_notice(cfg)
 
 
 def _cost_line(cost_usd: float, *, known: bool) -> str | None:

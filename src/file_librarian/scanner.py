@@ -212,7 +212,9 @@ def _known(candidate: Candidate, state: FileState, config: Config) -> SkipReason
     ):
         return SkipReason.KNOWN
     if state.status is FileStatus.MISSING:
-        return None  # reconcile found it nowhere: this copy is the one left
+        # Reconcile found it nowhere: this copy is the one left, unless taking the
+        # row over already failed max_attempts times.
+        return SkipReason.KNOWN if state.attempts >= config.limits.max_attempts else None
     there = content_at(state.path, candidate.sha256)
     if there is None:
         return SkipReason.KNOWN  # only in iCloud, or cannot be read now: never guess

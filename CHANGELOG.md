@@ -37,9 +37,18 @@ All notable changes to this project are documented here. The format follows
   by `flib status` and MCP `get_stats`).
   **Upgrading:** with the default `duplicates: move`, the first run after
   upgrading also sets aside the copies that waited in Downloads from earlier
-  runs. That run prints a one-time note saying where they went; nothing is
-  deleted, `flib undo` puts them back, and `duplicates: leave` keeps them
-  where they are from then on.
+  runs. A note says where they went (nothing is deleted, `flib undo` puts
+  them back, `duplicates: leave` keeps them where they are from then on); it
+  is written to each run log and shown by `flib status` until a `flib run`
+  prints it at a terminal.
+- `flib reconcile` no longer takes a copy downloaded again for a filed file
+  that went missing: in an input folder, only the very file flib moved (same
+  inode, dragged back by hand) counts as found. Otherwise the row becomes
+  `missing`, and the next run files the copy in its place (#37). A copy that
+  fails to take a `missing` row over counts toward `limits.max_attempts`
+  and shows under failed in `flib status`; copies skipped because their
+  filed file is not where flib left it are counted in `flib status` and the
+  periodic summary.
 - Optional semantic search (RF-15, #36), off by default
   (`search.semantic.enabled`). `flib search QUERY --semantic` (or
   `search.semantic.default: true`, with `--words` to opt out) fuses the

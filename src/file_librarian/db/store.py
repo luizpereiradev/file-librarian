@@ -159,6 +159,9 @@ class OperationRow:
     previous: tuple[FileStatus, str | None] | None = None
     """For a ``flib reprocess`` move, the (status, category) the file had before."""
     undone_at: str | None = None
+    pending: FileRecord | None = None
+    """For a move that takes over a ``missing`` row (RF-21), the record the row gets
+    once the item is in place; recovery writes it if a crash cut the move off."""
     """When the move was undone (UTC, ISO 8601); ``None`` if it never was."""
 
     @classmethod
@@ -183,6 +186,9 @@ class OperationRow:
             if row["prev_status"] is None
             else (FileStatus(row["prev_status"]), row["prev_category"]),
             undone_at=row["undone_at"],
+            pending=record_from_json(row["pending_record"])
+            if "pending_record" in row.keys()  # noqa: SIM118 - a Row is a sequence
+            else None,
         )
 
 
@@ -579,6 +585,23 @@ class Store:
         self.conn.execute(
             "UPDATE files SET review_reason = ?, review_category = ? WHERE id = ?",
             (reason.value, category, file_id),
+        )
+
+    def mark_missing(self, file_id: int) -> None:
+        """Found nowhere (``flib reconcile``): ``missing``, with a fresh attempt count, so a
+        copy that takes the row over gets ``limits.max_attempts`` tries of its own."""
+        self.conn.execute(
+            "UPDATE files SET status = 'missing', attempts = 0, last_error = NULL WHERE id = ?",
+            (file_id,),
+        )
+
+    def count_attempt(self, file_id: int, error: str) -> None:
+        """A failed attempt at a ``missing`` row's content (a takeover that did not
+        happen): counted and explained, the status kept."""
+        self.conn.execute(
+            """UPDATE files SET attempts = attempts + 1, last_error = ?, processed_at = ?
+               WHERE id = ?""",
+            (error[:500], _now(), file_id),
         )
 
     def set_file_status(self, file_id: int, status: FileStatus) -> None:
@@ -989,10 +1012,17 @@ class Store:
         )
 
     def waiting(self) -> list[WaitingRow]:
-        """Files in review or failed, oldest first. No names: only why, and since when."""
+        """Files in review or failed, oldest first. No names: only why, and since when.
+
+        A ``missing`` row with an error is a copy that failed to take it over: it
+        counts as failed.
+        """
         rows = self.conn.execute(
             """SELECT status, review_reason, review_category, attempts, last_error, processed_at
-               FROM files WHERE status IN ('review', 'failed') ORDER BY processed_at, id"""
+               FROM files
+               WHERE status IN ('review', 'failed')
+                  OR (status = 'missing' AND last_error IS NOT NULL)
+               ORDER BY processed_at, id"""
         )
         return [
             WaitingRow(
@@ -1056,9 +1086,11 @@ class Store:
         identity: tuple[int, int],
         fix: tuple[FileStatus, str | None] | None = None,
         previous: tuple[FileStatus, str | None] | None = None,
+        pending: FileRecord | None = None,
     ) -> int:
         """Journal a move. ``identity`` is the source's (st_dev, st_ino); ``fix`` is the
-        (status, category) a ``flib fix`` gives the file, so recovery can finish it."""
+        (status, category) a ``flib fix`` gives the file, so recovery can finish it;
+        ``pending`` the record a takeover writes once the item is in place."""
         fix_status, fix_category = (None, None) if fix is None else (fix[0].value, fix[1])
         prev_status, prev_category = (
             (None, None) if previous is None else (previous[0].value, previous[1])
@@ -1066,11 +1098,12 @@ class Store:
         cur = self.conn.execute(
             """INSERT INTO operations (run_id, file_id, src_path, dst_path, status, created_at,
                                       src_dev, src_ino, fix_status, fix_category, prev_status,
-                                      prev_category)
-               VALUES (?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?, ?)""",
+                                      prev_category, pending_record)
+               VALUES (?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 run_id, file_id, str(src), str(dst), _now(), identity[0], identity[1],
                 fix_status, fix_category, prev_status, prev_category,
+                None if pending is None else record_to_json(pending),
             ),
         )  # fmt: skip
         return _rowid(cur)
@@ -1268,6 +1301,38 @@ def _filter_clause(
         where.append("f.processed_at < ?")
         params.append(until)
     return where, params
+
+
+def record_to_json(r: FileRecord) -> str:
+    """A ``FileRecord`` as JSON, for the journal (``operations.pending_record``)."""
+    data = {
+        f: getattr(r, f)
+        for f in (
+            "sha256", "extension", "size_bytes", "is_unit", "source_url", "category",
+            "description", "confidence", "attempts", "last_error", "provider", "model",
+            "name_choice", "name_choice_reason", "review_category", "duplicate_of",
+        )
+    }  # fmt: skip
+    data |= {
+        "original_path": str(r.original_path),
+        "current_path": str(r.current_path),
+        "status": r.status.value,
+        "tags": list(r.tags),
+        "review_reason": _code(r.review_reason),
+    }
+    return json.dumps(data, ensure_ascii=False)
+
+
+def record_from_json(text: str | None) -> FileRecord | None:
+    if text is None:
+        return None
+    data = json.loads(text)
+    data["original_path"] = Path(data["original_path"])
+    data["current_path"] = Path(data["current_path"])
+    data["status"] = FileStatus(data["status"])
+    data["tags"] = tuple(data["tags"])
+    data["review_reason"] = _reason(data["review_reason"])
+    return FileRecord(**data)
 
 
 def _rowid(cur: sqlite3.Cursor) -> int:

@@ -6,7 +6,10 @@ every row of the index and looks at where the file really is:
 - still at its recorded path with the same content: nothing to do;
 - gone from there: look for the same content (sha256, or the manifest for a
   folder unit) under ``output_root`` and the input folders. Only files of the
-  same size are hashed, so this stays cheap;
+  same size are hashed, so this stays cheap. In an input folder, a file flib
+  had moved into the library counts only if it is the very file (same inode:
+  dragged back by hand); a copy with the same content is a new download,
+  which the next run files in the row's place once it is ``missing``;
   - found inside a category folder: the row follows it. If the category
     changed, that is a correction by the user and is recorded (RF-29);
   - found in the review folder: status ``review``; one that had no review
@@ -255,9 +258,11 @@ def reconcile(config: Config, store: Store) -> ReconcileReport:
                 report.cloud_only.append(recorded)
                 continue
         found = finder.find(row)
+        if found is not None and not _may_be(store, row, found, config):
+            found = None
         if found is None:
             if row.status is not FileStatus.MISSING:
-                store.set_file_status(row.id, FileStatus.MISSING)
+                store.mark_missing(row.id)
                 report.missing.append(recorded)
             continue
         status, category = place(config, found)
@@ -285,6 +290,27 @@ def reconcile(config: Config, store: Store) -> ReconcileReport:
     return report
 
 
+def _may_be(store: Store, row: FileRow, found: Path, config: Config) -> bool:
+    """Whether ``found`` may be the file of ``row``.
+
+    Inside the library, any item with its content is. In an input folder, a
+    file flib moved into the library must be the very one (the same device
+    and inode as when it was moved; a rename keeps them): there, the same
+    content is more likely a copy downloaded again, which the next run files
+    once the row is ``missing`` (RF-21).
+    """
+    if is_within(found, config.output_root):
+        return True
+    op = store.last_done_operation(row.id)
+    if op is None:
+        return True  # flib never moved it (left in place: sensitive, skipped)
+    try:
+        st = os.lstat(found)
+    except OSError:
+        return False
+    return op.src_identity == (st.st_dev, st.st_ino)
+
+
 def _check_duplicate(store: Store, row: FileRow, report: ReconcileReport) -> None:
     """A duplicate is only looked for where it was recorded; gone from there, it is missing."""
     if row.status is FileStatus.MISSING:
@@ -297,5 +323,5 @@ def _check_duplicate(store: Store, row: FileRow, report: ReconcileReport) -> Non
         else:
             report.unchecked.append(row.current_path)
     elif not there:
-        store.set_file_status(row.id, FileStatus.MISSING)
+        store.mark_missing(row.id)
         report.missing.append(row.current_path)

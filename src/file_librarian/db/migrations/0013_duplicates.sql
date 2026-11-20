@@ -19,10 +19,16 @@
 --
 -- runs.files_duplicates counts the duplicates a run set aside; NULL on runs
 -- recorded before this migration.
+--
+-- operations.pending_record is, for a move that takes over a 'missing' row
+-- (a copy of a file reconcile found nowhere), the record (JSON) the row gets
+-- once the item is in place, so recovery after a crash writes the new
+-- classification, not the old one. NULL on every other move.
 
 PRAGMA defer_foreign_keys = ON;
 
 ALTER TABLE runs ADD COLUMN files_duplicates INTEGER;
+ALTER TABLE operations ADD COLUMN pending_record TEXT;
 
 CREATE TEMP TABLE files_before_0013 AS SELECT * FROM files;
 CREATE TEMP TABLE embeddings_before_0013 AS SELECT * FROM embeddings;
