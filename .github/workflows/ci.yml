@@ -55,6 +55,11 @@ jobs:
         env:
           FLIB_TEST_VOLUMES: "1"
         run: uv run pytest -m volumes -p no:cacheprovider
+      - name: Text recognition with macOS's Vision framework (real OCR)
+        if: matrix.python == '3.15'
+        env:
+          FLIB_TEST_OCR: "1"
+        run: uv run pytest -m ocr -p no:cacheprovider
 
   # The one required check: it passes only when every matrix entry passed, so
   # the branch rules do not depend on which versions ran.

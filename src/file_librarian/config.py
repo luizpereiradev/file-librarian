@@ -278,6 +278,35 @@ class VisionConfig(_Section):
     """Only this many first pages of a PDF with no text layer are sent."""
 
 
+_OCR_LANGUAGE = re.compile(r"[a-z]{2,3}(-[A-Za-z0-9]{2,8})*")
+
+
+def _ocr_language(value: str) -> str:
+    if not _OCR_LANGUAGE.fullmatch(value):
+        raise ValueError(f"{value!r} is not a language code like en-US or pt-BR")
+    return value
+
+
+class OcrConfig(_Section):
+    """Text recognised locally in images and scanned PDFs (RF-26). On by default.
+
+    It runs on this Mac (macOS's Vision framework); nothing is sent anywhere for
+    it. The text then follows the same path as any document's text: the secret
+    scan, ``never_send``, ``provider.max_chars_per_file``.
+    """
+
+    enabled: bool = True
+    languages: Annotated[
+        list[Annotated[str, AfterValidator(_ocr_language)]], Field(min_length=1, max_length=10)
+    ] = Field(default_factory=lambda: ["en-US"])
+    """Vision's language codes, most likely first. Filled from ``language`` when omitted."""
+    max_pages: Annotated[int, Field(ge=1, le=20)] = 3
+    """Only this many first pages of a PDF with no text layer are read."""
+    min_chars: Annotated[int, Field(ge=1, le=10_000)] = 40
+    """Fewer letters and digits than this and the file is not a document (a photo):
+    it goes to vision when that is on, else it is classified from metadata."""
+
+
 class SensitiveConfig(_Section):
     detect_secrets: bool = True
 
@@ -406,6 +435,8 @@ class Config(_Section):
     ignore: list[str] = Field(default_factory=list)
     never_send: list[str] = Field(default_factory=list)
     vision: VisionConfig = VisionConfig()
+    ocr: OcrConfig = OcrConfig()
+    """``ocr.languages`` is filled from ``language`` when omitted."""
     sensitive: SensitiveConfig = SensitiveConfig()
     privacy: PrivacyConfig = PrivacyConfig()
     mcp: McpConfig = McpConfig()
@@ -427,6 +458,11 @@ class Config(_Section):
         data.setdefault("review_folder", locale.review_folder)
         data.setdefault("duplicates_folder", locale.duplicates_folder)
         data.setdefault("categories", [c.as_dict() for c in locale.categories])
+        ocr = data.get("ocr")
+        if ocr is None:
+            data["ocr"] = {"languages": list(locale.ocr_languages)}
+        elif isinstance(ocr, dict) and "languages" not in ocr:
+            data["ocr"] = {"languages": list(locale.ocr_languages)} | ocr
         return _moved_keys(data)
 
     @model_validator(mode="after")

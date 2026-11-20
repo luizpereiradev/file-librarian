@@ -165,6 +165,10 @@ class FileMetadata:
     """What made the file sensitive (a secret kind or a credential file name)."""
     bundle: BundleInfo | None = None
     """For an ``.app`` unit, what its ``Info.plist`` says."""
+    text_source: Literal["ocr"] | None = None
+    """``"ocr"`` when the text was recognised in the image or scanned pages (RF-26)."""
+    ocr_error: str | None = None
+    """Why text recognition failed; the file was then handled as with OCR off."""
 
 
 @dataclass(frozen=True, slots=True)

@@ -60,6 +60,32 @@ treat such a file they cannot read while the Mac is locked as "cannot tell
 now" (never changed, never missing) and ask you to try again once it is
 unlocked.
 
+## Images and scanned PDFs are classified from their name only
+
+flib reads the text in screenshots, photographed documents and scanned PDFs
+on your Mac with macOS's text recognition (OCR). When a document still ends
+up classified from its name alone:
+
+- `flib inspect FILE` says what a run would read from it: `text: N
+  characters, recognised by OCR on this Mac`, or `none sent` and why
+  (`OCR failed: ...`, `no readable text`, `sensitive`).
+- `flib check-config` prints `ocr: on, on this Mac (...)`, or a warning when
+  OCR cannot run here, with the reason. OCR uses `/usr/bin/osascript` and
+  the Vision framework, which every supported macOS has; nothing needs
+  installing. `ocr.enabled: false` turns it off.
+- A photo with fewer than `ocr.min_chars` letters and digits (40) is not
+  treated as a document: with `vision.enabled` the model sees it, otherwise
+  it is classified from its name. Lower `ocr.min_chars` for documents with
+  very little text.
+- A warning that macOS cannot recognise a language means a code in
+  `ocr.languages` is not one Vision knows; the warning lists those it does.
+  The others are still used.
+- The first recognition on a Mac can take about half a minute while macOS
+  prepares its model; each one after that takes a fraction of a second. A
+  file is given up after two minutes and handled as if OCR were off.
+- A file whose recognised text contains a password or a key is marked
+  sensitive on purpose: nothing of it is sent, and it stays where it is.
+
 ## No notification appears
 
 The periodic summary's notification is posted with `osascript`, so macOS

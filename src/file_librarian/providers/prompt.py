@@ -138,6 +138,8 @@ def user_message(context: FileContext) -> str:
     # "no readable text" is moot when the content is attached.
     if context.metadata.content is not None and context.attachment is None:
         meta["content"] = context.metadata.content
+    if context.metadata.text_source == "ocr" and context.attachment is None:
+        meta["text_source"] = "recognised from the image or scanned pages (OCR; may have typos)"
     body = f"File metadata:\n{json.dumps(meta, ensure_ascii=False, indent=2)}\n"
     if context.attachment is not None:
         body += f"\n{attachment_note(context.attachment)}\n"

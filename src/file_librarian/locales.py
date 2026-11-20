@@ -36,6 +36,8 @@ class Locale:
     review_folder: str
     categories: tuple[DefaultCategory, ...]
     duplicates_folder: str = "_Duplicates"
+    ocr_languages: tuple[str, ...] = ("en-US",)
+    """Text recognition languages (``ocr.languages``), most likely first."""
 
 
 LOCALES: dict[Language, Locale] = {
@@ -60,6 +62,7 @@ LOCALES: dict[Language, Locale] = {
         output_folder="Organizado",
         review_folder="_Revisar",
         duplicates_folder="_Duplicados",
+        ocr_languages=("pt-BR", "en-US"),
         categories=(
             DefaultCategory(
                 "Financeiro",

@@ -65,9 +65,9 @@ from pathlib import Path
 
 from file_librarian.classifier import (
     CACHE_DAYS,
+    answer_key,
     classify_all,
     rules_key,
-    vision_key,
     wants_attachment,
 )
 from file_librarian.config import Config, folder_key, is_within
@@ -349,7 +349,6 @@ def estimate(targets: list[Target], provider: Provider, config: Config, store: S
     """How many answers the cache has, and roughly what asking for the rest costs."""
     rules = rules_for(config, store)
     text_key = rules_key(provider, rules, config)
-    seen_key = vision_key(text_key, config)
     cached = to_ask = 0
     cost = 0.0
     for target in targets:
@@ -357,7 +356,7 @@ def estimate(targets: list[Target], provider: Provider, config: Config, store: S
         if ctx.sensitive:
             continue  # never sent
         vision = wants_attachment(ctx, provider, config)
-        key = seen_key if vision else text_key
+        key = answer_key(ctx, text_key, config, vision=vision)
         if store.cached_answer(ctx.sha256, key, max_age_days=CACHE_DAYS) is not None:
             cached += 1
             continue

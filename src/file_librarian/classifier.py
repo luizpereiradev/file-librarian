@@ -22,7 +22,9 @@ Wraps any ``Provider`` with what the provider itself should not decide:
   preparing it fails, it is classified from metadata as with vision off.
   Answers that saw an attachment are cached under their own key, which also
   covers the vision limits, so turning vision on or off never reuses an
-  answer given with the other setting;
+  answer given with the other setting. Answers given from text recognised by
+  OCR are cached under a key that also covers the OCR settings that shape
+  that text (languages, pages, the helper's version);
 - under ``privacy.descriptions: redact`` (the default) every answer, from the
   provider or the cache, has its description, tags, proposed name and reason
   scrubbed (``privacy.scrub_answer``) before anything else sees it: this is the
@@ -50,7 +52,7 @@ from pydantic import ValidationError
 
 from file_librarian.config import Config, VisionConfig
 from file_librarian.db.store import CorrectionRow
-from file_librarian.extractors import visual
+from file_librarian.extractors import ocr, visual
 from file_librarian.models import (
     VISUAL_MEDIA_TYPES,
     Attachment,
@@ -116,6 +118,25 @@ def vision_key(text_key: str, config: Config) -> str:
     v = config.vision
     material = f"{text_key}|vision|{v.max_image_px}|{v.max_pdf_pages}"
     return hashlib.sha256(material.encode()).hexdigest()
+
+
+def ocr_key(text_key: str, config: Config) -> str:
+    """The cache key for answers given from OCR text: the rules plus what shapes that text."""
+    o = config.ocr
+    material = json.dumps(
+        [text_key, "ocr", ocr.HELPER_VERSION, o.languages, o.max_pages, ocr.MAX_PX],
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(material.encode()).hexdigest()
+
+
+def answer_key(ctx: FileContext, text_key: str, config: Config, *, vision: bool) -> str:
+    """The cache key ``ctx``'s answer is kept under: with an attachment, from OCR text, or not."""
+    if vision:
+        return vision_key(text_key, config)
+    if ctx.metadata.text_source == "ocr":
+        return ocr_key(text_key, config)
+    return text_key
 
 
 def wants_attachment(ctx: FileContext, provider: Provider, config: Config) -> bool:
@@ -194,7 +215,6 @@ def classify_all(
     result = Classified()
     last_call: float | None = None
     text_key = rules_key(provider, rules, config) if cache is not None else ""
-    seen_key = vision_key(text_key, config) if cache is not None else ""
     clean = scrubber(config.privacy.descriptions)
 
     for ctx in contexts:
@@ -202,7 +222,7 @@ def classify_all(
             result.decisions.append(Decision(ctx))
             continue
         vision = wants_attachment(ctx, provider, config)
-        key = seen_key if vision else text_key
+        key = answer_key(ctx, text_key, config, vision=vision) if cache is not None else ""
         if cache is not None:
             hit = cache.cached_answer(ctx.sha256, key, max_age_days=CACHE_DAYS)
             if hit is not None:
@@ -222,7 +242,8 @@ def classify_all(
                 sent = replace(ctx, attachment=prepare(ctx, config.vision))
             except Exception:
                 # Any trouble with the image or PDF: classify from metadata (RF-27).
-                vision, key = False, text_key
+                vision = False
+                key = answer_key(ctx, text_key, config, vision=False) if cache is not None else ""
         error = "not classified"
         for attempt in range(settings.max_retries + 1):
             if last_call is not None:

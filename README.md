@@ -198,10 +198,11 @@ anything, keeps your corrections and file names unless told otherwise, and
 
 ### Names
 
-A file is renamed only when the model read its content (text, or the image
-with vision on), its category allows renaming, and the model is at least
+A file is renamed only when the model read its content (text, text
+[recognised by OCR](#text-in-images-and-scanned-pdfs-ocr), or the image with
+vision on), its category allows renaming, and the model is at least
 `naming.rename_confidence_threshold` sure (0.8 by default). Videos,
-installers, archives, folders and images with vision off keep their name.
+installers, archives, folders and photos with vision off keep their name.
 A generic name (`scan001.pdf`, `IMG_2041.jpg`) is replaced; a descriptive one
 keeps its words:
 
@@ -413,8 +414,10 @@ Trade-offs:
 - `limits.max_cost_usd_per_run` applies to the cost Claude Code reports, an
   estimate at API list prices. On a subscription nothing is charged per call,
   but the figure still caps how much of your plan a run uses;
-- images and scanned PDFs are classified from their metadata: `claude -p`
-  takes text only, so `vision.enabled` has no effect with this provider.
+- `claude -p` takes text only, so `vision.enabled` has no effect with this
+  provider: scanned PDFs and screenshots are classified from the text
+  [OCR](#text-in-images-and-scanned-pdfs-ocr) recognises on your Mac, and
+  photos from their metadata.
 
 Scheduled runs have a minimal PATH. flib also looks in the usual install
 folders (`~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`,
@@ -479,8 +482,8 @@ provider:
   that rejects that is asked again with plain JSON mode and the schema in the
   instructions, and flib keeps using JSON mode for the rest of the run.
 - **Images:** sent only with `provider.vision: true` and `vision.enabled`.
-  Scanned PDFs are never sent to this provider; they are classified from their
-  metadata.
+  Scanned PDFs are never sent to this provider; they are classified from the
+  text [OCR](#text-in-images-and-scanned-pdfs-ocr) recognises on your Mac.
 - **Where data goes:** only to `base_url`. Redirects are refused, user names
   or passwords in the URL are rejected (use the Keychain), and `flib
   check-config` warns about `http://` to another machine.
@@ -489,13 +492,13 @@ provider:
 
 | Format | What is read |
 | --- | --- |
-| PDF | the text layer (first 20 pages); a scanned PDF, only with [vision](#images-and-scanned-pdfs-vision) |
+| PDF | the text layer (first 20 pages); for a scanned PDF, the text [OCR](#text-in-images-and-scanned-pdfs-ocr) recognises in its first 3 pages, on your Mac |
 | Word, Excel, PowerPoint (`.docx`, `.xlsx`, `.pptx` and their macro versions) | the text; for a workbook, the sheet names and cell text |
 | Plain text, Markdown, CSV, JSON, YAML, HTML, subtitles and source code | the text |
 | E-mail (`.eml`) | subject, date, sender and recipients (names and domains only), attachment names, and the body (plain text, else the HTML's text) |
 | Archives (`.zip`, `.tar.gz` and other tarballs) | the list of names inside; nothing is unpacked |
 | Folders and `.app` bundles | the names of up to 100 files inside; an app's name and version |
-| Images | nothing, unless [vision](#images-and-scanned-pdfs-vision) is on |
+| Images | the text [OCR](#text-in-images-and-scanned-pdfs-ocr) recognises in them, on your Mac; a photo with little or no text, nothing unless [vision](#images-and-scanned-pdfs-vision) is on |
 | Anything else (`.doc`, videos, installers...) | nothing: classified from its name and metadata |
 
 At most `provider.max_chars_per_file` characters (4,000 by default) of the
@@ -526,6 +529,7 @@ The options you are most likely to change:
 | `naming.pattern` | `{date}_{subject}` | New names; see [Names](#names) |
 | `duplicates` | `move` | `leave` keeps copies where they are ([Duplicates](#duplicates)) |
 | `finder_tags.enabled` | `true` | Tag each filed item with its category in Finder |
+| `ocr.enabled` | `true` | Read the text in images and scanned PDFs on your Mac ([OCR](#text-in-images-and-scanned-pdfs-ocr)) |
 | `vision.enabled` | `false` | Let the model look at images and scanned PDFs |
 | `schedule.time` | `12:30` | When the daily run starts (applied by `flib schedule`) |
 | `summary.notify` | `true` | The periodic notification about files waiting for you |
@@ -538,11 +542,40 @@ category name as a Finder tag, so Finder's sidebar and Spotlight
 (`tag:Finance`) find it too. Your own tags are kept, and `flib undo` removes
 only the tag flib added.
 
+### Text in images and scanned PDFs (OCR)
+
+Screenshots, photographed receipts and scanned PDFs have no text layer. flib
+reads their text on your Mac with macOS's own text recognition (the Vision
+framework, run through `osascript`, which every Mac has): nothing is
+installed, nothing is sent anywhere for it, and it works from the scheduled
+run. The recognised text is then the file's text like any document's: it is
+scanned for secrets (a screenshot of a password or an API key makes the file
+sensitive, and nothing is sent), `never_send` and
+`provider.max_chars_per_file` apply, and the file can be renamed. Every
+provider benefits, including those that read text only.
+
+```yaml
+ocr:
+  enabled: true              # on by default
+  languages: [pt-BR, en-US]  # default from `language`: en gives [en-US]
+  max_pages: 3               # first pages read of a PDF with no text layer (1-20)
+  min_chars: 40              # fewer letters and digits than this: a photo, not a document
+```
+
+An image with less text than `min_chars` (a photo) is handled as before:
+with [vision](#images-and-scanned-pdfs-vision) on the model sees it,
+otherwise it is classified from its name and metadata. When OCR finds enough
+text, the text is sent instead of the image, even with vision on: it is
+cheaper and went through the secret scan. Recognition takes about a quarter
+of a second per image or page; the first one on a Mac can take half a minute
+while macOS prepares its model. `flib check-config` says whether OCR works
+here, and `flib inspect FILE` whether a file's text came from OCR.
+
 ### Images and scanned PDFs (vision)
 
-Photos, screenshots and scanned PDFs have no text, so by default they are
-classified from their name and metadata only and keep their name. Turn vision
-on to let the model look at them:
+Photos have no text, so by default they are classified from their name and
+metadata only and keep their name. Turn vision on to let the model look at
+them:
 
 ```yaml
 vision:
@@ -659,11 +692,16 @@ leaves it depends on the provider and on two optional features.
   recipients' names and the domains of their addresses (never the part
   before the `@`), and its attachments' names; the body follows as it is,
   like any document's text;
-- only with `vision.enabled` (off by default): for an image, the image
-  itself, shrunk to `vision.max_image_px` and stripped of its metadata; for a
-  PDF with no text layer, its first `vision.max_pdf_pages` pages. Secret
-  detection reads text, not pixels: a photo of a document or a screenshot of
-  a password goes as it is. Keep such files out with `never_send`;
+- for an image or a PDF with no text layer, the text
+  [OCR](#text-in-images-and-scanned-pdfs-ocr) recognised in it, like any
+  document's text. The recognition runs on your Mac; its text is scanned for
+  secrets before anything is sent;
+- only with `vision.enabled` (off by default) and when OCR found little or no
+  text: for an image, the image itself, shrunk to `vision.max_image_px` and
+  stripped of its metadata; for a PDF with no text layer, its first
+  `vision.max_pdf_pages` pages. Secret detection reads text, not pixels, so
+  what OCR could not read goes as it is. Keep such files out with
+  `never_send`;
 - your most recent corrections (at most `provider.max_examples`): for each,
   the corrected file's extension, the description the provider wrote for it
   earlier, and the category or name before and after. Never file content,
@@ -685,6 +723,9 @@ Two kinds of files are treated differently, with every provider:
 | `claude-code` | Anthropic, through the `claude` CLI | never | never |
 | `openai-compat` | the server at `provider.base_url` | only with `provider.vision: true` | never |
 | `ollama` | the model on this Mac (nothing leaves it), unless `base_url` points elsewhere | only with `provider.vision: true` | never |
+
+Text recognition (OCR) is not in this table because it never leaves your
+Mac: macOS reads the text locally, and only that text goes on, as above.
 
 **Optional features:**
 

@@ -13,8 +13,10 @@ classifier, uses AI. Each stage is a module with typed input and output
       │                            duplicates found here, never classified
  2. Extractor    context.py,       FileContext: metadata, download origin, text excerpt;
       │          extractors/,      secret detection here (sensitive.py): sensitive files stop
-      │          sensitive.py      at this stage and stay where they are; with vision on,
-      │                            images and scanned PDFs are marked visual
+      │          sensitive.py      at this stage and stay where they are; images and scanned
+      │                            PDFs are read by local OCR (macOS Vision), whose text is
+      │                            scanned too; with vision on, those with little text are
+      │                            marked visual
  3. Classifier   classifier.py,    Classification (schema-validated): category, name, description,
       │          providers/        tags, confidence; rate limits, retries, timeouts, cost cap;
       │                            a visual file's downscaled image or first pages
@@ -399,7 +401,7 @@ Everything is in `src/file_librarian/`:
 | `models.py` | typed values passed between stages (`FileContext`, `Classification`, `Decision`...) |
 | `pipeline.py` | one run or simulation, stage by stage |
 | `scanner.py`, `hashing.py`, `globs.py` | stage 1; content identity (SHA-256, folder manifests, iCloud-only check); glob matching as the Mac compares names |
-| `context.py`, `sensitive.py`, `extractors/` | stage 2; secret detection; one extractor per format (`text`, `office`, `pdf`, `archive`, `mail`), plus `origin.py` (download origin) and `visual.py` (images and scanned PDFs for vision); the interface is in `extractors/base.py` |
+| `context.py`, `sensitive.py`, `extractors/` | stage 2; secret detection; one extractor per format (`text`, `office`, `pdf`, `archive`, `mail`), plus `origin.py` (download origin), `ocr.py` with its helper `ocr.js` (local text recognition in images and scanned PDFs) and `visual.py` (images and scanned PDFs for vision); the interface is in `extractors/base.py` |
 | `classifier.py`, `privacy.py`, `providers/` | stage 3; identifiers scrubbed from every answer before it is cached or stored (`privacy.descriptions`); one module per provider (`anthropic`, `claude_code`, `openai_compat`, `ollama`, and `fake` for tests), the shared prompt (`prompt.py`), the HTTP client (`http.py`) and the interface (`base.py`) |
 | `planner.py`, `naming.py` | stage 4; safe file names and dates |
 | `executor.py`, `fsops.py` | stage 5 and crash recovery; `fsops.py` is the only code that moves, copies or deletes your files (the rest writes only flib's own: logs, reports, the trial copies of `flib init`) |
