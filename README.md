@@ -779,7 +779,9 @@ then runs once more for what is left. The run log and `schedule.out.log` say
 when it starts waiting and how the wait ended. While it waits it holds no
 lock, so `flib run` by hand works as usual; if a run is going on when the Mac
 is unlocked, the wait just ends. `flib schedule --remove` (or logging out)
-stops it cleanly, and the next day's run replaces a wait still going on.
+stops it cleanly. A scheduled run that finds an earlier one still waiting
+does not wait as well: the one waiting already runs once more for
+everything after the unlock.
 
 `flib status` counts these files under the last run, and the periodic summary
 mentions them. To file them right away, unlock the Mac and run `flib run`.

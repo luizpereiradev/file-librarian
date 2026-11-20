@@ -331,20 +331,21 @@ originals are only read, to copy them.
 
 A scheduled run that skipped files as `locked` does not leave them for the
 next day (when the Mac may be locked again). `cli.py` prints its report,
-releases the instance lock and hands over to `catchup.py`: it takes the
-waiter lock (`flib-waiter.lock` next to the database, an `flock` holding the
-waiter's pid) and sleeps, asking `protection.screen_locked` every 60 seconds,
+releases the instance lock and hands over to `catchup.py`: it tries to take
+the waiter lock (an exclusive `flock` on `flib-waiter.lock` next to the
+database) without blocking. If another process holds it, a waiter is alive
+and its second pass rescans everything, so this run logs that and does not
+wait; the system releases the lock when a waiter dies, so a file left behind
+is simply taken, and its contents are never read. With the lock, it sleeps, asking `protection.screen_locked` every 60 seconds,
 for up to `schedule.wait_for_unlock_hours` by the wall clock (time the Mac
 spends asleep counts; `0` turns the wait off). When the lock state cannot be
 told, it tries to `open` one of the skipped files instead. Once the Mac is
 unlocked it releases the waiter lock and runs the pipeline once more with
 trigger `schedule` (a second run record, whose log starts with "Catch-up
 run"); if another run holds the instance lock then, it exits. `SIGTERM`
-ends the wait cleanly. The start of every scheduled run stops a waiter left
-by an earlier one (`SIGTERM` to the pid in the waiter lock), so waiters never
-stack up. Each step is a timestamped line in `schedule.out.log`, and how the
+ends the wait cleanly. flib never signals another process. Each step is a timestamped line in `schedule.out.log`, and how the
 wait ended is appended to the first run's log. The wait, the clock and the
-signal are injectable, so the tests run it on a fake clock.
+sleep are injectable, so the tests run it on a fake clock.
 
 ## Status and the periodic summary
 

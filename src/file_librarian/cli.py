@@ -563,8 +563,6 @@ def _pipeline(
     waited for the Mac to be unlocked; it never waits again."""
     cfg = _load(config_path)
     scheduled = trigger is RunTrigger.SCHEDULE and not simulate
-    if scheduled and not catch_up and catchup.stop_waiter(cfg.database):
-        _say("Stopped an earlier scheduled run's wait for an unlock; this run takes over.")
     try:
         provider = get_provider(cfg.provider)
         outcome = pipeline.run(cfg, provider, simulate=simulate, trigger=trigger)
@@ -632,7 +630,10 @@ def _wait_and_catch_up(
 
     with catchup.waiter(cfg.database) as held:
         if not held:
-            note("Not waiting for an unlock: another flib process is waiting already.")
+            note(
+                "Not waiting for an unlock: an earlier scheduled run is waiting already "
+                "and runs once more after it."
+            )
             return
         _say(f"Waiting up to {hours} h for the Mac to be unlocked (checking every minute).")
         waited = catchup.wait_for_unlock(hours, partial(catchup.unlocked, locked))

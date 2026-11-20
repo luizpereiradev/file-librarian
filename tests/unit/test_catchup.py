@@ -93,99 +93,53 @@ def test_sigterm_ends_the_wait_cleanly() -> None:
 # --- the waiter lock ---------------------------------------------------------------------
 
 
-def hold(database: Path, pid: int) -> int:
-    """Hold the waiter lock from another open file, as an earlier waiter would."""
+def hold(database: Path) -> int:
+    """Hold the waiter lock from another open file, as a live waiter does."""
     path = catchup.waiter_lock_path(database)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    os.pwrite(fd, str(pid).encode(), 0)
     return fd
+
+
+def no_signals(monkeypatch: pytest.MonkeyPatch) -> None:
+    def kill(*_args: object) -> None:
+        pytest.fail("flib must never signal another process")
+
+    monkeypatch.setattr(os, "kill", kill)
+    monkeypatch.setattr(os, "killpg", kill)
 
 
 def test_the_waiter_lock_is_taken_and_released(tmp_path: Path) -> None:
     database = tmp_path / "library.db"
     with catchup.waiter(database) as held:
         assert held
-        text = catchup.waiter_lock_path(database).read_text(encoding="utf-8")
-        assert text == str(os.getpid())
     with catchup.waiter(database) as held:
         assert held
 
 
-def test_a_new_waiter_takes_over_from_an_earlier_one(tmp_path: Path) -> None:
+def test_a_live_waiter_keeps_its_place_and_is_not_signalled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    no_signals(monkeypatch)
     database = tmp_path / "library.db"
-    fd = hold(database, 4242)
-    killed: list[tuple[int, int]] = []
-
-    def kill(pid: int, sig: int) -> None:
-        killed.append((pid, sig))
-        os.close(fd)  # the earlier waiter exits and the lock goes with it
-
-    clock = FakeTime()
-    with catchup.waiter(database, kill=kill, sleep=clock.sleep, clock=clock.clock) as held:
-        assert held
-    assert killed == [(4242, signal.SIGTERM)]
-
-
-def test_an_earlier_waiter_that_does_not_stop_keeps_its_place(tmp_path: Path) -> None:
-    database = tmp_path / "library.db"
-    fd = hold(database, 4242)
-    clock = FakeTime()
+    fd = hold(database)
     try:
-        with catchup.waiter(
-            database, kill=lambda _p, _s: None, sleep=clock.sleep, clock=clock.clock
-        ) as held:
-            assert not held
-        assert sum(clock.sleeps) >= catchup.TAKEOVER_SECONDS
-    finally:
-        os.close(fd)
-
-
-def test_a_holder_without_a_pid_is_not_signalled(tmp_path: Path) -> None:
-    database = tmp_path / "library.db"
-    fd = hold(database, 0)
-    try:
-        with catchup.waiter(database, kill=pytest.fail) as held:  # type: ignore[arg-type]
+        with catchup.waiter(database) as held:
             assert not held
     finally:
         os.close(fd)
-
-
-def test_a_vanished_holder_is_no_error(tmp_path: Path) -> None:
-    database = tmp_path / "library.db"
-    fd = hold(database, 4242)
-
-    def kill(_pid: int, _sig: int) -> None:
-        os.close(fd)
-        raise ProcessLookupError
-
-    clock = FakeTime()
-    assert catchup.stop_waiter(database, kill=kill, sleep=clock.sleep, clock=clock.clock)
-
-
-def test_stop_waiter_without_a_waiter(tmp_path: Path) -> None:
-    database = tmp_path / "library.db"
-    assert catchup.stop_waiter(database) is False  # no lock file at all
-    with catchup.waiter(database):
-        pass
-    assert catchup.stop_waiter(database) is False  # a lock file nobody holds
-
-
-def test_stop_waiter_stops_an_earlier_one(tmp_path: Path) -> None:
-    database = tmp_path / "library.db"
-    fd = hold(database, 4242)
-    killed: list[int] = []
-
-    def kill(pid: int, _sig: int) -> None:
-        killed.append(pid)
-        os.close(fd)
-
-    clock = FakeTime()
-    assert catchup.stop_waiter(database, kill=kill, sleep=clock.sleep, clock=clock.clock)
-    assert killed == [4242]
     with catchup.waiter(database) as held:
-        assert held  # released again: stopping is not waiting
+        assert held  # it died (here: closed): the system released its lock
+
+
+def test_a_stale_lock_file_is_simply_taken(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    no_signals(monkeypatch)
+    database = tmp_path / "library.db"
+    # Left behind by an older flib, or tampered with: its contents mean nothing.
+    catchup.waiter_lock_path(database).write_text("1\n", encoding="utf-8")
+    with catchup.waiter(database) as held:
+        assert held
 
 
 # --- is the Mac unlocked? ---------------------------------------------------------------

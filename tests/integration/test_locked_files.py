@@ -11,9 +11,8 @@ wait runs on a fake clock.
 
 from __future__ import annotations
 
+import os
 import signal
-import subprocess
-import sys
 from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
@@ -210,35 +209,45 @@ def test_no_instance_lock_is_held_while_waiting_and_a_busy_wake_just_exits(
     assert schedule_runs(cfg) == ["schedule"]
 
 
-def test_a_scheduled_start_stops_an_earlier_waiter(
-    downloads: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_a_second_start_with_a_live_waiter_neither_waits_nor_signals(
+    downloads: Path, tmp_path: Path, locked_photo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = write_config(tmp_path, downloads)
+    cfg = load_config(config)
+
+    def kill(*_args: object) -> None:
+        pytest.fail("flib must never signal another process")
+
+    monkeypatch.setattr(os, "kill", kill)
+    monkeypatch.setattr(os, "killpg", kill)
+    wait = FakeWait(monkeypatch)
+    with catchup.waiter(cfg.database) as held:  # yesterday's waiter, still alive
+        assert held
+        stdout = scheduled(config)
+    assert LOCKED_LINE in stdout.splitlines()  # its own run went ahead as usual
+    assert "Not waiting for an unlock: an earlier scheduled run is waiting already" in stdout
+    assert wait.calls == 0
+    [log] = run_logs(cfg)
+    assert log[-1].startswith("Not waiting for an unlock")
+
+
+def test_a_lock_file_left_behind_does_not_stop_the_wait(
+    downloads: Path,
+    tmp_path: Path,
+    locked_photo: Path,
+    fake_protection: FakeProtection,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = write_config(tmp_path, downloads)
     cfg = load_config(config)
     lock = catchup.waiter_lock_path(cfg.database)
     lock.parent.mkdir(parents=True, exist_ok=True)
-    holder = subprocess.Popen(  # noqa: S603 - this Python, a fixed script
-        [
-            sys.executable,
-            "-c",
-            "import fcntl, os, sys, time\n"
-            f"fd = os.open({str(lock)!r}, os.O_RDWR | os.O_CREAT, 0o600)\n"
-            "fcntl.flock(fd, fcntl.LOCK_EX)\n"
-            "os.pwrite(fd, str(os.getpid()).encode(), 0)\n"
-            "print('ready', flush=True)\n"
-            "time.sleep(60)\n",
-        ],
-        stdout=subprocess.PIPE,
-        text=True,
-    )
-    try:
-        assert holder.stdout is not None and holder.stdout.readline().strip() == "ready"
-        stdout = scheduled(config)
-        assert "Stopped an earlier scheduled run's wait for an unlock" in stdout
-        assert holder.wait(timeout=10) == -signal.SIGTERM
-    finally:
-        holder.kill()
-        holder.wait()
+    lock.write_text("1\n", encoding="utf-8")  # no holder; its contents mean nothing
+    FakeWait(monkeypatch)
+    fake_protection.lock_screen(unlock_after=1)
+    stdout = scheduled(config)
+    assert "The Mac was unlocked; running once more" in stdout
+    assert not locked_photo.exists()
 
 
 def test_an_ordinary_denied_file_still_gets_the_full_disk_access_hint(

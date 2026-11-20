@@ -502,8 +502,10 @@ All notable changes to this project are documented here. The format follows
   its lock and waits for the Mac to be unlocked, checking once a minute for
   up to `schedule.wait_for_unlock_hours` (new, default 8, `0` = do not
   wait), then runs once more. The wait ends cleanly on `SIGTERM`, never
-  blocks `flib run`, exits if another run is going on when it wakes, and a
-  later scheduled start replaces it (`flib-waiter.lock`). `flib status`, its
+  blocks `flib run`, exits if another run is going on when it wakes, and
+  there is only ever one: a scheduled run that finds a waiter alive (an
+  `flock` on `flib-waiter.lock`) does not wait itself, and no process is
+  ever signalled. `flib status`, its
   `--json` and the periodic summary count these files with what to do;
   `flib doctor` shows whether the screen is locked and how many the last
   run skipped. In the library, such a file that cannot be read while the

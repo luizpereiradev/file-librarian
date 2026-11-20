@@ -7,10 +7,12 @@ locked skips them as ``locked``. Instead of leaving them for the next day
 
 1. releases the instance lock (the run is over), so a ``flib run`` by hand is
    never blocked while it waits;
-2. takes the *waiter lock* (``flib-waiter.lock`` next to the database), taking
-   over from a waiter left by an earlier scheduled run: that one is asked to
-   stop (``SIGTERM``) and its place taken, so waiters never stack up. The start
-   of every scheduled run does the same;
+2. tries to take the *waiter lock*, an exclusive ``flock`` on
+   ``flib-waiter.lock`` next to the database, without blocking. If another
+   process holds it, a waiter is alive and will run once more after the
+   unlock (rescanning everything), so this one does not wait: one waiter is
+   enough. The operating system releases the lock if the waiter dies, so a
+   lock file left behind is simply taken. No process is ever signalled;
 3. sleeps, asking every ``POLL_SECONDS`` whether the Mac is unlocked, up to
    ``schedule.wait_for_unlock_hours`` by the wall clock (time asleep counts).
    When the lock state cannot be told, it tries to open one of the skipped
@@ -41,13 +43,10 @@ from file_librarian import protection
 
 POLL_SECONDS = 60.0
 """How often the waiter asks whether the Mac is unlocked."""
-TAKEOVER_SECONDS = 10.0
-"""How long a new waiter waits for an older one to stop."""
 WAITER_LOCK_NAME = "flib-waiter.lock"
 
 Sleep = Callable[[float], None]
 Clock = Callable[[], float]
-Kill = Callable[[int, int], None]
 
 
 class Waited(StrEnum):
@@ -64,91 +63,26 @@ def waiter_lock_path(database: Path) -> Path:
     return database.parent / WAITER_LOCK_NAME
 
 
-def _open(path: Path) -> int:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-
-
-def _try_lock(fd: int) -> bool:
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        return False
-    return True
-
-
-def _holder(fd: int) -> int | None:
-    text = os.pread(fd, 32, 0).decode(errors="replace").strip()
-    return int(text) if text.isdigit() and int(text) > 0 else None
-
-
 @contextlib.contextmanager
-def waiter(
-    database: Path,
-    *,
-    kill: Kill = os.kill,
-    sleep: Sleep = time.sleep,
-    clock: Clock = time.monotonic,
-) -> Iterator[bool]:
-    """Hold the waiter lock for the block; ``True`` if it is held.
+def waiter(database: Path) -> Iterator[bool]:
+    """Hold the waiter lock for the block, if it is free: ``True`` if held.
 
-    An earlier waiter holding it is asked to stop (``SIGTERM`` to the pid it
-    wrote) and given ``TAKEOVER_SECONDS`` to go. ``False`` if it did not.
+    ``False`` means a waiter is alive already; nothing is done to it. The
+    file's contents are never read or acted upon: only the ``flock`` counts.
     """
-    fd = _open(waiter_lock_path(database))
+    path = waiter_lock_path(database)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
-        held = _try_lock(fd) or _take_over(fd, kill=kill, sleep=sleep, clock=clock)
-        if not held:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
             yield False
             return
-        os.ftruncate(fd, 0)
-        os.pwrite(fd, str(os.getpid()).encode(), 0)
         try:
             yield True
         finally:
-            os.ftruncate(fd, 0)
             fcntl.flock(fd, fcntl.LOCK_UN)
-    finally:
-        os.close(fd)
-
-
-def _take_over(fd: int, *, kill: Kill, sleep: Sleep, clock: Clock) -> bool:
-    """Ask the holder of the waiter lock on ``fd`` to stop, and take the lock once it has."""
-    pid = _holder(fd)
-    if pid is None or pid == os.getpid():
-        return False
-    with contextlib.suppress(ProcessLookupError, PermissionError):
-        kill(pid, signal.SIGTERM)
-    deadline = clock() + TAKEOVER_SECONDS
-    while clock() < deadline:
-        sleep(0.2)
-        if _try_lock(fd):
-            return True
-    return _try_lock(fd)
-
-
-def stop_waiter(
-    database: Path,
-    *,
-    kill: Kill = os.kill,
-    sleep: Sleep = time.sleep,
-    clock: Clock = time.monotonic,
-) -> bool:
-    """Stop a waiter left by an earlier scheduled run, if there is one. ``True`` if there was.
-
-    Called when a scheduled run starts: whatever it waited for, this run does now.
-    """
-    path = waiter_lock_path(database)
-    if not path.exists():
-        return False
-    fd = _open(path)
-    try:
-        if _try_lock(fd):
-            fcntl.flock(fd, fcntl.LOCK_UN)
-            return False
-        if _take_over(fd, kill=kill, sleep=sleep, clock=clock):
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        return True
     finally:
         os.close(fd)
 
