@@ -415,6 +415,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A file skipped as unreadable now says why, in the `flib run` and `flib
+  simulate` output and in the run log: the error and the step that failed,
+  as in `(unreadable: EPERM Operation not permitted, on read)`. A read that
+  fails with an error that is usually transient (`EDEADLK`, `EAGAIN`,
+  `EINTR`, `ETIMEDOUT`, `EBUSY`, `ESTALE`) is tried once more after half a
+  second instead of waiting for the next day; `EPERM`, `EACCES` and `ENOENT`
+  are not retried. When a scheduled run is denied a file (`EPERM`/`EACCES`),
+  its summary and log end with one line pointing to Full Disk Access for
+  `flib-python` and `flib schedule`. `flib doctor` redacts the new lines like
+  any other. The README's troubleshooting section explains what to do.
 - Tests no longer call `monkeypatch.undo()`, which also switched off the
   suite's safety guards (temporary HOME, no network) for the rest of a test; a
   guard test keeps it from coming back.

@@ -13,6 +13,8 @@
 - Skips anything already in the database by content hash, except files that
   failed fewer than ``max_attempts`` times (RF-01, RF-30).
 - Returns at most ``max_files_per_run`` candidates, oldest first.
+- Keeps why an item was unreadable (the step and the errno) and reads it once
+  more after a short pause when the error is plausibly transient.
 
 The scanner only reads. It never opens a file for writing and never follows
 a symlink.
@@ -20,6 +22,7 @@ a symlink.
 
 from __future__ import annotations
 
+import errno
 import os
 import re
 import stat
@@ -28,6 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import TypeVar
 
 from file_librarian import hashing
 from file_librarian.config import Config, is_within
@@ -77,15 +81,50 @@ class Candidate:
     """Checked again before moving, so a replaced file is never moved under the old hash."""
 
 
+# Read errors worth one more try: a lock, an interrupted call, a busy or stale file.
+TRANSIENT_ERRNOS = frozenset(
+    {errno.EDEADLK, errno.EAGAIN, errno.EINTR, errno.ETIMEDOUT, errno.EBUSY, errno.ESTALE}
+)
+RETRY_PAUSE = 0.5
+"""Seconds to wait before reading a file again after a transient error."""
+
+
+@dataclass(frozen=True, slots=True)
+class SkipDetail:
+    """Why an item could not be read: the step and the error, never a path or content."""
+
+    step: str
+    """``stat`` or ``read``."""
+    errno: int | None
+    message: str
+
+    @classmethod
+    def from_error(cls, step: str, exc: OSError) -> SkipDetail:
+        name = errno.errorcode.get(exc.errno, "") if exc.errno is not None else ""
+        message = exc.strerror or type(exc).__name__
+        return cls(step, exc.errno, f"{name} {message}" if name else message)
+
+    @property
+    def denied(self) -> bool:
+        """macOS (or the file's permissions) refused access."""
+        return self.errno in (errno.EPERM, errno.EACCES)
+
+    def __str__(self) -> str:
+        return f"{self.message}, on {self.step}"
+
+
 @dataclass(slots=True)
 class ScanResult:
     candidates: list[Candidate] = field(default_factory=list)
     skipped: list[tuple[Path, SkipReason]] = field(default_factory=list)
+    details: dict[Path, SkipDetail] = field(default_factory=dict)
+    """For unreadable items in ``skipped``: what failed."""
     deferred: int = 0
     """Ready candidates left for the next run because of ``max_files_per_run``."""
 
 
 Lookup = Callable[[str], FileState | None]
+T = TypeVar("T")
 
 
 # "report (1).pdf" (browsers), "report copy.pdf" / "report copy 2.pdf" (Finder).
@@ -139,7 +178,24 @@ def _birth(st: os.stat_result) -> float:
     return float(getattr(st, "st_birthtime", st.st_mtime))
 
 
-def scan(config: Config, lookup: Lookup, *, now: float | None = None) -> ScanResult:
+def _read_twice(read: Callable[[Path], T], path: Path, sleep: Callable[[float], None]) -> T:
+    """``read(path)``, once more after a pause if the first error is plausibly transient."""
+    try:
+        return read(path)
+    except OSError as exc:
+        if exc.errno not in TRANSIENT_ERRNOS:
+            raise
+    sleep(RETRY_PAUSE)
+    return read(path)
+
+
+def scan(
+    config: Config,
+    lookup: Lookup,
+    *,
+    now: float | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> ScanResult:
     now = time.time() if now is None else now
     limits = config.limits
     result = ScanResult()
@@ -162,8 +218,12 @@ def scan(config: Config, lookup: Lookup, *, now: float | None = None) -> ScanRes
         for entry in entries:
             path = Path(entry.path)
 
-            def skip(reason: SkipReason, path: Path = path) -> None:
+            def skip(
+                reason: SkipReason, detail: SkipDetail | None = None, path: Path = path
+            ) -> None:
                 result.skipped.append((path, reason))
+                if detail is not None:
+                    result.details[path] = detail
 
             if entry.name.startswith("."):
                 skip(SkipReason.HIDDEN)
@@ -173,8 +233,8 @@ def scan(config: Config, lookup: Lookup, *, now: float | None = None) -> ScanRes
                 continue
             try:
                 ident = entry.stat(follow_symlinks=False)
-            except OSError:
-                skip(SkipReason.UNREADABLE)
+            except OSError as exc:
+                skip(SkipReason.UNREADABLE, SkipDetail.from_error("stat", exc))
                 continue
             if ident.st_flags & stat.UF_HIDDEN:
                 skip(SkipReason.HIDDEN)
@@ -195,13 +255,15 @@ def scan(config: Config, lookup: Lookup, *, now: float | None = None) -> ScanRes
                 skip(SkipReason.CLOUD_ONLY)
                 continue
 
+            step = "stat"
             try:
                 st = entry.stat(follow_symlinks=False)
+                step = "read"
                 if stat.S_ISDIR(st.st_mode):
                     if config.folders == "ignore":
                         skip(SkipReason.FOLDER_IGNORED)
                         continue
-                    manifest = unit_manifest(path)
+                    manifest = _read_twice(unit_manifest, path, sleep)
                     if manifest.dataless:
                         skip(SkipReason.CLOUD_ONLY)
                         continue
@@ -225,7 +287,8 @@ def scan(config: Config, lookup: Lookup, *, now: float | None = None) -> ScanRes
                     if now - st.st_mtime < limits.stable_seconds:
                         skip(SkipReason.UNSTABLE)
                         continue
-                    digest = file_sha256(path)
+                    digest = _read_twice(file_sha256, path, sleep)
+                    step = "stat"
                     after = os.lstat(path)
                     if (after.st_size, after.st_mtime_ns) != (st.st_size, st.st_mtime_ns):
                         skip(SkipReason.UNSTABLE)
@@ -243,8 +306,8 @@ def scan(config: Config, lookup: Lookup, *, now: float | None = None) -> ScanRes
                 else:
                     skip(SkipReason.SPECIAL)
                     continue
-            except (FileNotFoundError, PermissionError, OSError):
-                skip(SkipReason.UNREADABLE)
+            except OSError as exc:
+                skip(SkipReason.UNREADABLE, SkipDetail.from_error(step, exc))
                 continue
 
             state = lookup(candidate.sha256)

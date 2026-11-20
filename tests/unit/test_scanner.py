@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import os
 import time
 from pathlib import Path
@@ -7,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from file_librarian import hashing
+from file_librarian import hashing, scanner
 from file_librarian.config import Config
 from file_librarian.hashing import SF_DATALESS, file_sha256
 from file_librarian.models import FileState, FileStatus
@@ -232,6 +233,7 @@ def test_unreadable_file_is_skipped_not_fatal(downloads: Path) -> None:
         locked.chmod(0o644)
     assert [c.path.name for c in result.candidates] == ["ok.pdf"]
     assert reasons(result)["locked.pdf"] is SkipReason.UNREADABLE
+    assert str(result.details[locked]) == "EACCES Permission denied, on read"
 
 
 def test_scanner_does_not_modify_anything(downloads: Path) -> None:
@@ -268,3 +270,121 @@ def test_version_numbers_are_not_mistaken_for_copies(downloads: Path) -> None:
     result = scan(make_config(downloads), nothing_known, now=NOW)
     # Neither looks like a copy: the shorter name wins the tie.
     assert [c.path.name for c in result.candidates] == ["Tool-0.1.dmg"]
+
+
+def failing_read(monkeypatch: pytest.MonkeyPatch, name: str, codes: list[int]) -> list[Path]:
+    """Reading ``name`` raises each errno in ``codes`` in turn, then works; returns the calls."""
+    calls: list[Path] = []
+    real = hashing.file_sha256
+
+    def read(path: Path) -> str:
+        if path.name == name:
+            calls.append(path)
+            if len(calls) <= len(codes):
+                code = codes[len(calls) - 1]
+                raise OSError(code, os.strerror(code), str(path))
+        return real(path)
+
+    monkeypatch.setattr(scanner, "file_sha256", read)
+    return calls
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        errno.EPERM,
+        errno.EACCES,
+        errno.ENOENT,
+        errno.EDEADLK,
+        errno.EAGAIN,
+        errno.EINTR,
+        errno.ETIMEDOUT,
+        errno.EBUSY,
+        errno.ESTALE,
+        errno.EIO,
+    ],
+)
+def test_unreadable_keeps_the_errno_and_step(
+    downloads: Path, monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    put(downloads, "photo.jpeg", b"jpeg bytes")
+    put(downloads, "ok.pdf", b"fine")
+    failing_read(monkeypatch, "photo.jpeg", [code, code])
+    pauses: list[float] = []
+    result = scan(make_config(downloads), nothing_known, now=NOW, sleep=pauses.append)
+    assert [c.path.name for c in result.candidates] == ["ok.pdf"]
+    assert reasons(result)["photo.jpeg"] is SkipReason.UNREADABLE
+    detail = result.details[downloads / "photo.jpeg"]
+    name = errno.errorcode[code]
+    assert str(detail) == f"{name} {os.strerror(code)}, on read"
+    assert str(downloads) not in str(detail)
+    assert detail.denied is (code in (errno.EPERM, errno.EACCES))
+
+
+@pytest.mark.parametrize("code", sorted(scanner.TRANSIENT_ERRNOS))
+def test_a_transient_read_error_is_retried_once(
+    downloads: Path, monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    put(downloads, "photo.jpeg", b"jpeg bytes")
+    calls = failing_read(monkeypatch, "photo.jpeg", [code])
+    pauses: list[float] = []
+    result = scan(make_config(downloads), nothing_known, now=NOW, sleep=pauses.append)
+    assert [c.path.name for c in result.candidates] == ["photo.jpeg"]
+    assert len(calls) == 2
+    assert pauses == [scanner.RETRY_PAUSE]
+    assert result.details == {}
+
+
+@pytest.mark.parametrize("code", [errno.EPERM, errno.EACCES, errno.ENOENT, errno.EIO])
+def test_other_read_errors_are_not_retried(
+    downloads: Path, monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    put(downloads, "photo.jpeg", b"jpeg bytes")
+    calls = failing_read(monkeypatch, "photo.jpeg", [code])
+    pauses: list[float] = []
+    result = scan(make_config(downloads), nothing_known, now=NOW, sleep=pauses.append)
+    assert reasons(result)["photo.jpeg"] is SkipReason.UNREADABLE
+    assert len(calls) == 1
+    assert pauses == []
+
+
+def test_a_transient_error_in_a_folder_unit_is_retried(
+    downloads: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    put(downloads, "album/photo.jpeg", b"jpeg bytes")
+    make_old(downloads / "album")
+    real = hashing.unit_manifest
+    calls: list[Path] = []
+
+    def manifest(path: Path) -> Any:
+        calls.append(path)
+        if len(calls) == 1:
+            raise OSError(errno.EDEADLK, os.strerror(errno.EDEADLK))
+        return real(path)
+
+    monkeypatch.setattr(scanner, "unit_manifest", manifest)
+    pauses: list[float] = []
+    result = scan(make_config(downloads), nothing_known, now=NOW, sleep=pauses.append)
+    assert [c.path.name for c in result.candidates] == ["album"]
+    assert pauses == [scanner.RETRY_PAUSE]
+
+
+def test_a_failed_stat_says_so(downloads: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    put(downloads, "photo.jpeg", b"jpeg bytes")
+    real = os.lstat
+
+    def lstat(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:
+        if Path(path).name == "photo.jpeg":
+            raise OSError(errno.EPERM, os.strerror(errno.EPERM))
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "lstat", lstat)
+    result = scan(make_config(downloads), nothing_known, now=NOW)
+    detail = result.details[downloads / "photo.jpeg"]
+    assert (detail.step, detail.denied) == ("stat", True)
+    assert str(detail) == "EPERM Operation not permitted, on stat"
+
+
+def test_an_error_without_errno_still_explains_itself() -> None:
+    detail = scanner.SkipDetail.from_error("read", OSError("no code"))
+    assert (str(detail), detail.denied) == ("OSError, on read", False)

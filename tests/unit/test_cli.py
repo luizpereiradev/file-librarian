@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import errno
 import json
+import os
 import plistlib
 from pathlib import Path
 
@@ -8,9 +10,10 @@ import pytest
 from typer.testing import CliRunner
 
 from file_librarian import config as config_module
-from file_librarian.cli import app
+from file_librarian import hashing, scanner
+from file_librarian.cli import ACCESS_HINT, app
 from file_librarian.extractors.origin import WHERE_FROMS
-from tests._helpers import REPO_ROOT, mark_cloud_only, planned, write_xattr
+from tests._helpers import REPO_ROOT, mark_cloud_only, planned, put, write_config, write_xattr
 
 runner = CliRunner()
 
@@ -217,3 +220,66 @@ def test_simulate_lists_cloud_only_files(
     sim = runner.invoke(app, ["simulate", "-c", str(cfg)])
     assert sim.exit_code == 0, sim.stderr
     assert "slides.key  (in iCloud only, not downloaded)" in sim.stdout
+
+
+def _deny_reading(monkeypatch: pytest.MonkeyPatch, *names: str) -> None:
+    """Reading these files fails as macOS privacy settings make it fail."""
+    real = hashing.file_sha256
+
+    def read(path: Path) -> str:
+        if path.name in names:
+            raise OSError(errno.EPERM, os.strerror(errno.EPERM), str(path))
+        return real(path)
+
+    monkeypatch.setattr(scanner, "file_sha256", read)
+
+
+def _log_of(output: str) -> str:
+    [line] = [line for line in output.splitlines() if line.startswith("Log: ")]
+    return Path(line.removeprefix("Log: ")).read_text(encoding="utf-8")
+
+
+UNREADABLE_LINE = "  skip    photo.jpeg  (unreadable: EPERM Operation not permitted, on read)"
+
+
+def test_run_and_simulate_say_why_a_file_was_unreadable(
+    downloads: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    put(downloads, "photo.jpeg", b"jpeg bytes")
+    _deny_reading(monkeypatch, "photo.jpeg")
+    config = write_config(tmp_path, downloads)
+
+    sim = runner.invoke(app, ["simulate", "-c", str(config)])
+    assert sim.exit_code == 0, sim.stderr
+    assert UNREADABLE_LINE in sim.stdout.splitlines()
+
+    run = runner.invoke(app, ["run", "-c", str(config)])
+    assert run.exit_code == 0, run.stderr
+    assert UNREADABLE_LINE in run.stdout.splitlines()
+    assert UNREADABLE_LINE in _log_of(run.stdout).splitlines()
+    assert ACCESS_HINT not in run.stdout  # a manual run: the terminal has its own access
+
+
+def test_a_denied_scheduled_run_gets_one_hint(
+    downloads: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    put(downloads, "photo.jpeg", b"jpeg bytes")
+    put(downloads, "scan.png", b"png bytes")
+    _deny_reading(monkeypatch, "photo.jpeg", "scan.png")
+    config = write_config(tmp_path, downloads)
+
+    run = runner.invoke(app, ["run", "-c", str(config), "--trigger", "schedule"])
+    assert run.exit_code == 0, run.stderr
+    assert run.stdout.count(ACCESS_HINT) == 1
+    log = _log_of(run.stdout).splitlines()
+    assert log.count(ACCESS_HINT) == 1
+    assert log[-1] == ACCESS_HINT
+    assert "flib-python" in ACCESS_HINT and "flib schedule" in ACCESS_HINT
+
+
+def test_a_scheduled_run_without_denials_has_no_hint(downloads: Path, tmp_path: Path) -> None:
+    put(downloads, "photo.jpeg", b"jpeg bytes")
+    config = write_config(tmp_path, downloads)
+    run = runner.invoke(app, ["run", "-c", str(config), "--trigger", "schedule"])
+    assert run.exit_code == 0, run.stderr
+    assert ACCESS_HINT not in run.stdout

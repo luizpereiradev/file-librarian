@@ -19,7 +19,7 @@ import pytest
 from typer.testing import CliRunner
 
 from file_librarian import doctor, keychain, scheduler
-from file_librarian.cli import app
+from file_librarian.cli import ACCESS_HINT, app
 from file_librarian.config import load_config
 from file_librarian.db.store import Store, load_migrations
 from file_librarian.doctor import Options, Redactor, build_report
@@ -54,7 +54,7 @@ class _Fake:
     def __init__(self, seed: int) -> None:
         rng = random.Random(seed)
         self.rng = rng
-        self.names = list(dict.fromkeys(_file_name(rng) for _ in range(12)))
+        self.names = list(dict.fromkeys(_file_name(rng) for _ in range(13)))
         self.folders = [_word(rng) for _ in range(3)]
         self.api_key = "sk-ant-api03-" + "".join(rng.choices("abcdefXYZ0123456789", k=48))
         self.aws_key = "AKIA" + "".join(rng.choices("ABCDEFGHIJ0123456789", k=16))
@@ -97,7 +97,7 @@ def _environment(home: Path, fake: _Fake) -> Path:
     assert result.exit_code == 0, result.stderr
     # Then logs in every format flib writes, with the rest of the names.
     out = cfg.output_root
-    a, b, c, d, e, f, g, h = fake.names[4:12]
+    a, b, c, d, e, f, g, h, i = fake.names[4:13]
     sub = fake.folders[2]
     write_log(
         cfg.database,
@@ -109,10 +109,12 @@ def _environment(home: Path, fake: _Fake) -> Path:
             f"  failed  {d}  ([Errno 13] Permission denied: '{inputs}/{d}')",
             f"  sensitive{e}  (sensitive: private key)",
             f"  skip    {f}  (still changing)",
+            f"  skip    {i}  (unreadable: EPERM Operation not permitted, on read)",
             f"  skipped {g}  (key {fake.aws_key} found; mail {fake.email}; see {fake.url})",
             f"  organized {h}  (password = {fake.api_key})",
             "  (3 item(s) already processed earlier were left alone)",
             "Run 90: 1 organized, 1 to review, 1 sensitive left in place, 1 failed, 2 skipped.",
+            ACCESS_HINT,
         ],
     )
     logs = logs_dir(cfg.database)
@@ -163,6 +165,8 @@ def test_nothing_personal_survives(fake_home: Path, seed: int, fmt: doctor.Forma
         "Run 90: 1 organized",
         "(still changing)",
         "(sensitive: private key)",
+        "(unreadable: EPERM Operation not permitted, on read)",
+        ACCESS_HINT,
     ):
         assert expected in report, expected
 
