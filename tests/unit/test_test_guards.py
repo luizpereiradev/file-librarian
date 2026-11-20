@@ -1,7 +1,7 @@
 """Guards for the test suite's own safety fixtures (``tests/conftest.py``).
 
 The autouse fixtures there (temporary HOME, no network or DNS, fake Keychain,
-launchctl, sips and ``claude``, no Ollama probe) patch through the same
+launchctl, sips, osascript and ``claude``, no Ollama probe) patch through the same
 function-scoped ``monkeypatch`` a test receives. ``monkeypatch.undo()`` reverts
 every patch on it, theirs included, so for the rest of that test it could reach
 the real home folder or the network. Temporary patches go in
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from file_librarian import keychain, scheduler
+from file_librarian import keychain, scheduler, status
 from tests._helpers import REPO_ROOT
 from tests.conftest import NetworkBlockedError
 
@@ -42,7 +42,11 @@ def test_no_test_undoes_the_safety_fixtures() -> None:
 
 
 def test_the_safety_fixtures_outlive_a_monkeypatch_context(
-    monkeypatch: pytest.MonkeyPatch, fake_home: Path, fake_keychain: Path, fake_launchd: Path
+    monkeypatch: pytest.MonkeyPatch,
+    fake_home: Path,
+    fake_keychain: Path,
+    fake_launchd: Path,
+    fake_osascript: Path,
 ) -> None:
     with monkeypatch.context() as m:
         m.setenv("HOME", "/nowhere")
@@ -59,3 +63,4 @@ def test_the_safety_fixtures_outlive_a_monkeypatch_context(
     assert Path(keychain.SECURITY).parent == fake_keychain.parent
     assert os.environ["FAKE_LAUNCHD"] == str(fake_launchd)
     assert Path(scheduler.LAUNCHCTL).parent == fake_launchd.parent
+    assert Path(status.OSASCRIPT).parent == fake_osascript.parent

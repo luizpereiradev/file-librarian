@@ -76,6 +76,7 @@ def test_defaults_all_the_way_give_a_working_setup(
     assert cfg.inputs == [downloads]
     assert cfg.output_root == downloads / "Organized"
     assert cfg.review_folder == "_Review"
+    assert "flib status" in result.stdout  # where to look once it runs by itself
     # Claude Code is installed and logged in (the fake), so it is the default.
     assert (cfg.provider.name, cfg.provider.model) == ("claude-code", "haiku")
     assert cfg.vision.enabled is False

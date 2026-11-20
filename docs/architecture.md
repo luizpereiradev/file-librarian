@@ -174,6 +174,7 @@ One SQLite file, outside the organized folders (default
 | `index_changes` | what a run changed in the index without moving a file (a category renamed in rows and corrections, a Finder tag renamed in the journal, a new description, tags or confidence, a review reason set or cleared by `flib reprocess` or `flib fix`), reverted by `flib undo` with the run, and with one file by `flib undo --file` |
 | `corrections` | user recategorizations and renames (`flib fix`, `flib reconcile`); the latest per file and field, while still in effect, are sent as examples and are part of the cache key |
 | `files_fts` | FTS5 index over names, description and tags; accents ignored |
+| `meta` | flib's own bookkeeping as key and value; `summary.last_at` is when the periodic summary was last written |
 
 Schema changes are new numbered files in `db/migrations/`; the applied version
 is `PRAGMA user_version`. Names and paths are stored in Unicode NFC.
@@ -267,6 +268,34 @@ sample of recent items into a temporary folder and runs `pipeline.run(...,
 simulate=True)` with a configuration whose `inputs`, `output_root` and
 `database` all point inside that folder, which is deleted afterwards. The
 originals are only read, to copy them.
+
+## Status and the periodic summary
+
+`flib status` (`status.py`, RF-40) reads what waits for the user: files in
+review grouped by `review_reason` and suggested category, failed files
+grouped by the kind of error (the text of `last_error` before its first
+colon, since the rest can name a path) and whether the next run retries
+them, files left in place as sensitive, the last run with the unreadable and
+iCloud-only skips counted from its log, the next run from the installed
+launchd agent, and this month's cost from `Store.stats()`. It opens the index
+read-only (`mode=ro`) and takes no lock: it neither creates nor migrates the
+database, so it works before the first run and during one. It names no file,
+so `flib doctor` includes its output (with suggested categories that are not
+configured hidden, since the model wrote them).
+
+After a run with trigger `schedule`, `cli.py` asks `status.after_scheduled_run`
+for the periodic summary. It is due when some file has been in review or
+failed for `summary.min_age_days` and the last summary (`meta`,
+`summary.last_at`) is `summary.every_days` or more calendar days old. Then one
+line goes to the run log and, with `summary.notify`, one notification is
+posted through `/usr/bin/osascript` (`status.OSASCRIPT`, swapped for a fake in
+every test). The text holds counts only and reaches AppleScript as arguments
+of an `on run argv` handler, never as script source. The time is recorded
+before notifying, so a failure is not retried on every run, and nothing in the
+summary can fail the run: errors become a warning line in the log. macOS can
+drop such a notification without telling (it is attributed to Script Editor,
+whose notifications may be off, and Focus modes hide it); the log line and
+`flib status` do not depend on it.
 
 ## Extension points
 

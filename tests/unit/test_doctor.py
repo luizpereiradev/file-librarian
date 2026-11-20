@@ -358,7 +358,7 @@ def test_last_runs_show_their_cost(
         return [line.strip() for line in printed.stdout.splitlines()]
 
     lines = run_lines()
-    assert "schema version: 9 (this flib knows 10)" in lines
+    assert f"schema version: 9 (this flib knows {len(load_migrations())})" in lines
     assert any(line.startswith("1 ") and line.endswith(" unknown") for line in lines)
 
     with Store.open(database) as store:
