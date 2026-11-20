@@ -274,6 +274,11 @@ class LastRun(BaseModel):
     files_seen: int | None = Field(description="Files it looked at.")
     files_moved: int | None = Field(description="Files it organized into a category.")
     files_review: int | None = Field(description="Files it sent to review.")
+    files_duplicates: int | None = Field(
+        default=None,
+        description="Duplicates it set aside in the duplicates folder; null for runs "
+        "recorded before flib counted them.",
+    )
     errors: int | None = Field(description="Files that failed.")
     cost_usd: float | None = Field(
         description="Estimated provider cost in US$; null when unknown (no prices configured "
@@ -674,6 +679,7 @@ def _last_run(run: RunRow) -> LastRun:
         files_seen=run.files_seen,
         files_moved=run.files_moved,
         files_review=run.files_review,
+        files_duplicates=run.files_duplicates,
         errors=run.errors,
         cost_usd=run.cost_usd,
     )

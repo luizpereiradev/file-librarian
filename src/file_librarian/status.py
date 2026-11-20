@@ -331,7 +331,9 @@ def _last_run_lines(status: Status) -> list[str]:
     cost = "cost unknown" if run.cost_usd is None else f"US$ {run.cost_usd:.4f}"
     line = (
         f"Last run: {when}, {trigger}: {run.files_moved or 0} organized, "
-        f"{run.files_review or 0} to review, {run.errors or 0} failed; {cost}"
+        f"{run.files_review or 0} to review, "
+        + (f"{run.files_duplicates} duplicate(s) set aside, " if run.files_duplicates else "")
+        + f"{run.errors or 0} failed; {cost}"
     )
     lines = [line]
     skipped = status.skipped or {}
@@ -403,6 +405,7 @@ def to_json(status: Status, config: Config, *, now: datetime | None = None) -> s
             "files_seen": run.files_seen,
             "files_moved": run.files_moved,
             "files_review": run.files_review,
+            "files_duplicates": run.files_duplicates,
             "errors": run.errors,
             "cost_usd": run.cost_usd,
             "skipped": status.skipped,

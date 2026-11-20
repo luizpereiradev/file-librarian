@@ -131,9 +131,18 @@ model.
   the one without a copy suffix, then created first, then with the shortest
   name), or that of a file filed in the library (organized or in review)
   that is still at its recorded path with that content. The library copy is
-  checked first, never read if it is only in iCloud (the item then waits);
-  if it is gone or changed, the item is no duplicate and is filed like a new
-  file, taking over the content's index row. Duplicates are not classified
+  checked first (`reconcile.content_at`, which answers "absent" only when
+  the folder that should hold it is there and readable, and "cannot tell"
+  for anything only in iCloud, unreadable or on a volume that is not
+  mounted); when it cannot tell, the item waits. A filed file that is not
+  where flib left it (renamed, moved, edited or deleted by hand, dragged back
+  to Downloads) is never assumed gone: the item is skipped with a note to
+  run `flib reconcile`. Only a content whose row reconcile marked `missing`
+  is filed again from a new copy, which takes over that row; the move is
+  journaled on the row, and the row changes only once the item is in place
+  (a failed move, a failed classification or a sensitive file leaves it
+  untouched, and recovery of an interrupted takeover gives it the status of
+  the folder it reached). Duplicates are not classified
   (no provider call, no cost) and not counted in `max_files_per_run`. The
   planner sends each one to `output_root / duplicates_folder` under its own
   name (`-N` if taken), after the other items; a copy of an item of the same
@@ -148,7 +157,9 @@ model.
   duplicates folder is inside `output_root`, so it is never scanned, and it
   is never a category. `flib reconcile` never looks for a duplicate by
   content (a copy is indistinguishable from its original) and never looks
-  inside the duplicates folder for anything else: a duplicate gone from its
+  inside the duplicates folder, nor in any library folder that holds a
+  duplicate (a duplicates folder used before a rename), nor at a duplicate's
+  recorded place, for anything else: a duplicate gone from its
   place becomes `missing`, and one whose original went missing is listed as
   orphaned, never promoted to original on its own. `flib reprocess` and
   `flib fix` leave duplicates alone; search (CLI and MCP) leaves them out

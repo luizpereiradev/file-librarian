@@ -200,6 +200,8 @@ class RunRow:
     errors: int | None
     cost_usd: float | None = None
     """Estimated provider cost; ``None`` when the prices are unknown."""
+    files_duplicates: int | None = None
+    """Duplicates it set aside (RF-21); ``None`` for runs recorded before flib kept it."""
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> RunRow:
@@ -213,6 +215,11 @@ class RunRow:
             files_review=row["files_review"],
             errors=row["errors"],
             cost_usd=None if row["cost_usd"] is None else float(row["cost_usd"]),
+            # Read-only callers (`flib status`) may see a schema from before 0013.
+            # (``in row`` would look among the values: a Row is a sequence.)
+            files_duplicates=row["files_duplicates"]
+            if "files_duplicates" in row.keys()  # noqa: SIM118
+            else None,
         )
 
 
@@ -417,12 +424,15 @@ class Store:
         review: int,
         errors: int,
         cost_usd: float | None,
+        duplicates: int = 0,
     ) -> None:
-        """``cost_usd``: the provider cost of the run; ``None`` when its prices are unknown."""
+        """``cost_usd``: the provider cost of the run; ``None`` when its prices are unknown.
+        ``duplicates``: how many duplicates it set aside (RF-21)."""
         self.conn.execute(
             """UPDATE runs SET finished_at = ?, files_seen = ?, files_moved = ?,
-                              files_review = ?, errors = ?, cost_usd = ? WHERE id = ?""",
-            (_now(), seen, moved, review, errors, cost_usd, run_id),
+                              files_review = ?, errors = ?, cost_usd = ?, files_duplicates = ?
+               WHERE id = ?""",
+            (_now(), seen, moved, review, errors, cost_usd, duplicates, run_id),
         )
 
     def run_trigger(self, run_id: int) -> RunTrigger:

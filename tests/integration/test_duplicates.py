@@ -22,10 +22,12 @@ from file_librarian.config import Config, ConfigError, parse_config
 from file_librarian.db.store import Store, load_migrations
 from file_librarian.embeddings import embeddable
 from file_librarian.fsops import move_no_replace
+from file_librarian.hashing import file_sha256
 from file_librarian.models import FileStatus, OperationStatus, RunTrigger
 from file_librarian.providers.fake import FakeProvider
-from file_librarian.reconcile import reconcile
+from file_librarian.reconcile import content_at, reconcile
 from file_librarian.reprocess import select
+from file_librarian.scanner import SkipReason
 from file_librarian.search import search
 from file_librarian.status import collect, render, to_json
 from file_librarian.undo import undo_run
@@ -145,48 +147,219 @@ def test_a_copy_in_review_is_a_duplicate_too(downloads: Path, cfg: Config) -> No
     assert item.original == library(downloads) / "_Review" / "unsure.pdf"
 
 
-def test_when_the_original_is_gone_the_copy_is_filed_normally(downloads: Path, cfg: Config) -> None:
+def snapshot(cfg: Config) -> list[tuple[int, str, str]]:
+    with Store.open(cfg.database) as store:
+        return [(r.id, r.status.value, str(r.current_path)) for r in store.all_files()]
+
+
+def go_missing(cfg: Config, downloads: Path) -> None:
+    """Delete the filed bill.pdf by hand and let reconcile mark it missing."""
+    (finance(downloads) / "bill.pdf").unlink()
+    with Store.open(cfg.database) as store:
+        reconcile(cfg, store)
+    assert rows(cfg)["bill.pdf"][0] == "missing"
+
+
+def renamed(downloads: Path) -> None:
+    (finance(downloads) / "bill.pdf").rename(finance(downloads) / "electricity.pdf")
+
+
+def edited(downloads: Path) -> None:
+    (finance(downloads) / "bill.pdf").write_bytes(b"edited since")
+
+
+def deleted(downloads: Path) -> None:
+    (finance(downloads) / "bill.pdf").unlink()
+
+
+def dragged_back(downloads: Path) -> None:
+    (finance(downloads) / "bill.pdf").rename(downloads / "bill.pdf")
+
+
+@pytest.mark.parametrize("change", [renamed, edited, deleted, dragged_back])
+def test_a_filed_file_not_where_flib_left_it_is_never_taken_over(
+    downloads: Path, cfg: Config, change: Any
+) -> None:
     put(downloads, "bill.pdf", b"same")
     run(cfg)
-    (finance(downloads) / "bill.pdf").unlink()  # deleted by hand
+    before = snapshot(cfg)
+    change(downloads)
+    copy = put(downloads, "bill.pdf", b"same") if change is not dragged_back else None
+    provider = FakeProvider(default=answer())
+
+    outcome = run(cfg, provider)
+
+    assert provider.calls == []
+    assert outcome.report is not None and outcome.report.items == []
+    assert (downloads / "bill.pdf", SkipReason.NOT_WHERE_LEFT) in outcome.scan.skipped
+    assert snapshot(cfg) == before  # the row is untouched until reconcile says where it is
+    assert copy is None or copy.exists()
+    assert not dups(downloads).exists()
+
+
+def test_the_skip_says_to_run_reconcile(tmp_path: Path, downloads: Path) -> None:
+    config_file = write_config(tmp_path, downloads)
     put(downloads, "bill.pdf", b"same")
-
-    outcome = run(cfg)
-
-    assert outcome.report is not None
-    assert [i.status for i in outcome.report.items] == [FileStatus.ORGANIZED]
-    assert (finance(downloads) / "bill.pdf").read_bytes() == b"same"
-    assert not dups(downloads).exists()
-    # The content keeps one row, now pointing at the new copy.
-    assert rows(cfg) == {"bill.pdf": ("organized", None, rows(cfg)["bill.pdf"][2])}
+    runner.invoke(cli.app, ["run", "-c", str(config_file)])
+    (library(downloads) / "Other" / "bill.pdf").rename(downloads / "bill.pdf")
+    result = runner.invoke(cli.app, ["run", "-c", str(config_file)])
+    assert (
+        "  skip    bill.pdf  (same content as a filed item that is not where flib left it; "
+        "run `flib reconcile`)" in result.stdout
+    )
 
 
-def test_when_the_original_changed_the_copy_is_no_duplicate(downloads: Path, cfg: Config) -> None:
-    put(downloads, "notes.txt", b"first")
+def test_an_unreadable_original_makes_the_copy_wait(downloads: Path, cfg: Config) -> None:
+    put(downloads, "bill.pdf", b"same")
     run(cfg)
-    (finance(downloads) / "notes.txt").write_bytes(b"edited since")
-    put(downloads, "notes.txt", b"first")
+    original = finance(downloads) / "bill.pdf"
+    before = snapshot(cfg)
+    original.chmod(0)
+    try:
+        copy = put(downloads, "bill (1).pdf", b"same")
+        outcome = run(cfg)
+    finally:
+        original.chmod(0o644)
+    assert (copy, SkipReason.KNOWN) in outcome.scan.skipped
+    assert snapshot(cfg) == before and copy.exists()
 
+
+def test_an_unmounted_library_volume_never_loses_the_row(tmp_path: Path, downloads: Path) -> None:
+    volumes = tmp_path / "Volumes"
+    lib = volumes / "External" / "Library"
+    lib.mkdir(parents=True)
+    cfg = fake_config(downloads, output_root=str(lib))
+    put(downloads, "bill.pdf", b"same")
+    run(cfg)
+    before = snapshot(cfg)
+    (volumes / "External").rename(tmp_path / "External.offline")  # "unmounted"
+    copy = put(downloads, "bill.pdf", b"same")  # downloaded again meanwhile
     outcome = run(cfg)
-
-    assert outcome.report is not None
-    assert [i.status for i in outcome.report.items] == [FileStatus.ORGANIZED]
-    assert (finance(downloads) / "notes-2.txt").read_bytes() == b"first"
-    assert (finance(downloads) / "notes.txt").read_bytes() == b"edited since"
-    assert not dups(downloads).exists()
+    assert outcome.report is not None and outcome.report.items == []
+    assert snapshot(cfg) == before and copy.exists()
+    (tmp_path / "External.offline").rename(volumes / "External")  # back
+    run(cfg)
+    assert sorted(p.name for p in (lib / "Finance").iterdir()) == ["bill.pdf"]
+    assert (lib / "_Duplicates" / "bill.pdf").read_bytes() == b"same"
 
 
 def test_a_missing_original_lets_the_copy_be_filed(downloads: Path, cfg: Config) -> None:
     put(downloads, "bill.pdf", b"same")
     run(cfg)
-    (finance(downloads) / "bill.pdf").unlink()
-    with Store.open(cfg.database) as store:
-        reconcile(cfg, store)
-    assert rows(cfg)["bill.pdf"][0] == "missing"
+    [(row_id, _, _)] = snapshot(cfg)
+    go_missing(cfg, downloads)
     put(downloads, "bill.pdf", b"same")
     run(cfg)
+    assert snapshot(cfg) == [(row_id, "organized", str(finance(downloads) / "bill.pdf"))]
+    assert (finance(downloads) / "bill.pdf").read_bytes() == b"same"
+
+
+def test_a_missing_row_is_not_taken_over_by_a_copy_that_stays(downloads: Path, cfg: Config) -> None:
+    put(downloads, "bill.pdf", b"same")
+    run(cfg)
+    go_missing(cfg, downloads)
+    before = snapshot(cfg)
+    # Failed classification, then a name that is sensitive: neither is filed.
+    put(downloads, "bill.pdf", b"same")
+    with Store.open(cfg.database) as store:
+        store.conn.execute("DELETE FROM classification_cache")
+    failed = run(cfg, FakeProvider())
+    assert failed.report is not None
+    assert [i.status for i in failed.report.items] == [FileStatus.FAILED]
+    assert snapshot(cfg) == before
+    (downloads / "bill.pdf").rename(downloads / "credentials.json")
+    sensitive = run(cfg)
+    assert sensitive.report is not None
+    assert [i.status for i in sensitive.report.items] == [FileStatus.SENSITIVE]
+    assert snapshot(cfg) == before
+
+
+def test_a_missing_row_is_not_taken_over_by_a_failed_move(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    put(downloads, "bill.pdf", b"same")
+    run(cfg)
+    go_missing(cfg, downloads)
+    before = snapshot(cfg)
+    copy = put(downloads, "bill.pdf", b"same")
+
+    def refuse(src: Path, dst: Path) -> None:
+        raise PermissionError(13, "Permission denied")
+
+    with monkeypatch.context() as patch:
+        patch.setattr("file_librarian.executor.move_no_replace", refuse)
+        outcome = run(cfg)
+    assert outcome.report is not None
+    assert [i.status for i in outcome.report.items] == [FileStatus.FAILED]
+    assert snapshot(cfg) == before and copy.exists()
+    with Store.open(cfg.database) as store:
+        assert store.operations()[-1].status is OperationStatus.FAILED
+    run(cfg)  # the next run files it
     assert rows(cfg)["bill.pdf"][0] == "organized"
-    assert (finance(downloads) / "bill.pdf").exists()
+
+
+@pytest.mark.parametrize("arrived", [True, False])
+def test_a_crash_while_taking_over_a_missing_row_is_recovered(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch, arrived: bool
+) -> None:
+    put(downloads, "bill.pdf", b"same")
+    run(cfg)
+    go_missing(cfg, downloads)
+    before = snapshot(cfg)
+    copy = put(downloads, "bill.pdf", b"same")
+
+    def crash(src: Path, dst: Path) -> None:
+        if arrived:
+            move_no_replace(src, dst)
+        raise Crash
+
+    with monkeypatch.context() as patch, pytest.raises(Crash):
+        patch.setattr("file_librarian.executor.move_no_replace", crash)
+        run(cfg)
+    assert snapshot(cfg) == before  # nothing written before the move finished
+    with Store.open(cfg.database) as store:
+        assert executor.recover(store, cfg) == 1
+    if arrived:
+        [(_, status, path)] = snapshot(cfg)
+        assert (status, path) == ("organized", str(finance(downloads) / "bill.pdf"))
+    else:
+        assert snapshot(cfg) == before and copy.exists()
+
+
+def test_a_copy_stays_when_its_original_fails_to_move_in_the_same_run(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    put(downloads, "bill.pdf", b"same")
+    copy = put(downloads, "bill (1).pdf", b"same")
+
+    def refuse_the_original(src: Path, dst: Path) -> None:
+        if src.name == "bill.pdf":
+            raise PermissionError(13, "Permission denied")
+        move_no_replace(src, dst)
+
+    with monkeypatch.context() as patch:
+        patch.setattr("file_librarian.executor.move_no_replace", refuse_the_original)
+        outcome = run(cfg)
+    assert outcome.report is not None
+    assert {i.source.name: i.status for i in outcome.report.items} == {
+        "bill.pdf": FileStatus.FAILED,
+        "bill (1).pdf": FileStatus.SKIPPED,
+    }
+    assert copy.exists() and list(rows(cfg)) == ["bill.pdf"]
+
+
+def test_content_at_tells_absent_from_unknown(tmp_path: Path) -> None:
+    there = put(tmp_path, "a.txt", b"a")
+    digest = file_sha256(there)
+    assert content_at(there, digest) is True
+    assert content_at(there, "0" * 64) is False
+    assert content_at(tmp_path / "gone.txt", digest) is False
+    assert content_at(tmp_path / "no folder" / "a.txt", digest) is None
+    there.chmod(0)
+    try:
+        assert content_at(there, digest) is None
+    finally:
+        there.chmod(0o644)
 
 
 def test_a_cloud_only_original_is_never_read_and_the_copy_waits(
@@ -587,6 +760,8 @@ def test_migration_keeps_rows_and_lets_duplicates_share_content(
         assert (row.sha256, row.status, row.duplicate_of) == ("abc", FileStatus.ORGANIZED, None)
         assert store.conn.execute("PRAGMA foreign_key_check").fetchall() == []
         assert store.embedding_keys() == {7: ("m", "h")}  # not lost to the cascade
+        [run_row] = store.conn.execute("SELECT files_duplicates FROM runs").fetchall()
+        assert run_row[0] is None  # not counted before
         # Full-text search still finds it, and keeps following changes.
         match = "SELECT rowid FROM files_fts WHERE files_fts MATCH ?"
         assert store.conn.execute(match, ("invoice",)).fetchall()[0][0] == 7
@@ -611,3 +786,125 @@ def test_migration_keeps_rows_and_lets_duplicates_share_content(
             )
         with pytest.raises(sqlite3.IntegrityError):  # references are still enforced
             store.conn.execute("DELETE FROM files WHERE id = 7")
+
+
+# --- reconcile never takes a copy for its original ------------------------------------
+
+
+def test_reconcile_never_searches_the_duplicates_folder(downloads: Path, cfg: Config) -> None:
+    put(downloads, "bill.pdf", b"same")
+    run(cfg)
+    dropped = put(dups(downloads), "kept by hand.pdf", b"same")  # not a duplicate row
+    original = finance(downloads) / "bill.pdf"
+    original.unlink()
+    with Store.open(cfg.database) as store:
+        report = reconcile(cfg, store)
+    assert report.missing == [original] and report.moved == []
+    assert rows(cfg)["bill.pdf"][0] == "missing"
+    assert dropped.exists()
+
+
+def test_reconcile_skips_where_duplicates_are_recorded(downloads: Path, cfg: Config) -> None:
+    put(downloads, "bill.pdf", b"same")
+    run(cfg)
+    copy = put(downloads, "bill (1).pdf", b"same")
+    run(cfg)
+    with Store.open(cfg.database) as store:
+        undo_run(store, config=cfg)  # the copy is back in Downloads, recorded there
+    original = finance(downloads) / "bill.pdf"
+    original.unlink()
+    with Store.open(cfg.database) as store:
+        report = reconcile(cfg, store)
+    assert report.missing == [original] and report.moved == []
+    found = rows(cfg)
+    assert found["bill.pdf"][0] == "missing"
+    assert found["bill (1).pdf"][0] == "skipped" and copy.exists()
+
+
+def test_reconcile_skips_a_duplicates_folder_used_before(downloads: Path) -> None:
+    cfg = fake_config(downloads)
+    put(downloads, "bill.pdf", b"same")
+    put(downloads, "bill (1).pdf", b"same")
+    run(cfg)
+    old = dups(downloads)
+    (old / "bill (1).pdf").rename(old / "keep.pdf")  # renamed in the old folder
+    original = finance(downloads) / "bill.pdf"
+    original.unlink()
+    renamed = fake_config(downloads, duplicates_folder="_Copies")
+    with Store.open(renamed.database) as store:
+        report = reconcile(renamed, store)
+    assert original in report.missing and report.moved == []
+    assert rows(renamed)["bill.pdf"][0] == "missing"
+
+
+# --- counting and telling the user ----------------------------------------------------
+
+
+def test_runs_count_the_duplicates_they_set_aside(downloads: Path, cfg: Config) -> None:
+    put(downloads, "bill.pdf", b"same")
+    put(downloads, "bill (1).pdf", b"same")
+    run(cfg)
+    with Store.open(cfg.database) as store:
+        [(moved, duplicates)] = store.conn.execute(
+            "SELECT files_moved, files_duplicates FROM runs"
+        ).fetchall()
+    assert (moved, duplicates) == (1, 1)
+    found = collect(cfg)
+    assert found.last_run is not None and found.last_run.files_duplicates == 1
+    assert "1 organized, 0 to review, 1 duplicate(s) set aside" in "\n".join(render(found, cfg))
+    assert json.loads(to_json(found, cfg))["last_run"]["files_duplicates"] == 1
+
+
+def test_the_first_duplicates_moved_come_with_a_note_once(tmp_path: Path, downloads: Path) -> None:
+    config_file = write_config(tmp_path, downloads)
+    put(downloads, "a.pdf", b"a")
+    put(downloads, "a (1).pdf", b"a")
+    first = runner.invoke(cli.app, ["run", "-c", str(config_file)])
+    assert "Note: files with the same content as one already filed were moved to _Duplicates" in (
+        first.stdout
+    )
+    assert "nothing was deleted" in first.stdout and "duplicates: leave" in first.stdout
+    put(downloads, "b.pdf", b"b")
+    put(downloads, "b (1).pdf", b"b")
+    second = runner.invoke(cli.app, ["run", "-c", str(config_file)])
+    assert "dup     b (1).pdf" in second.stdout
+    assert "Note: files with the same content" not in second.stdout
+
+
+def test_a_takeover_recovered_without_the_configuration_is_settled_by_reconcile(
+    downloads: Path, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    put(downloads, "bill.pdf", b"same")
+    run(cfg)
+    go_missing(cfg, downloads)
+    put(downloads, "bill.pdf", b"same")
+
+    def move_then_crash(src: Path, dst: Path) -> None:
+        move_no_replace(src, dst)
+        raise Crash
+
+    with monkeypatch.context() as patch, pytest.raises(Crash):
+        patch.setattr("file_librarian.executor.move_no_replace", move_then_crash)
+        run(cfg)
+    moved = finance(downloads) / "bill.pdf"
+    with Store.open(cfg.database) as store:
+        assert executor.recover(store) == 1
+    assert snapshot(cfg)[0][1:] == ("missing", str(moved))
+    with Store.open(cfg.database) as store:
+        assert reconcile(cfg, store).found_again == [moved]
+    assert snapshot(cfg)[0][1:] == ("organized", str(moved))
+
+
+def test_reconcile_leaves_an_unreadable_duplicate_as_it_is(downloads: Path, cfg: Config) -> None:
+    put(downloads, "bill.pdf", b"same")
+    put(downloads, "bill (1).pdf", b"same")
+    run(cfg)
+    copy = dups(downloads) / "bill (1).pdf"
+    copy.chmod(0)
+    try:
+        with Store.open(cfg.database) as store:
+            report = reconcile(cfg, store)
+    finally:
+        copy.chmod(0o644)
+    assert report.unchecked == [copy] and report.missing == []
+    assert rows(cfg)["bill (1).pdf"][0] == "duplicate"

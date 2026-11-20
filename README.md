@@ -403,9 +403,11 @@ A file with the same content as one flib already filed (the second
 `_Duplicates` (`_Duplicados` in pt-BR) inside the organized folder, under
 its own name. It is never deleted, and it is not sent to the AI, so it costs
 nothing. flib checks first that the filed copy is still there with the same
-content; if you deleted or edited it, the new copy is filed like any new
-file instead. A copy of a sensitive file stays where it is, like the
-original.
+content. If it is not where flib left it (you renamed, moved, edited or
+deleted it, or its disk is not connected), the new copy is left in Downloads
+with a note to run `flib reconcile`; once reconcile has found the filed copy
+gone, the next run files the new one in its place. A copy of a sensitive
+file stays where it is, like the original.
 
 ```text
   dup     report (1).pdf  ->  _Duplicates/report (1).pdf  (same content as Finance/report.pdf)
@@ -419,6 +421,12 @@ lists its duplicate as orphaned; move it back to Downloads to have it filed.
 Empty the folder whenever you like: flib never does. `duplicates: leave`
 turns this off (copies then stay where they are), and `duplicates_folder`
 renames the folder.
+
+**Upgrading from an earlier version:** with the default `duplicates: move`,
+the first run also sets aside the copies that earlier runs left in Downloads
+(`report (1).pdf` next to a filed `report.pdf`). It says so once, in a note
+after the run. Nothing is deleted: `flib undo` puts them back, and
+`duplicates: leave` keeps them where they are.
 
 ### Names
 

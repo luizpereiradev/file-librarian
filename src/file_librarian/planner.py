@@ -40,6 +40,7 @@ from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 from file_librarian.config import Config, folder_key
 from file_librarian.models import (
@@ -195,11 +196,12 @@ def _plan_duplicate(
     original = duplicate.original
     if not duplicate.in_library:
         item = going.get(duplicate.original)
-        if item is None or item.destination is None or item.status not in _FILED:
+        if item is None or item.status not in _FILED:
             why = "is left for a later run" if item is None else f"stays ({item.status.value})"
             reason = f"same content as another item of this run, which {why}"
             return PlannedItem(ctx, FileStatus.SKIPPED, None, reason, original=duplicate.original)
-        original = item.destination
+        # Organized and review items always have a destination.
+        original = cast(Path, item.destination)
     destination = _destination(config, config.duplicates_folder, ctx.path.name, names, ctx)
     return PlannedItem(
         ctx,

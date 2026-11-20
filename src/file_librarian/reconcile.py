@@ -68,6 +68,9 @@ class ReconcileReport:
     found_again: list[Path] = field(default_factory=list)
     cloud_only: list[Path] = field(default_factory=list)
     """At their recorded path but only in iCloud: not checked, row unchanged."""
+    unchecked: list[Path] = field(default_factory=list)
+    """Duplicates that could not be read where recorded (an unmounted volume, a read
+    error): row unchanged."""
     orphaned: list[tuple[Path, Path]] = field(default_factory=list)
     """Duplicates whose original is missing: (the duplicate, where the original was)."""
 
@@ -123,17 +126,40 @@ def _look(path: Path, sha256: str) -> _Seen:
 def content_at(path: Path, sha256: str) -> bool | None:
     """Whether ``path`` still holds the content ``sha256`` (a file or a folder unit).
 
-    ``None`` when that cannot be told without downloading it from iCloud.
+    ``False`` only when the answer is certain: nothing is there although its
+    folder can be listed, or what is there has other content. ``None`` when it
+    cannot be told: only in iCloud (never downloaded to check), a folder on
+    the way that is gone or cannot be read (an unmounted volume), or a read
+    error.
     """
-    seen = _look(path, sha256)
-    return None if seen is _Seen.CLOUD_ONLY else seen is _Seen.SAME
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        # Absent for sure only if its folder is there and readable (not an unmounted volume).
+        parent = path.parent
+        if parent.is_dir() and os.access(parent, os.R_OK | os.X_OK):
+            return False
+        return None
+    except OSError:
+        return None
+    if in_cloud_only(path):
+        return None
+    try:
+        if path.is_symlink():
+            return False
+        if path.is_dir():
+            manifest = hashing.unit_manifest(path)
+            return None if manifest.dataless else manifest.digest == sha256
+        return hashing.file_sha256(path) == sha256
+    except OSError:
+        return None
 
 
 class _Finder:
     """Find an item by content under a set of roots, hashing only same-size candidates.
 
-    The duplicates folder and the places of indexed duplicates (``skip``) are
-    never candidates.
+    The duplicates folder and ``skip`` (the places of indexed duplicates and the
+    library folders holding them) are never candidates nor walked into.
     """
 
     def __init__(self, config: Config, skip: set[str] | None = None) -> None:
@@ -202,7 +228,16 @@ def reconcile(config: Config, store: Store) -> ReconcileReport:
     report = ReconcileReport()
     rows = store.all_files()
     duplicates = [row for row in rows if row.duplicate_of is not None]
-    finder = _Finder(config, {normalize(str(row.current_path)) for row in duplicates})
+    skip = {normalize(str(row.current_path)) for row in duplicates}
+    # Folders of the library holding duplicates are skipped whole: a duplicates
+    # folder used before ``duplicates_folder`` was renamed, say.
+    skip |= {
+        normalize(str(row.current_path.parent))
+        for row in duplicates
+        if row.current_path.parent != config.output_root
+        and is_within(row.current_path.parent, config.output_root)
+    }
+    finder = _Finder(config, skip)
     for row in rows:
         if row.status not in _TRACKED:
             continue
@@ -254,9 +289,13 @@ def _check_duplicate(store: Store, row: FileRow, report: ReconcileReport) -> Non
     """A duplicate is only looked for where it was recorded; gone from there, it is missing."""
     if row.status is FileStatus.MISSING:
         return
-    seen = _look(row.current_path, row.sha256)
-    if seen is _Seen.CLOUD_ONLY:
-        report.cloud_only.append(row.current_path)
-    elif seen is _Seen.DIFFERENT:
+    there = content_at(row.current_path, row.sha256)
+    if there is None:
+        # Only in iCloud, unreadable or on a volume that is not there: left as it is.
+        if in_cloud_only(row.current_path):
+            report.cloud_only.append(row.current_path)
+        else:
+            report.unchecked.append(row.current_path)
+    elif not there:
         store.set_file_status(row.id, FileStatus.MISSING)
         report.missing.append(row.current_path)

@@ -16,11 +16,13 @@
   content as a file filed in the library (organized or in review) that is
   still there with that content, or as another item going ahead in this run.
   The library copy is checked before the item is called a duplicate; one
-  that is only in iCloud is not read, and the item waits. If the library
-  copy is gone or changed, the item is no duplicate: it goes ahead like a new
-  file and takes over the content's index row. A copy that ``flib undo`` put
-  back is left alone. With ``duplicates: leave``, duplicates are skipped and
-  stay where they are.
+  that is only in iCloud or cannot be read is not guessed at, and the item
+  waits. If the library copy is not where flib left it, the item is skipped
+  until ``flib reconcile`` finds it; only once reconcile marked it
+  ``missing`` does the item go ahead like a new file, taking over the
+  content's index row when it is moved. A copy that ``flib undo`` put back
+  is left alone. With ``duplicates: leave``, duplicates are skipped and stay
+  where they are.
 - Returns at most ``max_files_per_run`` candidates, oldest first. Duplicates
   are not counted: they cost no provider call. A duplicate of an item left
   for a later run waits with it.
@@ -77,6 +79,9 @@ class SkipReason(StrEnum):
     EMPTY = "empty file"
     DUPLICATE = "same content as another item in this run"
     CLOUD_ONLY = "in iCloud only, not downloaded"
+    NOT_WHERE_LEFT = (
+        "same content as a filed item that is not where flib left it; run `flib reconcile`"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,11 +191,16 @@ def _keep_originals(ready: list[Candidate]) -> tuple[list[Candidate], list[Dupli
 _FILED = frozenset({FileStatus.ORGANIZED, FileStatus.REVIEW, FileStatus.MISSING})
 
 
-def _known(candidate: Candidate, state: FileState, config: Config) -> bool | Duplicate:
-    """For content already in the index: skip it (True), a duplicate, or new (False).
+def _known(candidate: Candidate, state: FileState, config: Config) -> SkipReason | Duplicate | None:
+    """For content already in the index: why it is skipped, a duplicate, or ``None``
+    (new: it goes ahead and, once moved, takes over the content's row).
 
     Only with ``duplicates: move``; a content that is not filed (sensitive,
     skipped, failed for good) is always skipped, as are copies undo put back.
+    Only a ``missing`` row (reconcile found it nowhere) is taken over. A filed
+    file that is not where flib left it (renamed or moved by hand, dragged back
+    to Downloads, on a volume that is not mounted, unreadable) is never
+    assumed gone: the item is skipped until ``flib reconcile`` says where it is.
     """
     here = normalize("NFC", str(candidate.path))
     if (
@@ -200,13 +210,15 @@ def _known(candidate: Candidate, state: FileState, config: Config) -> bool | Dup
         or here in state.kept
         or here == normalize("NFC", str(state.path))  # the indexed file itself
     ):
-        return True
+        return SkipReason.KNOWN
     if state.status is FileStatus.MISSING:
-        return False  # reconcile found it nowhere: this copy is the one left
+        return None  # reconcile found it nowhere: this copy is the one left
     there = content_at(state.path, candidate.sha256)
     if there is None:
-        return True  # the library copy is only in iCloud: never read it to check
-    return Duplicate(candidate, state.path, in_library=True) if there else False
+        return SkipReason.KNOWN  # only in iCloud, or cannot be read now: never guess
+    if there:
+        return Duplicate(candidate, state.path, in_library=True)
+    return SkipReason.NOT_WHERE_LEFT
 
 
 def _protected_ids(config: Config) -> set[tuple[int, int]]:
@@ -378,8 +390,8 @@ def scan(
                 if isinstance(known, Duplicate):
                     result.duplicates.append(known)
                     continue
-                if known:
-                    skip(SkipReason.KNOWN)
+                if known is not None:
+                    skip(known)
                     continue
             ready.append(candidate)
 

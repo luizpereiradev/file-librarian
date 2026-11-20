@@ -568,6 +568,8 @@ def _pipeline(
             typer.echo(cost)
     elif outcome.report is not None:
         summary = _periodic_summary(cfg) if trigger is RunTrigger.SCHEDULE else []
+        if outcome.first_duplicates:
+            summary.insert(0, duplicates_notice(cfg))
         _print_report(outcome.report, cfg, skipped, cost, hint, summary)
     if outcome.cached:
         typer.echo(f"{outcome.cached} classification(s) reused from the cache at no cost.")
@@ -585,6 +587,16 @@ def _periodic_summary(cfg: Config) -> list[str]:
         return status_mod.after_scheduled_run(cfg)
     except Exception as exc:  # the run itself succeeded; the summary is a courtesy
         return [f"warning: the periodic summary failed: {type(exc).__name__}: {exc}"]
+
+
+def duplicates_notice(cfg: Config) -> str:
+    """Said once, the first time a run sets duplicates aside (RF-21)."""
+    return (
+        f"Note: files with the same content as one already filed were moved to "
+        f"{cfg.duplicates_folder} in the organized folder; nothing was deleted. "
+        "`flib undo` puts them back, and `duplicates: leave` in the configuration "
+        "leaves copies where they are. This note is shown once."
+    )
 
 
 def _cost_line(cost_usd: float, *, known: bool) -> str | None:
@@ -1136,6 +1148,8 @@ def reconcile(config: ConfigOption = None) -> None:
         typer.echo(f"  missing {_short(path, cfg)}")
     for path in report.cloud_only:
         typer.echo(f"  icloud  {_short(path, cfg)}  ({SkipReason.CLOUD_ONLY.value}, not checked)")
+    for path in report.unchecked:
+        typer.echo(f"  unread  {_short(path, cfg)}  (cannot be read now, not checked)")
     for path, original in report.orphaned:
         typer.echo(
             f"  orphan  {_short(path, cfg)}  (its original {_short(original, cfg)} is missing; "

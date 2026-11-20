@@ -16,8 +16,13 @@
 -- DELETE CASCADE, so they are kept aside and put back unchanged.
 -- The full-text index keeps its rows (same ids, same text); only its
 -- triggers, dropped with the old table, are made again.
+--
+-- runs.files_duplicates counts the duplicates a run set aside; NULL on runs
+-- recorded before this migration.
 
 PRAGMA defer_foreign_keys = ON;
+
+ALTER TABLE runs ADD COLUMN files_duplicates INTEGER;
 
 CREATE TEMP TABLE files_before_0013 AS SELECT * FROM files;
 CREATE TEMP TABLE embeddings_before_0013 AS SELECT * FROM embeddings;

@@ -13,9 +13,13 @@ All notable changes to this project are documented here. The format follows
   a file in the library that is still there with that content, goes to
   `_Duplicates` (`_Duplicados` in pt-BR) inside `output_root`, without a
   provider call; before, it stayed in Downloads for good. If the filed copy
-  is gone or was edited, the newcomer is filed like a new file instead; a
-  library copy only in iCloud is never read to check (the newcomer waits). A
-  copy of a sensitive, failed or deferred file stays with it. The move is
+  is not where flib left it (renamed, moved, deleted or edited by hand, or on
+  a volume that is not mounted), nothing is guessed: the newcomer is skipped
+  with "run `flib reconcile`", and only once reconcile has marked the filed
+  copy `missing` is the newcomer filed in its place (the row changes only
+  after it is moved). A library copy only in iCloud or unreadable is never
+  read to check (the newcomer waits). A copy of a sensitive, failed or
+  deferred file stays with it. The move is
   journaled, recovered after a crash, copied and verified across volumes and
   undone by `flib undo` (later runs then leave the copy where it is); it adds
   no Finder tag. Each duplicate gets its own index row, status `duplicate`,
@@ -28,7 +32,14 @@ All notable changes to this project are documented here. The format follows
   went missing and never promotes them on its own; `flib reprocess` and semantic search
   leave them alone (they get no embedding). `duplicates: leave` keeps the old behaviour, and
   `duplicates_folder` renames the folder. A file whose content the index
-  had as `missing` is now filed again when it reappears in Downloads.
+  had as `missing` is now filed again when it reappears in Downloads. Runs
+  record how many duplicates they set aside (`runs.files_duplicates`, shown
+  by `flib status` and MCP `get_stats`).
+  **Upgrading:** with the default `duplicates: move`, the first run after
+  upgrading also sets aside the copies that waited in Downloads from earlier
+  runs. That run prints a one-time note saying where they went; nothing is
+  deleted, `flib undo` puts them back, and `duplicates: leave` keeps them
+  where they are from then on.
 - Optional semantic search (RF-15, #36), off by default
   (`search.semantic.enabled`). `flib search QUERY --semantic` (or
   `search.semantic.default: true`, with `--words` to opt out) fuses the
