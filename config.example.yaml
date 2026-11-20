@@ -118,3 +118,16 @@ summary:                     # RF-40: after a scheduled run, what waits in revie
 
 mcp:                         # `flib mcp`: the local MCP server for AI assistants
   read_only: false           # true hides the write tools, recategorize_file and undo
+
+search:
+  semantic:                  # RF-15: also find files by meaning ("invoice" finds a "bill")
+    enabled: false           # off by default; when on, each run embeds new and changed rows
+    default: false           # true: `flib search` (and the MCP tool) search by meaning without --semantic
+    base_url: http://localhost:11434/v1  # any OpenAI-compatible /embeddings server; Ollama on this Mac
+    model: embeddinggemma    # `ollama pull embeddinggemma`; changing it re-embeds the library
+    # api_key_env: MY_EMBEDDINGS_KEY  # unset: FLIB_EMBEDDINGS_API_KEY, then the Keychain
+    #                          # (`flib key set --provider embeddings`); never the provider's key
+    timeout_seconds: 30
+    batch_size: 32           # texts per request
+    # Only names, category, tags and description are embedded, never file content or a
+    # sensitive file. A remote base_url sends that text, and your queries, off this Mac.

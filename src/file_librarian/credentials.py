@@ -5,7 +5,10 @@ Two providers take a key, each with its own variable and Keychain account
 
 - ``anthropic``: ``ANTHROPIC_API_KEY``, Keychain account ``anthropic-api-key``;
 - ``openai-compat``: ``provider.api_key_env``, else ``FLIB_OPENAI_COMPAT_API_KEY``,
-  Keychain account ``openai-compat-api-key``.
+  Keychain account ``openai-compat-api-key``;
+- ``embeddings`` (semantic search, ``search.semantic``): ``search.semantic.api_key_env``,
+  else ``FLIB_EMBEDDINGS_API_KEY``, Keychain account ``embeddings-api-key``. It is
+  never the classification provider's key, even when both point at one server.
 
 ``openai-compat`` does not read ``OPENAI_API_KEY`` unless ``api_key_env`` names
 it: the key goes to whatever ``base_url`` says, and an OpenAI key set for other
@@ -28,12 +31,14 @@ import os
 import stat
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from file_librarian import keychain
-from file_librarian.config import ProviderConfig
+from file_librarian.config import ProviderConfig, SemanticConfig
 
 ENV_VAR = "ANTHROPIC_API_KEY"
 OPENAI_COMPAT_ENV_VAR = "FLIB_OPENAI_COMPAT_API_KEY"
+EMBEDDINGS_ENV_VAR = "FLIB_EMBEDDINGS_API_KEY"
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +66,13 @@ def spec_for(provider: str, api_key_env: str | None = None) -> KeySpec | None:
             api_key_env or OPENAI_COMPAT_ENV_VAR,
             keychain.OPENAI_COMPAT_ACCOUNT,
             "openai-compat API key",
+        )
+    if provider == "embeddings":
+        return KeySpec(
+            provider,
+            api_key_env or EMBEDDINGS_ENV_VAR,
+            keychain.EMBEDDINGS_ACCOUNT,
+            "embeddings API key",
         )
     return None
 
@@ -105,7 +117,9 @@ def env_file_is_private(path: Path) -> bool:
 
 def all_specs(config: ProviderConfig) -> list[KeySpec]:
     """Every provider's key, ``config``'s own first; for redacting them all."""
-    specs = [key_spec(config), spec_for("anthropic"), spec_for("openai-compat")]
+    specs = [
+        key_spec(config), spec_for("anthropic"), spec_for("openai-compat"), spec_for("embeddings"),
+    ]  # fmt: skip
     found: list[KeySpec] = []
     for spec in specs:
         if spec is not None and all(s.provider != spec.provider for s in found):
@@ -118,7 +132,17 @@ def resolve(config: ProviderConfig, spec: KeySpec | None = None) -> ResolvedKey:
     spec = spec or key_spec(config)
     if spec is None:
         return ResolvedKey(None, "none")
-    source = config.api_key_source
+    return resolve_spec(spec, config.api_key_source, config.env_file)
+
+
+def resolve_embeddings(semantic: SemanticConfig) -> ResolvedKey:
+    """Semantic search's key: its environment variable, then the Keychain. Optional."""
+    spec = cast(KeySpec, spec_for("embeddings", semantic.api_key_env))
+    return resolve_spec(spec, "auto", None)
+
+
+def resolve_spec(spec: KeySpec, source: str, env_file: Path | None) -> ResolvedKey:
+    """``spec``'s key from the places ``source`` allows, in order."""
     if source in ("auto", "environment"):
         value = os.environ.get(spec.env_var, "").strip()
         if value:
@@ -130,8 +154,8 @@ def resolve(config: ProviderConfig, spec: KeySpec | None = None) -> ResolvedKey:
             value = ""
         if value:
             return ResolvedKey(value, "keychain")
-    if source in ("auto", "env_file") and config.env_file is not None:
-        value = read_env_file(config.env_file, spec.env_var) or ""
+    if source in ("auto", "env_file") and env_file is not None:
+        value = read_env_file(env_file, spec.env_var) or ""
         if value:
             return ResolvedKey(value, "env_file")
     return ResolvedKey(None, "none")

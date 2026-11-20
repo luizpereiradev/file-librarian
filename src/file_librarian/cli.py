@@ -21,7 +21,15 @@ from typing import Annotated, NoReturn, cast
 import typer
 from pydantic import ValidationError
 
-from file_librarian import __version__, credentials, keychain, onboarding, pipeline, scheduler
+from file_librarian import (
+    __version__,
+    credentials,
+    embeddings,
+    keychain,
+    onboarding,
+    pipeline,
+    scheduler,
+)
 from file_librarian import reprocess as reprocess_mod
 from file_librarian import status as status_mod
 from file_librarian.config import (
@@ -54,6 +62,7 @@ from file_librarian.search import (
     SearchFilters,
     SearchHit,
     make_filters,
+    semantic_search,
     split_values,
 )
 from file_librarian.search import search as run_search
@@ -146,6 +155,7 @@ def check_config(config: ConfigOption = None) -> None:
             "classification commands will not run until then.",
             err=True,
         )
+    _report_semantic(cfg)
     _warn_orphan_categories(cfg)
     for option, milestone in inactive_options_set(cfg):
         typer.echo(
@@ -208,6 +218,34 @@ def _report_compat(cfg: Config) -> None:
             typer.echo(f"  ollama: {line}")
         else:
             typer.echo(f"warning: {line}", err=True)
+
+
+def _report_semantic(cfg: Config) -> None:
+    """Semantic search: off, or where the index's text goes to be embedded."""
+    semantic = cfg.search.semantic
+    if not semantic.enabled:
+        typer.echo("  semantic search: off")
+        return
+    url = semantic.base_url
+    local = is_loopback_url(url)
+    where = "this Mac" if local else "a remote server"
+    typer.echo(f"  semantic search: {semantic.model} at {url} ({where})")
+    if not local:
+        typer.echo(
+            "warning: search.semantic.base_url is not this Mac: the names, categories, tags "
+            "and descriptions in the index, and every semantic query, leave it. Embeddings are "
+            "not priced; check your server's rates.",
+            err=True,
+        )
+        if url.startswith("http://"):
+            typer.echo(
+                "warning: search.semantic.base_url uses http:// to another machine; the index "
+                "text would travel unencrypted. Use https://.",
+                err=True,
+            )
+    found = credentials.resolve_embeddings(semantic)
+    if found.value:
+        typer.echo(f"  embeddings api key: {found.source} ({found.hint})")
 
 
 def _report_claude(cfg: Config) -> None:
@@ -367,7 +405,7 @@ def _index_entry(database: Path | None, digest: str | None) -> dict[str, object]
 # --- API key ---------------------------------------------------------------------------
 
 key_app = typer.Typer(
-    help="Store a provider's API key in the macOS Keychain (anthropic, openai-compat).",
+    help="Store an API key in the macOS Keychain (anthropic, openai-compat, embeddings).",
     no_args_is_help=True,
 )
 app.add_typer(key_app, name="key")
@@ -376,7 +414,8 @@ KeyProviderOption = Annotated[
     str | None,
     typer.Option(
         "--provider",
-        help="anthropic or openai-compat (default: the configured provider, else anthropic).",
+        help="anthropic, openai-compat, or embeddings (semantic search's server) "
+        "(default: the configured provider, else anthropic).",
     ),
 ]
 
@@ -392,7 +431,9 @@ def _key_spec(provider: str | None, config: Path | None) -> credentials.KeySpec:
         return found or cast(credentials.KeySpec, credentials.spec_for("anthropic"))
     spec = credentials.spec_for(provider)
     if spec is None:
-        _fatal(f"--provider must be anthropic or openai-compat; {provider} takes no key")
+        _fatal(
+            f"--provider must be anthropic, openai-compat or embeddings; {provider} takes no key"
+        )
     return spec
 
 
@@ -520,6 +561,12 @@ def _pipeline(
         _print_report(outcome.report, cfg, skipped, cost, hint, summary)
     if outcome.cached:
         typer.echo(f"{outcome.cached} classification(s) reused from the cache at no cost.")
+    if outcome.embedding is not None and outcome.embedding.error:
+        typer.echo(
+            f"warning: semantic search: {outcome.embedding.error}; the files not embedded "
+            "are retried on the next run (or `flib search --reindex`).",
+            err=True,
+        )
 
 
 def _periodic_summary(cfg: Config) -> list[str]:
@@ -688,24 +735,53 @@ def search(
     ] = None,
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON for other programs.")] = False,
     limit: Annotated[int, typer.Option("--limit", min=1, max=500, help="Most results.")] = 20,
+    semantic: Annotated[
+        bool | None,
+        typer.Option(
+            "--semantic/--words",
+            help="Also find files by meaning, with embeddings (needs search.semantic.enabled); "
+            "--words searches by words only. [default: search.semantic.default]",
+            show_default=False,
+        ),
+    ] = None,
+    reindex: Annotated[
+        bool,
+        typer.Option(
+            "--reindex",
+            help="First embed every file whose vector is missing or stale (semantic search).",
+        ),
+    ] = False,
     config: ConfigOption = None,
 ) -> None:
     """Find organized files by name, description or tags, and by category, period or type.
 
     Without a query, the files matching the filters are listed newest first.
+    With --semantic, files are also found by meaning ("invoice" finds a "bill").
     """
     cfg = _load(config)
     has_filters = bool(split_values(category) or split_values(ext) or since or until)
+    if reindex:
+        _reindex(cfg)
+        if not query.strip() and not has_filters:
+            return
     if not query.strip() and not has_filters:
         _fatal("give words to search for, a filter (--category, --since, --until, --ext), or both")
+    use_semantic = cfg.search.semantic.default if semantic is None else semantic
     configured = [c.name for c in cfg.categories]
     hits: list[SearchHit] = []
+    notice: str | None = None
     if not cfg.database.exists():
         _search_filters(configured, category, ext, since, until)  # still validate them
     else:
         with Store.open(cfg.database) as store:
             filters = _search_filters(configured + store.categories(), category, ext, since, until)
-            hits = run_search(store, query, filters=filters, limit=limit)
+            if use_semantic:
+                outcome = semantic_search(store, query, cfg, filters=filters, limit=limit)
+                hits, notice = outcome.hits, outcome.notice
+            else:
+                hits = run_search(store, query, filters=filters, limit=limit)
+    if notice:
+        typer.echo(f"note: {notice}", err=True)
     if as_json:
         typer.echo(search_json(hits))
         return
@@ -718,6 +794,22 @@ def search(
         typer.echo(f"{where}\n  [{label}] was {hit.original_name}")
         if hit.description:
             typer.echo(f"  {hit.description}")
+
+
+def _reindex(cfg: Config) -> None:
+    """``flib search --reindex``: embed what is missing or stale, under the instance lock."""
+    semantic = cfg.search.semantic
+    if not semantic.enabled:
+        _fatal("semantic search is off; set search.semantic.enabled: true first")
+    try:
+        with instance_lock(cfg.database), Store.open(cfg.database) as store:
+            report = embeddings.refresh(store, cfg)
+    except AlreadyRunningError as exc:
+        _fatal(str(exc))
+    where = "this Mac" if is_loopback_url(semantic.base_url) else semantic.base_url
+    typer.echo(f"Embedded {report.embedded} file(s) with {semantic.model} ({where}).")
+    if report.error:
+        _fatal(f"{report.error}; {report.pending} file(s) still without an embedding")
 
 
 @app.command()

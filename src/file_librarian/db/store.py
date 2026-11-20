@@ -770,27 +770,10 @@ class Store:
         exclusive, both UTC ISO text like ``processed_at``. Filter values are
         always bound as parameters.
         """
-        where: list[str] = []
-        params: list[object] = []
+        where, params = _filter_clause(categories, extensions, since, until, statuses)
         if fts_query is not None:
-            where.append("files_fts MATCH ?")
-            params.append(fts_query)
-        if categories:
-            where.append(f"f.category IN ({', '.join('?' * len(categories))})")
-            params.extend(categories)
-        if extensions:
-            where.append(f"lower(f.extension) IN ({', '.join('?' * len(extensions))})")
-            params.extend(extensions)
-        if statuses:
-            where.append(f"f.status IN ({', '.join('?' * len(statuses))})")
-            params.extend(s.value for s in statuses)
-        if since is not None:
-            where.append("f.processed_at >= ?")
-            params.append(since)
-        if until is not None:
-            where.append("f.processed_at < ?")
-            params.append(until)
-        if fts_query is not None:
+            where.insert(0, "files_fts MATCH ?")
+            params.insert(0, fts_query)
             source = "files_fts JOIN files f ON f.id = files_fts.rowid"
             order = "bm25(files_fts, 3.0, 3.0, 1.0, 2.0)"
         else:
@@ -802,6 +785,92 @@ class Store:
             f"SELECT f.* FROM {source} WHERE {condition} ORDER BY {order} LIMIT ?",  # noqa: S608
             (*params, limit),
         ).fetchall()
+        return [FileRow.from_row(r) for r in rows]
+
+    def files_by_ids(self, ids: Sequence[int]) -> dict[int, FileRow]:
+        found: dict[int, FileRow] = {}
+        for start in range(0, len(ids), 500):
+            chunk = ids[start : start + 500]
+            rows = self.conn.execute(
+                f"SELECT * FROM files WHERE id IN ({', '.join('?' * len(chunk))})",  # noqa: S608
+                tuple(chunk),
+            )
+            found.update((int(r["id"]), FileRow.from_row(r)) for r in rows)
+        return found
+
+    # --- embeddings (semantic search) -------------------------------------------------
+
+    def embedding_keys(self) -> dict[int, tuple[str, str]]:
+        """``file_id -> (model, text_hash)`` of every stored vector."""
+        rows = self.conn.execute("SELECT file_id, model, text_hash FROM embeddings")
+        return {int(r[0]): (str(r[1]), str(r[2])) for r in rows}
+
+    def save_embeddings(self, items: Sequence[tuple[int, str, int, str, bytes]]) -> None:
+        """Store ``(file_id, model, dimension, text_hash, vector)`` rows, replacing old ones."""
+        now = _now()
+        with self.transaction():
+            self.conn.executemany(
+                """INSERT INTO embeddings (file_id, model, dimension, text_hash, vector, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(file_id) DO UPDATE SET model = excluded.model,
+                       dimension = excluded.dimension, text_hash = excluded.text_hash,
+                       vector = excluded.vector, created_at = excluded.created_at""",
+                [(*item, now) for item in items],
+            )
+
+    def delete_embeddings(self, file_ids: Sequence[int]) -> int:
+        removed = 0
+        for start in range(0, len(file_ids), 500):
+            chunk = file_ids[start : start + 500]
+            cur = self.conn.execute(
+                f"DELETE FROM embeddings WHERE file_id IN ({', '.join('?' * len(chunk))})",  # noqa: S608
+                tuple(chunk),
+            )
+            removed += cur.rowcount
+        return removed
+
+    def embedding_vectors(
+        self,
+        model: str,
+        dimension: int,
+        *,
+        categories: Sequence[str] = (),
+        extensions: Sequence[str] = (),
+        since: str | None = None,
+        until: str | None = None,
+    ) -> Iterator[tuple[int, bytes]]:
+        """``(file_id, vector)`` of ``model``'s vectors for files matching the filters.
+
+        A sensitive file is never returned, even if a vector was stored for it.
+        """
+        where, params = _filter_clause(categories, extensions, since, until, ())
+        where[:0] = ["e.model = ?", "e.dimension = ?", "f.status != 'sensitive'"]
+        params[:0] = [model, dimension]
+        rows = self.conn.execute(
+            "SELECT e.file_id, e.vector FROM embeddings e JOIN files f ON f.id = e.file_id "  # noqa: S608
+            f"WHERE {' AND '.join(where)}",
+            params,
+        )
+        for row in rows:
+            yield int(row[0]), bytes(row[1])
+
+    def embedding_count(self, model: str) -> int:
+        """How many files that are not sensitive have a vector from ``model``."""
+        row = self.conn.execute(
+            """SELECT COUNT(*) FROM embeddings e JOIN files f ON f.id = e.file_id
+               WHERE e.model = ? AND f.status != 'sensitive'""",
+            (model,),
+        ).fetchone()
+        return int(row[0])
+
+    def files_without_embedding(self, model: str) -> list[FileRow]:
+        """Files that are not sensitive and have no vector from ``model``."""
+        rows = self.conn.execute(
+            """SELECT f.* FROM files f LEFT JOIN embeddings e
+                   ON e.file_id = f.id AND e.model = ?
+               WHERE f.status != 'sensitive' AND e.file_id IS NULL""",
+            (model,),
+        )
         return [FileRow.from_row(r) for r in rows]
 
     def categories(self) -> list[str]:
@@ -1101,6 +1170,34 @@ def _month_start() -> str:
     local = datetime.now().astimezone()
     start = local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     return start.astimezone(UTC).isoformat(timespec="seconds")
+
+
+def _filter_clause(
+    categories: Sequence[str],
+    extensions: Sequence[str],
+    since: str | None,
+    until: str | None,
+    statuses: Sequence[FileStatus],
+) -> tuple[list[str], list[object]]:
+    """SQL conditions on ``files f`` for the search filters, with their bound values."""
+    where: list[str] = []
+    params: list[object] = []
+    if categories:
+        where.append(f"f.category IN ({', '.join('?' * len(categories))})")
+        params.extend(categories)
+    if extensions:
+        where.append(f"lower(f.extension) IN ({', '.join('?' * len(extensions))})")
+        params.extend(extensions)
+    if statuses:
+        where.append(f"f.status IN ({', '.join('?' * len(statuses))})")
+        params.extend(s.value for s in statuses)
+    if since is not None:
+        where.append("f.processed_at >= ?")
+        params.append(since)
+    if until is not None:
+        where.append("f.processed_at < ?")
+        params.append(until)
+    return where, params
 
 
 def _rowid(cur: sqlite3.Cursor) -> int:

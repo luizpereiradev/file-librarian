@@ -8,6 +8,26 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Optional semantic search (RF-15, #36), off by default
+  (`search.semantic.enabled`). `flib search QUERY --semantic` (or
+  `search.semantic.default: true`, with `--words` to opt out) fuses the
+  word ranking with the cosine similarity of embeddings by reciprocal rank,
+  with the same filters on both, so "power bill" finds an "electricity
+  invoice". The MCP `search_files` takes a `semantic` flag and reports a
+  `notice`. Embeddings come from any OpenAI-compatible `/embeddings` server,
+  configured apart from the provider: Ollama on this Mac with
+  `embeddinggemma` by default; an optional key from
+  `FLIB_EMBEDDINGS_API_KEY` (or `search.semantic.api_key_env`) or the
+  Keychain (`flib key set --provider embeddings`), never the provider's.
+  Only the index's names, category, tags and description are embedded, never
+  content, a sensitive file or a `never_send` match; `flib check-config`
+  warns when `base_url` is not this Mac. Vectors live in a new `embeddings`
+  table (migration 0012) with the model and a hash of the text, so stale
+  ones are made again; each run embeds new and changed rows, `flib search
+  --reindex` backfills, and a failure never fails a run. When the server is
+  unreachable or nothing is embedded yet, the search says so and uses words.
+  The HTTP client is now shared by `openai-compat` and embeddings
+  (`providers/http.py`).
 - `flib status` (`--json` too) sums up what waits for you (#38, RF-40): files
   in review, grouped by why and by the category the AI suggested, with the
   oldest's age; failed files by kind of error and whether the next run

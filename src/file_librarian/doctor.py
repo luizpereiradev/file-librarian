@@ -444,6 +444,10 @@ def redacted_config(config: Config, r: Redactor) -> list[str]:
         url = config.provider.base_url
         where = "this Mac" if is_loopback_url(url) else "remote"
         provider["base_url"] = f"<{url.partition(':')[0]}, {where}>"
+    semantic = data["search"]["semantic"]
+    url = config.search.semantic.base_url
+    where = "this Mac" if is_loopback_url(url) else "remote"
+    semantic["base_url"] = f"<{url.partition(':')[0]}, {where}>"
     for category in data["categories"]:
         if category.get("hint"):
             category["hint"] = f"<hint, {len(category['hint'])} characters>"

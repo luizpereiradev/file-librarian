@@ -43,6 +43,8 @@ PROVIDER_NAMES = frozenset({"anthropic", "fake", "claude-code", "ollama", "opena
 
 OLLAMA_BASE_URL = "http://localhost:11434/v1"
 """Ollama's OpenAI-compatible endpoint on this Mac, the ``ollama`` provider's default."""
+DEFAULT_EMBEDDING_MODEL = "embeddinggemma"
+"""Semantic search's default model: small (about 600 MB), multilingual, 768 dimensions."""
 
 Fraction = Annotated[float, Field(ge=0.0, le=1.0)]
 PositiveInt = Annotated[int, Field(gt=0)]
@@ -118,24 +120,32 @@ def is_loopback_url(url: str) -> bool:
         return False
 
 
-def _base_url(value: str) -> str:
+def _check_url(value: str, option: str) -> str:
     """An http(s) URL with a host and nothing that could hide a secret or change the path."""
     value = value.strip()
     try:
         parts = urlsplit(value)
         parts.port  # noqa: B018 - raises ValueError on a bad port
     except ValueError as exc:
-        raise ValueError(f"provider.base_url is not a valid URL: {exc}") from exc
+        raise ValueError(f"{option} is not a valid URL: {exc}") from exc
     if parts.scheme not in ("http", "https") or not parts.hostname:
-        raise ValueError("provider.base_url must be an http:// or https:// URL with a host")
+        raise ValueError(f"{option} must be an http:// or https:// URL with a host")
     if parts.username is not None or parts.password is not None:
         raise ValueError(
-            "provider.base_url must not contain a user name or password; "
+            f"{option} must not contain a user name or password; "
             "the API key goes in the Keychain or an environment variable"
         )
     if parts.query or parts.fragment:
-        raise ValueError("provider.base_url must not have a query (?) or fragment (#)")
+        raise ValueError(f"{option} must not have a query (?) or fragment (#)")
     return value.rstrip("/")
+
+
+def _base_url(value: str) -> str:
+    return _check_url(value, "provider.base_url")
+
+
+def _semantic_base_url(value: str) -> str:
+    return _check_url(value, "search.semantic.base_url")
 
 
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -276,6 +286,43 @@ class McpConfig(_Section):
     read_only: bool = False
 
 
+class SemanticConfig(_Section):
+    """Semantic search with embeddings (RF-15). Off by default: opt in.
+
+    Embeddings come from ``POST {base_url}/embeddings`` of any OpenAI-compatible
+    server, configured apart from the classification provider. Only what the
+    index already stores is embedded (names, description, tags, category), never
+    file content, and never a sensitive file.
+    """
+
+    enabled: bool = False
+    """With it off nothing is embedded and ``flib search --semantic`` searches by words."""
+    default: bool = False
+    """Search semantically without ``--semantic`` (the MCP tool too, unless told otherwise)."""
+    base_url: Annotated[str, AfterValidator(_semantic_base_url)] = OLLAMA_BASE_URL
+    """The API root, the part before ``/embeddings``; Ollama on this Mac by default."""
+    model: str = Field(default=DEFAULT_EMBEDDING_MODEL, min_length=1)
+    """Changing it re-embeds the library on the next run or ``flib search --reindex``."""
+    api_key_env: str | None = None
+    """The environment variable holding the key; unset, it is ``FLIB_EMBEDDINGS_API_KEY``.
+    The Keychain account ``embeddings-api-key`` (``flib key set --provider embeddings``)
+    is tried next. Never the classification provider's key."""
+    timeout_seconds: Annotated[float, Field(gt=0)] = 30.0
+    batch_size: Annotated[int, Field(ge=1, le=256)] = 32
+    """Texts sent per request."""
+
+    @field_validator("api_key_env")
+    @classmethod
+    def _env_name(cls, value: str | None) -> str | None:
+        if value is not None and not _ENV_NAME.fullmatch(value):
+            raise ValueError("search.semantic.api_key_env must be an environment variable name")
+        return value
+
+
+class SearchConfig(_Section):
+    semantic: SemanticConfig = SemanticConfig()
+
+
 class ScheduleConfig(_Section):
     time: str = "12:30"
     """Local time of the daily run, HH:MM (24-hour). Applied by ``flib schedule``."""
@@ -336,6 +383,7 @@ class Config(_Section):
     mcp: McpConfig = McpConfig()
     schedule: ScheduleConfig = ScheduleConfig()
     summary: SummaryConfig = SummaryConfig()
+    search: SearchConfig = SearchConfig()
 
     @model_validator(mode="before")
     @classmethod
