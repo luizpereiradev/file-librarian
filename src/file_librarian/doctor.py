@@ -58,7 +58,7 @@ from file_librarian.models import FileStatus
 from file_librarian.runlog import logs_dir
 
 # The detection patterns of sensitive.py, reused to replace values instead of naming kinds.
-from file_librarian.sensitive import SECRET_PATTERNS
+from file_librarian.sensitive import EMAIL_PATTERN, SECRET_PATTERNS
 
 Format = Literal["text", "markdown"]
 
@@ -86,7 +86,6 @@ _ASSIGNMENT = "password or secret assignment"
 _EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,8}")
 
 _URL = re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s'\"<>]+")
-_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _QUOTED = re.compile(r"'([^'\n]*)'|\"([^\"\n]*)\"")
 # An unquoted path may hold spaces: up to the first extension when there is one (taking
 # too much only hides more), else up to the first space.
@@ -199,7 +198,7 @@ class Redactor:
                 text = pattern.sub(f"<secret: {kind}>", text)
         if assignments:
             text = _URL.sub("<url>", text)
-        return _EMAIL.sub("<email>", text)
+        return EMAIL_PATTERN.sub("<email>", text)
 
     def _quoted(self, match: re.Match[str]) -> str:
         quote = match.group(0)[0]

@@ -176,7 +176,7 @@ def test_answer_schema_is_pinned() -> None:
         ],
         "additionalProperties": False,
     }
-    assert PROMPT_VERSION == "4"
+    assert PROMPT_VERSION == "5"
 
 
 def test_name_choice_instructions_are_pinned() -> None:
@@ -192,6 +192,25 @@ def test_name_choice_instructions_are_pinned() -> None:
         "  does not match the content. A shorter or vaguer name never wins: when both\n"
         '  are good, choose "original". flib adds the date and formatting either way.\n'
     ) in system_prompt(RULES)
+
+
+def test_privacy_instructions_are_pinned() -> None:
+    """#82: the model is asked to describe what a file is without copying identifiers."""
+    prompt = system_prompt(RULES)
+    assert (
+        "- description: 1 to 3 sentences in English saying what the file is, with the\n"
+        "  names of organisations and products, amounts and dates someone would search\n"
+        "  for.\n"
+    ) in prompt
+    assert (
+        "Describe what the file is without copying personal identifiers from it into\n"
+        "suggested_name, name_choice_reason, description or tags: no phone numbers,\n"
+        "e-mail addresses, document, ID or tax numbers, bank account or card numbers,\n"
+        "payment keys, street addresses, licence plates, or full names of private\n"
+        'individuals. Say what kind of detail is there instead ("with a contact phone\n'
+        'number", "signed by the tenant"). Names of organisations, products and public\n'
+        "figures are fine.\n"
+    ) in prompt
 
 
 @pytest.mark.parametrize(

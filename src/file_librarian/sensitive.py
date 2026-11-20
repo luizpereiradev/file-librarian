@@ -51,6 +51,10 @@ SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
 )  # fmt: skip
 
+# An e-mail address. Not a secret (a file holding one is not sensitive), but the
+# diagnostics report (doctor.py) and the description scrubber (privacy.py) replace it.
+EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+
 
 def sensitive_name(name: str) -> bool:
     return matches_any(name, SENSITIVE_NAMES)
