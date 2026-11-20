@@ -111,7 +111,7 @@ A ferramenta mexe em arquivos pessoais sem supervisão, então segurança e priv
 - **Privacidade.** Só um trecho limitado do conteúdo vai para o provedor de IA, com tamanho configurável. Arquivos que batem com a lista `never_send` ou em que a ferramenta detecta segredos pelo conteúdo não são enviados e não recebem descrição. Um provedor local deve existir como alternativa para quem não quer enviar nada.
 - **Segredos.** A chave de API é lida de variável de ambiente e nunca fica em arquivo versionado.
 - **Custo previsível.** Há teto de arquivos e de tokens por execução, o modelo é configurável, um arquivo já classificado (mesmo hash) não é reprocessado e um arquivo que falha repetidamente deixa de ser reenviado.
-- **Resiliência ao provedor.** Limite de requisições por minuto, novas tentativas com espera crescente e timeout por chamada. A classificação usa temperatura zero para reduzir a variação entre execuções.
+- **Resiliência ao provedor.** Limite de requisições por minuto, novas tentativas com espera crescente e timeout por chamada. A variação entre execuções é reduzida pela resposta em esquema fechado e pelo cache de classificações, não por parâmetros de amostragem: os modelos atuais do Claude recusam temperatura diferente da padrão.
 - **Plataforma.** Somente a versão atual do macOS; Windows e Linux estão fora do escopo. Não há serviço residente: o processo roda e termina.
 - **Permissões do macOS.** A ferramenta verifica o acesso às pastas de entrada no início de cada execução. Sem a permissão, falha com uma mensagem que explica como liberá-la, em vez de terminar em silêncio.
 - **Nomes com acento.** Nomes e caminhos são normalizados para a forma composta (NFC) antes de irem ao banco, para que a busca por "orçamento" encontre o arquivo qualquer que seja a forma gravada no disco.
@@ -150,7 +150,7 @@ O servidor MCP é a interface de busca principal para quem usa assistentes de IA
 | --- | --- | --- |
 | `search_files` | Leitura | Devolve os arquivos que batem com uma consulta, com filtros opcionais de categoria, período e extensão |
 | `get_file` | Leitura | Devolve o registro completo de um arquivo: caminho atual, nome original, descrição, tags e histórico de operações |
-| `list_recent` | Leitura | Lista os arquivos processados nos últimos N dias |
+| `list_recent` | Leitura | Lista os arquivos organizados mais recentes, opcionalmente de uma categoria |
 | `list_review` | Leitura | Lista os arquivos aguardando decisão em `_Revisar` |
 | `get_stats` | Leitura | Devolve contagens por categoria e por status, e o resumo da última execução |
 | `recategorize_file` | Escrita | Move um arquivo para outra categoria configurada e, opcionalmente, aplica um novo nome |
@@ -164,7 +164,7 @@ O servidor MCP é a interface de busca principal para quem usa assistentes de IA
 
 ## Modelo de dados
 
-Um único arquivo SQLite guarda três tabelas e um índice FTS5. O banco fica fora das pastas organizadas (por padrão no diretório de dados do usuário) para não ser movido por engano.
+Um único arquivo SQLite guarda três tabelas e um índice FTS5. Este é o esquema inicial (migração 0001); o atual, com as tabelas e colunas acrescentadas depois, está em [architecture.md](architecture.md#data). O banco fica fora das pastas organizadas (por padrão no diretório de dados do usuário) para não ser movido por engano.
 
 ```sql
 CREATE TABLE files (
@@ -375,6 +375,8 @@ São cinco marcos em sequência, cada um com um critério de saída verificável
 | M2 Uso diário | `flib schedule`, `flib reconcile`, `flib init`, imagens e PDFs escaneados, etiquetas do Finder, aprendizado com correções, arquivos do iCloud, servidor MCP, provedor `claude-code` | Duas semanas rodando todo dia na máquina do mantenedor sem intervenção manual |
 | M3 Aberto | Provedores `ollama` e `openai-compat`, filtros de busca, `flib reprocess`, `flib doctor`, guias de extensão completos | Um provedor ou extrator adicionado por alguém de fora do projeto |
 | v1.0 | Duplicatas, busca semântica opcional, resumo periódico, pacote publicado no PyPI | Esquema do banco e formato de configuração declarados estáveis |
+
+Situação na v0.1.0: as entregas de M0 a M3 e as funcionalidades da v1.0 estão no código; falta publicar o pacote no PyPI (a instalação é a partir do repositório, com `scripts/install.sh`). A situação de cada requisito está em [requirements.md](requirements.md).
 
 ## Métricas de sucesso
 
