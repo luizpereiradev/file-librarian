@@ -9,12 +9,15 @@ longer has (RF-37).
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
 import os
 import shlex
 import sqlite3
 import sys
+from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Annotated, NoReturn, cast
 
@@ -23,6 +26,7 @@ from pydantic import ValidationError
 
 from file_librarian import (
     __version__,
+    catchup,
     credentials,
     embeddings,
     keychain,
@@ -55,7 +59,7 @@ from file_librarian.providers import PLANNED, ProviderError, get_provider, is_im
 from file_librarian.providers.base import Provider
 from file_librarian.reconcile import in_cloud_only
 from file_librarian.reconcile import reconcile as run_reconcile
-from file_librarian.runlog import logs_dir, write_log
+from file_librarian.runlog import append_log, logs_dir, write_log
 from file_librarian.scanner import ScanError, ScanResult, SkipReason
 from file_librarian.search import (
     SearchError,
@@ -549,19 +553,34 @@ def _warn_orphan_categories(cfg: Config) -> None:
 
 
 def _pipeline(
-    config_path: Path | None, *, simulate: bool, trigger: RunTrigger = RunTrigger.MANUAL
+    config_path: Path | None,
+    *,
+    simulate: bool,
+    trigger: RunTrigger = RunTrigger.MANUAL,
+    catch_up: bool = False,
 ) -> None:
+    """One run (or simulation). ``catch_up``: the second pass of a scheduled run that
+    waited for the Mac to be unlocked; it never waits again."""
     cfg = _load(config_path)
+    scheduled = trigger is RunTrigger.SCHEDULE and not simulate
     try:
         provider = get_provider(cfg.provider)
         outcome = pipeline.run(cfg, provider, simulate=simulate, trigger=trigger)
-    except (ProviderError, ScanError, AlreadyRunningError) as exc:
+    except AlreadyRunningError as exc:
+        if catch_up:
+            _say(f"Not running again after the unlock: {exc}. That run takes care of them.")
+            return
+        _fatal(str(exc))
+    except (ProviderError, ScanError) as exc:
         _fatal(str(exc))
     if outcome.recovered:
         typer.echo(f"Recovered {outcome.recovered} move(s) interrupted by an earlier crash.")
     skipped = _skipped_lines(outcome.scan, cfg)
     cost = _cost_line(outcome.cost_usd, known=outcome.cost_known)
     hint = _access_hint(outcome.scan) if trigger is RunTrigger.SCHEDULE else None
+    locked = [path for path, reason in outcome.scan.skipped if reason is SkipReason.LOCKED]
+    hours = cfg.schedule.wait_for_unlock_hours
+    wait = scheduled and not catch_up and bool(locked) and hours > 0
     if simulate:
         _print_plan(outcome.plan, outcome.deferred, cfg, skipped)
         if cost:
@@ -571,6 +590,13 @@ def _pipeline(
         notice = _duplicates_notice(cfg, trigger)
         if notice:
             summary.insert(0, notice)
+        if catch_up:
+            summary.insert(0, "Catch-up run, after the Mac was unlocked.")
+        if wait:
+            summary.append(
+                f"Waiting up to {hours} h for the Mac to be unlocked to read "
+                f"{len(locked)} file(s) protected while it is locked; then it runs once more."
+            )
         _print_report(outcome.report, cfg, skipped, cost, hint, summary)
     if outcome.cached:
         typer.echo(f"{outcome.cached} classification(s) reused from the cache at no cost.")
@@ -580,13 +606,55 @@ def _pipeline(
             "are retried on the next run (or `flib search --reindex`).",
             err=True,
         )
+    if wait and outcome.report is not None:
+        _wait_and_catch_up(config_path, cfg, outcome.report.run_id, locked)
+
+
+def _say(line: str) -> None:
+    """A line about the scheduled run's waiting, with the time: it goes to schedule.out.log."""
+    typer.echo(f"[{datetime.now().astimezone():%Y-%m-%d %H:%M}] {line}")
+
+
+def _wait_and_catch_up(
+    config_path: Path | None, cfg: Config, run_id: int | None, locked: list[Path]
+) -> None:
+    """After a scheduled run that skipped files protected while the Mac is locked:
+    wait for an unlock (holding no instance lock) and run once more (see ``catchup``)."""
+    hours = cfg.schedule.wait_for_unlock_hours
+
+    def note(line: str) -> None:
+        _say(line)
+        if run_id is not None:
+            with contextlib.suppress(OSError):
+                append_log(cfg.database, run_id, [line])
+
+    with catchup.waiter(cfg.database) as held:
+        if not held:
+            note(
+                "Not waiting for an unlock: an earlier scheduled run is waiting already "
+                "and runs once more after it."
+            )
+            return
+        _say(f"Waiting up to {hours} h for the Mac to be unlocked (checking every minute).")
+        waited = catchup.wait_for_unlock(hours, partial(catchup.unlocked, locked))
+    if waited is catchup.Waited.TIMED_OUT:
+        note(
+            f"The Mac was not unlocked within {hours} h; the next scheduled run "
+            "(or `flib run`) gets the files protected while it is locked."
+        )
+    elif waited is catchup.Waited.STOPPED:
+        note("Stopped while waiting for an unlock (SIGTERM); the next run gets those files.")
+    else:
+        note("The Mac was unlocked; running once more for the files skipped while it was locked.")
+        _pipeline(config_path, simulate=False, trigger=RunTrigger.SCHEDULE, catch_up=True)
 
 
 def _periodic_summary(cfg: Config, scan: ScanResult) -> list[str]:
     """After a scheduled run, what waits for the user, when due (RF-40). Never fails the run."""
     stuck = sum(1 for _, reason in scan.skipped if reason is SkipReason.NOT_WHERE_LEFT)
+    locked = sum(1 for _, reason in scan.skipped if reason is SkipReason.LOCKED)
     try:
-        return status_mod.after_scheduled_run(cfg, not_where_left=stuck)
+        return status_mod.after_scheduled_run(cfg, not_where_left=stuck, locked=locked)
     except Exception as exc:  # the run itself succeeded; the summary is a courtesy
         return [f"warning: the periodic summary failed: {type(exc).__name__}: {exc}"]
 
@@ -1164,6 +1232,8 @@ def reconcile(config: ConfigOption = None) -> None:
         typer.echo(f"  icloud  {_short(path, cfg)}  ({SkipReason.CLOUD_ONLY.value}, not checked)")
     for path in report.unchecked:
         typer.echo(f"  unread  {_short(path, cfg)}  (cannot be read now, not checked)")
+    for path in report.locked:
+        typer.echo(f"  locked  {_short(path, cfg)}  ({SkipReason.LOCKED.value}, not checked)")
     for path, original in report.orphaned:
         typer.echo(
             f"  orphan  {_short(path, cfg)}  (its original {_short(original, cfg)} is missing; "
@@ -1174,6 +1244,12 @@ def reconcile(config: ConfigOption = None) -> None:
         f"Reconcile: {report.checked} checked, {len(report.moved)} moved by hand, "
         f"{len(report.found_again)} found again, {len(report.missing)} missing, "
         f"{len(report.cloud_only)} in iCloud only{orphaned}."
+        + (
+            f" {len(report.locked)} could not be read while the Mac is locked; "
+            "run `flib reconcile` again once it is unlocked."
+            if report.locked
+            else ""
+        )
     )
 
 

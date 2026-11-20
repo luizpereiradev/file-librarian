@@ -2,7 +2,8 @@
 
 Every test runs with HOME pointed at a temporary directory and with outbound
 connections and DNS lookups disabled, and with a throwaway keychain in place of
-the user's login Keychain and fakes of launchctl, sips, osascript and claude, so code that uses
+the user's login Keychain and fakes of launchctl, sips, osascript and claude (and of the
+screen lock and Data Protection classes), so code that uses
 ``Path.home()`` or ``~`` stays in a temporary folder and nothing reaches a real API. A test that
 hard-codes an absolute path could still escape; reviewers must reject those.
 
@@ -24,7 +25,7 @@ import pytest
 
 from file_librarian.config import Config
 from file_librarian.fsops import CrossVolumeError
-from tests._helpers import FakeClaude, fake_config
+from tests._helpers import FakeClaude, FakeProtection, fake_config
 from tests.fake_openai import FakeOpenAI
 
 
@@ -141,6 +142,18 @@ def fake_osascript(
     monkeypatch.delenv("FAKE_OSASCRIPT_FAIL", raising=False)
     monkeypatch.setattr("file_librarian.status.OSASCRIPT", str(script))
     return folder / "calls.jsonl"
+
+
+@pytest.fixture(autouse=True)
+def fake_protection(monkeypatch: pytest.MonkeyPatch) -> FakeProtection:
+    """No test asks the real session whether the Mac is locked, nor reads a real
+    file's Data Protection class: every file is class C and the screen unlocked
+    unless the test changes the returned fake."""
+    fake = FakeProtection()
+    monkeypatch.setattr("file_librarian.protection.protection_class", fake.protection_class)
+    monkeypatch.setattr("file_librarian.protection.screen_locked", fake.screen_locked)
+    monkeypatch.setattr("file_librarian.protection.IOREG", "/nonexistent/ioreg")
+    return fake
 
 
 @pytest.fixture(autouse=True)

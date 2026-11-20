@@ -39,8 +39,9 @@ from file_librarian.fsops import (
     new_copy_key,
     volume_of,
 )
-from file_librarian.hashing import same_content, unit_manifest
+from file_librarian.hashing import check_content, unit_manifest
 from file_librarian.models import CopyPhase, FileStatus, OperationStatus
+from file_librarian.protection import LOCKED_NOW
 from file_librarian.reconcile import place
 
 
@@ -131,7 +132,11 @@ def _undo_one(store: Store, op: OperationRow, report: UndoReport, config: Config
     if not os.path.lexists(dst):
         report.skipped.append((dst, "no longer there (moved or deleted by hand)"))
         return
-    if not same_content(dst, row.sha256):
+    same = check_content(dst, row.sha256)
+    if same is None:
+        report.skipped.append((dst, LOCKED_NOW))
+        return
+    if not same:
         report.skipped.append((dst, "changed since it was moved"))
         return
     if not src.parent.is_dir():

@@ -164,8 +164,37 @@ def test_status_counts_the_last_runs_unreadable_and_cloud_only_skips(downloads: 
         ],
     )
     state = st.collect(cfg)
-    assert state.skipped == {"unreadable": 2, "cloud_only": 1, "not_where_left": 0}
+    assert state.skipped == {"unreadable": 2, "cloud_only": 1, "not_where_left": 0, "locked": 0}
     assert "  skipped: 2 unreadable, 1 only in iCloud (see its log)" in st.render(state, cfg)
+
+
+def test_status_counts_files_skipped_while_the_mac_was_locked(downloads: Path) -> None:
+    cfg = fake_config(downloads)
+    populate(downloads, cfg)
+    run_id = st.collect(cfg).last_run.id  # type: ignore[union-attr]
+    write_log(
+        cfg.database,
+        run_id,
+        [
+            "  skip    photo.jpeg  (protected by macOS while the Mac is locked)",
+            "  skip    scan.pdf  (protected by macOS while the Mac is locked)",
+        ],
+    )
+    state = st.collect(cfg)
+    assert state.skipped is not None and state.skipped["locked"] == 2
+    lines = st.render(state, cfg)
+    assert "  skipped: 2 protected while the Mac was locked (see its log)" in lines
+    assert (
+        "  2 files could only be read while the Mac is unlocked (macOS Data Protection); "
+        "the scheduled run waits for the next unlock, or run `flib run` now."
+    ) in lines
+    assert json.loads(st.to_json(state, cfg))["last_run"]["skipped"]["locked"] == 2
+
+    no_wait = fake_config(downloads, schedule={"wait_for_unlock_hours": 0})
+    assert (
+        "  2 files could only be read while the Mac is unlocked (macOS Data Protection); "
+        "run `flib run` now."
+    ) in st.render(state, no_wait)
 
 
 def test_without_a_log_the_skips_are_unknown(downloads: Path) -> None:
@@ -316,6 +345,37 @@ def test_the_notification_text_is_passed_as_arguments(fake_osascript: Path) -> N
 def test_summary_text_wording() -> None:
     assert st.summary_text(1, 0) == "1 file waits for review. Run `flib status` for details."
     assert st.summary_text(0, 2) == "2 failed. Run `flib status` for details."
+
+
+def test_files_skipped_while_locked_are_counted_in_the_summary(
+    downloads: Path, fake_osascript: Path
+) -> None:
+    cfg = fake_config(downloads)
+    put(downloads, "bill.pdf")
+    pipeline.run(cfg, FakeProvider({"bill.pdf": answer("Finance", confidence=0.9)}), simulate=False)
+    # The scheduled run waits for the next unlock: that alone is no reason to tell.
+    assert st.after_scheduled_run(cfg, locked=2) == []
+    no_wait = fake_config(downloads, schedule={"wait_for_unlock_hours": 0})
+    assert st.after_scheduled_run(no_wait, locked=2) == [
+        "Summary: 2 could only be read while the Mac is unlocked. Run `flib status` for details.",
+        "2 files could only be read while the Mac is unlocked (macOS Data Protection); "
+        "run `flib run` now.",
+    ]
+    (argv,) = calls(fake_osascript)
+    assert "photo" not in " ".join(argv)
+
+
+def test_a_due_summary_also_counts_files_skipped_while_locked(
+    downloads: Path, fake_osascript: Path
+) -> None:
+    cfg = with_summary(fake_config(downloads), notify=False)
+    populate(downloads, cfg)
+    assert st.after_scheduled_run(cfg, locked=1) == [
+        "Summary: 3 files wait for review, 1 failed, 1 could only be read while the Mac is "
+        "unlocked. Run `flib status` for details.",
+        "1 file could only be read while the Mac is unlocked (macOS Data Protection); "
+        "the scheduled run waits for the next unlock, or run `flib run` now.",
+    ]
 
 
 def test_a_failed_notification_is_logged_and_not_retried_next_run(

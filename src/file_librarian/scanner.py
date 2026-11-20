@@ -28,6 +28,11 @@
   for a later run waits with it.
 - Keeps why an item was unreadable (the step and the errno) and reads it once
   more after a short pause when the error is plausibly transient.
+- Skips as ``locked`` (not ``unreadable``) a file the system refuses because
+  it is readable only while the Mac is unlocked (Data Protection class A or
+  B, see ``protection``), and, while the screen is locked, a folder unit with
+  any such file inside. The same goes for a duplicate whose library copy is
+  such a file. A scheduled run then waits for the next unlock (``catchup``).
 
 The scanner only reads. It never opens a file for writing and never follows
 a symlink.
@@ -47,7 +52,7 @@ from pathlib import Path
 from typing import TypeVar
 from unicodedata import normalize
 
-from file_librarian import hashing
+from file_librarian import hashing, protection
 from file_librarian.config import Config, is_within
 from file_librarian.globs import matches_any
 from file_librarian.hashing import file_sha256, unit_manifest
@@ -76,6 +81,7 @@ class SkipReason(StrEnum):
     UNSTABLE = "still changing"
     KNOWN = "already processed"
     UNREADABLE = "unreadable"
+    LOCKED = "protected by macOS while the Mac is locked"
     EMPTY = "empty file"
     DUPLICATE = "same content as another item in this run"
     CLOUD_ONLY = "in iCloud only, not downloaded"
@@ -217,7 +223,10 @@ def _known(candidate: Candidate, state: FileState, config: Config) -> SkipReason
         return SkipReason.KNOWN if state.attempts >= config.limits.max_attempts else None
     there = content_at(state.path, candidate.sha256)
     if there is None:
-        return SkipReason.KNOWN  # only in iCloud, or cannot be read now: never guess
+        # Only in iCloud, or cannot be read now: never guess.
+        if protection.protection_class(state.path) in protection.LOCKED_CLASSES:
+            return SkipReason.LOCKED  # readable again once the Mac is unlocked
+        return SkipReason.KNOWN
     if there:
         return Duplicate(candidate, state.path, in_library=True)
     return SkipReason.NOT_WHERE_LEFT
@@ -272,6 +281,12 @@ def scan(
     result = ScanResult()
     ready: list[Candidate] = []
     protected = _protected_ids(config)
+    locked_now: list[bool] = []  # whether the screen is locked, asked once and only if needed
+
+    def screen_locked() -> bool:
+        if not locked_now:
+            locked_now.append(protection.screen_locked() is True)
+        return locked_now[0]
 
     for folder in config.inputs:
         try:
@@ -341,6 +356,9 @@ def scan(
                     if now - manifest.newest_mtime < limits.stable_seconds:
                         skip(SkipReason.UNSTABLE)
                         continue
+                    if screen_locked() and protection.has_locked_files(path):
+                        skip(SkipReason.LOCKED)
+                        continue
                     candidate = Candidate(
                         path,
                         manifest.digest,
@@ -378,7 +396,10 @@ def scan(
                     skip(SkipReason.SPECIAL)
                     continue
             except OSError as exc:
-                skip(SkipReason.UNREADABLE, SkipDetail.from_error(step, exc))
+                if step == "read" and protection.is_locked_out(exc, path):
+                    skip(SkipReason.LOCKED)
+                else:
+                    skip(SkipReason.UNREADABLE, SkipDetail.from_error(step, exc))
                 continue
 
             state = lookup(candidate.sha256)

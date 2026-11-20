@@ -55,6 +55,7 @@ _LOGGED_SKIPS = {
     "unreadable": SkipReason.UNREADABLE,
     "cloud_only": SkipReason.CLOUD_ONLY,
     "not_where_left": SkipReason.NOT_WHERE_LEFT,
+    "locked": SkipReason.LOCKED,
 }
 _SKIP_LINE = re.compile(r"  skip    .*  \((.*)\)")
 _SCRIPT = (
@@ -114,7 +115,8 @@ class Status:
     sensitive: int
     last_run: RunRow | None
     skipped: dict[str, int] | None
-    """``unreadable`` and ``cloud_only`` counts from the last run's log; ``None`` without one."""
+    """``unreadable``, ``cloud_only``, ``not_where_left`` and ``locked`` counts from the last
+    run's log; ``None`` without one."""
     schedule: NextRun
     month_cost_usd: float
     month_unpriced_runs: int
@@ -318,7 +320,7 @@ def render(
                 f"Duplicates set aside in {config.duplicates_folder}: "
                 f"{_files(status.duplicates)} (nothing is deleted; review them when you like)"
             )
-        lines.extend(_last_run_lines(status))
+        lines.extend(_last_run_lines(status, config))
     lines.append(_schedule_line(status.schedule))
     if status.database_exists:
         month = f"This month: US$ {status.month_cost_usd:.4f}"
@@ -360,7 +362,7 @@ def _failed_lines(status: Status, config: Config, now: datetime) -> list[str]:
     return lines
 
 
-def _last_run_lines(status: Status) -> list[str]:
+def _last_run_lines(status: Status, config: Config) -> list[str]:
     run = status.last_run
     if run is None:
         return ["Last run: none yet."]
@@ -386,9 +388,21 @@ def _last_run_lines(status: Status) -> list[str]:
             f"{skipped['not_where_left']} waiting for `flib reconcile` "
             "(copies of filed files that are not where flib left them)"
         )
+    if skipped.get("locked"):
+        parts.append(f"{skipped['locked']} protected while the Mac was locked")
     if parts:
         lines.append(f"  skipped: {', '.join(parts)} (see its log)")
+    if skipped.get("locked"):
+        lines.append(f"  {locked_advice(skipped['locked'], config)}")
     return lines
+
+
+def locked_advice(count: int, config: Config) -> str:
+    """What to do about files skipped because the Mac was locked (no names)."""
+    what = f"{_files(count)} could only be read while the Mac is unlocked (macOS Data Protection)"
+    if config.schedule.wait_for_unlock_hours > 0:
+        return f"{what}; the scheduled run waits for the next unlock, or run `flib run` now."
+    return f"{what}; run `flib run` now."
 
 
 def _schedule_line(schedule: NextRun) -> str:
@@ -496,7 +510,7 @@ def _local(text: str) -> str:
 # --- the periodic summary --------------------------------------------------------------
 
 
-def summary_text(review: int, failed: int, not_where_left: int = 0) -> str:
+def summary_text(review: int, failed: int, not_where_left: int = 0, locked: int = 0) -> str:
     """The notification's body: counts only, nothing that names a file."""
     parts = []
     if review:
@@ -505,18 +519,23 @@ def summary_text(review: int, failed: int, not_where_left: int = 0) -> str:
         parts.append(f"{failed} failed")
     if not_where_left:
         parts.append(f"{not_where_left} wait for `flib reconcile`")
+    if locked:
+        parts.append(f"{locked} could only be read while the Mac is unlocked")
     return f"{', '.join(parts)}. Run `flib status` for details."
 
 
 def after_scheduled_run(
-    config: Config, *, now: datetime | None = None, not_where_left: int = 0
+    config: Config, *, now: datetime | None = None, not_where_left: int = 0, locked: int = 0
 ) -> list[str]:
     """The periodic summary, when one is due: lines for the run log (else none).
 
     Due when some file has waited in review or failed for ``min_age_days``, or
     the run skipped ``not_where_left`` copies of filed files that are not where
     flib left them (RF-21), and the last summary was ``every_days`` or more
-    calendar days ago. The time is
+    calendar days ago. Files skipped as ``locked`` (readable only while the
+    Mac is unlocked) are counted in it; they make it due on their own only
+    when the scheduled run does not wait for an unlock
+    (``schedule.wait_for_unlock_hours: 0``). The time is
     recorded before notifying, so a notification that fails is not retried
     on every run.
     """
@@ -525,7 +544,8 @@ def after_scheduled_run(
     with Store.open(config.database) as store:
         waiting = store.waiting()
         cutoff = now - timedelta(days=settings.min_age_days)
-        if not not_where_left and not any(_when(row.processed_at) <= cutoff for row in waiting):
+        stuck = not_where_left or (locked and config.schedule.wait_for_unlock_hours == 0)
+        if not stuck and not any(_when(row.processed_at) <= cutoff for row in waiting):
             return []
         last = store.meta(SUMMARY_KEY)
         if last is not None:
@@ -534,8 +554,10 @@ def after_scheduled_run(
                 return []
         store.set_meta(SUMMARY_KEY, now.astimezone(UTC).isoformat(timespec="seconds"))
     review = sum(1 for row in waiting if row.status is FileStatus.REVIEW)
-    text = summary_text(review, len(waiting) - review, not_where_left)
+    text = summary_text(review, len(waiting) - review, not_where_left, locked)
     lines = [f"Summary: {text}"]
+    if locked:
+        lines.append(locked_advice(locked, config))
     if settings.notify:
         problem = notify(text)
         if problem is not None:

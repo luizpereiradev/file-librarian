@@ -117,6 +117,9 @@ sensitive:
 
 schedule:
   time: "12:30"              # daily run, 24-hour local time; applied by `flib schedule`
+  wait_for_unlock_hours: 8   # files some apps protect while the Mac is locked: after a scheduled
+                             # run skipped them, wait up to this long for an unlock and run once
+                             # more (0 = don't wait; the next day's run gets them)
 
 summary:                     # RF-40: after a scheduled run, what waits in review or failed (`flib status`)
   notify: true               # one macOS notification, counts only, no file names; false = run log only

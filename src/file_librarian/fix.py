@@ -35,9 +35,10 @@ from file_librarian.config import Config
 from file_librarian.db.store import FileRow, OperationRow, Store
 from file_librarian.finder_tags import tag_moved, untag_restored
 from file_librarian.fsops import DestinationExistsError, ensure_folder, move_no_replace
-from file_librarian.hashing import same_content
+from file_librarian.hashing import check_content
 from file_librarian.models import FileStatus, OperationStatus, RunMode, RunTrigger
 from file_librarian.naming import candidate_names, safe_component, split_name
+from file_librarian.protection import LOCKED_NOW
 
 _FIXABLE = {FileStatus.ORGANIZED, FileStatus.REVIEW}
 _MAX_NAME_BYTES = 255
@@ -78,7 +79,10 @@ def fix_file(
     if row.status not in _FIXABLE:
         raise FixError(f"{path} is {row.status.value}; only organized or review files can be fixed")
     source = row.current_path
-    if not same_content(source, row.sha256):
+    same = check_content(source, row.sha256)
+    if same is None:
+        raise FixError(f"{path} is {LOCKED_NOW}")
+    if not same:
         raise FixError(f"{path} changed or moved since it was indexed; run `flib reconcile` first")
 
     folder, new_category = _folder(config, row, category)

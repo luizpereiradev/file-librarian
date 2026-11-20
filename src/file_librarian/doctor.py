@@ -43,7 +43,7 @@ from typing import Any, Literal
 
 import yaml
 
-from file_librarian import __version__, credentials, scheduler
+from file_librarian import __version__, credentials, protection, scheduler
 from file_librarian import status as status_mod
 from file_librarian.config import (
     Config,
@@ -80,6 +80,7 @@ _SAFE_DIRS = frozenset(
 _OWN_FILES = re.compile(
     r"run-\d+\.log|library\.db(?:-wal|-shm)?|schedule\.(?:out|err)\.log"
     r"|doctor-[\d-]+\.(?:txt|md)|config\.yaml|flib-python|.*\.plist"
+    r"|flib(?:-reprocess|-waiter)?\.lock"
 )
 _ASSIGNMENT = "password or secret assignment"
 _EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,8}")
@@ -570,8 +571,21 @@ def _status(section: Section, r: Redactor, config: Config | None) -> None:
     if config is None:
         section.lines.append("unknown (the configuration did not load)")
         return
-    lines = status_mod.render(status_mod.collect(config), config, private=True)
+    status = status_mod.collect(config)
+    lines = status_mod.render(status, config, private=True)
     section.lines += [r.text(line) for line in lines]
+    _data_protection(section, status)
+
+
+def _data_protection(section: Section, status: status_mod.Status) -> None:
+    """Whether the Mac is locked now, and how many files the last run could not read
+    because of it (macOS Data Protection; counts only)."""
+    locked = protection.screen_locked()
+    state = "unknown" if locked is None else "yes" if locked else "no"
+    section.lines.append(f"screen locked now: {state}")
+    if status.skipped is not None:
+        count = status.skipped.get("locked", 0)
+        section.lines.append(f"skipped in the last run as protected while locked: {count}")
 
 
 def _logs(section: Section, r: Redactor, config: Config | None, count: int) -> None:

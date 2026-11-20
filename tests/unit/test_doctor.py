@@ -26,7 +26,7 @@ from file_librarian.doctor import Options, Redactor, build_report
 from file_librarian.models import RunMode, RunTrigger
 from file_librarian.runlog import logs_dir, write_log
 from file_librarian.sensitive import SECRET_PATTERNS, find_secrets
-from tests._helpers import put
+from tests._helpers import FakeProtection, put
 
 runner = CliRunner()
 
@@ -54,7 +54,7 @@ class _Fake:
     def __init__(self, seed: int) -> None:
         rng = random.Random(seed)
         self.rng = rng
-        self.names = list(dict.fromkeys(_file_name(rng) for _ in range(13)))
+        self.names = list(dict.fromkeys(_file_name(rng) for _ in range(14)))
         self.folders = [_word(rng) for _ in range(3)]
         self.api_key = "sk-ant-api03-" + "".join(rng.choices("abcdefXYZ0123456789", k=48))
         self.aws_key = "AKIA" + "".join(rng.choices("ABCDEFGHIJ0123456789", k=16))
@@ -97,7 +97,7 @@ def _environment(home: Path, fake: _Fake) -> Path:
     assert result.exit_code == 0, result.stderr
     # Then logs in every format flib writes, with the rest of the names.
     out = cfg.output_root
-    a, b, c, d, e, f, g, h, i = fake.names[4:13]
+    a, b, c, d, e, f, g, h, i, j = fake.names[4:14]
     sub = fake.folders[2]
     write_log(
         cfg.database,
@@ -111,11 +111,15 @@ def _environment(home: Path, fake: _Fake) -> Path:
             f"  sensitive{e}  (sensitive: private key)",
             f"  skip    {f}  (still changing)",
             f"  skip    {i}  (unreadable: EPERM Operation not permitted, on read)",
+            f"  skip    {j}  (protected by macOS while the Mac is locked)",
             f"  skipped {g}  (key {fake.aws_key} found; mail {fake.email}; see {fake.url})",
             f"  organized {h}  (password = {fake.api_key})",
             "  (3 item(s) already processed earlier were left alone)",
             "Run 90: 1 organized, 1 to review, 1 sensitive left in place, 1 failed, 2 skipped.",
             ACCESS_HINT,
+            "Waiting up to 8 h for the Mac to be unlocked to read 1 file(s) protected while it "
+            "is locked; then it runs once more.",
+            "The Mac was unlocked; running once more for the files skipped while it was locked.",
         ],
     )
     logs = logs_dir(cfg.database)
@@ -128,7 +132,10 @@ def _environment(home: Path, fake: _Fake) -> Path:
         encoding="utf-8",
     )
     (logs / "schedule.out.log").write_text(
-        f"Log: {logs}/run-000090.log\n  moved   {b}  ->  Personal/{b}\n", encoding="utf-8"
+        f"Log: {logs}/run-000090.log\n  moved   {b}  ->  Personal/{b}\n"
+        "[2026-11-20 03:00] Waiting up to 8 h for the Mac to be unlocked (checking every minute).\n"
+        f"  skip    {j}  (protected by macOS while the Mac is locked)\n",
+        encoding="utf-8",
     )
     scheduler.install("09:15", config, logs)
     return config
@@ -170,6 +177,11 @@ def test_nothing_personal_survives(fake_home: Path, seed: int, fmt: doctor.Forma
         "(still changing)",
         "(sensitive: private key)",
         "(unreadable: EPERM Operation not permitted, on read)",
+        "(protected by macOS while the Mac is locked)",
+        "Waiting up to 8 h for the Mac to be unlocked to read 1 file(s)",
+        "[2026-11-20 03:00] Waiting up to 8 h for the Mac to be unlocked (checking every minute).",
+        "The Mac was unlocked; running once more",
+        "screen locked now: no",
         ACCESS_HINT,
     ):
         assert expected in report, expected
@@ -373,3 +385,34 @@ def test_last_runs_show_their_cost(
     assert any(line.startswith("2 ") and line.endswith(" 0.0123") for line in lines)
     assert any(line.startswith("3 ") and line.endswith(" -") for line in lines)
     assert any(line.startswith("1 ") and line.endswith(" unknown") for line in lines)
+
+
+def test_the_lock_state_and_the_files_skipped_while_locked(
+    fake_home: Path, downloads: Path, fake_protection: FakeProtection
+) -> None:
+    config = fake_home / "config.yaml"
+    config.write_text(
+        f"inputs: [{json.dumps(str(downloads))}]\nprovider: {{name: fake, model: x}}\n",
+        encoding="utf-8",
+    )
+    cfg = load_config(config)
+    assert "screen locked now: no" in build_report(Options(config_path=config))
+
+    with Store.open(cfg.database) as store:
+        run_id = store.start_run(RunMode.RUN, RunTrigger.SCHEDULE)
+        store.finish_run(run_id, seen=0, moved=0, review=0, errors=0, cost_usd=0.0)
+    write_log(
+        cfg.database,
+        run_id,
+        [
+            "  skip    photo.jpeg  (protected by macOS while the Mac is locked)",
+            "  skip    scan.pdf  (protected by macOS while the Mac is locked)",
+        ],
+    )
+    fake_protection.lock_screen()
+    report = build_report(Options(config_path=config))
+    assert "screen locked now: yes" in report
+    assert "skipped in the last run as protected while locked: 2" in report
+    assert "photo.jpeg" not in report and "scan.pdf" not in report
+    fake_protection.locked = None
+    assert "screen locked now: unknown" in build_report(Options(config_path=config))

@@ -36,6 +36,10 @@ is left as it is and reported; it is not ``missing``, because it is there. The
 search treats cloud-only files and folders as no match and does not walk into
 them.
 
+The same holds for a file the system refuses to read while the Mac is locked
+(Data Protection class A or B, see ``protection``): its row is left as it is
+and reported as ``locked``, never ``missing`` or changed.
+
 Nothing on disk is touched; only the index changes.
 """
 
@@ -47,7 +51,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
-from file_librarian import hashing
+from file_librarian import hashing, protection
 from file_librarian.config import Config, folder_key, is_within
 from file_librarian.db.store import FileRow, Store, normalize
 from file_librarian.models import FileStatus, ReviewReason
@@ -74,6 +78,9 @@ class ReconcileReport:
     unchecked: list[Path] = field(default_factory=list)
     """Duplicates that could not be read where recorded (an unmounted volume, a read
     error): row unchanged."""
+    locked: list[Path] = field(default_factory=list)
+    """At their recorded path but readable only while the Mac is unlocked: not checked,
+    row unchanged."""
     orphaned: list[tuple[Path, Path]] = field(default_factory=list)
     """Duplicates whose original is missing: (the duplicate, where the original was)."""
 
@@ -105,13 +112,15 @@ class _Seen(Enum):
     SAME = "same"
     DIFFERENT = "different"
     CLOUD_ONLY = "cloud only"
+    LOCKED = "locked"
 
 
 def _look(path: Path, sha256: str) -> _Seen:
     """Whether ``path`` holds the content ``sha256``. Reads nothing that is only in iCloud.
 
     A folder unit with anything inside only in iCloud cannot be compared: its
-    manifest would be partial.
+    manifest would be partial. A file readable only while the Mac is
+    unlocked cannot be compared while it is locked.
     """
     if in_cloud_only(path):
         return _Seen.CLOUD_ONLY
@@ -123,7 +132,10 @@ def _look(path: Path, sha256: str) -> _Seen:
             return _Seen.SAME if manifest.digest == sha256 else _Seen.DIFFERENT
     except OSError:
         return _Seen.DIFFERENT
-    return _Seen.SAME if hashing.same_content(path, sha256) else _Seen.DIFFERENT
+    same = hashing.check_content(path, sha256)
+    if same is None:
+        return _Seen.LOCKED
+    return _Seen.SAME if same else _Seen.DIFFERENT
 
 
 def content_at(path: Path, sha256: str) -> bool | None:
@@ -133,7 +145,7 @@ def content_at(path: Path, sha256: str) -> bool | None:
     folder can be listed, or what is there has other content. ``None`` when it
     cannot be told: only in iCloud (never downloaded to check), a folder on
     the way that is gone or cannot be read (an unmounted volume), or a read
-    error.
+    error (such as a file readable only while the Mac is unlocked).
     """
     try:
         os.lstat(path)
@@ -257,6 +269,9 @@ def reconcile(config: Config, store: Store) -> ReconcileReport:
                 # It is there, but checking it would download it: leave the row as it is.
                 report.cloud_only.append(recorded)
                 continue
+            if seen is _Seen.LOCKED:
+                report.locked.append(recorded)  # there, but unreadable until the Mac is unlocked
+                continue
         found = finder.find(row)
         if found is not None and not _may_be(store, row, found, config):
             found = None
@@ -320,6 +335,8 @@ def _check_duplicate(store: Store, row: FileRow, report: ReconcileReport) -> Non
         # Only in iCloud, unreadable or on a volume that is not there: left as it is.
         if in_cloud_only(row.current_path):
             report.cloud_only.append(row.current_path)
+        elif protection.protection_class(row.current_path) in protection.LOCKED_CLASSES:
+            report.locked.append(row.current_path)
         else:
             report.unchecked.append(row.current_path)
     elif not there:
