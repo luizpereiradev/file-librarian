@@ -227,6 +227,13 @@ class Redactor:
     _log_formats: tuple[tuple[re.Pattern[str], Callable[[Redactor, re.Match[str]], str]], ...] = (
         (re.compile(r"# flib run \d+ finished \S+"), lambda _r, m: m.group(0)),
         (
+            re.compile(r"  dup     (.+)  ->  (.+)  \(same content as (.+)\)"),
+            lambda r, m: (
+                f"  dup     {r.path(m.group(1))}  ->  {r.path(m.group(2))}  "
+                f"(same content as {r.path(m.group(3))})"
+            ),
+        ),
+        (
             re.compile(r"  moved   (.+)  ->  (.+)"),
             lambda r, m: f"  moved   {r.path(m.group(1))}  ->  {r.path(m.group(2))}",
         ),
@@ -255,6 +262,7 @@ def redactor_for(config: Config | None) -> Redactor:
         roots.append((config.output_root, "<output>"))
         keep.extend(c.name for c in config.categories)
         keep.append(config.review_folder)
+        keep.append(config.duplicates_folder)
     # Also the resolved spelling (/private/var for /var, a symlinked Downloads).
     roots.extend((Path(os.path.realpath(path)), name) for path, name in list(roots))
     roots.append((Path(os.path.realpath(home)), "<home>"))

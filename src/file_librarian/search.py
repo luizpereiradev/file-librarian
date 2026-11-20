@@ -18,6 +18,11 @@ meaning too: "invoice" finds a file described as a "bill". The words ranking
 (BM25) and the meaning ranking (cosine similarity of embeddings, see
 ``embeddings.py``) are fused by reciprocal rank, with the same filters on
 both. When it cannot run, it says why in one line and searches by words.
+
+Duplicates (RF-21) are left out unless asked for (``include_duplicates``):
+they are copies of a file the search already finds. They have no embedding,
+so they are found by words only. A duplicate in the results says where its
+original is (``duplicate_of``).
 """
 
 from __future__ import annotations
@@ -51,6 +56,8 @@ class SearchHit:
     status: str
     processed_at: str
     exists: bool
+    duplicate_of: str | None = None
+    """For a duplicate, where its original is now."""
 
 
 class SearchError(ValueError):
@@ -144,7 +151,12 @@ def fts_query(text: str) -> str | None:
 
 
 def search(
-    store: Store, text: str, *, filters: SearchFilters | None = None, limit: int = 20
+    store: Store,
+    text: str,
+    *,
+    filters: SearchFilters | None = None,
+    limit: int = 20,
+    include_duplicates: bool = False,
 ) -> list[SearchHit]:
     """Files matching all words of ``text`` and all ``filters``.
 
@@ -155,11 +167,16 @@ def search(
     query = fts_query(text)
     if query is None and not filters:
         return []
-    return [_hit(row) for row in _word_rows(store, query, filters, limit)]
+    rows = _word_rows(store, query, filters, limit, include_duplicates)
+    return [_hit(store, row) for row in rows]
 
 
 def _word_rows(
-    store: Store, query: str | None, filters: SearchFilters, limit: int
+    store: Store,
+    query: str | None,
+    filters: SearchFilters,
+    limit: int,
+    include_duplicates: bool = False,
 ) -> list[FileRow]:
     return store.search_files(
         query,
@@ -167,11 +184,17 @@ def _word_rows(
         extensions=filters.extensions,
         since=filters.since,
         until=filters.until,
+        include_duplicates=include_duplicates,
         limit=limit,
     )
 
 
-def _hit(row: FileRow) -> SearchHit:
+def original_path(store: Store, file_id: int | None) -> str | None:
+    """Where the original of a duplicate is now (``None`` for a file that is not one)."""
+    return None if file_id is None else str(store.file_by_id(file_id).current_path)
+
+
+def _hit(store: Store, row: FileRow) -> SearchHit:
     return SearchHit(
         path=str(row.current_path),
         original_name=row.original_name,
@@ -181,6 +204,7 @@ def _hit(row: FileRow) -> SearchHit:
         status=row.status.value,
         processed_at=row.processed_at,
         exists=os.path.lexists(row.current_path),
+        duplicate_of=original_path(store, row.duplicate_of),
     )
 
 
@@ -207,6 +231,7 @@ def semantic_search(
     filters: SearchFilters | None = None,
     limit: int = 20,
     embedder: Embedder | None = None,
+    include_duplicates: bool = False,
 ) -> SearchOutcome:
     """Words and meaning together: BM25 and cosine rankings fused by reciprocal rank.
 
@@ -218,7 +243,10 @@ def semantic_search(
     settings = config.search.semantic
 
     def words_only(notice: str | None) -> SearchOutcome:
-        return SearchOutcome(search(store, text, filters=filters, limit=limit), False, notice)
+        hits = search(
+            store, text, filters=filters, limit=limit, include_duplicates=include_duplicates
+        )
+        return SearchOutcome(hits, False, notice)
 
     if not settings.enabled:
         return words_only(
@@ -238,7 +266,7 @@ def semantic_search(
     except EmbeddingError as exc:
         return words_only(f"semantic search unavailable ({exc}); searched by words only")
     pool = max(limit * 2, 50)
-    by_words = [row.id for row in _word_rows(store, query, filters, pool)]
+    by_words = [row.id for row in _word_rows(store, query, filters, pool, include_duplicates)]
     by_meaning = [
         file_id
         for file_id, _ in nearest(
@@ -267,7 +295,7 @@ def semantic_search(
             f"{len(missing)} file(s) have no embedding yet and are found by words only; "
             "the next run or `flib search --reindex` adds them"
         )
-    return SearchOutcome([_hit(rows[i]) for i in best if i in rows], True, notice)
+    return SearchOutcome([_hit(store, rows[i]) for i in best if i in rows], True, notice)
 
 
 def to_json(hits: list[SearchHit]) -> str:

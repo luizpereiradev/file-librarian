@@ -17,6 +17,15 @@ The caller holds the instance lock. For each planned move:
    the journal entry so undo removes exactly that tag. A tag failure is only
    a warning: the move stands.
 
+A duplicate (RF-21) is moved the same way, journaled and undoable, into the
+duplicates folder, and gets a row of its own (status ``duplicate``, pointing
+at its original's row) and no Finder tag. Its original is checked again
+first: if it is no longer filed with that content, the copy stays and
+nothing is recorded. An item whose content's row is ``missing`` takes that
+row over: the move is journaled on it, and the row is rewritten only once
+the item is in place; an item that stays (failed, sensitive) or whose move
+fails leaves it as it was.
+
 ``relocate`` does the same for files already in the library (``flib
 reprocess``, RF-37), as one run with trigger ``reprocess``: the index row is
 left as it is until the file is at its new place, and the entry carries the
@@ -81,6 +90,7 @@ from file_librarian.models import (
 )
 from file_librarian.naming import candidate_names
 from file_librarian.planner import Plan, PlannedItem
+from file_librarian.reconcile import content_at
 from file_librarian.undo import record_restored, unit_identity
 
 # A full disk or quota is not the file's fault: the item is retried every run.
@@ -97,6 +107,8 @@ class ItemResult:
     note: str
     warning: str | None = None
     """Something that went wrong without failing the item, e.g. a Finder tag."""
+    original: Path | None = None
+    """For a duplicate, where its original is."""
 
 
 @dataclass(slots=True)
@@ -145,6 +157,7 @@ def execute(
         review=report.count(FileStatus.REVIEW, moved=True),
         errors=report.errors,
         cost_usd=cost_usd,
+        duplicates=report.count(FileStatus.DUPLICATE, moved=True),
     )
     return report
 
@@ -183,30 +196,114 @@ def _apply(
     item: PlannedItem, config: Config, store: Store, run_id: int, provider: str, model: str
 ) -> ItemResult:
     ctx = item.context
+    if item.original is not None:
+        return _apply_duplicate(item, config, store, run_id)
+    known = store.file_by_sha256(ctx.sha256)
+    # A file found again after reconcile marked its content ``missing`` takes over
+    # that row, but only once it is actually moved (RF-21).
+    takeover = known.id if known is not None and known.status is FileStatus.MISSING else None
     if item.destination is None:
+        if takeover is not None:
+            # The row stays ``missing``; a failure still counts toward max_attempts.
+            if item.status is FileStatus.FAILED:
+                with store.transaction():
+                    store.count_attempt(takeover, item.reason)
+            return ItemResult(ctx.path, item.status, None, item.reason)
         error = item.reason if item.status is FileStatus.FAILED else None
         store.upsert_file(file_record(item, item.status, provider, model, error), run_id=run_id)
         return ItemResult(ctx.path, item.status, None, item.reason)
 
+    record = file_record(item, item.status, provider, model)
+    return _place(item, record, config, store, run_id, takeover=takeover)
+
+
+def _apply_duplicate(item: PlannedItem, config: Config, store: Store, run_id: int) -> ItemResult:
+    """Move a duplicate to the duplicates folder, if its original is still filed (RF-21).
+
+    The original is checked again right before: its row must be organized or
+    in review and the file there must still have this content (not read if it
+    is only in iCloud). Otherwise the copy stays and nothing is recorded; the
+    next run looks at it again. A copy that stays because its original does
+    (``destination`` ``None``) records nothing either.
+    """
+    ctx = item.context
+    if item.destination is None:
+        return ItemResult(ctx.path, FileStatus.SKIPPED, None, item.reason, original=item.original)
+    original = store.file_by_sha256(ctx.sha256)
+    if (
+        original is None
+        or original.status not in {FileStatus.ORGANIZED, FileStatus.REVIEW}
+        or content_at(original.current_path, ctx.sha256) is not True
+    ):
+        why = "its original is no longer in the library with this content; next run"
+        return ItemResult(ctx.path, FileStatus.SKIPPED, None, why)
+    record = FileRecord(
+        sha256=ctx.sha256,
+        original_path=ctx.path,
+        current_path=ctx.path,
+        status=FileStatus.DUPLICATE,
+        extension=ctx.extension,
+        size_bytes=ctx.size_bytes,
+        is_unit=ctx.is_unit,
+        duplicate_of=original.id,
+    )
+    result = _place(item, record, config, store, run_id)
+    result.original = original.current_path
+    return result
+
+
+def _place(
+    item: PlannedItem,
+    record: FileRecord,
+    config: Config,
+    store: Store,
+    run_id: int,
+    *,
+    takeover: int | None = None,
+) -> ItemResult:
+    """Index the item, journal its move, move it, then record where it went.
+
+    ``takeover``: the id of a ``missing`` row this item takes over. The move is
+    journaled on that row, which is left as it is until the item is in place;
+    a failed move leaves it untouched.
+    """
+    ctx = item.context
     identity = _unchanged(ctx)
-    if identity is None:
+    if identity is None or item.destination is None:
         return ItemResult(ctx.path, FileStatus.SKIPPED, None, "changed since the scan; next run")
 
     destination = item.destination
     with store.transaction():
-        file_id = store.upsert_file(file_record(item, item.status, provider, model), run_id=run_id)
-        op_id = store.add_operation(run_id, file_id, ctx.path, destination, identity=identity)
+        file_id = takeover if takeover is not None else store.upsert_file(record, run_id=run_id)
+        op_id = store.add_operation(
+            run_id,
+            file_id,
+            ctx.path,
+            destination,
+            identity=identity,
+            pending=record if takeover is not None else None,
+        )
     try:
         _require_safe_volume(ctx.path, config.output_root)
         ensure_folder(destination.parent, inside=config.output_root)
         destination, kept = _move(ctx.path, destination, store, op_id, ctx.sha256)
     except (OSError, ValueError) as exc:
-        if isinstance(exc, OSError) and exc.errno in _ENVIRONMENTAL:
+        environmental = isinstance(exc, OSError) and exc.errno in _ENVIRONMENTAL
+        if isinstance(exc, OSError) and environmental:
             error = f"not enough space at the destination; retried next run: {exc.strerror}"
-            return _fail(store, op_id, file_id, ctx.path, error, attempt=False)
-        return _fail(store, op_id, file_id, ctx.path, f"move failed: {exc}")
+        else:
+            error = f"move failed: {exc}"
+        if takeover is not None:
+            with store.transaction():
+                store.set_operation(op_id, OperationStatus.FAILED)
+                if not environmental:
+                    store.count_attempt(takeover, error)
+            return ItemResult(ctx.path, FileStatus.FAILED, None, error[:300])
+        return _fail(store, op_id, file_id, ctx.path, error, attempt=not environmental)
     unit = unit_identity(destination, ctx.sha256) if ctx.is_unit else None
     with store.transaction():
+        if takeover is not None:
+            store.upsert_file(record, run_id=run_id)
         store.set_operation(op_id, OperationStatus.DONE, destination)
         store.set_file_location(file_id, destination, item.status)
         if unit is not None:
@@ -577,11 +674,24 @@ def _recover_rename(store: Store, op: OperationRow, row: FileRow, config: Config
     elif moved:
         with store.transaction():
             store.set_operation(op.id, OperationStatus.DONE)
-            store.set_file_location(op.file_id, op.dst_path, row.status)
+            _record_recovered(store, op, op.dst_path, row)
     else:
         with store.transaction():
             store.set_operation(op.id, OperationStatus.FAILED)
-            store.mark_file_failed(op.file_id, "interrupted before the move finished")
+            if row.status is not FileStatus.MISSING:  # a takeover leaves the row as it was
+                store.mark_file_failed(op.file_id, "interrupted before the move finished")
+
+
+def _record_recovered(store: Store, op: OperationRow, path: Path, row: FileRow) -> None:
+    """Where an interrupted move put the item. A ``missing`` row it was taking over
+    gets the record journaled with the move (its new classification)."""
+    if row.status is not FileStatus.MISSING:
+        store.set_file_location(op.file_id, path, row.status)
+    elif op.pending is not None:
+        store.upsert_file(op.pending, run_id=op.run_id)
+        store.set_file_location(op.file_id, path, op.pending.status)
+    else:  # never journaled without its record; left for reconcile all the same
+        store.set_file_location(op.file_id, path, FileStatus.MISSING)
 
 
 def _recover_copy(
@@ -608,12 +718,13 @@ def _recover_copy(
     with store.transaction():
         if final is not None:
             store.set_operation(op.id, OperationStatus.DONE, final)
-            store.set_file_location(op.file_id, final, row.status)
+            _record_recovered(store, op, final, row)
             if unit is not None:
                 store.set_file_identity(op.file_id, unit)
         else:
             store.set_operation(op.id, OperationStatus.FAILED)
-            store.mark_file_failed(op.file_id, "interrupted while copying to another volume")
+            if row.status is not FileStatus.MISSING:
+                store.mark_file_failed(op.file_id, "interrupted while copying to another volume")
 
 
 def _recover_undo(store: Store, op: OperationRow, config: Config | None) -> None:

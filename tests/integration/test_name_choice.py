@@ -147,6 +147,7 @@ def test_inspect_shows_the_name_choice(downloads: Path, cfg: Config, tmp_path: P
         "review": None,
         "name_choice": "original",
         "name_choice_reason": "Names the cake.",
+        "duplicate_of": None,
     }
 
 

@@ -95,6 +95,8 @@ class FileRow:
     """Why it is in review; ``None`` outside review and for rows filed before #68."""
     review_category: str | None = None
     """The category the model suggested for a file in review, if any."""
+    duplicate_of: int | None = None
+    """For a duplicate (RF-21), the id of the row of the file it is a copy of."""
 
     @property
     def review(self) -> tuple[ReviewReason | None, str | None]:
@@ -128,6 +130,7 @@ class FileRow:
             if row["review_reason"] is None
             else ReviewReason(row["review_reason"]),
             review_category=row["review_category"],
+            duplicate_of=None if row["duplicate_of"] is None else int(row["duplicate_of"]),
         )
 
 
@@ -156,6 +159,9 @@ class OperationRow:
     previous: tuple[FileStatus, str | None] | None = None
     """For a ``flib reprocess`` move, the (status, category) the file had before."""
     undone_at: str | None = None
+    pending: FileRecord | None = None
+    """For a move that takes over a ``missing`` row (RF-21), the record the row gets
+    once the item is in place; recovery writes it if a crash cut the move off."""
     """When the move was undone (UTC, ISO 8601); ``None`` if it never was."""
 
     @classmethod
@@ -180,6 +186,9 @@ class OperationRow:
             if row["prev_status"] is None
             else (FileStatus(row["prev_status"]), row["prev_category"]),
             undone_at=row["undone_at"],
+            pending=record_from_json(row["pending_record"])
+            if "pending_record" in row.keys()  # noqa: SIM118 - a Row is a sequence
+            else None,
         )
 
 
@@ -197,6 +206,8 @@ class RunRow:
     errors: int | None
     cost_usd: float | None = None
     """Estimated provider cost; ``None`` when the prices are unknown."""
+    files_duplicates: int | None = None
+    """Duplicates it set aside (RF-21); ``None`` for runs recorded before flib kept it."""
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> RunRow:
@@ -210,6 +221,11 @@ class RunRow:
             files_review=row["files_review"],
             errors=row["errors"],
             cost_usd=None if row["cost_usd"] is None else float(row["cost_usd"]),
+            # Read-only callers (`flib status`) may see a schema from before 0013.
+            # (``in row`` would look among the values: a Row is a sequence.)
+            files_duplicates=row["files_duplicates"]
+            if "files_duplicates" in row.keys()  # noqa: SIM118
+            else None,
         )
 
 
@@ -361,13 +377,29 @@ class Store:
         return self.schema_version
 
     def file_state(self, sha256: str) -> FileState | None:
-        """Status and attempt count of a known file, or ``None`` if it was never seen."""
+        """What the index knows about a content, or ``None`` if it was never seen.
+
+        Duplicates (RF-21) are not the content's state, except that the copies
+        ``flib undo`` put back are listed (``FileState.kept``).
+        """
         row = self.conn.execute(
-            "SELECT status, attempts FROM files WHERE sha256 = ?", (sha256,)
+            "SELECT status, attempts, current_path FROM files "
+            "WHERE sha256 = ? AND duplicate_of IS NULL",
+            (sha256,),
         ).fetchone()
         if row is None:
             return None
-        return FileState(FileStatus(row["status"]), int(row["attempts"]))
+        kept = self.conn.execute(
+            """SELECT current_path FROM files
+               WHERE sha256 = ? AND duplicate_of IS NOT NULL AND status = 'skipped'""",
+            (sha256,),
+        )
+        return FileState(
+            FileStatus(row["status"]),
+            int(row["attempts"]),
+            Path(row["current_path"]),
+            frozenset(str(r[0]) for r in kept),
+        )
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
@@ -398,12 +430,15 @@ class Store:
         review: int,
         errors: int,
         cost_usd: float | None,
+        duplicates: int = 0,
     ) -> None:
-        """``cost_usd``: the provider cost of the run; ``None`` when its prices are unknown."""
+        """``cost_usd``: the provider cost of the run; ``None`` when its prices are unknown.
+        ``duplicates``: how many duplicates it set aside (RF-21)."""
         self.conn.execute(
             """UPDATE runs SET finished_at = ?, files_seen = ?, files_moved = ?,
-                              files_review = ?, errors = ?, cost_usd = ? WHERE id = ?""",
-            (_now(), seen, moved, review, errors, cost_usd, run_id),
+                              files_review = ?, errors = ?, cost_usd = ?, files_duplicates = ?
+               WHERE id = ?""",
+            (_now(), seen, moved, review, errors, cost_usd, duplicates, run_id),
         )
 
     def run_trigger(self, run_id: int) -> RunTrigger:
@@ -433,8 +468,14 @@ class Store:
     # --- files ----------------------------------------------------------------
 
     def upsert_file(self, record: FileRecord, *, run_id: int) -> int:
-        """Insert or update the row for ``record.sha256``; returns its id."""
+        """Insert or update the row for ``record.sha256``; returns its id.
+
+        A duplicate (``record.duplicate_of``) has a row of its own: the one of
+        an earlier attempt to move the same copy from the same place, or a new one.
+        """
         r = record
+        if r.duplicate_of is not None:
+            return self._upsert_duplicate(r, run_id=run_id)
         self.conn.execute(
             """INSERT INTO files (sha256, original_name, original_path, current_name,
                    current_path, extension, size_bytes, source_url, category, description,
@@ -442,7 +483,7 @@ class Store:
                    processed_at, is_unit, name_choice, name_choice_reason, review_reason,
                    review_category)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(sha256) DO UPDATE SET
+               ON CONFLICT(sha256) WHERE duplicate_of IS NULL DO UPDATE SET
                    current_name = excluded.current_name, current_path = excluded.current_path,
                    category = excluded.category, description = excluded.description,
                    tags = excluded.tags, confidence = excluded.confidence,
@@ -463,8 +504,37 @@ class Store:
                 None if r.review_reason is None else r.review_reason.value, r.review_category,
             ),
         )  # fmt: skip
-        row = self.conn.execute("SELECT id FROM files WHERE sha256 = ?", (r.sha256,)).fetchone()
+        row = self.conn.execute(
+            "SELECT id FROM files WHERE sha256 = ? AND duplicate_of IS NULL", (r.sha256,)
+        ).fetchone()
         return int(row[0])
+
+    def _upsert_duplicate(self, r: FileRecord, *, run_id: int) -> int:
+        found = self.conn.execute(
+            """SELECT id FROM files
+               WHERE sha256 = ? AND duplicate_of IS NOT NULL AND current_path = ?""",
+            (r.sha256, normalize(str(r.current_path))),
+        ).fetchone()
+        if found is not None:
+            self.conn.execute(
+                """UPDATE files SET status = ?, duplicate_of = ?, run_id = ?, processed_at = ?
+                   WHERE id = ?""",
+                (r.status.value, r.duplicate_of, run_id, _now(), int(found[0])),
+            )
+            return int(found[0])
+        cur = self.conn.execute(
+            """INSERT INTO files (sha256, original_name, original_path, current_name,
+                   current_path, extension, size_bytes, source_url, tags, status, run_id,
+                   processed_at, is_unit, duplicate_of)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?)""",
+            (
+                r.sha256, normalize(r.original_path.name), normalize(str(r.original_path)),
+                normalize(r.current_path.name), normalize(str(r.current_path)), r.extension,
+                r.size_bytes, r.source_url, r.status.value, run_id, _now(), int(r.is_unit),
+                r.duplicate_of,
+            ),
+        )  # fmt: skip
+        return _rowid(cur)
 
     def set_file_location(self, file_id: int, path: Path, status: FileStatus) -> None:
         """Where the file is now. Out of review, it loses its review reason."""
@@ -515,6 +585,23 @@ class Store:
         self.conn.execute(
             "UPDATE files SET review_reason = ?, review_category = ? WHERE id = ?",
             (reason.value, category, file_id),
+        )
+
+    def mark_missing(self, file_id: int) -> None:
+        """Found nowhere (``flib reconcile``): ``missing``, with a fresh attempt count, so a
+        copy that takes the row over gets ``limits.max_attempts`` tries of its own."""
+        self.conn.execute(
+            "UPDATE files SET status = 'missing', attempts = 0, last_error = NULL WHERE id = ?",
+            (file_id,),
+        )
+
+    def count_attempt(self, file_id: int, error: str) -> None:
+        """A failed attempt at a ``missing`` row's content (a takeover that did not
+        happen): counted and explained, the status kept."""
+        self.conn.execute(
+            """UPDATE files SET attempts = attempts + 1, last_error = ?, processed_at = ?
+               WHERE id = ?""",
+            (error[:500], _now(), file_id),
         )
 
     def set_file_status(self, file_id: int, status: FileStatus) -> None:
@@ -743,7 +830,10 @@ class Store:
         return FileRow.from_row(row)
 
     def file_by_sha256(self, sha256: str) -> FileRow | None:
-        row = self.conn.execute("SELECT * FROM files WHERE sha256 = ?", (sha256,)).fetchone()
+        """The row of a content; never a duplicate's (see ``duplicate_of``)."""
+        row = self.conn.execute(
+            "SELECT * FROM files WHERE sha256 = ? AND duplicate_of IS NULL", (sha256,)
+        ).fetchone()
         return None if row is None else FileRow.from_row(row)
 
     def file_by_current_path(self, path: Path) -> FileRow | None:
@@ -761,9 +851,10 @@ class Store:
         since: str | None = None,
         until: str | None = None,
         statuses: Sequence[FileStatus] = (),
+        include_duplicates: bool = False,
         limit: int,
     ) -> list[FileRow]:
-        """Rows matching an FTS5 query and the filters.
+        """Rows matching an FTS5 query and the filters; duplicates only if asked.
 
         With a query, best first (names weigh more than descriptions); without
         one, newest ``processed_at`` first. ``since`` is inclusive and ``until``
@@ -771,6 +862,8 @@ class Store:
         always bound as parameters.
         """
         where, params = _filter_clause(categories, extensions, since, until, statuses)
+        if not include_duplicates:
+            where.append("f.duplicate_of IS NULL")
         if fts_query is not None:
             where.insert(0, "files_fts MATCH ?")
             params.insert(0, fts_query)
@@ -919,10 +1012,17 @@ class Store:
         )
 
     def waiting(self) -> list[WaitingRow]:
-        """Files in review or failed, oldest first. No names: only why, and since when."""
+        """Files in review or failed, oldest first. No names: only why, and since when.
+
+        A ``missing`` row with an error is a copy that failed to take it over: it
+        counts as failed.
+        """
         rows = self.conn.execute(
             """SELECT status, review_reason, review_category, attempts, last_error, processed_at
-               FROM files WHERE status IN ('review', 'failed') ORDER BY processed_at, id"""
+               FROM files
+               WHERE status IN ('review', 'failed')
+                  OR (status = 'missing' AND last_error IS NOT NULL)
+               ORDER BY processed_at, id"""
         )
         return [
             WaitingRow(
@@ -986,9 +1086,11 @@ class Store:
         identity: tuple[int, int],
         fix: tuple[FileStatus, str | None] | None = None,
         previous: tuple[FileStatus, str | None] | None = None,
+        pending: FileRecord | None = None,
     ) -> int:
         """Journal a move. ``identity`` is the source's (st_dev, st_ino); ``fix`` is the
-        (status, category) a ``flib fix`` gives the file, so recovery can finish it."""
+        (status, category) a ``flib fix`` gives the file, so recovery can finish it;
+        ``pending`` the record a takeover writes once the item is in place."""
         fix_status, fix_category = (None, None) if fix is None else (fix[0].value, fix[1])
         prev_status, prev_category = (
             (None, None) if previous is None else (previous[0].value, previous[1])
@@ -996,11 +1098,12 @@ class Store:
         cur = self.conn.execute(
             """INSERT INTO operations (run_id, file_id, src_path, dst_path, status, created_at,
                                       src_dev, src_ino, fix_status, fix_category, prev_status,
-                                      prev_category)
-               VALUES (?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?, ?)""",
+                                      prev_category, pending_record)
+               VALUES (?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 run_id, file_id, str(src), str(dst), _now(), identity[0], identity[1],
                 fix_status, fix_category, prev_status, prev_category,
+                None if pending is None else record_to_json(pending),
             ),
         )  # fmt: skip
         return _rowid(cur)
@@ -1198,6 +1301,38 @@ def _filter_clause(
         where.append("f.processed_at < ?")
         params.append(until)
     return where, params
+
+
+def record_to_json(r: FileRecord) -> str:
+    """A ``FileRecord`` as JSON, for the journal (``operations.pending_record``)."""
+    data = {
+        f: getattr(r, f)
+        for f in (
+            "sha256", "extension", "size_bytes", "is_unit", "source_url", "category",
+            "description", "confidence", "attempts", "last_error", "provider", "model",
+            "name_choice", "name_choice_reason", "review_category", "duplicate_of",
+        )
+    }  # fmt: skip
+    data |= {
+        "original_path": str(r.original_path),
+        "current_path": str(r.current_path),
+        "status": r.status.value,
+        "tags": list(r.tags),
+        "review_reason": _code(r.review_reason),
+    }
+    return json.dumps(data, ensure_ascii=False)
+
+
+def record_from_json(text: str | None) -> FileRecord | None:
+    if text is None:
+        return None
+    data = json.loads(text)
+    data["original_path"] = Path(data["original_path"])
+    data["current_path"] = Path(data["current_path"])
+    data["status"] = FileStatus(data["status"])
+    data["tags"] = tuple(data["tags"])
+    data["review_reason"] = _reason(data["review_reason"])
+    return FileRecord(**data)
 
 
 def _rowid(cur: sqlite3.Cursor) -> int:

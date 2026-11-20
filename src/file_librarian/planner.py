@@ -25,6 +25,12 @@ Every destination is ``output_root / <configured folder> / <safe name>``;
 what is already on disk and earlier items in the same plan, compared the way
 APFS compares them; an item's own current name is free for it, so a file
 ``flib reprocess`` re-plans into the folder it is already in keeps its name.
+Duplicates (RF-21) come last, unclassified: each goes to
+``output_root / duplicates_folder`` under its own name (``-N`` if taken), once
+its original is filed. A copy of an item of this run follows that item: if
+the original stays where it is (sensitive, failed, left for later), so does
+the copy, and nothing is recorded about it.
+
 ``flib simulate`` stops after this stage.
 """
 
@@ -34,6 +40,7 @@ from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 from file_librarian.config import Config, folder_key
 from file_librarian.models import (
@@ -51,6 +58,7 @@ from file_librarian.naming import (
     safe_component,
     split_name,
 )
+from file_librarian.scanner import Candidate, Duplicate
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +74,8 @@ class PlannedItem:
     """The subject the name was built from; ``None`` when no rename was considered."""
     review_reason: ReviewReason | None = None
     """Why it goes to review; ``None`` unless ``status`` is ``review``."""
+    original: Path | None = None
+    """For a duplicate, where its original is (or goes, in this run)."""
 
     @property
     def review_category(self) -> str | None:
@@ -125,8 +135,10 @@ def plan(
     *,
     today: date | None = None,
     keep_names: Collection[Path] = (),
+    duplicates: Collection[Duplicate] = (),
 ) -> Plan:
-    """Plan every decision. ``today`` names files that carry no other date.
+    """Plan every decision, then every duplicate. ``today`` names files that carry
+    no other date.
 
     Items at a path in ``keep_names`` are never renamed (``flib reprocess``:
     a name the user chose).
@@ -143,7 +155,65 @@ def plan(
                 decision.context, FileStatus.FAILED, None, f"cannot plan: {exc}"[:300]
             )
         result.items.append(item)
+    going = {item.context.path: item for item in result.items}
+    for duplicate in duplicates:
+        ctx = duplicate_context(duplicate.candidate)
+        try:
+            item = _plan_duplicate(ctx, duplicate, going, config, names)
+        except (UnsafeDestinationError, OSError) as exc:
+            # It stays, and nothing is recorded: its content's row is the original's.
+            reason = f"cannot plan: {exc}"[:300]
+            item = PlannedItem(ctx, FileStatus.SKIPPED, None, reason, original=duplicate.original)
+        result.items.append(item)
     return result
+
+
+def duplicate_context(candidate: Candidate) -> FileContext:
+    """What a duplicate needs to be moved: nothing is read from it besides the scan."""
+    return FileContext(
+        path=candidate.path,
+        sha256=candidate.sha256,
+        size_bytes=candidate.size_bytes,
+        extension=candidate.path.suffix.lower(),
+        mtime_ns=candidate.mtime_ns,
+        inode=candidate.inode,
+        is_unit=candidate.is_unit,
+    )
+
+
+def _plan_duplicate(
+    ctx: FileContext,
+    duplicate: Duplicate,
+    going: dict[Path, PlannedItem],
+    config: Config,
+    names: _Names,
+) -> PlannedItem:
+    """A duplicate goes to the duplicates folder once its original is filed (RF-21).
+
+    A copy of an item of this run follows it: if the original stays where it
+    is (sensitive, failed, left for a later run), so does the copy.
+    """
+    original = duplicate.original
+    if not duplicate.in_library:
+        item = going.get(duplicate.original)
+        if item is None or item.status not in _FILED:
+            why = "is left for a later run" if item is None else f"stays ({item.status.value})"
+            reason = f"same content as another item of this run, which {why}"
+            return PlannedItem(ctx, FileStatus.SKIPPED, None, reason, original=duplicate.original)
+        # Organized and review items always have a destination.
+        original = cast(Path, item.destination)
+    destination = _destination(config, config.duplicates_folder, ctx.path.name, names, ctx)
+    return PlannedItem(
+        ctx,
+        FileStatus.DUPLICATE,
+        destination,
+        "duplicate",
+        renamed=destination.name != ctx.path.name,
+        original=original,
+    )
+
+
+_FILED = frozenset({FileStatus.ORGANIZED, FileStatus.REVIEW})
 
 
 def _plan_one(
@@ -224,7 +294,7 @@ def _to_review(
 def _destination(
     config: Config, folder_name: str, file_name: str, names: _Names, ctx: FileContext
 ) -> Path:
-    allowed = {c.name for c in config.categories} | {config.review_folder}
+    allowed = {c.name for c in config.categories} | {config.review_folder, config.duplicates_folder}
     if folder_name not in allowed:
         raise UnsafeDestinationError(f"folder {folder_name!r} is not configured")
     safe = safe_component(file_name)

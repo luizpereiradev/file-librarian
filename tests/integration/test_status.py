@@ -164,7 +164,7 @@ def test_status_counts_the_last_runs_unreadable_and_cloud_only_skips(downloads: 
         ],
     )
     state = st.collect(cfg)
-    assert state.skipped == {"unreadable": 2, "cloud_only": 1}
+    assert state.skipped == {"unreadable": 2, "cloud_only": 1, "not_where_left": 0}
     assert "  skipped: 2 unreadable, 1 only in iCloud (see its log)" in st.render(state, cfg)
 
 
@@ -378,7 +378,7 @@ def test_a_broken_summary_never_fails_the_scheduled_run(
     path = write_config(tmp_path, downloads)
     populate(downloads, load_config(path))
 
-    def broken(_cfg: Config) -> list[str]:
+    def broken(_cfg: Config, **_kwargs: object) -> list[str]:
         raise sqlite3.OperationalError("database is locked")
 
     monkeypatch.setattr("file_librarian.status.after_scheduled_run", broken)

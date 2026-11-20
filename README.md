@@ -396,6 +396,41 @@ Your own tags are kept, `flib undo` removes only the tag flib added, and
 `finder_tags.enabled: false` turns this off.
 The API key is read from `ANTHROPIC_API_KEY`, never from the file.
 
+### Duplicates
+
+A file with the same content as one flib already filed (the second
+`report (1).pdf`, or a re-download of something in `Finance`) is moved to
+`_Duplicates` (`_Duplicados` in pt-BR) inside the organized folder, under
+its own name. It is never deleted, and it is not sent to the AI, so it costs
+nothing. flib checks first that the filed copy is still there with the same
+content. If it is not where flib left it (you renamed, moved, edited or
+deleted it, or its disk is not connected), the new copy is left in Downloads
+with a note to run `flib reconcile` (`flib status` counts these). Once
+reconcile has found the filed copy gone, the next run files the new one in
+its place. A file you dragged from the organized folder back to Downloads is
+recognised as the same file and left there. A copy of a sensitive
+file stays where it is, like the original.
+
+```text
+  dup     report (1).pdf  ->  _Duplicates/report (1).pdf  (same content as Finance/report.pdf)
+```
+
+`flib undo` puts duplicates back like any other move, and later runs leave
+them there. `flib search` leaves duplicates out unless you add
+`--duplicates`; `flib inspect` on one says which file it is a copy of, and
+`flib status` counts them. If the original disappears, `flib reconcile`
+lists its duplicate as orphaned; move it back to Downloads to have it filed.
+Empty the folder whenever you like: flib never does. `duplicates: leave`
+turns this off (copies then stay where they are), and `duplicates_folder`
+renames the folder.
+
+**Upgrading from an earlier version:** with the default `duplicates: move`,
+the first run also sets aside the copies that earlier runs left in Downloads
+(`report (1).pdf` next to a filed `report.pdf`). A note after the run says
+so; scheduled runs write it to their log, and `flib status` shows it until
+you have seen it after a `flib run` in Terminal. Nothing is deleted: `flib
+undo` puts them back, and `duplicates: leave` keeps them where they are.
+
 ### Names
 
 A file is renamed only when the model read its content (text, or the image

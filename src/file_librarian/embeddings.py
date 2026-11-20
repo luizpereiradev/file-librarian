@@ -171,8 +171,9 @@ def nearest(
 
 
 def embeddable(row: FileRow, config: Config) -> bool:
-    """Never a sensitive file, nor one whose name looks sensitive or matches ``never_send``."""
-    if row.status is FileStatus.SENSITIVE:
+    """Never a sensitive file, nor one whose name looks sensitive or matches ``never_send``,
+    nor a duplicate (RF-21): its original is embedded already."""
+    if row.status is FileStatus.SENSITIVE or row.duplicate_of is not None:
         return False
     names = {row.original_name, row.current_name}
     return not any(sensitive_name(n) or withheld_by_config(n, config.never_send) for n in names)

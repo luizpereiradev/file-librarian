@@ -28,7 +28,6 @@ from file_librarian.extractors.origin import WHERE_FROMS, read_xattr
 from file_librarian.finder_tags import read_tags
 from file_librarian.fsops import (
     CopyMismatchError,
-    CrossVolumeError,
     UnavailableError,
     copy_verified,
     new_copy_key,
@@ -42,22 +41,6 @@ from file_librarian.undo import undo_run
 from tests._helpers import OLD, Crash, answer, make_old, put, row_for, set_tags, write_xattr
 
 pytestmark = pytest.mark.integration
-
-
-@pytest.fixture
-def cross_volume(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every move by a run or an undo behaves as if it crossed volumes.
-
-    Copy keys lose their random suffix, so tests can name the staging paths.
-    """
-    monkeypatch.setattr("file_librarian.executor.new_copy_key", lambda op_id: f"{op_id}-k")
-    monkeypatch.setattr("file_librarian.undo.new_copy_key", lambda op_id: f"{op_id}-k")
-
-    def exdev(src: Path, dst: Path) -> None:
-        raise CrossVolumeError(errno.EXDEV, "cross-device link", str(dst))
-
-    monkeypatch.setattr("file_librarian.executor.move_no_replace", exdev)
-    monkeypatch.setattr("file_librarian.undo.move_no_replace", exdev)
 
 
 def finance(downloads: Path) -> Path:

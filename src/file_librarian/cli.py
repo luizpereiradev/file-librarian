@@ -62,6 +62,7 @@ from file_librarian.search import (
     SearchFilters,
     SearchHit,
     make_filters,
+    original_path,
     semantic_search,
     split_values,
 )
@@ -309,7 +310,7 @@ def inspect(
                 "sha256": digest,
                 "size_bytes": size,
                 "source_urls": list(download_origin(path)),
-                "index": _index_entry(database, digest),
+                "index": _index_entry(database, digest, path),
             }
         )
     if as_json:
@@ -337,6 +338,8 @@ def inspect(
             review = entry["review"]
             if review is not None:
                 typer.echo(f"  review: {review}")
+            if entry["duplicate_of"] is not None:
+                typer.echo(f"  duplicate of: {entry['duplicate_of']}")
             choice = entry["name_choice"]
             if choice is not None:
                 said = "original name kept" if choice == "original" else "new name from the AI"
@@ -378,12 +381,18 @@ def _index_database(config: Path | None) -> Path | None:
     return database if database.exists() else None
 
 
-def _index_entry(database: Path | None, digest: str | None) -> dict[str, object] | None:
-    """What the index says about a content hash (the model's words are untrusted data)."""
+def _index_entry(database: Path | None, digest: str | None, path: Path) -> dict[str, object] | None:
+    """What the index says about a content hash (the model's words are untrusted data).
+
+    A duplicate set aside (RF-21) is shown as itself, with where its original is.
+    """
     if database is None or digest is None:
         return None
     with Store.open(database) as store:
-        row = store.file_by_sha256(digest)
+        row = store.file_by_current_path(path.absolute())
+        if row is None or row.sha256 != digest or row.duplicate_of is None:
+            row = store.file_by_sha256(digest)
+        original = None if row is None else original_path(store, row.duplicate_of)
     if row is None:
         return None
     sensitive = row.status is FileStatus.SENSITIVE
@@ -399,6 +408,7 @@ def _index_entry(database: Path | None, digest: str | None) -> dict[str, object]
         else None,
         "name_choice": row.name_choice,
         "name_choice_reason": None if sensitive else row.name_choice_reason,
+        "duplicate_of": original,
     }
 
 
@@ -557,7 +567,10 @@ def _pipeline(
         if cost:
             typer.echo(cost)
     elif outcome.report is not None:
-        summary = _periodic_summary(cfg) if trigger is RunTrigger.SCHEDULE else []
+        summary = _periodic_summary(cfg, outcome.scan) if trigger is RunTrigger.SCHEDULE else []
+        notice = _duplicates_notice(cfg, trigger)
+        if notice:
+            summary.insert(0, notice)
         _print_report(outcome.report, cfg, skipped, cost, hint, summary)
     if outcome.cached:
         typer.echo(f"{outcome.cached} classification(s) reused from the cache at no cost.")
@@ -569,12 +582,35 @@ def _pipeline(
         )
 
 
-def _periodic_summary(cfg: Config) -> list[str]:
+def _periodic_summary(cfg: Config, scan: ScanResult) -> list[str]:
     """After a scheduled run, what waits for the user, when due (RF-40). Never fails the run."""
+    stuck = sum(1 for _, reason in scan.skipped if reason is SkipReason.NOT_WHERE_LEFT)
     try:
-        return status_mod.after_scheduled_run(cfg)
+        return status_mod.after_scheduled_run(cfg, not_where_left=stuck)
     except Exception as exc:  # the run itself succeeded; the summary is a courtesy
         return [f"warning: the periodic summary failed: {type(exc).__name__}: {exc}"]
+
+
+def _interactive() -> bool:
+    """Whether the output reaches a person at a terminal (not a log, not a pipe)."""
+    return sys.stdout.isatty()
+
+
+def _duplicates_notice(cfg: Config, trigger: RunTrigger) -> str | None:
+    """The one-time note about duplicates (RF-21), while nobody has seen it.
+
+    It goes to the run log every time until a run started by hand prints it to
+    a terminal; ``flib status`` shows it meanwhile.
+    """
+    try:
+        with Store.open(cfg.database) as store:
+            if not status_mod.duplicates_notice_due(store):
+                return None
+            if trigger is not RunTrigger.SCHEDULE and _interactive():
+                status_mod.acknowledge_duplicates_notice(store)
+    except (sqlite3.Error, OSError):
+        return None
+    return status_mod.duplicates_notice(cfg)
 
 
 def _cost_line(cost_usd: float, *, known: bool) -> str | None:
@@ -633,20 +669,35 @@ def _print_plan(plan: Plan, deferred: int, cfg: Config, skipped: list[str]) -> N
         source = _short(item.context.path, cfg)
         if item.destination is None:
             typer.echo(f"  keep    {source}  ({item.reason})")
+        elif item.status is FileStatus.DUPLICATE and item.original is not None:
+            typer.echo(_dup_line(source, item.destination, item.original, cfg))
         else:
             typer.echo(f"  move    {source}  ->  {_short(item.destination, cfg)}  ({item.reason})")
     for line in skipped:
         typer.echo(line)
     moves = len(plan.moves())
+    duplicates = sum(1 for i in plan.moves() if i.status is FileStatus.DUPLICATE)
+    among = f" ({duplicates} duplicate(s) to {cfg.duplicates_folder})" if duplicates else ""
     typer.echo(
-        f"Simulation: {moves} would move, {len(plan.items) - moves} would stay. Nothing changed."
+        f"Simulation: {moves} would move{among}, {len(plan.items) - moves} would stay. "
+        "Nothing changed."
     )
     if deferred:
         typer.echo(f"{deferred} more file(s) wait for a later run (file or cost limit).")
 
 
+def _dup_line(source: str, destination: Path, original: Path, cfg: Config) -> str:
+    """A duplicate moved (or to be moved) to the duplicates folder (RF-21)."""
+    return (
+        f"  dup     {source}  ->  {_short(destination, cfg)}  "
+        f"(same content as {_short(original, cfg)})"
+    )
+
+
 def _moved_line(source: str, item: ItemResult, cfg: Config) -> str:
     """A moved item; one sent to review says why."""
+    if item.destination is not None and item.original is not None:
+        return _dup_line(source, item.destination, item.original, cfg)
     line = f"  moved   {source}  ->  {_short(item.destination, cfg) if item.destination else '?'}"
     return line + (f"  (review: {item.note})" if item.status is FileStatus.REVIEW else "")
 
@@ -672,6 +723,7 @@ def _print_report(
     lines.append(
         f"Run {report.run_id}: {report.count(FileStatus.ORGANIZED, moved=True)} organized, "
         f"{report.count(FileStatus.REVIEW, moved=True)} to review, "
+        f"{report.count(FileStatus.DUPLICATE, moved=True)} duplicate(s) set aside, "
         f"{report.count(FileStatus.SENSITIVE)} sensitive left in place, "
         f"{report.errors} failed, {report.count(FileStatus.SKIPPED)} skipped."
     )
@@ -751,12 +803,19 @@ def search(
             help="First embed every file whose vector is missing or stale (semantic search).",
         ),
     ] = False,
+    duplicates: Annotated[
+        bool,
+        typer.Option(
+            "--duplicates", help="Also list duplicates set aside in the duplicates folder."
+        ),
+    ] = False,
     config: ConfigOption = None,
 ) -> None:
     """Find organized files by name, description or tags, and by category, period or type.
 
     Without a query, the files matching the filters are listed newest first.
     With --semantic, files are also found by meaning ("invoice" finds a "bill").
+    Duplicates are left out unless --duplicates is given.
     """
     cfg = _load(config)
     has_filters = bool(split_values(category) or split_values(ext) or since or until)
@@ -776,10 +835,19 @@ def search(
         with Store.open(cfg.database) as store:
             filters = _search_filters(configured + store.categories(), category, ext, since, until)
             if use_semantic:
-                outcome = semantic_search(store, query, cfg, filters=filters, limit=limit)
+                outcome = semantic_search(
+                    store,
+                    query,
+                    cfg,
+                    filters=filters,
+                    limit=limit,
+                    include_duplicates=duplicates,
+                )
                 hits, notice = outcome.hits, outcome.notice
             else:
-                hits = run_search(store, query, filters=filters, limit=limit)
+                hits = run_search(
+                    store, query, filters=filters, limit=limit, include_duplicates=duplicates
+                )
     if notice:
         typer.echo(f"note: {notice}", err=True)
     if as_json:
@@ -792,6 +860,8 @@ def search(
         where = hit.path if hit.exists else f"{hit.path}  (missing: moved by hand?)"
         label = hit.category or hit.status
         typer.echo(f"{where}\n  [{label}] was {hit.original_name}")
+        if hit.duplicate_of is not None:
+            typer.echo(f"  duplicate of {hit.duplicate_of}")
         if hit.description:
             typer.echo(f"  {hit.description}")
 
@@ -1092,10 +1162,18 @@ def reconcile(config: ConfigOption = None) -> None:
         typer.echo(f"  missing {_short(path, cfg)}")
     for path in report.cloud_only:
         typer.echo(f"  icloud  {_short(path, cfg)}  ({SkipReason.CLOUD_ONLY.value}, not checked)")
+    for path in report.unchecked:
+        typer.echo(f"  unread  {_short(path, cfg)}  (cannot be read now, not checked)")
+    for path, original in report.orphaned:
+        typer.echo(
+            f"  orphan  {_short(path, cfg)}  (its original {_short(original, cfg)} is missing; "
+            "move this copy to an input folder to have it filed)"
+        )
+    orphaned = f", {len(report.orphaned)} duplicate(s) of missing files" if report.orphaned else ""
     typer.echo(
         f"Reconcile: {report.checked} checked, {len(report.moved)} moved by hand, "
         f"{len(report.found_again)} found again, {len(report.missing)} missing, "
-        f"{len(report.cloud_only)} in iCloud only."
+        f"{len(report.cloud_only)} in iCloud only{orphaned}."
     )
 
 
@@ -1409,7 +1487,9 @@ def _print_trial(trial: onboarding.Trial, cfg: Config) -> None:
         if item.destination is None:
             typer.echo(f"  keep    {item.name}  ({item.reason})")
         else:
-            label = "review" if item.status is FileStatus.REVIEW else "move"
+            label = {FileStatus.REVIEW: "review", FileStatus.DUPLICATE: "dup"}.get(
+                item.status, "move"
+            )
             typer.echo(f"  {label:<8}{item.name}  ->  {item.destination}")
     organized = trial.count(FileStatus.ORGANIZED)
     review = trial.count(FileStatus.REVIEW)

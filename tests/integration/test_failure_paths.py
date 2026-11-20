@@ -216,7 +216,7 @@ def test_main_turns_unexpected_errors_into_a_report_request(
 
 
 def test_simulate_and_run_say_why_items_were_skipped(tmp_path: Path, downloads: Path) -> None:
-    config_file = write_config(tmp_path, downloads)
+    config_file = write_config(tmp_path, downloads, extra="duplicates: leave\n")
     put(downloads, "app.dmg", b"same")
     put(downloads, "app (1).dmg", b"same")
     put(downloads, "movie.mkv.part", b"partial")

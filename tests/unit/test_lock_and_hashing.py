@@ -71,4 +71,4 @@ def test_store_file_state(tmp_path: Path) -> None:
                                   current_path, status, attempts, processed_at)
                VALUES ('abc', 'a', '/a', 'a', '/a', 'failed', 2, '2026-11-16')"""
         )
-        assert store.file_state("abc") == FileState(FileStatus.FAILED, 2)
+        assert store.file_state("abc") == FileState(FileStatus.FAILED, 2, Path("/a"))

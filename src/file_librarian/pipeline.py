@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 
 from file_librarian.classifier import CACHE_DAYS, classify_all, correction_examples
 from file_librarian.config import Config
@@ -25,10 +25,11 @@ from file_librarian.db.store import Store
 from file_librarian.embeddings import RefreshReport, refresh
 from file_librarian.executor import RunReport, execute, recover
 from file_librarian.lock import instance_lock
-from file_librarian.models import CategoryRule, Rules, RunTrigger
+from file_librarian.models import CategoryRule, FileStatus, Rules, RunTrigger
 from file_librarian.planner import Plan, plan
 from file_librarian.providers.base import Provider
 from file_librarian.scanner import ScanResult, scan
+from file_librarian.status import DUPLICATES_MOVED
 
 
 @dataclass(slots=True)
@@ -93,8 +94,12 @@ def _run(
     found = scan(config, store.file_state, now=now)
     contexts = [build_context_safely(c, config) for c in found.candidates]
     classified = classify_all(contexts, provider, rules_for(config, store), config, cache=store)
+    # Duplicates are never classified: no provider call, no cost (RF-21).
     planned = plan(
-        classified.decisions, config, today=date.fromtimestamp(now) if now is not None else None
+        classified.decisions,
+        config,
+        today=date.fromtimestamp(now) if now is not None else None,
+        duplicates=found.duplicates,
     )
     deferred = found.deferred + len(classified.deferred)
     if simulate:
@@ -114,10 +119,13 @@ def _run(
         trigger=trigger,
         provider=provider.name,
         model=config.provider.model,
-        seen=len(found.candidates),
+        seen=len(found.candidates) + len(found.duplicates),
         deferred=deferred,
         cost_usd=classified.run_cost,
     )
+    if report.count(FileStatus.DUPLICATE, moved=True) and store.meta(DUPLICATES_MOVED) is None:
+        # Remembered so the one-time note about duplicates is shown (``status.py``).
+        store.set_meta(DUPLICATES_MOVED, datetime.now(UTC).isoformat(timespec="seconds"))
     return Outcome(
         found,
         planned,
