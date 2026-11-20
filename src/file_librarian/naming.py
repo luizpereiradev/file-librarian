@@ -11,8 +11,10 @@ so it gets the same pattern, date and sanitising as any other.
 
 Category layouts (#86) name folders after the document's issuer:
 ``issuer_folder_name`` makes the model's issuer a safe folder name, and
-``match_issuer`` finds the folder that already holds the same organisation,
-so one company never ends up in two folders.
+``issuer_matches`` finds the folders that already hold the same organisation.
+The planner uses it in the folder the file goes to and, with ``{year}/{issuer}``
+and the like, in the sibling folders too, so one company keeps one folder per
+place and one spelling across them.
 """
 
 from __future__ import annotations
@@ -95,40 +97,58 @@ def safe_component(name: str) -> str:
 
 # --- issuer folders (#86) ----------------------------------------------------------
 
-# Words that say what kind of company it is, not which one: dropped from the end
-# of a name before comparing ("Acme Inc." is "Acme"). Dotted forms ("S.A.",
-# "L.L.C.") arrive here as one word: single letters in a row are joined first.
-LEGAL_SUFFIXES = frozenset(
-    {
-        "ab", "ag", "bv", "cia", "co", "company", "corp", "corporation", "eireli", "epp",
-        "gmbh", "inc", "incorporated", "kg", "limitada", "limited", "llc", "llp", "lp",
-        "ltd", "ltda", "me", "nv", "oy", "plc", "pty", "sa", "sarl", "sas", "spa", "srl",
-    }
-)  # fmt: skip
+# Legal forms dropped from the end of a name before comparing ("Acme Inc." is
+# "Acme"). Only forms that are never an ordinary word: "Co", "Company", "Spa",
+# "Me" or "SA" without dots can be part of a name ("Lotus Spa", "Pay Me"), so
+# they stay. Matched on the lower-cased, accent-free text, punctuation kept.
+_LEGAL_FORM = re.compile(
+    r"(?:^|[\s,]+)(?:inc|incorporated|llc|l\.\s?l\.\s?c|llp|ltd|limited|ltda|limitada|corp"
+    r"|corporation|gmbh|plc|eireli|s\.\s?a\.\s?s|s\.\s?a|s\s?/\s?a|s\.\s?r\.\s?l"
+    r"|s\.\s?p\.\s?a|b\.\s?v|n\.\s?v)\.?\s*$"
+)
+# A web address used as a brand: "Amazon.com", "Example.com.br" are "Amazon", "Example".
+_WEB_SUFFIX = re.compile(r"\.(?:com|net|org)(?:\.[a-z]{2})?$")
 MAX_ISSUER_FOLDER = 64
 # A folder name is compared loosely only when both are at least this long.
 _SIMILAR_MIN_CHARS = 6
 
 
+def _plain(name: str) -> str:
+    """Lower case, accents dropped (NFC or NFD alike), spaces collapsed."""
+    text = unicodedata.normalize("NFKD", name.replace("&", " and "))
+    text = "".join(ch for ch in text if not unicodedata.combining(ch)).casefold()
+    return " ".join(text.split())
+
+
 def issuer_key(name: str) -> str:
     """``name`` reduced to what tells one organisation from another.
 
-    Case, accents and punctuation go, single letters in a row are joined
-    (``S.A.`` is ``sa``), a leading "the" and trailing legal suffixes are
-    dropped while a word is left: ``"ACME, Inc."``, ``"Acme Ltda"`` and
-    ``"acme"`` all give ``"acme"``.
+    Case, accents and punctuation go, a trailing web suffix (``.com``) and
+    trailing legal forms (``Inc``, ``Ltd``, ``LLC``, ``Corp``, ``GmbH``,
+    ``Ltda``, ``S.A.`` with its dots...) are dropped while something is left,
+    single letters in a row are joined, and so is a leading "the":
+    ``"ACME, Inc."``, ``"Acme Ltda"``, ``"acme.com"`` and ``"acme"`` all give
+    ``"acme"``.
     """
-    words = _issuer_words(name)
+    return " ".join(_key_words(name))
+
+
+def _key_words(name: str) -> list[str]:
+    text = _WEB_SUFFIX.sub("", _plain(name).rstrip(" ."))
+    while True:
+        stripped = _LEGAL_FORM.sub("", text).rstrip(" ,.")
+        if stripped == text or not re.search(r"[^\W_]", stripped):
+            break
+        text = stripped
+    words = _issuer_words(text)
     if len(words) > 1 and words[0] == "the":
         words.pop(0)
-    while len(words) > 1 and (words[-1] in LEGAL_SUFFIXES or words[-1] == "and"):
+    while len(words) > 1 and words[-1] == "and":
         words.pop()
-    return " ".join(words)
+    return words
 
 
-def _issuer_words(name: str) -> list[str]:
-    text = unicodedata.normalize("NFKD", name.replace("&", " and "))
-    text = "".join(ch for ch in text if not unicodedata.combining(ch)).casefold()
+def _issuer_words(text: str) -> list[str]:
     words: list[str] = []
     letters = ""
     for word in re.findall(r"[^\W_]+", text):
@@ -145,53 +165,63 @@ def _issuer_words(name: str) -> list[str]:
 
 
 def issuer_folder_name(issuer: str) -> str | None:
-    """The folder a new issuer gets: its own spelling made a safe folder name, or
-    ``None`` when nothing usable is left."""
-    name = safe_component(re.sub(r"\s+", " ", issuer)[:MAX_ISSUER_FOLDER])
+    """The folder a new issuer gets: its own spelling made a safe folder name (NFC,
+    no trailing dots or spaces), or ``None`` when nothing usable is left."""
+    name = safe_component(re.sub(r"\s+", " ", issuer)[:MAX_ISSUER_FOLDER]).rstrip(" .")
     if not name or not issuer_key(name):
         return None
     return name
 
 
-def match_issuer(issuer: str, folders: list[str]) -> str | None:
-    """The folder among ``folders`` that already holds ``issuer``'s files, if any.
+def issuer_matches(issuer: str, folders: list[str]) -> list[str]:
+    """The folders among ``folders`` that hold ``issuer``, best tier first.
 
-    First the same ``issuer_key``, then the same key without spaces ("Power Co"
-    and "PowerCo"), and only then a conservative similarity
-    (``_similar_keys``), used only when exactly one folder is that close.
-    Distinct organisations are never merged on looks alone: one different
-    letter (``Acme``/``Acne``), a different number or a different word keeps
-    them apart.
+    Tiers: the same ``issuer_key``; the same key without spaces ("Power Co"
+    and "PowerCo"); then a conservative similarity (``_similar_keys``). Only
+    the first tier that has any match is returned, every folder in it: the
+    caller picks among them (the one a file is already in, the one flib
+    made, the oldest). Distinct organisations are never merged on looks
+    alone: one different letter (``Acme``/``Acne``), a different number, a
+    plural (``Morgan``/``Morgans``) or a different word keeps them apart.
     """
     key = issuer_key(issuer)
     if not key:
-        return None
+        return []
     keyed = [(folder, issuer_key(folder)) for folder in folders]
-    for folder, other in keyed:
-        if other == key:
-            return folder
-    compact = {key.replace(" ", ""), "".join(_issuer_words(issuer))}
-    for folder, other in keyed:
-        if other and compact & {other.replace(" ", ""), "".join(_issuer_words(folder))}:
-            return folder
+    same = [folder for folder, other in keyed if other == key]
+    if same:
+        return same
+    compact = {key.replace(" ", ""), "".join(_issuer_words(_plain(issuer)))}
+    joined = [
+        folder
+        for folder, other in keyed
+        if other and compact & {other.replace(" ", ""), "".join(_issuer_words(_plain(folder)))}
+    ]
+    if joined:
+        return joined
     close = [folder for folder, other in keyed if other and _similar_keys(key, other)]
-    return close[0] if len(close) == 1 else None
+    return close if len(close) == 1 else []
+
+
+def match_issuer(issuer: str, folders: list[str]) -> str | None:
+    """The folder among ``folders`` that already holds ``issuer``, if one clearly does
+    (the first of ``issuer_matches``, which keeps the order of ``folders``)."""
+    found = issuer_matches(issuer, folders)
+    return found[0] if found else None
 
 
 def _similar_keys(a: str, b: str) -> bool:
     """Two issuer keys that only a slip tells apart.
 
-    Both at least ``_SIMILAR_MIN_CHARS`` letters long without spaces, and the
-    same words but for one of: a plural ``s`` at the end of a word, one letter
-    doubled (``Fabrikkam``), or two neighbouring letters swapped
-    (``Nortwhind``). A substituted letter never counts: ``Acme`` and ``Acne``
-    are different names.
+    Both at least ``_SIMILAR_MIN_CHARS`` characters long without spaces, and
+    the same but for one letter doubled (``Fabrikkam``) or two neighbouring
+    letters swapped (``Nortwhind``). Never a digit, never a substituted or
+    added letter: ``Acme`` and ``Acne``, ``Morgan`` and ``Morgans``, are
+    different names.
     """
     ca, cb = a.replace(" ", ""), b.replace(" ", "")
     if min(len(ca), len(cb)) < _SIMILAR_MIN_CHARS or ca == cb:
         return False
-    if _singular(a) == _singular(b):
-        return True
     if abs(len(ca) - len(cb)) == 1:
         long, short = (ca, cb) if len(ca) > len(cb) else (cb, ca)
         for i, ch in enumerate(long):
@@ -210,10 +240,6 @@ def _similar_keys(a: str, b: str) -> bool:
             and ca[diff[1]].isalpha()
         )
     return False
-
-
-def _singular(key: str) -> str:
-    return " ".join(w[:-1] if len(w) > 3 and w.endswith("s") else w for w in key.split())
 
 
 MAX_COUNTER = 999

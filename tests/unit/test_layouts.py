@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,7 @@ import pytest
 from file_librarian import planner
 from file_librarian.config import Category, ConfigError, layout_segments
 from file_librarian.models import Classification, Decision, FileContext, FileStatus
-from file_librarian.naming import issuer_folder_name, issuer_key, match_issuer
+from file_librarian.naming import issuer_folder_name, issuer_key, issuer_matches, match_issuer
 from file_librarian.planner import Placement, layout_parts, plan
 from file_librarian.privacy import scrub_answer
 from file_librarian.providers.prompt import clean_issuer, normalize_answer
@@ -89,28 +90,38 @@ def test_invalid_layouts_are_refused_at_load(tmp_path: Path, layout: str, messag
 @pytest.mark.parametrize(
     "spelling",
     ["Acme", "ACME", "acme", "Acme Inc.", "ACME, Inc", "Acme Ltda", "Acme S.A.", "Acme S/A",
-     "The Acme Company", "Ácme", "Acme L.L.C.", "Acme & Co"],
+     "The Acme Corporation", "Ácme", unicodedata.normalize("NFD", "Ácme"), "Acme L.L.C.",
+     "Acme GmbH", "Acme Ltd.", "Acme EIRELI", "acme.com", "Acme.com.br", "Acme Inc. Ltd"],
 )  # fmt: skip
 def test_spellings_of_one_company_share_a_key(spelling: str) -> None:
     assert issuer_key(spelling) == "acme"
     assert match_issuer(spelling, ["Other Corp", "Acme"]) == "Acme"
 
 
-def test_a_legal_suffix_alone_is_kept() -> None:
+def test_a_legal_form_alone_is_kept() -> None:
     assert issuer_key("Inc") == "inc"
     assert issuer_key("S.A.") == "sa"
-    assert issuer_key("Power Co") == "power"
+
+
+@pytest.mark.parametrize(
+    "name", ["Power Co", "Power Company", "Lotus Spa", "Pay Me", "Acme SA", "Acme & Co"]
+)
+def test_ordinary_words_are_never_taken_for_a_legal_form(name: str) -> None:
+    # "Co", "Company", "Spa", "Me" and "SA" without dots can be part of a name.
+    assert issuer_key(name) != issuer_key(name.split()[0])
 
 
 @pytest.mark.parametrize(
     ("new", "existing"),
     [
         ("PowerCo", "Power Co"),
-        ("Power Company", "Power Co"),
-        ("Northwind Traders", "Northwind Trader"),
+        ("POWER CO.", "Power Co"),
         ("Fabrikkam", "Fabrikam"),
         ("Nortwhind", "Northwind"),
         ("Banco do Brasil S.A.", "Banco do Brasil"),
+        ("Amazon", "Amazon.com"),
+        ("Café", unicodedata.normalize("NFD", "Café Ltda")),
+        ("Acme Partners", "Acme:Partners"),  # Finder shows it as "Acme/Partners"
     ],
 )
 def test_similar_spellings_join_the_folder_already_there(new: str, existing: str) -> None:
@@ -128,6 +139,16 @@ def test_similar_spellings_join_the_folder_already_there(new: str, existing: str
         ("Northwind Bank", "Northwind Brands"),
         ("Fabrikam", "Fabrikan"),
         ("Woodgrove", "Woodgrave"),
+        ("Morgans", "Morgan"),  # a plural is another name
+        ("Williams", "William"),
+        ("Siemens", "Siemen"),
+        ("Northwind Traders", "Northwind Trader"),
+        ("Lotus Spa", "Lotus"),
+        ("Pay Me", "Pay"),
+        ("Power Company", "Power Co"),
+        ("Studio 5455", "Studio 545"),  # a doubled digit
+        ("Studio 54", "Studio 45"),  # swapped digits
+        ("Contoso 12", "Contoso 21"),
     ],
 )
 def test_near_miss_names_are_never_merged(new: str, existing: str) -> None:
@@ -135,7 +156,13 @@ def test_near_miss_names_are_never_merged(new: str, existing: str) -> None:
 
 
 def test_two_equally_close_folders_are_not_guessed_between() -> None:
-    assert match_issuer("Northwind Traders", ["Northwind Trader", "Northwind Tradres"]) is None
+    assert match_issuer("Northwind", ["Nortwhind", "Northwnid"]) is None
+
+
+def test_every_folder_of_the_best_tier_is_returned() -> None:
+    assert issuer_matches("Acme", ["ACME Corp", "Acme", "PowerCo"]) == ["ACME Corp", "Acme"]
+    assert issuer_matches("Power Co", ["PowerCo", "Contoso"]) == ["PowerCo"]
+    assert issuer_matches("...", ["Acme"]) == []
 
 
 def test_an_issuer_without_letters_matches_nothing() -> None:
@@ -145,7 +172,10 @@ def test_an_issuer_without_letters_matches_nothing() -> None:
 
 
 def test_issuer_folder_names_are_safe() -> None:
-    assert issuer_folder_name("Acme Inc.") == "Acme Inc."
+    assert issuer_folder_name("Acme Inc.") == "Acme Inc"
+    assert issuer_folder_name("Acme... ") == "Acme"
+    nfd = issuer_folder_name(unicodedata.normalize("NFD", "Café"))
+    assert nfd == unicodedata.normalize("NFC", "Café")
     assert issuer_folder_name("Power/Co") == "Power-Co"
     assert issuer_folder_name("  ..Acme  ") == "Acme"
     assert issuer_folder_name("A\x00cme") == "A-cme"
@@ -256,7 +286,8 @@ def test_new_files_land_in_their_layout_folders(tmp_path: Path) -> None:
     where = {i.context.path.name: i.destination for i in planned.items}
     assert where == {
         "a.pdf": lib / "Finance" / "2024" / "Acme" / "a.pdf",
-        "b.pdf": lib / "Finance" / "2026" / "ACME, Inc." / "b.pdf",
+        # Another year: its folder is spelled like the one of 2024.
+        "b.pdf": lib / "Finance" / "2026" / "Acme" / "b.pdf",
         "c.pdf": lib / "Finance" / "2026" / "c.pdf",  # no issuer: the year folder
         "d.pdf": lib / "Other" / "d.pdf",  # no layout
         "e.pdf": lib / cfg.review_folder / "e.pdf",  # review never gets a layout
@@ -266,7 +297,7 @@ def test_new_files_land_in_their_layout_folders(tmp_path: Path) -> None:
 def test_the_same_company_lands_in_one_folder_within_a_plan(tmp_path: Path) -> None:
     cfg = layout_config(tmp_path, "{issuer}")
     inbox = tmp_path / "Downloads"
-    names = ["Power Co", "POWER COMPANY", "PowerCo", "Power Co."]
+    names = ["Power Co", "POWER CO", "PowerCo", "Power Co."]
     decisions = [
         decision(inbox / f"{i}.pdf", answer("Finance", issuer=name)) for i, name in enumerate(names)
     ]
@@ -312,3 +343,29 @@ def test_names_collide_per_final_folder(tmp_path: Path) -> None:
         lib / "Finance" / "2025" / "bill.pdf",
     ]
     assert all(i.status is FileStatus.ORGANIZED for i in planned.items)
+
+
+@pytest.mark.parametrize("part", ["", ".", "..", "a/b", "a\x00b", "new:folder"])
+def test_destination_refuses_a_sub_folder_that_is_not_plain(tmp_path: Path, part: str) -> None:
+    cfg = layout_config(tmp_path, "{year}")
+    ctx = FileContext(
+        path=tmp_path / "Downloads" / "a.pdf", sha256="a" * 64, size_bytes=1, extension=""
+    )
+    with pytest.raises(planner.UnsafeDestinationError, match="not a plain folder name"):
+        planner._destination(cfg, "Finance", "a.pdf", planner._Names(), ctx, (part,))
+
+
+def test_destination_takes_sub_folders_only_in_a_category(tmp_path: Path) -> None:
+    cfg = layout_config(tmp_path, "{year}")
+    ctx = FileContext(
+        path=tmp_path / "Downloads" / "a.pdf", sha256="a" * 64, size_bytes=1, extension=""
+    )
+    with pytest.raises(planner.UnsafeDestinationError, match="has no layout"):
+        planner._destination(cfg, cfg.review_folder, "a.pdf", planner._Names(), ctx, ("2026",))
+    deep = ("2026", "05", "Acme")
+    final = planner._destination(cfg, "Finance", "a.pdf", planner._Names(), ctx, deep)
+    assert final == cfg.output_root / "Finance" / "2026" / "05" / "Acme" / "a.pdf"
+    # A folder already on disk is taken as it is spelled there.
+    (cfg.output_root / "Finance" / "Acme:Partners").mkdir(parents=True)
+    taken = planner._destination(cfg, "Finance", "a.pdf", planner._Names(), ctx, ("Acme:Partners",))
+    assert taken.parent.name == "Acme:Partners"

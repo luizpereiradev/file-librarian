@@ -72,6 +72,7 @@ from __future__ import annotations
 
 import json
 import os
+import unicodedata
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import date
@@ -100,7 +101,7 @@ from file_librarian.models import (
     RunTrigger,
 )
 from file_librarian.pipeline import rules_for
-from file_librarian.planner import Placement, UnsafeDestinationError, plan
+from file_librarian.planner import Placement, UnsafeDestinationError, plan, same_folder
 from file_librarian.privacy import scrub, scrub_name, scrub_tags
 from file_librarian.protection import LOCKED_NOW
 from file_librarian.providers.base import Provider, Usage
@@ -190,6 +191,9 @@ class ReprocessPlan:
     provider gave where the index had none; written with the run, undone with it."""
     in_place: int = 0
     """For ``--apply-layout``: files already where their layout puts them."""
+    respelled: dict[int, Path] = field(default_factory=dict)
+    """For ``--apply-layout``: files in place whose folder the disk now spells
+    otherwise (renamed only in case by the user); the index takes that spelling."""
 
     def moves(self) -> list[Change]:
         return [c for c in self.changes if c.moves]
@@ -299,26 +303,34 @@ def _deep(path: Path, config: Config) -> bool:
 
 
 def placed_by_hand(row: FileRow, moves: list[tuple[Path, Path]], config: Config) -> bool:
-    """The file is in a sub-folder of its folder that the user chose, not flib.
+    """The user chose where the file is, not flib.
 
     ``moves``: the file's moves still in effect, newest first (``Store.done_moves``).
-    A file deeper than ``output_root/<folder>/`` was put there by flib (a
+    A file not where flib's last move put it was moved by hand (``flib
+    reconcile`` records that without a move of flib's), at any depth: out of
+    a layout folder to the category's top, into a sub-folder of its own. A
+    file deeper than ``output_root/<folder>/`` was put there by flib (a
     category layout) only if flib's last move brought it exactly there, from
-    a top-level place or from another place flib had put it. A move by hand
-    (which ``flib reconcile`` records without a move of flib's) breaks that
-    chain, and so does a move that kept a sub-folder the user had made (a
-    category rename keeps it): such a file is the user's to place.
+    a top-level place or from another place flib had put it; a move that
+    kept a sub-folder the user had made (a category rename keeps it) breaks
+    that chain too. Paths are compared the way APFS compares names.
     """
     current = row.current_path
+    if moves and not _same_path(moves[0][1], current):
+        return True
     if not _deep(current, config):
         return False
     for src, dst in moves:
-        if dst != current:
+        if not _same_path(dst, current):
             return True
         if not _deep(src, config):
             return False
         current = src
-    return True
+    return True  # deep, and no move of flib's brought it there
+
+
+def _same_path(a: Path, b: Path) -> bool:
+    return a == b or [folder_key(p) for p in a.parts] == [folder_key(p) for p in b.parts]
 
 
 def _wanted(
@@ -484,6 +496,8 @@ def plan_reprocess(
         destination = item.destination
         if target.nested and (item.status, category) == (row.status, row.category):
             destination = None  # in the sub-folder the user chose
+        if destination is not None and _same_place(destination, path):
+            destination = None  # the same file, its folder spelled otherwise on disk
         relocation = Relocation(
             file_id=row.id,
             context=item.context,
@@ -597,6 +611,9 @@ class _Placed:
     row: FileRow
     when: date
     issuer: str | None
+    learned: tuple[str | None, str | None] = (None, None)
+    """(document date, issuer) taken from outside the index (a cached answer, the
+    provider): written to the index with the run, so the next one finds them there."""
 
 
 @dataclass(slots=True)
@@ -624,7 +641,9 @@ def select_layout(
     sub-folder by hand (``placed_by_hand``). ``{year}`` and ``{month}`` come
     from the stored document date, else the newest cached answer's, else the
     file's download (birth) date, else the day it was filed; ``{issuer}``
-    from the stored issuer, else the cached answer's. A file whose layout
+    from the stored issuer, else the cached answer's. A value taken from the
+    cache is written to the index with the run (``learned``), so the file
+    stays put once the cache has expired. A file whose layout
     needs an issuer that is in neither is ``missing``; with ``ask`` its text
     is read so the provider can be asked. Nothing is sent here.
     """
@@ -658,14 +677,19 @@ def select_layout(
             selection.left.append((path, "not at its recorded place; run `flib reconcile`"))
             continue
         cached_date, cached_issuer = _cached_values(store, row.sha256)
+        stored_date = _iso(row.document_date)
         born = getattr(st, "st_birthtime", None)
         when = (
-            _iso(row.document_date)
+            stored_date
             or cached_date
             or (date.fromtimestamp(born) if born else None)
             or _processed_on(row)
         )
         issuer = row.issuer or cached_issuer
+        learned = (
+            cached_date.isoformat() if cached_date and not stored_date else None,
+            cached_issuer if cached_issuer and not row.issuer else None,
+        )
         needs_issuer = category.layout is not None and "{issuer}" in layout_segments(
             category.layout
         )
@@ -681,7 +705,7 @@ def select_layout(
                 continue
             selection.missing.append(Target(row, context))
             continue
-        selection.ready.append(_Placed(row, when, issuer))
+        selection.ready.append(_Placed(row, when, issuer, learned))
     return selection
 
 
@@ -750,14 +774,14 @@ def plan_layout(
             when = stored or answer.document_date or decision.context.downloaded
             when = when or _processed_on(row)
             learned = None if stored else answer.document_date
-            result.learned[row.id] = (learned.isoformat() if learned else None, answer.issuer)
-            placed.append(_Placed(row, when, answer.issuer))
+            values = (learned.isoformat() if learned else None, answer.issuer)
+            placed.append(_Placed(row, when, answer.issuer, values))
         for ctx in classified.deferred:
             result.kept.append((ctx.path, "cost limit reached; run it again"))
     else:
         for target in selection.missing:
             result.kept.append((target.context.path, "issuer unknown; it stays"))
-    placement = Placement()
+    placement = Placement(store.flib_folders())
     for item in sorted(placed, key=lambda p: p.row.id):
         _place_in_layout(item, config, placement, result)
     return result
@@ -775,30 +799,67 @@ def _place_in_layout(
     # then neither read nor hashed.
     light = FileContext(path=path, sha256=row.sha256, size_bytes=0, extension="")
     try:
-        destination = placement.in_category(
+        destination, note = placement.in_category(
             config, category, path.name, light, when=item.when, issuer=item.issuer
         )
     except (UnsafeDestinationError, OSError) as exc:
         result.kept.append((path, f"cannot plan: {exc}"[:300]))
         return
-    if destination == path:
+    if _same_place(destination, path):
         result.in_place += 1
+        _learn(result, row, item.learned)
+        if destination != path:  # the same place, spelled otherwise: the disk's wins
+            spelled = _spelled_on_disk(path, config.output_root)
+            if spelled is not None and spelled != path:
+                result.respelled[row.id] = spelled
         return
     context, problem = _check(row, config, read=False)
     if context is None:
         result.kept.append((path, problem))
         return
     where = destination.parent.relative_to(config.output_root)
+    reason = f"layout of {category.name}: {where}" + (f"; {note}" if note else "")
     relocation = Relocation(
         file_id=row.id,
         context=context,
         destination=destination,
         status=FileStatus.ORGANIZED,
         category=category.name,
-        reason=f"layout of {category.name}: {where}",
+        reason=reason,
         previous=(row.status, row.category),
     )
     result.changes.append(Change(row, relocation))
+    _learn(result, row, item.learned)
+
+
+def _learn(result: ReprocessPlan, row: FileRow, values: tuple[str | None, str | None]) -> None:
+    if values != (None, None):
+        result.learned[row.id] = values
+
+
+def _same_place(destination: Path, path: Path) -> bool:
+    """``destination`` is where ``path`` already is: the same name in the same folder,
+    however the folder is spelled (a folder renamed only in case is the same)."""
+    return destination.name == path.name and same_folder(destination.parent, path.parent)
+
+
+def _spelled_on_disk(path: Path, root: Path) -> Path | None:
+    """``path`` as the disk spells it below ``root`` (case, Unicode form); ``None``
+    when a part cannot be found or listed."""
+    if not path.is_relative_to(root):
+        return None
+    current = root
+    for part in path.relative_to(root).parts:
+        try:
+            names = [entry.name for entry in current.iterdir()]
+        except OSError:
+            return None
+        wanted = folder_key(part)
+        found = next((n for n in names if folder_key(n) == wanted), None)
+        if found is None:
+            return None
+        current = current / unicodedata.normalize("NFC", found)
+    return current
 
 
 # --- 4. applying --------------------------------------------------------------------
@@ -834,6 +895,10 @@ def apply(
                 store.change_index(run_id, "files.issuer", file_id, None, issuer)
             if when is not None and row.document_date is None:
                 store.change_index(run_id, "files.document_date", file_id, None, when)
+        for file_id, spelled in planned.respelled.items():
+            row = store.file_by_id(file_id)
+            if _same_path(row.current_path, spelled):
+                store.set_file_location(file_id, spelled, row.status)
     if planned.rename is not None and planned.same_folder:
         _rename_tags(config, store, run_id, renamed, *planned.rename)
     report = relocate(

@@ -1972,10 +1972,13 @@ def _layout_run(
     if simulate:
         typer.echo("Simulation: nothing moved or changed.")
         return None, planned
-    if not planned.moves() and not planned.learned:
+    if not planned.moves() and not planned.learned and not planned.respelled:
         typer.echo("Nothing to move: the library already follows its layouts.")
         return None, planned
     question = f"Move {len(planned.moves())} file(s) into their layout? `flib undo` reverts it"
+    if not planned.moves():
+        count = len(planned.learned.keys() | planned.respelled.keys())
+        question = f"Record in the index what {count} file(s) are filed by? Nothing moves"
     if not yes and not typer.confirm(question, default=False):
         typer.echo("Nothing changed.")
         return None, planned

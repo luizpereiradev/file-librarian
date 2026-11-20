@@ -5,6 +5,7 @@ from __future__ import annotations
 import errno
 import json
 import shutil
+import unicodedata
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -134,7 +135,7 @@ def test_a_run_files_into_the_layout_and_the_index_keeps_what_it_used(downloads:
 def test_later_runs_reuse_the_issuer_folder_already_there(downloads: Path) -> None:
     cfg = config(downloads, finance="{issuer}")
     organize(downloads, cfg, {"a.pdf": (b"one", filed(issuer="Power Co"))})
-    organize(downloads, cfg, {"b.pdf": (b"two", filed(issuer="POWER COMPANY"))})
+    organize(downloads, cfg, {"b.pdf": (b"two", filed(issuer="POWER CO."))})
     organize(downloads, cfg, {"c.pdf": (b"three", filed(issuer="Power Cooperative"))})
     lib = library(downloads)
     assert path_of(cfg, "b.pdf") == lib / "Finance" / "Power Co" / "b.pdf"
@@ -450,6 +451,137 @@ def test_a_file_changed_since_it_was_filed_is_left(downloads: Path) -> None:
         (p.name, why) for p, why in planned.kept
     ]
     assert (lib / "Finance" / "a.pdf").read_bytes() == b"edited"
+
+
+# --- review findings: stability -----------------------------------------------------------
+
+
+def test_a_value_from_the_cache_is_kept_in_the_index(downloads: Path) -> None:
+    cfg = config(downloads, finance="{year}")
+    organize(downloads, cfg, {"a.pdf": (b"one", filed())})  # no document date
+    lib = library(downloads)
+    first = path_of(cfg, "a.pdf")
+    with Store.open(cfg.database) as store:
+        cached = json.dumps({"document_date": "2019-03-04", "issuer": "Acme"})
+        store.conn.execute("DELETE FROM classification_cache")  # only the later answer
+        store.cache_answer(row_for(cfg, "a.pdf").sha256, "other rules", cached)
+    _, report = apply_layout(cfg)
+    assert path_of(cfg, "a.pdf") == lib / "Finance" / "2019" / "a.pdf"
+    row = row_for(cfg, "a.pdf")
+    assert (row.document_date, row.issuer) == ("2019-03-04", "Acme")
+    # The cache expires: the index alone gives the same place, so nothing moves.
+    forget_answers(cfg)
+    again, _ = apply_layout(cfg)
+    assert again.moves() == [] and again.learned == {}
+    with Store.open(cfg.database) as store:
+        undo_run(store, report.run_id, config=cfg)
+    row = row_for(cfg, "a.pdf")
+    assert (row.document_date, row.issuer, row.current_path) == (None, None, first)
+
+
+def test_values_from_the_cache_are_kept_for_a_file_already_in_place(downloads: Path) -> None:
+    cfg = config(downloads, finance="{year}")
+    organize(downloads, cfg, {"a.pdf": (b"one", filed())})
+    with Store.open(cfg.database) as store:
+        cached = json.dumps({"document_date": f"{YEAR}-01-02"})
+        store.conn.execute("DELETE FROM classification_cache")  # only the later answer
+        store.cache_answer(row_for(cfg, "a.pdf").sha256, "other rules", cached)
+    planned, report = apply_layout(cfg)
+    assert planned.moves() == [] and planned.in_place == 1
+    assert row_for(cfg, "a.pdf").document_date == f"{YEAR}-01-02"
+    assert report.run_id is not None
+
+
+def test_a_folder_renamed_only_in_case_keeps_its_file(downloads: Path) -> None:
+    cfg = config(downloads, finance="{issuer}")
+    organize(downloads, cfg, {"a.pdf": (b"one", filed(issuer="acme"))})
+    lib = library(downloads)
+    (lib / "Finance" / "acme").rename(lib / "Finance" / "Acme")  # as Finder does
+    with Store.open(cfg.database) as store:
+        reconcile(cfg, store)
+    planned, _ = apply_layout(cfg)
+    assert planned.moves() == [] and planned.in_place == 1
+    assert [p.name for p in (lib / "Finance" / "Acme").iterdir()] == ["a.pdf"]
+    assert str(path_of(cfg, "a.pdf")).endswith("Finance/Acme/a.pdf")  # the disk's spelling
+    # Plain reprocess leaves it too.
+    planned, _ = reprocess(cfg, FakeProvider(default=filed(issuer="ACME")))
+    assert planned.moves() == []
+
+
+@pytest.mark.parametrize(
+    ("folder", "issuer"),
+    [("Acme:Partners", "Acme Partners"), (unicodedata.normalize("NFD", "Café Ltda"), "Café")],
+)
+def test_an_existing_folder_with_an_unusual_name_is_used_as_it_is(
+    downloads: Path, folder: str, issuer: str
+) -> None:
+    cfg = config(downloads, finance="{issuer}")
+    lib = library(downloads)
+    (lib / "Finance" / folder).mkdir(parents=True)
+    organize(downloads, cfg, {"a.pdf": (b"one", filed(issuer=issuer))})
+    row = row_for(cfg, "a.pdf")
+    assert row.status is FileStatus.ORGANIZED
+    assert (lib / "Finance" / folder / "a.pdf").exists()
+
+
+def test_a_layout_folder_that_cannot_take_the_file_never_fails_it(
+    downloads: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from file_librarian import planner
+
+    cfg = config(downloads, finance="{issuer}")
+    # A folder name that is not safe and not on disk: refused, so the top level is used.
+    monkeypatch.setattr(planner, "issuer_folder_name", lambda _issuer: "Acme:Partners")
+    organize(downloads, cfg, {"a.pdf": (b"one", filed(issuer="Acme"))})
+    row = row_for(cfg, "a.pdf")
+    assert (row.status, row.current_path) == (
+        FileStatus.ORGANIZED,
+        library(downloads) / "Finance" / "a.pdf",
+    )
+
+
+def test_a_hand_made_folder_with_the_same_issuer_takes_nothing(downloads: Path) -> None:
+    cfg = config(downloads, finance="{issuer}")
+    organize(downloads, cfg, {"a.pdf": (b"one", filed(issuer="Acme"))})
+    lib = library(downloads)
+    (lib / "Finance" / "ACME Corp").mkdir()  # sorts before "Acme"
+    planned, _ = apply_layout(cfg)
+    assert planned.moves() == []
+    # A new file of the same company goes to the folder flib made.
+    organize(downloads, cfg, {"b.pdf": (b"two", filed(issuer="Acme Corp."))})
+    assert path_of(cfg, "b.pdf") == lib / "Finance" / "Acme" / "b.pdf"
+
+
+def test_a_file_moved_out_of_its_layout_folder_by_hand_stays(downloads: Path) -> None:
+    cfg = config(downloads, finance="{issuer}")
+    organize(downloads, cfg, {"a.pdf": (b"one", filed(issuer="Acme"))})
+    lib = library(downloads)
+    (lib / "Finance" / "Acme" / "a.pdf").rename(lib / "Finance" / "a.pdf")
+    with Store.open(cfg.database) as store:
+        reconcile(cfg, store)
+    planned, _ = apply_layout(cfg)
+    assert planned.moves() == []
+    assert path_of(cfg, "a.pdf") == lib / "Finance" / "a.pdf"
+
+
+def test_one_company_keeps_one_spelling_across_years(downloads: Path) -> None:
+    cfg = config(downloads, finance="{year}/{issuer}")
+    organize(downloads, cfg, {"a.pdf": (b"one", filed(document_date=MAY, issuer="ACME Inc."))})
+    later = date(2025, 1, 2)
+    organize(downloads, cfg, {"b.pdf": (b"two", filed(document_date=later, issuer="Acme"))})
+    lib = library(downloads)
+    assert path_of(cfg, "a.pdf") == lib / "Finance" / "2024" / "ACME Inc" / "a.pdf"
+    assert path_of(cfg, "b.pdf") == lib / "Finance" / "2025" / "ACME Inc" / "b.pdf"
+
+
+def test_a_deep_file_without_moves_of_flib_is_the_user_s(downloads: Path) -> None:
+    cfg = config(downloads, finance="{issuer}")
+    organize(downloads, cfg, {"a.pdf": (b"one", filed(issuer="Acme"))})
+    row = row_for(cfg, "a.pdf")
+    assert rp.placed_by_hand(row, [], cfg) is True
+    top = config(downloads)
+    organize(downloads, top, {"b.pdf": (b"two", filed())})
+    assert rp.placed_by_hand(row_for(top, "b.pdf"), [], top) is False
 
 
 # --- crashes and other volumes ---------------------------------------------------------------

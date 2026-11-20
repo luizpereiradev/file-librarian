@@ -12,16 +12,20 @@ All notable changes to this project are documented here. The format follows
   with `{year}`, `{month}` and `{issuer}` (`"{year}"`, `"{issuer}/{year}"`...,
   up to three levels, validated at load). The year and month come from the
   document's date, else the download date, else the day filed; the issuer is
-  a new field of the answer (an organisation, never a private person; one
-  holding an identifier is dropped), stored in the index with the document
-  date (migration 0014; prompt version 6). Issuer folders are stable: a name
-  is matched with the folders already there ignoring case, accents,
-  punctuation and legal suffixes, then by a conservative similarity (a
-  plural, a doubled or swapped letter, never a different letter or word).
-  An unknown value stops at the deepest folder known.
+  a new field of the answer (the prompt asks for an organisation, not a
+  private person; one holding an identifier is dropped), stored in the index
+  with the document date (migration 0014; prompt version 6). Issuer folders
+  are stable: a name is matched with the folders already there ignoring
+  case, accents, punctuation, `.com` and unambiguous legal forms (`Inc`,
+  `Ltd`, `LLC`, `S.A.`...), then by a conservative similarity (a doubled or
+  swapped letter, never a digit, a plural, a different letter or word), and
+  reuses its spelling across sibling folders (other years). An unknown value
+  stops at the deepest folder known; a folder that cannot take a file sends
+  it to the category's top, never failing it.
   `flib reprocess --apply-layout [--category NAME] [--ask-issuer]` moves
   organized files into their layout from what the index stores, as one run
-  `flib undo` reverts; files you placed in a sub-folder stay. `flib fix
+  `flib undo` reverts; files you placed yourself stay, and values taken
+  from the cache are written to the index with the run. `flib fix
   --name` now renames a file inside its sub-folder instead of moving it to
   the category's top folder.
 - Local OCR (RF-26 done): the text in screenshots, photographed documents and

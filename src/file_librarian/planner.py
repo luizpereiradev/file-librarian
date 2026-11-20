@@ -30,8 +30,13 @@ read, else the file's download date, else the processing date: the same date
 the naming pattern uses, so a file's folder and its name agree. ``{issuer}``
 is the organisation the model named; its folder is matched against the
 sub-folders already there (and those planned earlier in the same plan) with
-``naming.match_issuer``, so the same company always lands in the same folder,
-spelled as it was the first time. A value that is unknown (no issuer) or
+``naming.issuer_matches``, so the same company lands in the same folder,
+spelled as it was the first time; at a deeper level (``{year}/{issuer}``) a
+company new to that folder takes the spelling it has in the sibling folders.
+Of two folders holding it, the one the file is in wins, then one flib made
+(the journal), then the oldest. An existing folder is used as the disk spells
+it; a layout folder that cannot take the file sends it to the category's own
+folder with a note, never failing it. A value that is unknown (no issuer) or
 unusable (nothing left once made a folder name, or something that is not a
 real folder already at that place) stops the layout there: the file goes
 to the deepest folder that could be resolved, at worst the category's own.
@@ -73,7 +78,7 @@ from file_librarian.naming import (
     build_name,
     candidate_names,
     issuer_folder_name,
-    match_issuer,
+    issuer_matches,
     original_subject,
     safe_component,
     split_name,
@@ -121,6 +126,22 @@ class UnsafeDestinationError(RuntimeError):
     """A computed destination escaped the configured folders. Always a bug."""
 
 
+def _key(path: Path) -> tuple[str, ...]:
+    return tuple(folder_key(part) for part in path.parts)
+
+
+def same_folder(a: Path, b: Path) -> bool:
+    """``a`` and ``b`` are the same folder: by identity when both exist, else by
+    name compared the way APFS compares names (a folder renamed only in case,
+    or stored in another Unicode form, is the same folder)."""
+    if a == b:
+        return True
+    try:
+        return a.samefile(b)
+    except OSError:
+        return _key(a) == _key(b)
+
+
 class _Names:
     """Names taken per folder: on disk plus already planned, APFS-style."""
 
@@ -131,7 +152,7 @@ class _Names:
         """A free name in ``folder``. ``own`` is where the item is now: its own
         name is free for it (``flib reprocess`` re-plans files already in place)."""
         taken = self._taken.setdefault(folder, self._on_disk(folder))
-        mine = folder_key(own.name) if own.parent == folder else None
+        mine = folder_key(own.name) if same_folder(own.parent, folder) else None
         for candidate in candidate_names(name):
             key = folder_key(candidate)
             if key not in taken or key == mine:
@@ -150,28 +171,95 @@ class _Names:
 
 
 class _Folders:
-    """Sub-folders per parent folder: real folders on disk plus those already planned."""
+    """Sub-folders per parent folder: real folders on disk plus those already planned.
 
-    def __init__(self) -> None:
+    ``made_by_flib``: folders flib moved files into (from the journal), preferred
+    when two folders hold the same issuer.
+    """
+
+    def __init__(self, made_by_flib: Collection[Path] = ()) -> None:
         self._known: dict[Path, list[str]] = {}
+        self._made = {_key(path) for path in made_by_flib}
 
-    def issuer(self, parent: Path, issuer: str) -> str | None:
-        """The folder under ``parent`` for ``issuer``: one that already holds it, else a
-        new one spelled like ``issuer``; ``None`` when no folder name can be made."""
+    def names(self, parent: Path) -> list[str]:
         names = self._known.get(parent)
         if names is None:
             names = self._known[parent] = _real_folders(parent)
-        found = match_issuer(issuer, names)
-        if found is not None:
-            return found
-        name = issuer_folder_name(issuer)
+        return names
+
+    def add(self, parent: Path, name: str) -> None:
+        """``name`` is planned under ``parent`` (a no-op if it is there already)."""
+        names = self.names(parent)
+        if not any(folder_key(n) == folder_key(name) for n in names):
+            names.append(name)
+
+    def level(self, top: Path, depth: int) -> list[Path]:
+        """The folders ``depth`` levels below ``top`` (``top`` itself for 0), on disk
+        or planned, in a fixed order."""
+        found = [top]
+        for _ in range(depth):
+            found = [parent / name for parent in found for name in self.names(parent)]
+        return sorted(found)
+
+    def issuer(
+        self,
+        parent: Path,
+        issuer: str,
+        *,
+        own: Path | None = None,
+        siblings: Collection[Path] = (),
+    ) -> str | None:
+        """The folder under ``parent`` for ``issuer``; ``None`` when no folder name
+        can be made.
+
+        The folder ``own`` (the file being placed) is already in wins if it holds
+        this issuer at all: a file is never moved because a sibling folder with an
+        equivalent name appeared. Otherwise one that holds it (``issuer_matches``;
+        of several, one flib made, then the oldest). Otherwise a new folder,
+        spelled like the issuer's folder in one of ``siblings`` (the same level of
+        the layout elsewhere, such as other years), else like the issuer.
+        """
+        names = self.names(parent)
+        if own is not None and own.is_relative_to(parent):
+            inside = own.relative_to(parent).parts
+            if len(inside) > 1 and issuer_matches(issuer, [inside[0]]):
+                # As spelled on disk now (the user may have changed its case).
+                here = [n for n in names if same_folder(parent / n, parent / inside[0])]
+                if here:
+                    return here[0]
+        found = issuer_matches(issuer, names)
+        if found:
+            return self._prefer(parent, found)
+        name = None
+        for other in siblings:
+            if same_folder(other, parent):
+                continue
+            spelled = issuer_matches(issuer, self.names(other))
+            if spelled:
+                name = issuer_folder_name(self._prefer(other, spelled))
+                break
+        name = name or issuer_folder_name(issuer)
         if name is not None:
             names.append(name)
         return name
 
+    def _prefer(self, parent: Path, found: list[str]) -> str:
+        if len(found) == 1:
+            return found[0]
+        made = [name for name in found if _key(parent / name) in self._made]
+        return min(made or found, key=lambda name: (_born(parent / name), name))
+
+
+def _born(path: Path) -> float:
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return float("inf")  # planned, not made yet: the newest
+    return float(getattr(st, "st_birthtime", st.st_mtime))
+
 
 def _real_folders(parent: Path) -> list[str]:
-    """The visible real folders in ``parent`` (no symlinks, no files), by name."""
+    """The visible real folders in ``parent`` (no symlinks, no files), by name as stored."""
     try:
         entries = list(os.scandir(parent))
     except OSError:
@@ -179,6 +267,13 @@ def _real_folders(parent: Path) -> list[str]:
     return sorted(
         e.name for e in entries if not e.name.startswith(".") and e.is_dir(follow_symlinks=False)
     )
+
+
+def _real_folder(path: Path) -> bool:
+    try:
+        return stat.S_ISDIR(os.lstat(path).st_mode)
+    except OSError:
+        return False
 
 
 def _usable_folder(path: Path) -> bool:
@@ -194,24 +289,33 @@ def _usable_folder(path: Path) -> bool:
 
 
 def layout_parts(
-    category: Category, folder: Path, when: date, issuer: str | None, folders: _Folders
+    category: Category,
+    folder: Path,
+    when: date,
+    issuer: str | None,
+    folders: _Folders,
+    own: Path | None = None,
 ) -> tuple[str, ...]:
     """The sub-folders ``category``'s layout gives a file, below its folder ``folder``.
 
-    The layout stops at the first value that is unknown or unusable: the file
+    ``own``: where the file is now, if it is already in the library. The
+    layout stops at the first value that is unknown or unusable: the file
     goes to the deepest folder resolved (see the module docstring).
     """
     if category.layout is None:
         return ()
+    top = folder
     parts: list[str] = []
-    for segment in layout_segments(category.layout):
+    for depth, segment in enumerate(layout_segments(category.layout)):
         name: str | None
         if segment == "{issuer}":
-            name = folders.issuer(folder, issuer) if issuer else None
+            siblings = folders.level(top, depth) if depth else []
+            name = folders.issuer(folder, issuer, own=own, siblings=siblings) if issuer else None
         else:
             name = segment.format(year=f"{when.year:04d}", month=f"{when.month:02d}")
         if name is None or not _usable_folder(folder / name):
             break
+        folders.add(folder, name)
         parts.append(name)
         folder = folder / name
     return tuple(parts)
@@ -221,11 +325,12 @@ class Placement:
     """The names and issuer folders one plan has taken so far, on disk and planned.
 
     ``flib reprocess --apply-layout`` places files with it the way a run does.
+    ``made_by_flib``: folders the journal shows flib moved files into.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, made_by_flib: Collection[Path] = ()) -> None:
         self.names = _Names()
-        self.folders = _Folders()
+        self.folders = _Folders(made_by_flib)
 
     def in_category(
         self,
@@ -236,12 +341,22 @@ class Placement:
         *,
         when: date,
         issuer: str | None,
-    ) -> Path:
+    ) -> tuple[Path, str | None]:
         """Where ``ctx`` goes in ``category``, its layout applied, under ``file_name``
-        (or the next free ``-N``)."""
+        (or the next free ``-N``), and a note when the layout could not be used.
+
+        A layout folder that cannot take the file never fails it: it goes to the
+        category's own folder instead, and the note says why.
+        """
         folder = config.output_root / category.name
-        sub = layout_parts(category, folder, when, issuer, self.folders)
-        return _destination(config, category.name, file_name, self.names, ctx, sub)
+        sub = layout_parts(category, folder, when, issuer, self.folders, own=ctx.path)
+        try:
+            return _destination(config, category.name, file_name, self.names, ctx, sub), None
+        except UnsafeDestinationError as exc:
+            if not sub:
+                raise
+            top = _destination(config, category.name, file_name, self.names, ctx)
+            return top, f"layout not used ({exc})"[:200]
 
 
 def plan(
@@ -252,6 +367,7 @@ def plan(
     keep_names: Collection[Path] = (),
     duplicates: Collection[Duplicate] = (),
     filed_on: Mapping[Path, date] | None = None,
+    made_by_flib: Collection[Path] = (),
 ) -> Plan:
     """Plan every decision, then every duplicate. ``today`` names files that carry
     no other date.
@@ -260,10 +376,11 @@ def plan(
     a name the user chose). ``filed_on`` gives files already in the library
     the day they were filed, used instead of ``today`` by a layout's
     ``{year}`` and ``{month}``, so reprocessing never moves a file to this
-    year's folder just because it carries no date.
+    year's folder just because it carries no date. ``made_by_flib``: the
+    folders the journal shows flib moved files into (``Store.flib_folders``).
     """
     result = Plan()
-    placement = Placement()
+    placement = Placement(made_by_flib)
     names = placement.names
     today = today or date.today()
     filed_on = filed_on or {}
@@ -386,7 +503,7 @@ def _plan_one(
         if choice == "proposed":
             new_name = build_name(original, answer.suggested_name, when, config.naming)
     chosen = new_name or original
-    destination = placement.in_category(
+    destination, note = placement.in_category(
         config,
         category,
         chosen,
@@ -397,6 +514,8 @@ def _plan_one(
     reason = f"category {category.name}"
     if choice == "original":
         reason += ", original name kept"
+    if note:
+        reason += f"; {note}"
     return PlannedItem(
         ctx,
         FileStatus.ORGANIZED,
@@ -452,7 +571,11 @@ def _destination(
     top = config.output_root / folder_name
     folder = top
     for part in sub:
-        if not part or part in {".", ".."} or safe_component(part) != part:
+        if not part or part in {".", ".."} or "/" in part or "\x00" in part:
+            raise UnsafeDestinationError(f"sub-folder {part!r} is not a plain folder name")
+        # A folder already there is taken as it is spelled on disk (a ':' Finder
+        # shows as '/', another Unicode form); a new one must be a safe name.
+        if safe_component(part) != part and not _real_folder(folder / part):
             raise UnsafeDestinationError(f"sub-folder {part!r} is not a plain folder name")
         folder = folder / part
     final = folder / names.claim(folder, safe, ctx.path)

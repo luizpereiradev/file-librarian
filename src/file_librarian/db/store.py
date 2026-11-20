@@ -1238,6 +1238,15 @@ class Store:
             moves.setdefault(int(r[0]), []).append((Path(r[1]), Path(r[2])))
         return moves
 
+    def flib_folders(self) -> set[Path]:
+        """Every folder flib moved a file into (and the folders above it), from the
+        moves still in effect."""
+        folders: set[Path] = set()
+        rows = self.conn.execute("SELECT DISTINCT dst_path FROM operations WHERE status = 'done'")
+        for (dst,) in rows:
+            folders.update(Path(dst).parents)
+        return folders
+
     def file_history(self, file_id: int, *, limit: int) -> list[HistoryRow]:
         """The file's journaled moves, newest first, at most ``limit``."""
         rows = self.conn.execute(

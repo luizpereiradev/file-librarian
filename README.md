@@ -229,10 +229,12 @@ categories:
 
 `{year}` and `{month}` come from the document's date (else the download
 date, else the day it was filed); `{issuer}` is the organisation the
-document comes from, as the AI names it (never a private person). The same
-company always lands in the same folder: `Acme Inc.`, `ACME` and `Acme Ltda`
-join the folder already there, spelled as it was the first time, while
-different names stay apart. Without an issuer, a file stops at the deepest
+document comes from, as the AI names it (the prompt asks for an
+organisation, not a private person; flib itself only drops a name holding a
+phone or document number). The same company lands in the same folder:
+`Acme Inc.`, `ACME` and `Acme Ltda` join the folder already there, spelled
+as it was the first time (in every year's folder with `{year}/{issuer}`),
+while different names stay apart. Without an issuer, a file stops at the deepest
 folder known (`Finance/2026/` for `{year}/{issuer}`). To move what is
 already organized into a new layout, without the AI:
 
@@ -241,7 +243,7 @@ flib reprocess --apply-layout --simulate   # show what would move
 flib reprocess --apply-layout              # asks, then moves; flib undo reverts it
 ```
 
-Files you put in a sub-folder yourself stay there. The details are in
+Files you moved yourself stay where you put them. The details are in
 [the guide](docs/guide.md#sub-folders-inside-a-category).
 
 ### Duplicates

@@ -86,9 +86,10 @@ Each part between `/` is one folder. The placeholders:
   file was filed. It is the same date the file name gets, so a file's folder
   and its name agree.
 - `{issuer}`: the organisation the document comes from (a company, bank,
-  utility, public body or brand), as the AI names it. It is never a private
-  person's name, and an answer holding a phone or document number is
-  dropped. `{issuer}` stands alone between two `/`.
+  utility, public body or brand), as the AI names it. The prompt asks the
+  AI never to give a private person's name; flib cannot check that, but it
+  drops an answer holding a phone or document number. `{issuer}` stands
+  alone between two `/`.
 
 A folder part may add fixed text (`"Y{year}"`, `"{year}-{month}"`), up to
 three levels. `flib check-config` refuses unknown placeholders, empty parts,
@@ -103,15 +104,27 @@ folder only in iCloud) already has that name.
 
 **The same company, the same folder.** Before making a new issuer folder,
 flib compares the name with the folders already there, ignoring case,
-accents, punctuation, a leading "The" and legal suffixes (`Inc`, `Ltd`,
-`LLC`, `Co`, `Corp`, `GmbH`, `S.A.`, `Ltda`, `ME`...): `Acme Inc.`, `ACME`,
-`Acme Ltda` and `Ácme` all join an `Acme` folder, as do `Power Co` and
-`PowerCo`. Only then, and only when a single folder is that close, it
-accepts a slip: a plural `s`, a doubled letter (`Fabrikkam`) or two letters
-swapped (`Nortwhind`). One different letter (`Acme`/`Acne`), a different
-number or an extra word (`Acme Bank`) is another company, with its own
-folder. The folder keeps the spelling it was made with, so rename it by hand
-if you prefer another; flib matches the new name from then on.
+accents (in either Unicode form), punctuation, a leading "The", a trailing
+`.com` or `.com.br`, and legal forms that are never ordinary words (`Inc`,
+`Ltd`, `LLC`, `Corp`, `GmbH`, `PLC`, `Ltda`, `EIRELI`, `S.A.` with its
+dots...): `Acme Inc.`, `ACME`, `Acme Ltda`, `Ácme` and `acme.com` all join
+an `Acme` folder, and `Power Co` and `PowerCo` share one. `Co`, `Company`,
+`Spa`, `Me` or `SA` without dots can be part of a name (`Lotus Spa`, `Pay
+Me`), so they count. Only then, and only when a single folder is that
+close, it accepts a slip: a doubled letter (`Fabrikkam`) or two letters
+swapped (`Nortwhind`), never with digits. One different letter
+(`Acme`/`Acne`), a plural (`Morgan`/`Morgans`), a different number or an
+extra word (`Acme Bank`) is another company, with its own folder.
+
+The folder keeps the spelling it was made with, so rename it by hand if you
+prefer another (a change of case only is fine: the files stay and the index
+follows); flib matches the new name from then on. With `{year}/{issuer}`,
+a company new to a year gets the spelling its folder has in the other
+years. If two folders hold the same company, a file already in one of them
+stays there; a new file goes to the one flib made, else the oldest. An
+existing folder is used as it is spelled on disk, even with a `:` (what
+Finder shows as `/`). A layout folder that cannot take a file never leaves
+it behind: it goes to the category's own folder, and the plan says why.
 
 New files get a name that is free in their own folder (`-2`, `-3`...);
 nothing is ever replaced. Review, duplicates and sensitive files never get a
@@ -134,8 +147,11 @@ where they are; `--ask-issuer` asks the AI for it, showing the estimated cost
 and asking first, and keeps only the issuer and date from the answer (the
 category and name stay). Names are kept; a taken one gets `-2`.
 
-A file you put in a sub-folder yourself stays there: flib moves only files
-it placed. A category whose layout you removed gets the files flib had put
+It never moves a file you placed yourself: one not where flib last put it
+(moved by hand into a sub-folder, or out of one to the category's top, then
+`flib reconcile`) stays. A date or issuer it takes from a cached answer is
+written to the index with the run, so the file stays where it went once the
+cache has expired, and `flib undo` takes them back out. A category whose layout you removed gets the files flib had put
 in its sub-folders back to its top folder. Everything moved is one run:
 `flib undo` puts it all back (the issuers and dates `--ask-issuer` learned
 too); the emptied sub-folders are left in place. It cannot be combined with

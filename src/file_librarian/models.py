@@ -213,7 +213,8 @@ class Classification(BaseModel):
     name_choice_reason: str | None = Field(default=None, max_length=300)
     issuer: str | None = Field(default=None, min_length=1, max_length=100)
     """The organisation the document comes from (a company, bank, public body or
-    brand), never a private person; ``None`` when there is none or it is unclear.
+    brand); the prompt asks for no private person's name, which nothing can check.
+    ``None`` when there is none or it is unclear.
     Category layouts with ``{issuer}`` file into a folder named after it."""
 
 

@@ -68,14 +68,17 @@ model.
   cross-volume copy finished by its phase) and otherwise fails the entry and
   leaves the row as it was: the file is still in its old folder.
 - A category `layout` (#86) only adds sub-folders below the category's own
-  folder, at most three, each one plain name (validated at load, checked
-  again by the planner) made with `fsops.ensure_folder`, which refuses a
+  folder, at most three, each one plain name (or a real folder already there,
+  as the disk spells it; checked by the planner) made with `fsops.ensure_folder`, which refuses a
   symlink on the way. A place already taken by something that is not a real
   folder stops the layout there. `flib reprocess --apply-layout` moves
   through the same journaled `relocate` as any reprocess, never asks the
   provider unless told to, and moves only `organized` files flib placed: a
-  file deeper than its category folder counts as the user's unless the
-  chain of its journaled moves shows flib put it there.
+  file not where its last journaled move put it is the user's, at any
+  depth, and so is one deeper than its category folder unless the chain of
+  its journaled moves shows flib put it there. Values it takes from the
+  cache are written to the index (journaled), so the next run finds the
+  same place from the index alone.
 - `flib undo` walks a run's operations in reverse, checks each file's hash, and
   skips (and lists) files that were edited or whose original path is taken.
 - A move to another volume (RF-33), where a rename is impossible, is copy,
