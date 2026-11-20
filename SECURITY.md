@@ -12,8 +12,10 @@ Do not open a public issue. Use GitHub's private reporting instead:
 Please include the version (`flib --version`), your macOS version, and the
 steps to reproduce. Leave out real file names, paths and contents; synthetic
 examples are enough. The report `flib doctor` writes has names, paths and
-secrets replaced already (see the README's Troubleshooting section); read it
-before attaching it. You should get a first answer within 7 days.
+secrets replaced already
+([docs/troubleshooting.md](docs/troubleshooting.md#the-doctor-report) lists
+what is replaced); read it before attaching it. You should get a first answer
+within 7 days.
 
 ## In scope
 

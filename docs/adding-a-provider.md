@@ -260,12 +260,13 @@ Cover, in `tests/unit/test_<name>_provider.py`:
 
 ## 6. Document it
 
-- **README.md:** the Requirements list, its own section (configuration,
-  where the key comes from, trade-offs), the Privacy section (what goes
-  where), and the vision paragraph if it reads images.
+- **README.md:** the Requirements list, its own section under Providers
+  (configuration, where the key comes from, trade-offs), a row in the
+  Privacy section's table (what goes where), and the vision paragraph if it
+  reads images.
 - **`config.example.yaml`:** the `provider.name` comment and its settings.
-- **CHANGELOG.md:** one entry at the top of `### Added` under
-  `## [Unreleased]`.
+- **CHANGELOG.md:** one entry under `### Added` in
+  `## [Unreleased]`, in the Providers group.
 
 ## Checklist for the pull request
 

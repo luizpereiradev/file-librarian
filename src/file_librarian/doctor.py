@@ -357,7 +357,7 @@ def build_report(options: Options, fmt: Format = "text") -> str:
 
 
 def default_report_path(config_path: Path | None, fmt: Format) -> Path:
-    """``doctor-<time>.txt`` in flib's logs folder (see the README for why there)."""
+    """``doctor-<time>.txt`` in flib's logs folder (docs/troubleshooting.md says why there)."""
     try:
         database = load_config(config_path).database
     except Exception:

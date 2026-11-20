@@ -13,7 +13,7 @@ when some file has waited in review or failed for ``summary.min_age_days`` or
 more, it writes one line to the run log and, with ``summary.notify``, posts
 one macOS notification. The notification holds counts only, never a file
 name: notifications show on the lock screen. Whether it shows at all is up to
-macOS (see the README); the log and ``flib status`` are enough on their own,
+macOS (see docs/troubleshooting.md); the log and ``flib status`` are enough on their own,
 and a notification that fails never fails the run.
 
 All ``osascript`` calls go through ``OSASCRIPT`` (tests swap in a fake). The

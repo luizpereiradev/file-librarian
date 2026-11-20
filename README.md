@@ -7,43 +7,46 @@ searchable description to a local SQLite index.
 `documento(3).pdf` becomes `Finance/2026-10-05_electricity-invoice.pdf`, and
 `flib search "electricity october"` finds it months later.
 
+> **Status: alpha, getting ready for v0.1.0.** Everything in this README is
+> implemented and tested. The first release is tagged after two weeks of
+> daily use ([#24](https://github.com/luizpereiradev/file-librarian/issues/24));
+> until then, install from the repository as shown below. macOS only.
+
+## What it promises
+
 **The AI only decides. Deterministic code moves files.** The organizing
 commands keep these guarantees:
 
-- nothing is deleted and nothing is overwritten. The one exception: when the
-  destination is on another volume (an external disk), the item is copied,
-  the copy is checked against the original's hash, and only then is the
-  original removed; extended attributes (download origin, Finder tags),
+- **Nothing is deleted and nothing is overwritten.** The one exception: when
+  the destination is on another volume (an external disk), the item is
+  copied, the copy is checked against the original's hash, and only then is
+  the original removed; extended attributes (download origin, Finder tags),
   permissions and dates go with it. exFAT and FAT drives cannot rename
-  without replacing, so flib does not move anything onto them;
-- every run is recorded and can be undone, except files you changed or moved
-  afterwards, which are skipped and listed.
-- nothing is downloaded from iCloud: files that exist only in the cloud, and
-  folders with any such file inside, are skipped and listed until you
+  without replacing, so flib does not move anything onto them.
+- **Every run is recorded and can be undone**, except files you changed or
+  moved afterwards, which are skipped and listed.
+- **Nothing is downloaded from iCloud.** Files that exist only in the cloud,
+  and folders with any such file inside, are skipped and listed until you
   download them. `flib reconcile` and `flib inspect` do not read them either.
-
-> **Status: pre-alpha (M2 features complete, in daily-use validation).**
-> Scanning, extraction, secret detection, classification with Claude,
-> planning, moving, search and undo work, and so do the M2 additions: the
-> guided first run (`flib init`), the daily run (`flib schedule`),
-> `flib reconcile` and `flib fix`, Finder tags, iCloud-aware scanning, opt-in
-> vision, the optional MCP server (`flib mcp`) and the `claude-code` provider.
-> M2 is now in its two-week daily-use validation
-> ([#24](https://github.com/luizpereiradev/file-librarian/issues/24)). Try it
-> offline first with `provider: {name: fake, model: offline}`, which files
-> everything under the last category without calling any API. See the
-> [roadmap](#roadmap).
+- **Secrets stay put.** Files with credential names or secrets in their
+  content are never sent to the AI and never moved; `never_send` patterns
+  send only metadata. [Privacy](#privacy) lists exactly what leaves your Mac.
 
 ## Requirements
 
 - The current major release of macOS (the only supported platform)
 - [uv](https://docs.astral.sh/uv/) 0.13 or newer (`brew install uv`); it
   installs Python 3.11+ for you
-- An Anthropic API key for the default provider, or
-  [Claude Code](https://code.claude.com) logged in to your Claude
-  subscription for the `claude-code` provider, or
-  [Ollama](https://ollama.com) with a model pulled for the `ollama` provider,
-  or any OpenAI-compatible API for `openai-compat`
+- One AI provider:
+  - an Anthropic API key, for the default `anthropic` provider;
+  - or [Claude Code](https://code.claude.com) logged in to your Claude
+    subscription, for `claude-code` (no key);
+  - or [Ollama](https://ollama.com) with a model pulled, for `ollama`
+    (nothing leaves your Mac);
+  - or any OpenAI-compatible API, for `openai-compat`.
+
+To try flib without any of them, set `provider: {name: fake, model: offline}`:
+everything is filed under the last category, offline.
 
 ## Install
 
@@ -54,11 +57,15 @@ git clone https://github.com/luizpereiradev/file-librarian.git && cd file-librar
 flib init                 # a few questions, a trial on copies of your files, the daily run
 ```
 
+To update, `git pull` and run `./scripts/install.sh` again.
+
+### First run: `flib init`
+
 `flib init` asks for the language, the folder to organize and where organized
 files go, the provider and, with `anthropic`, whether to turn on
-[vision](#images-and-scanned-pdfs-vision) (default no).
-Every question has a default, so pressing Enter all the way gives a working
-setup (`flib init --yes` takes them all without asking):
+[vision](#images-and-scanned-pdfs-vision) (default no). Every question has a
+default, so pressing Enter all the way gives a working setup (`flib init
+--yes` takes them all without asking):
 
 - **Provider:** `claude-code` when Claude Code is installed and logged in
   (nothing more to set up), then `ollama` when Ollama is running on this Mac
@@ -77,9 +84,6 @@ setup (`flib init --yes` takes them all without asking):
   `never_send`, iCloud-only and large (over 20 MB) items are left out.
 - **Daily run:** it offers to schedule it, as `flib schedule` does.
 
-Then `flib simulate` shows the plan for your real folder, `flib run`
-organizes for real, and `flib undo` reverts the last run.
-
 To set it up by hand instead:
 
 ```sh
@@ -87,8 +91,20 @@ mkdir -p ~/.config/file-librarian
 cp config.example.yaml ~/.config/file-librarian/config.yaml
 flib key set              # stores your API key in the macOS Keychain (anthropic, openai-compat)
 flib check-config         # validates the configuration and finds the key
-flib simulate             # shows what would happen; nothing moves
 ```
+
+## Daily use
+
+```sh
+flib simulate             # the plan for your real folder; nothing moves
+flib run                  # organize now
+flib undo                 # revert the last run (--run ID for another, --file PATH for one file)
+flib search "power bill"  # find a file again
+flib status               # what waits for you
+```
+
+Files the AI is not sure about go to the review folder (`_Review` inside
+`~/Downloads/Organized` by default) for you to decide.
 
 ### Run it every day
 
@@ -106,14 +122,14 @@ Settings > Privacy & Security > Full Disk Access. That program is
 `flib-python`, flib's own copy of the Python interpreter, so the access you
 grant covers flib only and not your other Python projects. After updating
 Python or flib, `./scripts/install.sh` refreshes it (`flib schedule
---refresh`); macOS may then ask for access again. If the Mac is asleep at the
-scheduled time, the run happens on wake. Each run writes a log next to the
-database (`~/Library/Application Support/file-librarian/logs`), ending with
-its estimated provider cost (or "unknown" when the provider's prices are not
-known).
+--refresh`); macOS may then ask for access again.
 
-To try it without an API key, set `provider: {name: fake, model: offline}`:
-everything is filed under the last category, offline.
+If the Mac is asleep at the scheduled time, the run happens on wake. If it
+runs while the Mac is locked and skips files that macOS protects until the
+unlock, it waits for the unlock and runs once more
+([details](docs/troubleshooting.md#a-file-is-skipped-as-locked)). Each run
+writes a log to `~/Library/Application Support/file-librarian/logs`, ending
+with its estimated provider cost.
 
 ### Staying on top of it
 
@@ -135,43 +151,214 @@ This month: US$ 0.0456
 ```
 
 It only reads (no lock, so it works while a run is going on, and before the
-first one); `--json` gives the same for scripts. You do not have to remember
-to run it: after a *scheduled* run, when a file has waited in review or failed
-for two days or more, flib writes a one-line summary to the run log and shows
-one macOS notification, such as "3 files wait for review, 1 failed. Run `flib
-status` for details." It does this at most once a week, and never after a
-`flib run` you started yourself. The notification holds counts only, never a
-file name, because notifications show on the lock screen. Change it under
-`summary:` in the configuration: `notify: false` keeps only the log line,
-`every_days` and `min_age_days` set how often and how patient.
+first one); `--json` gives the same for scripts.
 
-The notification is posted with `osascript`, so macOS shows it as coming from
-Script Editor, and it can be hidden: macOS may only list Script Editor under
-System Settings > Notifications after its first notification, with alerts off,
-and a Focus mode or "Do Not Disturb" silences it. A notification macOS drops
-cannot be detected, so it is not retried. If you never see one, allow
-notifications for Script Editor there, or rely on the run log and
-`flib status`, which always have the same summary.
+You do not have to remember to run it: after a *scheduled* run, when a file
+has waited in review or failed for two days or more, flib writes a one-line
+summary to the run log and shows one macOS notification, such as "3 files
+wait for review, 1 failed. Run `flib status` for details." It does this at
+most once a week, and never after a `flib run` you started yourself. The
+notification holds counts only, never a file name, because notifications show
+on the lock screen. Change it under `summary:` in the configuration:
+`notify: false` keeps only the log line, `every_days` and `min_age_days` set
+how often and how patient. If you never see the notification, see
+[Troubleshooting](docs/troubleshooting.md#no-notification-appears).
 
-### Where the API key comes from
+### Teaching it
 
-`provider.api_key_source: auto` (the default) uses the first it finds:
+When a file lands in the wrong place, correct it:
 
-1. `ANTHROPIC_API_KEY` in the environment (for `openai-compat`, the variable
-   below);
+```sh
+flib fix ~/Downloads/Organized/Other/scan.pdf --category Finance
+flib fix ~/Downloads/Organized/_Review/document.pdf --category Contracts --name lease-2026
+```
+
+The file moves, the index, search and the Finder tag follow, and `flib undo`
+reverts it like a run. Moving or renaming a file by hand works too: run
+`flib reconcile` and the index catches up. Both kinds of correction are sent
+as examples with later requests, so the classifier stops repeating the
+mistake (`provider.max_examples`, 10 by default; `0` sends none).
+
+The categories are a closed list, and each category's `hint` in the
+configuration is the main lever for fixing wrong classifications. After you
+change categories, hints, naming rules or the model, `flib reprocess` files
+what is already organized again:
+
+```sh
+flib reprocess --simulate          # classify and show what would move; moves nothing
+flib reprocess                     # asks before sending, then before moving
+flib reprocess --rename-category Docs Documents   # after renaming a category in the config
+flib reprocess --remove-category Misc             # after removing one
+```
+
+It asks before it sends anything (with a cost estimate) and before it moves
+anything, keeps your corrections and file names unless told otherwise, and
+`flib undo` puts the whole reprocess back. The details are in
+[the guide](docs/guide.md#changing-your-rules).
+
+### Names
+
+A file is renamed only when the model read its content (text, or the image
+with vision on), its category allows renaming, and the model is at least
+`naming.rename_confidence_threshold` sure (0.8 by default). Videos,
+installers, archives, folders and images with vision off keep their name.
+A generic name (`scan001.pdf`, `IMG_2041.jpg`) is replaced; a descriptive one
+keeps its words:
+
+```text
+Study guide - 11 tweaks for coding agents.pdf  ->  2026-11-16_study-guide-11-tweaks-for-coding-agents.pdf
+scan001.pdf                                    ->  2026-10-05_electricity-bill.pdf
+```
+
+flib, not the model, builds the final name from `naming.pattern`
+(`{date}_{subject}` by default); [the guide](docs/guide.md#names) has the
+rules.
+
+### Duplicates
+
+A file with the same content as one flib already filed (the second
+`report (1).pdf`, or a re-download of something in `Finance`) is moved to
+`_Duplicates` (`_Duplicados` in pt-BR) inside the organized folder, under its
+own name. It is never deleted, and it is not sent to the AI, so it costs
+nothing:
+
+```text
+  dup     report (1).pdf  ->  _Duplicates/report (1).pdf  (same content as Finance/report.pdf)
+```
+
+`flib undo` puts duplicates back like any other move. `flib search` leaves
+them out unless you add `--duplicates`. Empty the folder whenever you like:
+flib never does. `duplicates: leave` turns this off, and `duplicates_folder`
+renames the folder. [The guide](docs/guide.md#duplicates) covers the edge
+cases, including what the first run does with copies earlier versions left
+in Downloads.
+
+## Commands
+
+Every command takes `--config PATH` (`-c`); without it, flib reads
+`$FLIB_CONFIG` or `~/.config/file-librarian/config.yaml`.
+
+| Command | What it does |
+| --- | --- |
+| `flib init [--yes] [--sample N] [--force]` | Guided setup with a trial on copies of recent files ([First run](#first-run-flib-init)) |
+| `flib check-config` | Validate the configuration and find the API key, without touching files |
+| `flib key set\|status\|delete [--provider NAME]` | Store, locate or remove an API key in the macOS Keychain (`anthropic`, `openai-compat`, `embeddings`) |
+| `flib simulate` | Print the full plan without changing anything |
+| `flib run` | Classify, rename, move and index new files |
+| `flib undo [--run ID \| --file PATH]` | Revert the last run, a given run, or the last operation on one file |
+| `flib search [QUERY] [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--semantic \| --words] [--reindex] [--duplicates] [--limit N] [--json]` | Search names, descriptions and tags, narrowed by category, period or extension; optionally by meaning ([Searching](#searching)) |
+| `flib status [--json]` | What waits for you: files in review and why, failures, files left in place as sensitive, the last and next run, this month's cost ([Staying on top of it](#staying-on-top-of-it)) |
+| `flib fix FILE [--category NAME] [--name NAME]` | Correct one file's category or name; flib learns from it ([Teaching it](#teaching-it)) |
+| `flib reconcile` | Update the index after you move, rename or delete files by hand; files only in iCloud are left unchecked |
+| `flib reprocess [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--rename] [--override-corrections] [--simulate] [--yes]` | Reclassify organized files after the rules change; `--rename-category OLD NEW` and `--remove-category OLD [--to-review]` migrate a category ([guide](docs/guide.md#changing-your-rules)) |
+| `flib schedule [--at HH:MM \| --status \| --remove \| --refresh] [--no-save-key] [--no-check]` | Run every day via launchd, with an access check ([Run it every day](#run-it-every-day)) |
+| `flib inspect FILE... [--json]` | Show hash, size and download origin (no hash for a file only in iCloud), and for an indexed file its status, category, why it is in review and the name choice |
+| `flib mcp` | Local MCP server for AI assistants ([Use it from Claude](#use-it-from-claude)) |
+| `flib doctor [--stdout \| -o PATH] [--format markdown] [--logs N]` | A redacted diagnostics report for bug reports ([Troubleshooting](#troubleshooting)) |
+| `flib --version` | Print the version |
+
+## Searching
+
+Every word of the query must match a name, the description or a tag; accents
+are ignored and words match as prefixes. Filters narrow the results and can be
+combined with each other and with a query, or used without one, in which case
+matches are listed newest first:
+
+- `--category NAME`: case-insensitive. Repeat it or separate names with commas
+  to match any of them (`--category finance,contracts`).
+- `--ext EXT`: with or without the dot (`pdf` or `.pdf`). Repeat it or use
+  commas for several (`--ext jpg,png`).
+- `--since DATE` / `--until DATE`: `YYYY-MM-DD`, both days included, in your
+  local time. The date is when flib last processed the file (filed it, or sent
+  it to review), not the date written in the document, which the index does not
+  keep, nor the file's modification time.
+- `--limit N`: at most this many results (20 by default, up to 500).
+
+```sh
+flib search "power bill" --category finance --since 2026-01-01
+flib search --ext pdf --until 2025-12-31 --json
+```
+
+An unknown category, a malformed extension or date, or `--since` after
+`--until` stops with a message saying what is wrong.
+
+### Semantic search (optional)
+
+Word search finds "electricity invoice" only if those words are in the index.
+Semantic search also finds files by meaning: `flib search "power bill"
+--semantic` finds a file described as an "electricity invoice". Each file gets
+an *embedding*, a list of numbers that places texts with similar meaning close
+together, and the query gets one too. The results of both searches are merged
+(reciprocal rank fusion), so exact word matches still come first, and the
+filters above apply to both. It is off by default. To turn it on with
+[Ollama](https://ollama.com) on this Mac:
+
+1. `ollama pull embeddinggemma` (about 600 MB; multilingual).
+2. In the configuration:
+
+   ```yaml
+   search:
+     semantic:
+       enabled: true
+   ```
+
+3. `flib search --reindex` to embed the files already indexed. After that,
+   every `flib run` embeds the files it adds or changes.
+
+Then search with `--semantic`, or set `search.semantic.default: true` to make
+it the default (`--words` then searches by words only). The MCP tool
+`search_files` takes the same choice as its `semantic` flag.
+
+What is embedded is only what the index already stores about a file: its
+names, category, tags and the AI's description, never its content. A
+sensitive file, or one matching `never_send`, is never embedded. Any server
+with an OpenAI-compatible `/embeddings` endpoint works
+(`search.semantic.base_url` and `model`). Its optional key comes from
+`FLIB_EMBEDDINGS_API_KEY`, or the variable `search.semantic.api_key_env`
+names, or `flib key set --provider embeddings`; never from the classification
+provider's key. With a remote server, that index text and every semantic
+query leave your Mac, `flib check-config` warns about it, and the cost is not
+counted: check your server's prices. Anthropic has no embeddings endpoint, so
+it cannot be used here.
+
+If the embeddings server cannot be reached, or no file has an embedding yet,
+the search says so in one line and searches by words. A run never fails
+because of embeddings: what was not embedded is retried on the next run.
+Changing `search.semantic.model` embeds the library again. Vectors are kept
+in the same database and searched by brute force: about 0.1 s for 10,000
+files and 0.6 s for 50,000.
+
+## Providers
+
+`provider.name` picks who classifies. All of them get the same prompt and
+the same validation: a category outside your list fails the file.
+
+### Anthropic (`anthropic`, the default)
+
+```yaml
+provider:
+  name: anthropic
+  model: claude-haiku-5-5    # fast and cheap; claude-sonnet-5-5 or claude-opus-5-5 for harder files
+```
+
+`provider.api_key_source: auto` (the default) takes the key from the first
+place it finds one:
+
+1. `ANTHROPIC_API_KEY` in the environment;
 2. the macOS Keychain (`flib key set`; `flib key status` shows which is used);
 3. the `.env` file named by `provider.env_file`, if you set one.
+
+Scheduled runs don't see your shell's environment, so the Keychain is the
+easiest choice for them. Set `api_key_source` to `environment`, `keychain` or
+`env_file` to use only one place. The key never goes in the configuration
+file.
 
 Each provider keeps its own key: `flib key set --provider openai-compat`
 stores the `openai-compat` key in a separate Keychain entry, so it never
 replaces the Anthropic one (`flib key set`, `status` and `delete` act on the
 configured provider's key when `--provider` is not given).
 
-Scheduled runs don't see your shell's environment, so the Keychain is the
-easiest choice for them. Set `api_key_source` to `environment`, `keychain` or
-`env_file` to use only one place.
-
-### Using your Claude subscription instead (`claude-code`)
+### Your Claude subscription (`claude-code`)
 
 If you already use Claude Code, flib can classify through it instead of the
 API, with no API key:
@@ -258,13 +445,11 @@ provider:
   `price_input_per_mtok` and `price_output_per_mtok` left at 0, every file
   counts as free and **`limits.max_cost_usd_per_run` cannot stop a run**;
   `flib check-config` warns about it for a remote server, and the run's cost
-  is shown and recorded as unknown (a server on this Mac counts as free). `limits.max_files_per_run`
-  still caps how many files a run sends.
+  is shown and recorded as unknown (a server on this Mac counts as free).
+  `limits.max_files_per_run` still caps how many files a run sends.
 - **Answers:** flib asks for structured output with a JSON schema. A server
   that rejects that is asked again with plain JSON mode and the schema in the
-  instructions, and flib keeps using JSON mode for the rest of the run. Every
-  answer is validated the same way: a category outside your list fails the
-  file.
+  instructions, and flib keeps using JSON mode for the rest of the run.
 - **Images:** sent only with `provider.vision: true` and `vision.enabled`.
   Scanned PDFs are never sent to this provider; they are classified from their
   metadata.
@@ -272,101 +457,11 @@ provider:
   or passwords in the URL are rejected (use the Keychain), and `flib
   check-config` warns about `http://` to another machine.
 
-## Commands
-
-| Command | What it does | Milestone |
-| --- | --- | --- |
-| `flib check-config` | Validate the configuration without touching files | M0 |
-| `flib inspect FILE...` | Show hash, size and download origin (not the hash of a file only in iCloud), and for an indexed file its status, category, why it is in review (if it is) and name choice | M0 |
-| `flib simulate` | Print the full plan without changing anything | M1 (available) |
-| `flib run` | Classify, rename, move and index new files | M1 (available) |
-| `flib search [QUERY] [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--semantic \| --words] [--reindex] [--json]` | Full-text search over names, descriptions and tags, narrowed by category, period or extension; optionally by meaning too ([Searching](#searching)) | M1 (available) |
-| `flib undo [--run ID \| --file PATH]` | Revert a run or one file | M1 (available) |
-| `flib schedule [--at HH:MM \| --status \| --remove]` | Run every day via launchd, with an access check | M2 (available) |
-| `flib reconcile` | Update the index after you move, rename or delete files by hand; files only in iCloud are left unchecked | M2 (available) |
-| `flib fix PATH [--category NAME] [--name NAME]` | Correct one file's category or name; flib learns from it | M2 (available) |
-| `flib init [--yes] [--sample N] [--force]` | Guided setup with a trial on copies of recent files | M2 (available) |
-| `flib mcp` | Local MCP server for AI assistants ([Use it from Claude](#use-it-from-claude)) | M2 (available) |
-| `flib reprocess [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--rename] [--simulate] [--yes]` | Reclassify organized files after the rules change (names kept unless `--rename`); `--rename-category OLD NEW` and `--remove-category OLD [--to-review]` migrate a category ([Changing your rules](#changing-your-rules)) | M3 (available) |
-| `flib status [--json]` | What waits for you: files in review and why, failures, files left in place as sensitive, the last and next run, this month's cost ([Staying on top of it](#staying-on-top-of-it)) | v1.0 (available) |
-| `flib doctor [--stdout \| -o PATH] [--format markdown]` | A redacted diagnostics report for bug reports ([Troubleshooting](#troubleshooting)) | M3 (available) |
-
-### Searching
-
-Every word of the query must match a name, the description or a tag; accents
-are ignored and words match as prefixes. Filters narrow the results and can be
-combined with each other and with a query, or used without one, in which case
-matches are listed newest first:
-
-- `--category NAME`: case-insensitive. Repeat it or separate names with commas
-  to match any of them (`--category finance,contracts`).
-- `--ext EXT`: with or without the dot (`pdf` or `.pdf`). Repeat it or use
-  commas for several (`--ext jpg,png`).
-- `--since DATE` / `--until DATE`: `YYYY-MM-DD`, both days included, in your
-  local time. The date is when flib last processed the file (filed it, or sent
-  it to review), not the date written in the document, which the index does not
-  keep, nor the file's modification time.
-
-```sh
-flib search "power bill" --category finance --since 2026-01-01
-flib search --ext pdf --until 2025-12-31 --json
-```
-
-An unknown category, a malformed extension or date, or `--since` after
-`--until` stops with a message saying what is wrong.
-
-#### Semantic search (optional)
-
-Word search finds "electricity invoice" only if those words are in the index.
-Semantic search also finds files by meaning: `flib search "power bill"
---semantic` finds a file described as an "electricity invoice". Each file gets
-an *embedding*, a list of numbers that places texts with similar meaning close
-together, and the query gets one too. The results of both searches are merged
-(reciprocal rank fusion), so exact word matches still come first, and the
-filters above apply to both. It is off by default. To turn it on with
-[Ollama](https://ollama.com) on this Mac:
-
-1. `ollama pull embeddinggemma` (about 600 MB; multilingual).
-2. In the configuration:
-
-   ```yaml
-   search:
-     semantic:
-       enabled: true
-   ```
-
-3. `flib search --reindex` to embed the files already indexed. After that,
-   every `flib run` embeds the files it adds or changes.
-
-Then search with `--semantic`, or set `search.semantic.default: true` to make
-it the default (`--words` then searches by words only). The MCP tool
-`search_files` takes the same choice as its `semantic` flag.
-
-What is embedded is only what the index already stores about a file: its
-names, category, tags and the AI's description, never its content. A
-sensitive file, or one matching `never_send`, is never embedded. With
-Ollama on this Mac (the default `base_url`), nothing leaves it. Any server
-with an OpenAI-compatible `/embeddings` endpoint works
-(`search.semantic.base_url` and `model`; an optional key from
-`FLIB_EMBEDDINGS_API_KEY`, or
-`search.semantic.api_key_env`, or `flib key set --provider embeddings`, never
-the classification provider's key). With a remote server, that index text
-and every semantic query leave your Mac, `flib check-config` warns about it,
-and the cost is not counted: check your server's prices. Anthropic has no
-embeddings endpoint, so it cannot be used here.
-
-If the embeddings server cannot be reached, or no file has an embedding yet,
-the search says so in one line and searches by words. A run never fails
-because of embeddings: what was not embedded is retried on the next run.
-Changing `search.semantic.model` embeds the library again. Vectors are kept
-in the same database and searched by brute force: about 0.1 s for 10,000
-files and 0.6 s for 50,000.
-
 ## What flib reads
 
 | Format | What is read |
 | --- | --- |
-| PDF | the text layer; a scanned PDF, only with [vision](#images-and-scanned-pdfs-vision) |
+| PDF | the text layer (first 20 pages); a scanned PDF, only with [vision](#images-and-scanned-pdfs-vision) |
 | Word, Excel, PowerPoint (`.docx`, `.xlsx`, `.pptx` and their macro versions) | the text; for a workbook, the sheet names and cell text |
 | Plain text, Markdown, CSV, JSON, YAML, HTML, subtitles and source code | the text |
 | E-mail (`.eml`) | subject, date, sender and recipients (names and domains only), attachment names, and the body (plain text, else the HTML's text) |
@@ -375,85 +470,44 @@ files and 0.6 s for 50,000.
 | Images | nothing, unless [vision](#images-and-scanned-pdfs-vision) is on |
 | Anything else (`.doc`, videos, installers...) | nothing: classified from its name and metadata |
 
-A damaged or password-protected file is classified from its name and
-metadata too. To add a format, see
+At most `provider.max_chars_per_file` characters (4,000 by default) of the
+text are sent. A damaged or password-protected file is classified from its
+name and metadata too. To add a format, see
 [docs/adding-an-extractor.md](docs/adding-an-extractor.md).
 
 ## Configuration
 
-Everything you can tune lives in one YAML file; see the commented
-[`config.example.yaml`](config.example.yaml). Set `language` to `en` or
-`pt-BR` to choose the language of generated names and descriptions and of the
-default folders (`Organized`/`_Review` or `Organizado`/`_Revisar`) and
-categories. Only the provider is required; everything else has a default.
+Everything you can tune lives in one YAML file; the commented
+[`config.example.yaml`](config.example.yaml) lists every option with its
+default. Only `provider.model` is required; everything else has a default.
+`flib check-config` validates the file, and an invalid one stops a run before
+any file is touched. API keys never go in this file.
 
-The categories are a closed list, and each category's `hint` is the main lever
-for fixing wrong classifications.
+The options you are most likely to change:
 
-Each item moved into a category folder also gets the category name as a
-Finder tag, so Finder's sidebar and Spotlight (`tag:Finance`) find it too.
-Your own tags are kept, `flib undo` removes only the tag flib added, and
-`finder_tags.enabled: false` turns this off.
-The API key is read from `ANTHROPIC_API_KEY`, never from the file.
+| Option | Default | What it does |
+| --- | --- | --- |
+| `language` | `en` | `en` or `pt-BR`: the language of generated names and descriptions, and of the default folders (`Organized`/`_Review` or `Organizado`/`_Revisar`) and categories |
+| `inputs` | `[~/Downloads]` | The folders to keep organized |
+| `output_root` | `~/Downloads/Organized` | Where category folders are created |
+| `categories` | 5 in `en`, 15 in `pt-BR` | The closed list the AI chooses from; each `hint` steers it, `rename: false` keeps original names |
+| `never_send` | `*.pem`, `*.key`, `.env*` in the example | Patterns classified from metadata only |
+| `limits.confidence_threshold` | `0.7` | Below this, a file goes to review |
+| `limits.max_cost_usd_per_run` | `1.00` | Estimated cost cap per run; the rest waits for the next run (`null` = no cap) |
+| `limits.max_files_per_run` | `200` | Files sent per run |
+| `naming.pattern` | `{date}_{subject}` | New names; see [Names](#names) |
+| `duplicates` | `move` | `leave` keeps copies where they are ([Duplicates](#duplicates)) |
+| `finder_tags.enabled` | `true` | Tag each filed item with its category in Finder |
+| `vision.enabled` | `false` | Let the model look at images and scanned PDFs |
+| `schedule.time` | `12:30` | When the daily run starts (applied by `flib schedule`) |
+| `summary.notify` | `true` | The periodic notification about files waiting for you |
+| `search.semantic.enabled` | `false` | [Semantic search](#semantic-search-optional) |
+| `mcp.read_only` | `false` | Offer only the read tools in `flib mcp` |
 
-### Duplicates
-
-A file with the same content as one flib already filed (the second
-`report (1).pdf`, or a re-download of something in `Finance`) is moved to
-`_Duplicates` (`_Duplicados` in pt-BR) inside the organized folder, under
-its own name. It is never deleted, and it is not sent to the AI, so it costs
-nothing. flib checks first that the filed copy is still there with the same
-content. If it is not where flib left it (you renamed, moved, edited or
-deleted it, or its disk is not connected), the new copy is left in Downloads
-with a note to run `flib reconcile` (`flib status` counts these). Once
-reconcile has found the filed copy gone, the next run files the new one in
-its place. A file you dragged from the organized folder back to Downloads is
-recognised as the same file and left there. A copy of a sensitive
-file stays where it is, like the original.
-
-```text
-  dup     report (1).pdf  ->  _Duplicates/report (1).pdf  (same content as Finance/report.pdf)
-```
-
-`flib undo` puts duplicates back like any other move, and later runs leave
-them there. `flib search` leaves duplicates out unless you add
-`--duplicates`; `flib inspect` on one says which file it is a copy of, and
-`flib status` counts them. If the original disappears, `flib reconcile`
-lists its duplicate as orphaned; move it back to Downloads to have it filed.
-Empty the folder whenever you like: flib never does. `duplicates: leave`
-turns this off (copies then stay where they are), and `duplicates_folder`
-renames the folder.
-
-**Upgrading from an earlier version:** with the default `duplicates: move`,
-the first run also sets aside the copies that earlier runs left in Downloads
-(`report (1).pdf` next to a filed `report.pdf`). A note after the run says
-so; scheduled runs write it to their log, and `flib status` shows it until
-you have seen it after a `flib run` in Terminal. Nothing is deleted: `flib
-undo` puts them back, and `duplicates: leave` keeps them where they are.
-
-### Names
-
-A file is renamed only when the model read its content (text, or the image
-with vision on), its category allows renaming, and the model is at least
-`naming.rename_confidence_threshold` sure (0.8 by default). Videos,
-installers, archives, folders and images with vision off keep their name.
-
-The model also compares the file's current name with the subject it proposes
-and says which describes the file better. A generic name (`scan001.pdf`,
-`document (3).pdf`, `IMG_2041.jpg`) is replaced; a descriptive one keeps its
-words, so two similar files stay told apart:
-
-```text
-Study guide - 11 tweaks for coding agents.pdf  ->  2026-11-16_study-guide-11-tweaks-for-coding-agents.pdf
-scan001.pdf                                    ->  2026-10-05_electricity-bill.pdf
-```
-
-Either way flib, not the model, builds the final name: `naming.pattern`
-(`{date}_{subject}` by default) with the document's date, or the download
-date, or today; lower case words joined by `-`; at most `naming.max_length`
-characters; the original extension. A date already at the start of the old
-name is not repeated. `flib simulate` marks a kept name with "original name
-kept", and `flib inspect` shows the choice and the model's reason.
+**Finder tags.** Each item moved into a category folder also gets the
+category name as a Finder tag, so Finder's sidebar and Spotlight
+(`tag:Finance`) find it too. Your own tags are kept, and `flib undo` removes
+only the tag flib added.
 
 ### Images and scanned PDFs (vision)
 
@@ -464,8 +518,8 @@ on to let the model look at them:
 ```yaml
 vision:
   enabled: true      # off by default
-  max_image_px: 1568 # longer side of the image sent, in pixels
-  max_pdf_pages: 3   # first pages sent of a PDF with no text layer
+  max_image_px: 1568 # longer side of the image sent, in pixels (256-2576)
+  max_pdf_pages: 3   # first pages sent of a PDF with no text layer (1-20)
 ```
 
 Images (`.jpg`, `.png`, `.heic`, `.webp`, `.gif`, `.tiff`, `.bmp`) are
@@ -476,119 +530,33 @@ new PDF, which is sent as a document. Because the model then sees the content,
 these files can be renamed like any document (`IMG_4512.HEIC` becomes, say,
 `2026-11-02_beach-at-sunset.HEIC`). If an image cannot be converted, or the
 provider cannot read images, the file is classified from its metadata as with
-vision off. `anthropic` reads images and scanned PDFs; `ollama` and
-`openai-compat` read images only, and only with `provider.vision: true` (set it
-when the model is a vision model); `claude-code` reads neither. Answers given with vision are cached apart from answers without
-it, so turning it on or off never reuses the other kind.
+vision off.
 
-**Estimated cost** on the default model (Claude Haiku 5.5, US$0.10 per
-million input tokens and US$0.50 per million output tokens). An image costs
-about width × height / 750 input tokens:
+Which provider reads what: `anthropic` reads images and scanned PDFs;
+`ollama` and `openai-compat` read images only, and only with
+`provider.vision: true` (set it when the model is a vision model);
+`claude-code` reads neither. Answers given with vision are cached apart from
+answers without it, so turning it on or off never reuses the other kind.
 
-| What is sent | Image tokens | Whole request, estimated |
-| --- | --- | --- |
-| Photo, 4:3, shrunk to 1568 × 1176 | ~2,460 | ~US$0.0005 |
-| Screenshot, 16:10, shrunk to 1568 × 980 | ~2,050 | ~US$0.0005 |
-| Scanned PDF, 3 pages | ~1,600-2,500 per page | ~US$0.001 |
-
-"Whole request" adds about 1,000 tokens of instructions and metadata and a
-few hundred output tokens. These are estimates from the published formula,
-not measurements; what counts toward `limits.max_cost_usd_per_run` is the
-usage the API actually bills, so the cap holds either way. Roughly 2,000
-photos fit in the default US$1 cap. Lowering `max_image_px` lowers the cost
-quadratically (1024 px: about 40% of it).
-
-### Teaching it
-
-When a file lands in the wrong place, correct it:
-
-```sh
-flib fix ~/Downloads/Organized/Other/scan.pdf --category Finance
-flib fix ~/Downloads/Organized/_Review/document.pdf --category Contracts --name lease-2026
-```
-
-The file moves (a taken name gets `-2`, but changing only the capitalization
-renames in place; a missing extension is kept), the index, search and the
-Finder tag follow, and `flib undo` reverts it like a run. If flib is
-interrupted mid-fix, the next command finishes the whole fix or leaves the
-file as it was. Corrections,
-these and the moves or renames `flib reconcile` finds, are sent as examples
-with later requests, so the classifier stops repeating the mistake.
-`provider.max_examples` caps how many (10 by default; `0` sends none).
-
-### Changing your rules
-
-New files follow the configuration as it is when they arrive. After you
-change categories, their hints, the naming rules or the model, file what is
-already organized again:
-
-```sh
-flib reprocess --simulate          # classify and show what would move; moves nothing
-flib reprocess                     # asks before sending, then before moving
-flib reprocess --category finance --since 2026-01-01 --rename
-```
-
-It works on files in the library only (organized or in review), never on the
-input folders, and never sends a file flagged sensitive, nor the content of
-one whose current or original name matches `never_send`. Before anything is
-sent it says how many files the cache already answers and estimates the cost
-of the rest, and asks; the per-run cost limit
-(`limits.max_cost_usd_per_run`) still applies, and running it again goes on
-where it stopped, the cache answering what was done. Then it shows the plan
-and asks again (`--yes` answers both). `--simulate` still sends the files
-(after the same question, so it can cost money; the answers are cached for
-the real run) and stops before moving anything.
-
-A file whose answer did not change stays as it is; one the AI is now unsure
-about stays in its category; one you put in a sub-folder of its category
-stays there unless its category changes. File names are kept: only
-`--rename` applies the current naming rules to them too. The filters are the
-ones of `flib search` (`--category`, `--since`, `--until`, `--ext`). The
-questions are asked before flib takes its lock, so a scheduled run is never
-held up by an unanswered one; each file is checked again before it moves.
-Only one `flib reprocess` runs at a time. `flib undo` also gives back the
-descriptions and tags it replaced.
-
-Your corrections win: a category or a name you set with `flib fix` (or by
-moving the file and running `flib reconcile`) is kept, unless you add
-`--override-corrections`. Everything moved is one run: `flib undo` puts the
-whole reprocess back, Finder tags included.
-
-Renaming or removing a category needs one explicit step. Edit the
-configuration first; every command then warns that organized files still use
-a category it no longer has, and plain `flib reprocess` refuses until you
-say what happened:
-
-```sh
-flib reprocess --rename-category Docs Documents  # move Docs/ into Documents/, no AI
-flib reprocess --remove-category Misc            # reclassify Misc among the others
-flib reprocess --remove-category Misc --to-review  # or send all of it to review
-```
-
-A rename keeps file names (a taken one gets `-2`), and your corrections to
-the old name now point at the new one; a rename that only changes the case
-changes the index and the Finder tags. Files the AI is unsure about after a
-removal go to review. `flib undo` reverts a migration like any reprocess,
-the index side included (category names in rows and corrections), and makes
-the emptied folder again if you deleted it.
-
-After a reprocess that changed nothing (every move failed or was skipped),
-plain `flib undo` refuses instead of undoing an earlier run; name that run
-with `--run ID` if you meant it.
+On the default model a photo or screenshot costs about US$0.0005 and a
+three-page scan about US$0.001, so roughly 2,000 photos fit in the default
+US$1 cap; [the guide](docs/guide.md#what-vision-costs) shows the estimate.
 
 ## Use it from Claude
 
 `flib mcp` is a local [MCP](https://modelcontextprotocol.io) server over
 stdio, so Claude (or any MCP client) can answer "where is last month's power
-bill?" from your library. It runs only while the client is open, uses no
-network and reads the same database as `flib search`.
+bill?" from your library. It runs only while the client is open and reads the
+same database as `flib search`. It uses no network itself, except that with
+semantic search on and a remote `search.semantic.base_url`, a search by
+meaning sends the query there (the `search_files` tool then says so).
 
 | Tool | What it does |
 | --- | --- |
-| `search_files` | Full-text search over names, descriptions and tags, with the same category, extension and period filters as `flib search`; `semantic: true` also searches by meaning ([Semantic search](#semantic-search-optional)) |
+| `search_files` | Search names, descriptions and tags, with the same category, extension and period filters as `flib search`; `semantic: true` also searches by meaning ([Semantic search](#semantic-search-optional)); duplicates only with `include_duplicates` |
 | `get_file` | Everything the index knows about one file: where it is and was, category, description, tags, hash, size, download origin, whether it is only in iCloud, why it is in review (if it is), and its history (moves, renames, fixes, undos with when each was undone; newest first, last 20) |
 | `list_recent` | The files organized most recently, newest first, optionally in one category |
-| `list_review` | What waits in the review folder, newest first, with the AI's confidence and why each file is there (see below) |
+| `list_review` | What waits in the review folder, newest first, with the AI's confidence and why each file is there |
 | `get_stats` | Counts by status and by category, total size filed, the last run and its provider cost, and this month's total cost |
 | `recategorize_file` | Move a file to another configured category and/or rename it, like `flib fix` |
 | `undo` | Revert a run or the last move of one file, like `flib undo` |
@@ -598,12 +566,18 @@ was below `limits.confidence_threshold`), `unknown_category` (the AI chose a
 category you have not configured), `category_removed` (`flib reprocess
 --remove-category --to-review`) or `moved_by_hand` (`flib reconcile` found it
 in the review folder). The first two come with the category the AI suggested.
-Files filed before flib recorded reasons show none.
 
 Costs are estimates, recorded per run (`flib run`, `flib reprocess`; a `flib
-fix` costs nothing). A provider whose prices flib does not know (an
+fix` costs nothing). A run whose provider prices flib does not know (an
 `openai-compat` server without `price_input_per_mtok`/`price_output_per_mtok`)
-records its cost as unknown, not as zero; `get_stats` counts those runs apart.
+has no recorded cost rather than a cost of zero; `get_stats` and `flib status`
+count those runs apart.
+
+Results carry metadata and descriptions, never file content; sensitive files
+show no description, tags or origin. The write tools go through the same
+journal as the CLI, so `flib undo` reverts what an assistant did, and they
+refuse to run while a run is in progress. Set `mcp.read_only: true` to offer
+only the read tools.
 
 **1. Enable it.** The MCP server is optional, because its SDK adds 16
 packages that the rest of flib does not need. Answer yes when
@@ -615,12 +589,6 @@ packages that the rest of flib does not need. Answer yes when
 
 Later updates keep it; `--without-mcp` removes it. Without it, `flib mcp`
 says how to enable it.
-
-Results carry metadata and descriptions, never file content; sensitive files
-show no description, tags or origin. The write tools go through the same
-journal as the CLI, so `flib undo` reverts what an assistant did, and they
-refuse to run while a run is in progress. Set `mcp.read_only: true` to offer
-only the read tools.
 
 **2. Add it to Claude Code:**
 
@@ -649,8 +617,10 @@ not in the default place.
 
 ## Privacy
 
-With a remote provider such as `anthropic`, this is what leaves your Mac
-for each file:
+The index, the logs and the `flib doctor` report stay on your Mac. What
+leaves it depends on the provider and on two optional features.
+
+**For each file classified**, the provider receives:
 
 - its name, extension, size, download date and the URL it was downloaded
   from;
@@ -664,15 +634,13 @@ for each file:
   itself, shrunk to `vision.max_image_px` and stripped of its metadata; for a
   PDF with no text layer, its first `vision.max_pdf_pages` pages. Secret
   detection reads text, not pixels: a photo of a document or a screenshot of
-  a password goes as it is. Keep such files out with `never_send`.
+  a password goes as it is. Keep such files out with `never_send`;
+- your most recent corrections (at most `provider.max_examples`): for each,
+  the corrected file's extension, the description the provider wrote for it
+  earlier, and the category or name before and after. Never file content,
+  and never from files matching `never_send` or flagged sensitive.
 
-With every request also go your most recent corrections (at most
-`provider.max_examples`): for each, the corrected file's extension, the
-description the provider wrote for it earlier, and the category or name before
-and after. Never file content, and never from files matching `never_send` or
-flagged sensitive.
-
-Two kinds of files are treated differently:
+Two kinds of files are treated differently, with every provider:
 
 - **Matching `never_send`:** only the metadata above is sent, never the
   content. Add `"*.eml"` to keep e-mail messages to their metadata.
@@ -680,126 +648,65 @@ Two kinds of files are treated differently:
   nothing at all is sent, the file stays where it is, and the index records
   only that it is sensitive.
 
-With `claude-code` the same goes to Anthropic through the `claude` CLI, except
-images and PDF pages, which it never sends. With `openai-compat` it goes to
-the server at `provider.base_url`, except PDF pages, which it never sends.
+**Where it goes, by provider:**
 
-With `ollama` on this Mac (the default `base_url`), nothing leaves the
-machine. The same rules still apply: `never_send` files send only their
-metadata to the local model and sensitive files send nothing.
+| Provider | Receives the above | Images (vision on) | Scanned PDF pages (vision on) |
+| --- | --- | --- | --- |
+| `anthropic` | Anthropic's API | yes | yes |
+| `claude-code` | Anthropic, through the `claude` CLI | never | never |
+| `openai-compat` | the server at `provider.base_url` | only with `provider.vision: true` | never |
+| `ollama` | the model on this Mac (nothing leaves it), unless `base_url` points elsewhere | only with `provider.vision: true` | never |
 
-The index and the logs stay on your Mac. The MCP server sends an assistant
-only what `flib search` would show you, never file content.
+**Optional features:**
 
-[Semantic search](#semantic-search-optional) is off by default. On, it sends
-the index's names, categories, tags and descriptions (never content, never a
-sensitive or `never_send` file) and your semantic queries to
-`search.semantic.base_url`: Ollama on this Mac by default, so nothing leaves
-it unless you point it elsewhere.
+- [Semantic search](#semantic-search-optional) (off by default) sends the
+  index's names, categories, tags and descriptions (never content, never a
+  sensitive or `never_send` file) and your semantic queries to
+  `search.semantic.base_url`: Ollama on this Mac by default, so nothing
+  leaves it unless you point it elsewhere.
+- The [MCP server](#use-it-from-claude) gives an assistant only what `flib
+  search` would show you, never file content. What the assistant does with
+  it is up to the assistant: a cloud assistant such as Claude sends it to its
+  provider like anything else in the conversation.
+
+`flib status` and the periodic notification name no file, because
+notifications show on the lock screen.
 
 ## Troubleshooting
 
 When something does not work, `flib check-config` validates the
-configuration and `flib schedule --status` shows the daily run. To report a
-bug, run:
+configuration and `flib schedule --status` shows the daily run. The most
+common questions have their own page,
+[docs/troubleshooting.md](docs/troubleshooting.md):
+
+- [a file is skipped as "unreadable"](docs/troubleshooting.md#a-file-is-skipped-as-unreadable)
+  (usually Full Disk Access for the daily run);
+- [a file is skipped as "locked"](docs/troubleshooting.md#a-file-is-skipped-as-locked)
+  (files some apps protect while the Mac is locked);
+- [no notification appears](docs/troubleshooting.md#no-notification-appears).
+
+To report a bug, run:
 
 ```sh
 flib doctor
 ```
 
-It writes one file, `doctor-<date>-<time>.txt`, and prints its path. The file
-holds flib's, Python's and macOS's versions, how flib was installed, whether
-the MCP extra is there, the configuration (validated), where the API key comes
-from, the schedule's state, the database's schema version and counts, what
-`flib status` shows, the last runs with their cost and the last five run logs (`--logs N` for more). It is made to be posted
-in a public issue, so before it is written:
-
-- the API key is left out entirely, not even its last characters; only the
-  word for where it comes from (`environment`, `keychain`, `env_file`, `none`);
-- folders become `<home>`, `<input-1>`, `<output>` or `<data>` (flib's own
-  folder), and other folder names `<dir-N>`; category names and the review
-  folder stay, as they come from the configuration;
-- file names become `<file-N>` with only the extension kept (`<file-3>.pdf`),
-  the same number for the same name, so one file can be followed through the logs;
-- anything that looks like a secret, e-mail addresses, URLs, quoted text, your
-  account name, category hints and `ignore`/`never_send` patterns that name
-  something are replaced as well.
-
-Read the file before you attach it: redaction is careful, not infallible.
-`--stdout` prints the report instead, `--output PATH` writes it elsewhere, and
-`--format markdown` makes it paste-ready for an issue.
-
-The report goes into flib's logs folder
-(`~/Library/Application Support/file-librarian/logs`), owner-only, keeping the
-last ten, rather than on the Desktop: flib writes nowhere new, and on many Macs
-the Desktop is synced to iCloud, which would upload a file you have not read
-yet. `open -R` on the printed path shows it in Finder, ready to drag into the
-issue.
-
-### A file is skipped as "unreadable"
-
-flib could not look at the file, so it left it where it is and will try again
-on the next run. The run summary and the run log say what failed: the step
-(`stat` reads the file's details, `read` its content) and the error macOS gave,
-for example:
-
-```text
-  skip    photo.jpeg  (unreadable: EPERM Operation not permitted, on read)
-```
-
-- `EPERM` or `EACCES` in the daily run: macOS keeps the scheduled run out of
-  that file. Give `flib-python` Full Disk Access as described in
-  [Run it every day](#run-it-every-day), then run `flib schedule` again to
-  check. A scheduled run that hits this ends its log with a hint saying so.
-  In a manual run, check the file's permissions (`ls -l`).
-- `EDEADLK`, `EAGAIN`, `EINTR`, `ETIMEDOUT`, `EBUSY` or `ESTALE`: another
-  program (a sync client, an antivirus, Spotlight) had the file busy. flib
-  already tried once more after half a second; the next run usually reads it.
-- Anything else, or the same file failing every day: run `flib doctor` and
-  open an issue with the report.
-
-### A file is skipped as "locked"
-
-```text
-  skip    photo.jpeg  (protected by macOS while the Mac is locked)
-```
-
-macOS Data Protection gives every file a protection class. Most files can be
-read whenever you have logged in once since the Mac started. Some apps built
-for iOS and run on the Mac, such as some messaging apps, save files with a
-stricter class: macOS refuses to open them at all while the screen is
-locked, even to their owner. Nothing is wrong with the file or with flib's
-permissions, so Full Disk Access does not help here.
-
-When the daily run starts while the Mac is locked, flib skips those files as
-`locked` (no failed attempt is counted) and then waits for you to unlock the
-Mac: it checks once a minute, sleeping in between, for up to
-`schedule.wait_for_unlock_hours` (8 by default; `0` turns the wait off), and
-then runs once more for what is left. The run log and `schedule.out.log` say
-when it starts waiting and how the wait ended. While it waits it holds no
-lock, so `flib run` by hand works as usual; if a run is going on when the Mac
-is unlocked, the wait just ends. `flib schedule --remove` (or logging out)
-stops it cleanly. A scheduled run that finds an earlier one still waiting
-does not wait as well: the one waiting already runs once more for
-everything after the unlock.
-
-`flib status` counts these files under the last run, and the periodic summary
-mentions them. To file them right away, unlock the Mac and run `flib run`.
-flib never changes a file's protection class: a file moved into the library
-keeps it, so `flib reconcile`, `flib undo`, `flib fix` and `flib reprocess`
-treat such a file they cannot read while the Mac is locked as "cannot tell
-now" (never changed, never missing) and ask you to try again once it is
-unlocked.
+It writes one file into flib's logs folder and prints its path; `open -R` on
+that path shows it in Finder, ready to drag into an issue. The report holds
+versions, the configuration, the schedule, database counts, what `flib
+status` shows, the last runs and their logs, with the API key left out
+entirely and file names, folders, e-mail addresses, URLs and anything that
+looks like a secret replaced. Read it before you attach it: redaction is
+careful, not infallible. `--stdout` prints it instead, `--format markdown`
+makes it paste-ready, and [the troubleshooting page](docs/troubleshooting.md#the-doctor-report)
+lists exactly what is redacted.
 
 ## Roadmap
 
-| Milestone | Delivers |
-| --- | --- |
-| M0 Foundation | Repository, CI, database schema, empty CLI commands, contributor docs, download-origin prototype |
-| M1 MVP | All P0 requirements with the `anthropic` provider |
-| M2 Daily use | Scheduling, reconcile, init, images and scanned PDFs, Finder tags, learning from corrections, iCloud, MCP server, `claude-code` provider |
-| M3 Open | `ollama` and `openai-compat` providers, search filters, reprocess, doctor, extension guides |
-| v1.0 | Duplicates, optional semantic search, periodic summary, PyPI release |
+Everything planned for M0–M3 and the P2 backlog is implemented; the
+[requirements](docs/requirements.md) have each one's status. Next: v0.1.0
+after the daily-use validation, then packaging for v1.0 (a release on PyPI).
+The [CHANGELOG](CHANGELOG.md) lists what is in the upcoming release.
 
 ## Contributing
 
@@ -809,6 +716,7 @@ Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md),
 has its own guide: [docs/adding-an-extractor.md](docs/adding-an-extractor.md)
 and [docs/adding-a-provider.md](docs/adding-a-provider.md). Questions go to
 [Discussions](https://github.com/luizpereiradev/file-librarian/discussions).
+Report vulnerabilities privately, as [SECURITY.md](SECURITY.md) describes.
 
 ## License
 
