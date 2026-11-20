@@ -29,6 +29,17 @@ A new branch of behaviour, especially a failure path, comes with a test.
 
 `uv run ruff format .` fixes formatting; `uv run ruff check --fix .` fixes most lint findings.
 
+### What CI runs
+
+CI runs those checks on `macos-15`. A pull request is tested on the oldest
+and newest supported Python, 3.11 and 3.15; every push to `main` is tested on
+3.11 through 3.15. Python 3.15 also runs the cross-volume tests on real disk
+images (APFS, HFS+, exFAT); run them locally with
+`FLIB_TEST_VOLUMES=1 uv run pytest -m volumes`. The one required check is
+`CI passed`, which passes only when every Python version passed. A separate
+Security workflow reviews new dependencies, audits `uv.lock` and lints the
+workflows (see [SECURITY.md](SECURITY.md#supply-chain)).
+
 ## Your first contribution
 
 1. Run the setup and the four checks above, so you know they pass before you
@@ -139,11 +150,13 @@ Every dependency runs with access to the user's files, so the bar is high
 
 ## Releases
 
-There are no releases before v1.0's packaging work. When there are, the
-maintainer will: move the `Unreleased` entries in CHANGELOG.md under the new
-version, bump `version` in `pyproject.toml`, merge that as `chore: release
-vX.Y.Z`, tag the merge commit `vX.Y.Z`, and publish from a dedicated workflow
-with PyPI Trusted Publishing (ADR 0003). No one publishes from a laptop.
+The maintainer cuts releases by hand, following
+[docs/releasing.md](docs/releasing.md). There is no release workflow and
+nothing is published to PyPI yet: users install from the repository with
+`scripts/install.sh`, pinned to `uv.lock`. When PyPI publishing starts (v1.0),
+it will use a dedicated workflow with Trusted Publishing
+([ADR 0003](docs/decisions/0003-supply-chain.md)); no one publishes from a
+laptop.
 
 ## Conduct and security
 
