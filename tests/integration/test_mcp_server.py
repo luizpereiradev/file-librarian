@@ -253,6 +253,7 @@ def test_get_stats(downloads: Path, cfg: Config) -> None:
         "missing": 0,
         "failed": 0,
         "sensitive": 1,
+        "duplicate": 0,
     }
     assert stats["by_category"] == {"Finance": 2, "Other": 1}
     assert stats["filed_size_bytes"] == len(b"electricity bill" + b"tax" + b"memo" + b"who knows")
@@ -364,6 +365,7 @@ def test_search_and_get_file(downloads: Path, cfg: Config) -> None:
         "description": "A finance document.",
         "tags": ["sample"],
         "processed_at": hit["processed_at"],
+        "duplicate_of": None,
     }
     detail = ok(call(cfg, "get_file", path=str(target)))
     assert detail["original_path"] == str(downloads / "bill.txt")
@@ -605,3 +607,23 @@ def test_a_reprocess_shows_in_history_and_is_the_last_run(downloads: Path, cfg: 
         "reprocess",
         1,
     )
+
+
+def test_duplicates_show_their_original(downloads: Path, cfg: Config) -> None:
+    organize(
+        downloads,
+        cfg,
+        {
+            "bill.txt": (b"electricity bill", answer("Finance")),
+            "bill (1).txt": (b"electricity bill", answer("Finance")),
+        },
+    )
+    original = str(library(downloads) / "Finance" / "bill.txt")
+    copy = str(library(downloads) / "_Duplicates" / "bill (1).txt")
+    hits = ok(call(cfg, "search_files", query="bill"))["files"]
+    assert [h["path"] for h in hits] == [original]
+    both = ok(call(cfg, "search_files", query="bill", include_duplicates=True))["files"]
+    assert {h["path"]: h["duplicate_of"] for h in both} == {original: None, copy: original}
+    detail = ok(call(cfg, "get_file", path=copy))
+    assert (detail["status"], detail["duplicate_of"]) == ("duplicate", original)
+    assert ok(call(cfg, "get_stats"))["by_status"]["duplicate"] == 1

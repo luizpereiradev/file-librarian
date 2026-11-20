@@ -27,6 +27,8 @@ class FileStatus(StrEnum):
     MISSING = "missing"
     FAILED = "failed"
     SENSITIVE = "sensitive"
+    DUPLICATE = "duplicate"
+    """Same content as a file already filed; moved to ``duplicates_folder`` (RF-21)."""
 
 
 class OperationStatus(StrEnum):
@@ -98,6 +100,11 @@ class FileState:
 
     status: FileStatus
     attempts: int
+    path: Path | None = None
+    """Where the index says the file with this content is now."""
+    kept: frozenset[str] = frozenset()
+    """Paths (NFC) of other copies of this content that ``flib undo`` put back: a
+    duplicate moved back by hand is left where the user wanted it."""
 
 
 NameChoice = Literal["original", "proposed"]
@@ -278,6 +285,8 @@ class FileRecord:
     """Why it goes to review; ``None`` unless ``status`` is ``review``."""
     review_category: str | None = None
     """The category the model suggested for a file in review, if any."""
+    duplicate_of: int | None = None
+    """For a duplicate (RF-21), the id of the row of the file it is a copy of."""
 
 
 @dataclass(frozen=True, slots=True)

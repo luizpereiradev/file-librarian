@@ -95,6 +95,8 @@ class FileRow:
     """Why it is in review; ``None`` outside review and for rows filed before #68."""
     review_category: str | None = None
     """The category the model suggested for a file in review, if any."""
+    duplicate_of: int | None = None
+    """For a duplicate (RF-21), the id of the row of the file it is a copy of."""
 
     @property
     def review(self) -> tuple[ReviewReason | None, str | None]:
@@ -128,6 +130,7 @@ class FileRow:
             if row["review_reason"] is None
             else ReviewReason(row["review_reason"]),
             review_category=row["review_category"],
+            duplicate_of=None if row["duplicate_of"] is None else int(row["duplicate_of"]),
         )
 
 
@@ -361,13 +364,29 @@ class Store:
         return self.schema_version
 
     def file_state(self, sha256: str) -> FileState | None:
-        """Status and attempt count of a known file, or ``None`` if it was never seen."""
+        """What the index knows about a content, or ``None`` if it was never seen.
+
+        Duplicates (RF-21) are not the content's state, except that the copies
+        ``flib undo`` put back are listed (``FileState.kept``).
+        """
         row = self.conn.execute(
-            "SELECT status, attempts FROM files WHERE sha256 = ?", (sha256,)
+            "SELECT status, attempts, current_path FROM files "
+            "WHERE sha256 = ? AND duplicate_of IS NULL",
+            (sha256,),
         ).fetchone()
         if row is None:
             return None
-        return FileState(FileStatus(row["status"]), int(row["attempts"]))
+        kept = self.conn.execute(
+            """SELECT current_path FROM files
+               WHERE sha256 = ? AND duplicate_of IS NOT NULL AND status = 'skipped'""",
+            (sha256,),
+        )
+        return FileState(
+            FileStatus(row["status"]),
+            int(row["attempts"]),
+            Path(row["current_path"]),
+            frozenset(str(r[0]) for r in kept),
+        )
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
@@ -433,8 +452,14 @@ class Store:
     # --- files ----------------------------------------------------------------
 
     def upsert_file(self, record: FileRecord, *, run_id: int) -> int:
-        """Insert or update the row for ``record.sha256``; returns its id."""
+        """Insert or update the row for ``record.sha256``; returns its id.
+
+        A duplicate (``record.duplicate_of``) has a row of its own: the one of
+        an earlier attempt to move the same copy from the same place, or a new one.
+        """
         r = record
+        if r.duplicate_of is not None:
+            return self._upsert_duplicate(r, run_id=run_id)
         self.conn.execute(
             """INSERT INTO files (sha256, original_name, original_path, current_name,
                    current_path, extension, size_bytes, source_url, category, description,
@@ -442,7 +467,7 @@ class Store:
                    processed_at, is_unit, name_choice, name_choice_reason, review_reason,
                    review_category)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(sha256) DO UPDATE SET
+               ON CONFLICT(sha256) WHERE duplicate_of IS NULL DO UPDATE SET
                    current_name = excluded.current_name, current_path = excluded.current_path,
                    category = excluded.category, description = excluded.description,
                    tags = excluded.tags, confidence = excluded.confidence,
@@ -463,8 +488,37 @@ class Store:
                 None if r.review_reason is None else r.review_reason.value, r.review_category,
             ),
         )  # fmt: skip
-        row = self.conn.execute("SELECT id FROM files WHERE sha256 = ?", (r.sha256,)).fetchone()
+        row = self.conn.execute(
+            "SELECT id FROM files WHERE sha256 = ? AND duplicate_of IS NULL", (r.sha256,)
+        ).fetchone()
         return int(row[0])
+
+    def _upsert_duplicate(self, r: FileRecord, *, run_id: int) -> int:
+        found = self.conn.execute(
+            """SELECT id FROM files
+               WHERE sha256 = ? AND duplicate_of IS NOT NULL AND current_path = ?""",
+            (r.sha256, normalize(str(r.current_path))),
+        ).fetchone()
+        if found is not None:
+            self.conn.execute(
+                """UPDATE files SET status = ?, duplicate_of = ?, run_id = ?, processed_at = ?
+                   WHERE id = ?""",
+                (r.status.value, r.duplicate_of, run_id, _now(), int(found[0])),
+            )
+            return int(found[0])
+        cur = self.conn.execute(
+            """INSERT INTO files (sha256, original_name, original_path, current_name,
+                   current_path, extension, size_bytes, source_url, tags, status, run_id,
+                   processed_at, is_unit, duplicate_of)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?)""",
+            (
+                r.sha256, normalize(r.original_path.name), normalize(str(r.original_path)),
+                normalize(r.current_path.name), normalize(str(r.current_path)), r.extension,
+                r.size_bytes, r.source_url, r.status.value, run_id, _now(), int(r.is_unit),
+                r.duplicate_of,
+            ),
+        )  # fmt: skip
+        return _rowid(cur)
 
     def set_file_location(self, file_id: int, path: Path, status: FileStatus) -> None:
         """Where the file is now. Out of review, it loses its review reason."""
@@ -743,7 +797,10 @@ class Store:
         return FileRow.from_row(row)
 
     def file_by_sha256(self, sha256: str) -> FileRow | None:
-        row = self.conn.execute("SELECT * FROM files WHERE sha256 = ?", (sha256,)).fetchone()
+        """The row of a content; never a duplicate's (see ``duplicate_of``)."""
+        row = self.conn.execute(
+            "SELECT * FROM files WHERE sha256 = ? AND duplicate_of IS NULL", (sha256,)
+        ).fetchone()
         return None if row is None else FileRow.from_row(row)
 
     def file_by_current_path(self, path: Path) -> FileRow | None:
@@ -761,9 +818,10 @@ class Store:
         since: str | None = None,
         until: str | None = None,
         statuses: Sequence[FileStatus] = (),
+        include_duplicates: bool = False,
         limit: int,
     ) -> list[FileRow]:
-        """Rows matching an FTS5 query and the filters.
+        """Rows matching an FTS5 query and the filters; duplicates only if asked.
 
         With a query, best first (names weigh more than descriptions); without
         one, newest ``processed_at`` first. ``since`` is inclusive and ``until``
@@ -771,6 +829,8 @@ class Store:
         always bound as parameters.
         """
         where, params = _filter_clause(categories, extensions, since, until, statuses)
+        if not include_duplicates:
+            where.append("f.duplicate_of IS NULL")
         if fts_query is not None:
             where.insert(0, "files_fts MATCH ?")
             params.insert(0, fts_query)

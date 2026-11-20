@@ -368,6 +368,11 @@ class Config(_Section):
     inputs: list[AbsolutePath] = Field(min_length=1)
     output_root: AbsolutePath
     review_folder: SafeFolderName
+    duplicates: Literal["move", "leave"] = "move"
+    """What happens to a file with the same content as one already filed (RF-21):
+    ``move`` puts it in ``duplicates_folder``; ``leave`` leaves it where it is."""
+    duplicates_folder: SafeFolderName
+    """Under ``output_root``, like ``review_folder``; never scanned, never a category."""
     database: AbsolutePath = Field(default_factory=default_database_path)
     provider: ProviderConfig
     limits: LimitsConfig = LimitsConfig()
@@ -397,16 +402,22 @@ class Config(_Section):
         data.setdefault("inputs", ["~/Downloads"])
         data.setdefault("output_root", f"~/Downloads/{locale.output_folder}")
         data.setdefault("review_folder", locale.review_folder)
+        data.setdefault("duplicates_folder", locale.duplicates_folder)
         data.setdefault("categories", [c.as_dict() for c in locale.categories])
         return _moved_keys(data)
 
     @model_validator(mode="after")
     def _check_folder_names(self) -> Config:
         seen: dict[str, str] = {}
-        for name in [*(c.name for c in self.categories), self.review_folder]:
+        special = {self.review_folder: "review_folder", self.duplicates_folder: "duplicates_folder"}
+        for name in [
+            *(c.name for c in self.categories),
+            self.review_folder,
+            self.duplicates_folder,
+        ]:
             key = folder_key(name)
             if key in seen:
-                what = "review_folder" if name == self.review_folder else "category"
+                what = special.get(name, "category")
                 raise ValueError(
                     f"{what} {name!r} is the same folder as {seen[key]!r} on macOS "
                     "(names are compared ignoring case and Unicode form)"

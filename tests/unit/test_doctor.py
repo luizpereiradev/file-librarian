@@ -104,6 +104,7 @@ def _environment(home: Path, fake: _Fake) -> Path:
         90,
         [
             f"  moved   {a}  ->  Finance/{sub}/{a}",
+            f"  dup     {b}  ->  _Duplicates/{b}  (same content as Finance/{sub}/{c})",
             f"  warning Finance/{b}  (could not add the Finder tag: [Errno 1] '{out}/{b}')",
             f"  review  {c}  (model chose unknown category {fake.unknown_category!r})",
             f"  failed  {d}  ([Errno 13] Permission denied: '{inputs}/{d}')",
@@ -163,6 +164,9 @@ def test_nothing_personal_survives(fake_home: Path, seed: int, fmt: doctor.Forma
         "<email>",
         "'*.dmg'",
         "Run 90: 1 organized",
+        "  dup     <file-",
+        "->  _Duplicates/<file-",
+        "(same content as Finance/",
         "(still changing)",
         "(sensitive: private key)",
         "(unreadable: EPERM Operation not permitted, on read)",

@@ -93,8 +93,12 @@ def _run(
     found = scan(config, store.file_state, now=now)
     contexts = [build_context_safely(c, config) for c in found.candidates]
     classified = classify_all(contexts, provider, rules_for(config, store), config, cache=store)
+    # Duplicates are never classified: no provider call, no cost (RF-21).
     planned = plan(
-        classified.decisions, config, today=date.fromtimestamp(now) if now is not None else None
+        classified.decisions,
+        config,
+        today=date.fromtimestamp(now) if now is not None else None,
+        duplicates=found.duplicates,
     )
     deferred = found.deferred + len(classified.deferred)
     if simulate:
@@ -114,7 +118,7 @@ def _run(
         trigger=trigger,
         provider=provider.name,
         model=config.provider.model,
-        seen=len(found.candidates),
+        seen=len(found.candidates) + len(found.duplicates),
         deferred=deferred,
         cost_usd=classified.run_cost,
     )

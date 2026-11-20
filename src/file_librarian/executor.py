@@ -17,6 +17,12 @@ The caller holds the instance lock. For each planned move:
    the journal entry so undo removes exactly that tag. A tag failure is only
    a warning: the move stands.
 
+A duplicate (RF-21) is moved the same way, journaled and undoable, into the
+duplicates folder, and gets a row of its own (status ``duplicate``, pointing
+at its original's row) and no Finder tag. Its original is checked again
+first: if it is no longer filed with that content, the copy stays and
+nothing is recorded.
+
 ``relocate`` does the same for files already in the library (``flib
 reprocess``, RF-37), as one run with trigger ``reprocess``: the index row is
 left as it is until the file is at its new place, and the entry carries the
@@ -81,6 +87,7 @@ from file_librarian.models import (
 )
 from file_librarian.naming import candidate_names
 from file_librarian.planner import Plan, PlannedItem
+from file_librarian.reconcile import content_at
 from file_librarian.undo import record_restored, unit_identity
 
 # A full disk or quota is not the file's fault: the item is retried every run.
@@ -97,6 +104,8 @@ class ItemResult:
     note: str
     warning: str | None = None
     """Something that went wrong without failing the item, e.g. a Finder tag."""
+    original: Path | None = None
+    """For a duplicate, where its original is."""
 
 
 @dataclass(slots=True)
@@ -183,18 +192,63 @@ def _apply(
     item: PlannedItem, config: Config, store: Store, run_id: int, provider: str, model: str
 ) -> ItemResult:
     ctx = item.context
+    if item.original is not None:
+        return _apply_duplicate(item, config, store, run_id)
     if item.destination is None:
         error = item.reason if item.status is FileStatus.FAILED else None
         store.upsert_file(file_record(item, item.status, provider, model, error), run_id=run_id)
         return ItemResult(ctx.path, item.status, None, item.reason)
 
+    return _place(item, file_record(item, item.status, provider, model), config, store, run_id)
+
+
+def _apply_duplicate(item: PlannedItem, config: Config, store: Store, run_id: int) -> ItemResult:
+    """Move a duplicate to the duplicates folder, if its original is still filed (RF-21).
+
+    The original is checked again right before: its row must be organized or
+    in review and the file there must still have this content (not read if it
+    is only in iCloud). Otherwise the copy stays and nothing is recorded; the
+    next run looks at it again. A copy that stays because its original does
+    (``destination`` ``None``) records nothing either.
+    """
+    ctx = item.context
+    if item.destination is None:
+        return ItemResult(ctx.path, FileStatus.SKIPPED, None, item.reason, original=item.original)
+    original = store.file_by_sha256(ctx.sha256)
+    if (
+        original is None
+        or original.status not in {FileStatus.ORGANIZED, FileStatus.REVIEW}
+        or content_at(original.current_path, ctx.sha256) is not True
+    ):
+        why = "its original is no longer in the library with this content; next run"
+        return ItemResult(ctx.path, FileStatus.SKIPPED, None, why)
+    record = FileRecord(
+        sha256=ctx.sha256,
+        original_path=ctx.path,
+        current_path=ctx.path,
+        status=FileStatus.DUPLICATE,
+        extension=ctx.extension,
+        size_bytes=ctx.size_bytes,
+        is_unit=ctx.is_unit,
+        duplicate_of=original.id,
+    )
+    result = _place(item, record, config, store, run_id)
+    result.original = original.current_path
+    return result
+
+
+def _place(
+    item: PlannedItem, record: FileRecord, config: Config, store: Store, run_id: int
+) -> ItemResult:
+    """Index the item, journal its move, move it, then record where it went."""
+    ctx = item.context
     identity = _unchanged(ctx)
-    if identity is None:
+    if identity is None or item.destination is None:
         return ItemResult(ctx.path, FileStatus.SKIPPED, None, "changed since the scan; next run")
 
     destination = item.destination
     with store.transaction():
-        file_id = store.upsert_file(file_record(item, item.status, provider, model), run_id=run_id)
+        file_id = store.upsert_file(record, run_id=run_id)
         op_id = store.add_operation(run_id, file_id, ctx.path, destination, identity=identity)
     try:
         _require_safe_volume(ctx.path, config.output_root)

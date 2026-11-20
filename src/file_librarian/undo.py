@@ -9,7 +9,8 @@ back to another volume is copied, verified and only then removed from the
 library (``fsops.copy_move``), each phase journaled on the entry, which stays
 ``done`` until the copy is complete; ``executor.recover`` finishes or rolls
 back an undo a crash cut off. Restored files are marked
-``skipped`` in the index, so the next run leaves them where you put them, and
+``skipped`` in the index, so the next run leaves them where you put them (a
+duplicate too: its row lists it in ``FileState.kept``), and
 lose the Finder tag the move added (if any), keeping every other tag.
 Given the configuration, a file restored into the library (undoing ``flib
 fix`` or ``flib reprocess``) gets back the status and category of the folder

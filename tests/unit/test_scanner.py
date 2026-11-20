@@ -259,9 +259,14 @@ def test_duplicates_keep_the_original_copy(downloads: Path, names: list[str]) ->
     result = scan(make_config(downloads), nothing_known, now=NOW)
     original = min(names, key=len)
     assert [c.path.name for c in result.candidates] == [original]
-    assert sorted(p.name for p, r in result.skipped if r is SkipReason.DUPLICATE) == sorted(
-        n for n in names if n != original
-    )
+    copies = sorted(n for n in names if n != original)
+    assert sorted(d.candidate.path.name for d in result.duplicates) == copies
+    assert {d.original.name for d in result.duplicates} == {original}
+    assert not any(d.in_library for d in result.duplicates)
+    # With `duplicates: leave`, they are skipped and wait where they are.
+    left = scan(make_config(downloads, duplicates="leave"), nothing_known, now=NOW)
+    assert [c.path.name for c in left.candidates] == [original] and left.duplicates == []
+    assert sorted(p.name for p, r in left.skipped if r is SkipReason.DUPLICATE) == copies
 
 
 def test_version_numbers_are_not_mistaken_for_copies(downloads: Path) -> None:

@@ -105,7 +105,8 @@ def test_category_path_that_is_a_file_fails_one_item_only(downloads: Path) -> No
 def test_same_content_twice_moves_one_and_leaves_the_other(downloads: Path) -> None:
     put(downloads, "x.pdf", b"same")
     put(downloads, "x (1).pdf", b"same")
-    outcome = pipeline.run(fake_config(downloads), FakeProvider(default=answer()), simulate=False)
+    config = fake_config(downloads, duplicates="leave")
+    outcome = pipeline.run(config, FakeProvider(default=answer()), simulate=False)
     assert outcome.report is not None and outcome.report.moved == 1
     [left] = [p for p in downloads.iterdir() if p.is_file()]
     assert (left, SkipReason.DUPLICATE) in outcome.scan.skipped

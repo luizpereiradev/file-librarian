@@ -22,6 +22,13 @@ inputs:
 # Low-confidence files land here for you to decide. Default depends on language.
 # review_folder: _Review
 
+# Files with the same content as one already filed (re-downloads, "x (1).pdf"):
+#   move  -> into duplicates_folder, inside output_root, never deleted, never
+#            sent to the AI (no cost); flib undo puts them back
+#   leave -> they stay where they are
+duplicates: move
+# duplicates_folder: _Duplicates   # default depends on language (pt-BR: _Duplicados)
+
 # SQLite index. Kept outside the organized folders so it is never moved.
 # database: ~/Library/Application Support/file-librarian/library.db
 

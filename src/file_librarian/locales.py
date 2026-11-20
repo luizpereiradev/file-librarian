@@ -35,6 +35,7 @@ class Locale:
     output_folder: str
     review_folder: str
     categories: tuple[DefaultCategory, ...]
+    duplicates_folder: str = "_Duplicates"
 
 
 LOCALES: dict[Language, Locale] = {
@@ -58,6 +59,7 @@ LOCALES: dict[Language, Locale] = {
         display_name="Português (Brasil)",
         output_folder="Organizado",
         review_folder="_Revisar",
+        duplicates_folder="_Duplicados",
         categories=(
             DefaultCategory(
                 "Financeiro",

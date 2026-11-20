@@ -15,6 +15,17 @@ every row of the index and looks at where the file really is:
 - found nowhere: status ``missing``; if it reappears later it is picked up
   again by the same search.
 
+Duplicates (RF-21) are never searched for: a copy is indistinguishable from
+its original by content. A duplicate gone from its recorded place (moved or
+deleted by hand) becomes ``missing``; if it was put back into an input
+folder, the next run moves it to the duplicates folder again while its
+original is in the library. For the same reason the search for any other
+file skips the duplicates folder and every duplicate's place: a filed file
+deleted by hand becomes ``missing`` even when a copy of it waits in the
+duplicates folder. That copy is never promoted silently; it is reported as
+orphaned (``ReconcileReport.orphaned``), and moving it back to an input
+folder has it filed like a new file.
+
 Nothing that exists only in iCloud is read, hashed or listed: that would make
 macOS download it. A file still at its recorded path but only in iCloud (or a
 folder unit with anything inside only in iCloud) cannot be checked, so its row
@@ -34,11 +45,12 @@ from enum import Enum
 from pathlib import Path
 
 from file_librarian import hashing
-from file_librarian.config import Config, is_within
-from file_librarian.db.store import FileRow, Store
+from file_librarian.config import Config, folder_key, is_within
+from file_librarian.db.store import FileRow, Store, normalize
 from file_librarian.models import FileStatus, ReviewReason
 
 _TRACKED = {
+    FileStatus.DUPLICATE,
     FileStatus.ORGANIZED,
     FileStatus.REVIEW,
     FileStatus.SKIPPED,
@@ -56,6 +68,8 @@ class ReconcileReport:
     found_again: list[Path] = field(default_factory=list)
     cloud_only: list[Path] = field(default_factory=list)
     """At their recorded path but only in iCloud: not checked, row unchanged."""
+    orphaned: list[tuple[Path, Path]] = field(default_factory=list)
+    """Duplicates whose original is missing: (the duplicate, where the original was)."""
 
 
 def in_cloud_only(path: Path) -> bool:
@@ -106,29 +120,54 @@ def _look(path: Path, sha256: str) -> _Seen:
     return _Seen.SAME if hashing.same_content(path, sha256) else _Seen.DIFFERENT
 
 
-class _Finder:
-    """Find an item by content under a set of roots, hashing only same-size candidates."""
+def content_at(path: Path, sha256: str) -> bool | None:
+    """Whether ``path`` still holds the content ``sha256`` (a file or a folder unit).
 
-    def __init__(self, config: Config) -> None:
+    ``None`` when that cannot be told without downloading it from iCloud.
+    """
+    seen = _look(path, sha256)
+    return None if seen is _Seen.CLOUD_ONLY else seen is _Seen.SAME
+
+
+class _Finder:
+    """Find an item by content under a set of roots, hashing only same-size candidates.
+
+    The duplicates folder and the places of indexed duplicates (``skip``) are
+    never candidates.
+    """
+
+    def __init__(self, config: Config, skip: set[str] | None = None) -> None:
         self._config = config
+        self._skip = skip or set()
         self._index: tuple[dict[int, list[Path]], list[Path]] | None = None
 
     def _build(self) -> tuple[dict[int, list[Path]], list[Path]]:
         by_size: dict[int, list[Path]] = defaultdict(list)
         dirs: list[Path] = []
-        for root in [self._config.output_root, *self._config.inputs]:
+        output_root = self._config.output_root
+        duplicates = folder_key(self._config.duplicates_folder)
+        for root in [output_root, *self._config.inputs]:
             if not root.is_dir() or in_cloud_only(root):
                 continue
-            deep = is_within(root, self._config.output_root)
+            deep = is_within(root, output_root)
             for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
                 here = Path(dirpath)
-                # Cloud-only folders are neither candidates nor walked into.
-                dirnames[:] = [name for name in dirnames if not _dataless(here / name)]
+                # Cloud-only folders are neither candidates nor walked into, and
+                # neither is the duplicates folder.
+                dirnames[:] = [
+                    name
+                    for name in dirnames
+                    if not _dataless(here / name)
+                    and not (deep and here == output_root and folder_key(name) == duplicates)
+                    and normalize(str(here / name)) not in self._skip
+                ]
                 dirs.extend(here / name for name in dirnames)
                 if not deep:
                     dirnames.clear()  # inputs: top level only, like the scanner
                 for name in filenames:
                     path = here / name
+                    if normalize(str(path)) in self._skip:
+                        continue
                     try:
                         st = path.lstat()
                     except OSError:
@@ -161,12 +200,17 @@ def place(config: Config, path: Path) -> tuple[FileStatus, str | None]:
 
 def reconcile(config: Config, store: Store) -> ReconcileReport:
     report = ReconcileReport()
-    finder = _Finder(config)
-    for row in store.all_files():
+    rows = store.all_files()
+    duplicates = [row for row in rows if row.duplicate_of is not None]
+    finder = _Finder(config, {normalize(str(row.current_path)) for row in duplicates})
+    for row in rows:
         if row.status not in _TRACKED:
             continue
         report.checked += 1
         recorded = row.current_path
+        if row.duplicate_of is not None:
+            _check_duplicate(store, row, report)
+            continue
         if row.status is not FileStatus.MISSING:
             seen = _look(recorded, row.sha256)
             if seen is _Seen.SAME:
@@ -197,4 +241,22 @@ def reconcile(config: Config, store: Store) -> ReconcileReport:
             report.found_again.append(found)
         else:
             report.moved.append((recorded, found))
+    for row in duplicates:
+        if store.file_by_id(row.id).status is not FileStatus.DUPLICATE:
+            continue
+        original = store.file_by_id(row.duplicate_of or 0)
+        if original.status is FileStatus.MISSING:
+            report.orphaned.append((row.current_path, original.current_path))
     return report
+
+
+def _check_duplicate(store: Store, row: FileRow, report: ReconcileReport) -> None:
+    """A duplicate is only looked for where it was recorded; gone from there, it is missing."""
+    if row.status is FileStatus.MISSING:
+        return
+    seen = _look(row.current_path, row.sha256)
+    if seen is _Seen.CLOUD_ONLY:
+        report.cloud_only.append(row.current_path)
+    elif seen is _Seen.DIFFERENT:
+        store.set_file_status(row.id, FileStatus.MISSING)
+        report.missing.append(row.current_path)

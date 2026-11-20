@@ -12,7 +12,18 @@
   mtime are the same before and after hashing (RF-02).
 - Skips anything already in the database by content hash, except files that
   failed fewer than ``max_attempts`` times (RF-01, RF-30).
-- Returns at most ``max_files_per_run`` candidates, oldest first.
+- Finds duplicates (RF-21), with ``duplicates: move``: an item with the same
+  content as a file filed in the library (organized or in review) that is
+  still there with that content, or as another item going ahead in this run.
+  The library copy is checked before the item is called a duplicate; one
+  that is only in iCloud is not read, and the item waits. If the library
+  copy is gone or changed, the item is no duplicate: it goes ahead like a new
+  file and takes over the content's index row. A copy that ``flib undo`` put
+  back is left alone. With ``duplicates: leave``, duplicates are skipped and
+  stay where they are.
+- Returns at most ``max_files_per_run`` candidates, oldest first. Duplicates
+  are not counted: they cost no provider call. A duplicate of an item left
+  for a later run waits with it.
 - Keeps why an item was unreadable (the step and the errno) and reads it once
   more after a short pause when the error is plausibly transient.
 
@@ -32,6 +43,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import TypeVar
+from unicodedata import normalize
 
 from file_librarian import hashing
 from file_librarian.config import Config, is_within
@@ -39,6 +51,7 @@ from file_librarian.globs import matches_any
 from file_librarian.hashing import file_sha256, unit_manifest
 from file_librarian.lock import lock_path
 from file_librarian.models import FileState, FileStatus
+from file_librarian.reconcile import content_at
 
 # Browsers write in-progress downloads under these names (Safari's are folders).
 IN_PROGRESS_PATTERNS = ("*.crdownload", "*.part", "*.partial", "*.download", "*.opdownload")
@@ -113,9 +126,22 @@ class SkipDetail:
         return f"{self.message}, on {self.step}"
 
 
+@dataclass(frozen=True, slots=True)
+class Duplicate:
+    """An item with the same content as a file already filed, or about to be (RF-21)."""
+
+    candidate: Candidate
+    original: Path
+    """Where its original is: in the library, or (``in_library`` False) the item
+    with the same content that goes ahead in this run."""
+    in_library: bool
+
+
 @dataclass(slots=True)
 class ScanResult:
     candidates: list[Candidate] = field(default_factory=list)
+    duplicates: list[Duplicate] = field(default_factory=list)
+    """With ``duplicates: move``: items to move to the duplicates folder, unclassified."""
     skipped: list[tuple[Path, SkipReason]] = field(default_factory=list)
     details: dict[Path, SkipDetail] = field(default_factory=dict)
     """For unreadable items in ``skipped``: what failed."""
@@ -137,19 +163,50 @@ def looks_like_a_copy(path: Path) -> bool:
     return bool(_COPY_SUFFIX.search(stem))
 
 
-def _keep_originals(ready: list[Candidate], result: ScanResult) -> list[Candidate]:
-    """One candidate per content: no copy suffix first, then created first, then shortest."""
+def _keep_originals(ready: list[Candidate]) -> tuple[list[Candidate], list[Duplicate]]:
+    """One candidate per content: no copy suffix first, then created first, then shortest.
+
+    Returns the originals, and the other copies as duplicates of them.
+    """
     by_hash: dict[str, list[Candidate]] = {}
     for candidate in ready:
         by_hash.setdefault(candidate.sha256, []).append(candidate)
     kept = []
+    copies_of: list[Duplicate] = []
     for copies in by_hash.values():
         copies.sort(
             key=lambda c: (looks_like_a_copy(c.path), c.created, len(c.path.name), c.path.name)
         )
         kept.append(copies[0])
-        result.skipped.extend((c.path, SkipReason.DUPLICATE) for c in copies[1:])
-    return kept
+        copies_of.extend(Duplicate(c, copies[0].path, in_library=False) for c in copies[1:])
+    return kept, copies_of
+
+
+# Statuses of a content filed in the library, whose copies are duplicates.
+_FILED = frozenset({FileStatus.ORGANIZED, FileStatus.REVIEW, FileStatus.MISSING})
+
+
+def _known(candidate: Candidate, state: FileState, config: Config) -> bool | Duplicate:
+    """For content already in the index: skip it (True), a duplicate, or new (False).
+
+    Only with ``duplicates: move``; a content that is not filed (sensitive,
+    skipped, failed for good) is always skipped, as are copies undo put back.
+    """
+    here = normalize("NFC", str(candidate.path))
+    if (
+        config.duplicates != "move"
+        or state.status not in _FILED
+        or state.path is None
+        or here in state.kept
+        or here == normalize("NFC", str(state.path))  # the indexed file itself
+    ):
+        return True
+    if state.status is FileStatus.MISSING:
+        return False  # reconcile found it nowhere: this copy is the one left
+    there = content_at(state.path, candidate.sha256)
+    if there is None:
+        return True  # the library copy is only in iCloud: never read it to check
+    return Duplicate(candidate, state.path, in_library=True) if there else False
 
 
 def _protected_ids(config: Config) -> set[tuple[int, int]]:
@@ -317,14 +374,26 @@ def scan(
                 and state.attempts < limits.max_attempts
             )
             if state is not None and not retry:
-                skip(SkipReason.KNOWN)
-                continue
+                known = _known(candidate, state, config)
+                if isinstance(known, Duplicate):
+                    result.duplicates.append(known)
+                    continue
+                if known:
+                    skip(SkipReason.KNOWN)
+                    continue
             ready.append(candidate)
 
-    # The index is keyed by content: of several copies, only the original goes ahead;
-    # the others wait where they are (moving duplicates is RF-21).
-    ready = _keep_originals(ready, result)
+    # The index is keyed by content: of several copies, only the original goes ahead.
+    ready, copies = _keep_originals(ready)
     ready.sort(key=lambda c: (c.mtime, str(c.path)))
     result.candidates = ready[: limits.max_files_per_run]
     result.deferred = len(ready) - len(result.candidates)
+    going = {c.path for c in result.candidates}
+    for copy in copies:
+        # The others wait where they are, or with ``duplicates: move`` follow their original.
+        if config.duplicates == "move" and copy.original in going:
+            result.duplicates.append(copy)
+        else:
+            result.skipped.append((copy.candidate.path, SkipReason.DUPLICATE))
+    result.duplicates.sort(key=lambda d: str(d.candidate.path))
     return result

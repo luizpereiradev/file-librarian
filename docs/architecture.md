@@ -125,6 +125,35 @@ model.
   a match, does not walk into a cloud-only folder, and leaves the row of an
   indexed item that is at its recorded path but only in iCloud unchanged
   (it is there, so not `missing`); `inspect` reports it instead of hashing it.
+- Duplicates (RF-21) are moved, never deleted. The scanner calls an item a
+  duplicate when its content (SHA-256, or a folder unit's manifest digest)
+  equals that of another item going ahead in the same run (the original is
+  the one without a copy suffix, then created first, then with the shortest
+  name), or that of a file filed in the library (organized or in review)
+  that is still at its recorded path with that content. The library copy is
+  checked first, never read if it is only in iCloud (the item then waits);
+  if it is gone or changed, the item is no duplicate and is filed like a new
+  file, taking over the content's index row. Duplicates are not classified
+  (no provider call, no cost) and not counted in `max_files_per_run`. The
+  planner sends each one to `output_root / duplicates_folder` under its own
+  name (`-N` if taken), after the other items; a copy of an item of the same
+  run follows it, so if the original stays (sensitive, failed, left for
+  later) the copy stays too and nothing is recorded about it. The executor
+  checks the original once more right before moving, then moves the copy
+  like any item (journaled, recovered after a crash, copied and verified
+  across volumes, undoable), with no Finder tag, and gives it a row of its
+  own: status `duplicate`, `duplicate_of` the original's row. A copy put back
+  by `flib undo` is left where it is by later runs. `duplicates: leave` turns
+  all of this off: duplicates are skipped and stay where they are. The
+  duplicates folder is inside `output_root`, so it is never scanned, and it
+  is never a category. `flib reconcile` never looks for a duplicate by
+  content (a copy is indistinguishable from its original) and never looks
+  inside the duplicates folder for anything else: a duplicate gone from its
+  place becomes `missing`, and one whose original went missing is listed as
+  orphaned, never promoted to original on its own. `flib reprocess` and
+  `flib fix` leave duplicates alone; search (CLI and MCP) leaves them out
+  unless asked (`--duplicates`, `include_duplicates`), and `flib inspect`
+  and `get_file` say what a duplicate is a copy of.
 - One writer at a time: the scheduled run, a manual run and MCP write tools
   share a single-instance lock. The database runs in WAL mode so MCP reads
   never block a run.
@@ -158,8 +187,6 @@ Found in the safety review of M1 and accepted for now:
 - **`flib fix` stays on one volume.** A correction is a rename inside the
   library; a category folder that is the mount point of another volume
   fails the fix with nothing changed.
-- **Duplicates wait.** A second copy with the same content as one processed
-  in the same run stays in place (moving duplicates is RF-21).
 
 ## Data
 
@@ -168,7 +195,7 @@ One SQLite file, outside the organized folders (default
 
 | Table | Holds |
 | --- | --- |
-| `files` | one row per file: original and current name/path, hash, origin, category, description, tags, status, attempts; for a file in review, why (`review_reason`: `low_confidence`, `unknown_category`, `category_removed`, `moved_by_hand`) and the category the model suggested (`review_category`), both NULL outside review |
+| `files` | one row per file: original and current name/path, hash, origin, category, description, tags, status, attempts; for a file in review, why (`review_reason`: `low_confidence`, `unknown_category`, `category_removed`, `moved_by_hand`) and the category the model suggested (`review_category`), both NULL outside review; for a duplicate (status `duplicate`, RF-21), the row of its original (`duplicate_of`). A content has one row besides its duplicates' (a partial unique index on `sha256`) |
 | `runs` | one row per `flib run`, `flib fix` or `flib reprocess`, with what started it (`trigger`: schedule, manual, mcp, reprocess), counts and the estimated provider cost (`cost_usd`: 0 for a fix, NULL when the provider's prices are unknown); simulations record none |
 | `operations` | the journal behind `flib undo`, including the Finder tag each move added, the phase of a cross-volume copy in progress, for `flib fix` and `flib reprocess` the status and category it sets and, for `flib reprocess`, the ones the file had before (undo gives those back), and when it was undone (`undone_at`, set by undo and by the recovery of an interrupted undo) |
 | `index_changes` | what a run changed in the index without moving a file (a category renamed in rows and corrections, a Finder tag renamed in the journal, a new description, tags or confidence, a review reason set or cleared by `flib reprocess` or `flib fix`), reverted by `flib undo` with the run, and with one file by `flib undo --file` |

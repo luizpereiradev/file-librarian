@@ -396,6 +396,30 @@ Your own tags are kept, `flib undo` removes only the tag flib added, and
 `finder_tags.enabled: false` turns this off.
 The API key is read from `ANTHROPIC_API_KEY`, never from the file.
 
+### Duplicates
+
+A file with the same content as one flib already filed (the second
+`report (1).pdf`, or a re-download of something in `Finance`) is moved to
+`_Duplicates` (`_Duplicados` in pt-BR) inside the organized folder, under
+its own name. It is never deleted, and it is not sent to the AI, so it costs
+nothing. flib checks first that the filed copy is still there with the same
+content; if you deleted or edited it, the new copy is filed like any new
+file instead. A copy of a sensitive file stays where it is, like the
+original.
+
+```text
+  dup     report (1).pdf  ->  _Duplicates/report (1).pdf  (same content as Finance/report.pdf)
+```
+
+`flib undo` puts duplicates back like any other move, and later runs leave
+them there. `flib search` leaves duplicates out unless you add
+`--duplicates`; `flib inspect` on one says which file it is a copy of, and
+`flib status` counts them. If the original disappears, `flib reconcile`
+lists its duplicate as orphaned; move it back to Downloads to have it filed.
+Empty the folder whenever you like: flib never does. `duplicates: leave`
+turns this off (copies then stay where they are), and `duplicates_folder`
+renames the folder.
+
 ### Names
 
 A file is renamed only when the model read its content (text, or the image

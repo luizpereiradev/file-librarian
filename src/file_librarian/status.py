@@ -111,6 +111,8 @@ class Status:
     month_cost_usd: float
     month_unpriced_runs: int
     last_summary: datetime | None
+    duplicates: int = 0
+    """Copies set aside in the duplicates folder (RF-21)."""
 
     @property
     def review_total(self) -> int:
@@ -157,6 +159,7 @@ def collect(config: Config, *, now: datetime | None = None) -> Status:
         month_cost_usd=stats.month_cost_usd,
         month_unpriced_runs=stats.month_unpriced_runs,
         last_summary=last_summary,
+        duplicates=stats.by_status.get(FileStatus.DUPLICATE.value, 0),
     )
 
 
@@ -271,6 +274,11 @@ def render(
         lines.extend(_failed_lines(status, config, now))
         if status.sensitive:
             lines.append(f"Left in place as sensitive: {_files(status.sensitive)}")
+        if status.duplicates:
+            lines.append(
+                f"Duplicates set aside in {config.duplicates_folder}: "
+                f"{_files(status.duplicates)} (nothing is deleted; review them when you like)"
+            )
         lines.extend(_last_run_lines(status))
     lines.append(_schedule_line(status.schedule))
     if status.database_exists:
@@ -384,6 +392,7 @@ def to_json(status: Status, config: Config, *, now: datetime | None = None) -> s
             ],
         },
         "sensitive": status.sensitive,
+        "duplicates": {"folder": config.duplicates_folder, "total": status.duplicates},
         "last_run": None
         if run is None
         else {

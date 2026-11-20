@@ -8,6 +8,27 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Duplicates are moved to a duplicates folder, never deleted (#37, RF-21).
+  A file with the same content as another one filed in the same run, or as
+  a file in the library that is still there with that content, goes to
+  `_Duplicates` (`_Duplicados` in pt-BR) inside `output_root`, without a
+  provider call; before, it stayed in Downloads for good. If the filed copy
+  is gone or was edited, the newcomer is filed like a new file instead; a
+  library copy only in iCloud is never read to check (the newcomer waits). A
+  copy of a sensitive, failed or deferred file stays with it. The move is
+  journaled, recovered after a crash, copied and verified across volumes and
+  undone by `flib undo` (later runs then leave the copy where it is); it adds
+  no Finder tag. Each duplicate gets its own index row, status `duplicate`,
+  pointing at its original (migration 0013). `flib run` and `flib simulate`
+  show `dup  NAME  ->  _Duplicates/NAME  (same content as Finance/x.pdf)` and
+  count duplicates in the summary; `flib search` and the MCP `search_files`
+  leave them out unless asked (`--duplicates`, `include_duplicates`);
+  `flib inspect` and `get_file` say what a duplicate is a copy of;
+  `flib status` counts them; `flib reconcile` lists duplicates whose original
+  went missing and never promotes them on its own; `flib reprocess` and semantic search
+  leave them alone (they get no embedding). `duplicates: leave` keeps the old behaviour, and
+  `duplicates_folder` renames the folder. A file whose content the index
+  had as `missing` is now filed again when it reappears in Downloads.
 - Optional semantic search (RF-15, #36), off by default
   (`search.semantic.enabled`). `flib search QUERY --semantic` (or
   `search.semantic.default: true`, with `--words` to opt out) fuses the
