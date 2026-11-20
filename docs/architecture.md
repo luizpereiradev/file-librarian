@@ -414,6 +414,7 @@ Everything is in `src/file_librarian/`:
 | `scheduler/` | the launchd agent behind `flib schedule` |
 | `credentials.py`, `keychain.py` | where an API key comes from; the macOS Keychain through `/usr/bin/security` |
 | `mcp_server.py` | `flib mcp` (optional `mcp` extra) |
+| `evals/` | `flib eval`: the synthetic corpus and its gold labels, the isolated simulate-mode harness and the scoring ([quality.md](quality.md)) |
 
 ## Extension points
 

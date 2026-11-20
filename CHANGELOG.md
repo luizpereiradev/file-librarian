@@ -19,6 +19,18 @@ All notable changes to this project are documented here. The format follows
   (on), `ocr.languages` (from `language`); `flib check-config` and `flib
   doctor` say whether OCR works, `flib inspect` whether a file's text came
   from it.
+- `flib eval` measures classification quality on a public, synthetic corpus of
+  154 downloads (formats flib reads, English and Portuguese, both locales'
+  categories, generic and descriptive names, near-identical bills, items for
+  review, credential files) with gold labels in
+  `src/file_librarian/evals/gold.json`. It runs the real pipeline in simulate
+  mode in a temporary folder with a throwaway database, never reading your
+  configuration, library or cache, and reports category accuracy (overall,
+  per category, common mistakes), review rate, name-kept precision and recall,
+  sensitive items withheld (it fails if one is ever sent), items per minute,
+  tokens and cost. It asks before spending with a paid provider and honours
+  `--max-cost`; `--json`, `--out` and `--compare` save and compare runs.
+  Baselines for `claude-haiku-5-5` are in [docs/quality.md](docs/quality.md).
 
 **Setup and scheduling**
 

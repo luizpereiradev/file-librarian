@@ -255,6 +255,7 @@ Every command takes `--config PATH` (`-c`); without it, flib reads
 | `flib schedule [--at HH:MM \| --status \| --remove \| --refresh] [--no-save-key] [--no-check]` | Run every day via launchd, with an access check ([Run it every day](#run-it-every-day)) |
 | `flib inspect FILE... [--json]` | Show hash, size and download origin (no hash for a file only in iCloud), and for an indexed file its status, category, why it is in review and the name choice |
 | `flib mcp` | Local MCP server for AI assistants ([Use it from Claude](#use-it-from-claude)) |
+| `flib eval [--provider NAME] [--model M] [--language en\|pt-BR] [--limit N] [--json] [--out FILE] [--compare FILE]` | Measure classification quality on a built-in synthetic corpus, never touching your files ([Measuring quality](#measuring-quality)) |
 | `flib doctor [--stdout \| -o PATH] [--format markdown] [--logs N]` | A redacted diagnostics report for bug reports ([Troubleshooting](#troubleshooting)) |
 | `flib --version` | Print the version |
 
@@ -801,6 +802,17 @@ looks like a secret replaced. Read it before you attach it: redaction is
 careful, not infallible. `--stdout` prints it instead, `--format markdown`
 makes it paste-ready, and [the troubleshooting page](docs/troubleshooting.md#the-doctor-report)
 lists exactly what is redacted.
+
+## Measuring quality
+
+`flib eval` runs a synthetic corpus of about 150 downloads, in English and
+Portuguese, through the real pipeline in a temporary folder and reports
+category accuracy, the review rate, how often descriptive names are kept,
+speed and cost. It never reads your configuration or touches your library;
+with a paid provider it shows the estimated cost (a few US cents with the
+default model) and asks first. `--compare` puts two runs side by side, for
+two providers or two prompt versions. [docs/quality.md](docs/quality.md) has
+the options, what each number means and the current baselines.
 
 ## Roadmap
 

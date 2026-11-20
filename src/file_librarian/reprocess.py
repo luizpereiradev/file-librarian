@@ -361,11 +361,12 @@ def estimate(targets: list[Target], provider: Provider, config: Config, store: S
             cached += 1
             continue
         to_ask += 1
-        cost += provider.cost_usd(_usage(ctx, rules, config, vision))
+        cost += provider.cost_usd(estimated_usage(ctx, rules, config, vision))
     return Estimate(len(targets), cached, to_ask, cost)
 
 
-def _usage(ctx: FileContext, rules: Rules, config: Config, vision: bool) -> Usage:
+def estimated_usage(ctx: FileContext, rules: Rules, config: Config, vision: bool) -> Usage:
+    """Roughly what one request for ``ctx`` bills, before it is sent."""
     chars = len(system_prompt(rules)) + len(user_message(ctx))
     tokens = chars // CHARS_PER_TOKEN + (attachment_tokens(ctx, config) if vision else 0)
     return Usage(input_tokens=tokens, output_tokens=ANSWER_TOKENS)

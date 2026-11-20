@@ -18,7 +18,6 @@ import os
 import plistlib
 import sqlite3
 import time
-import zipfile
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,6 +29,11 @@ from file_librarian import pipeline
 from file_librarian.config import Config, parse_config
 from file_librarian.context import build_context
 from file_librarian.db.store import FileRow, Store
+from file_librarian.evals.documents import make_docx as make_docx
+from file_librarian.evals.documents import make_eml as make_eml
+from file_librarian.evals.documents import make_pdf as make_pdf
+from file_librarian.evals.documents import make_pptx as make_pptx
+from file_librarian.evals.documents import make_xlsx as make_xlsx
 from file_librarian.finder_tags import USER_TAGS
 from file_librarian.hashing import file_sha256, unit_manifest
 from file_librarian.models import Classification, FileContext
@@ -276,107 +280,6 @@ class FakeProtection:
 
 
 # --- Synthetic documents ---------------------------------------------------------
-
-_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
-_S = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-
-
-def _xml_escape(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def make_docx(path: Path, paragraphs: list[str]) -> Path:
-    body = "".join(f"<w:p><w:r><w:t>{_xml_escape(p)}</w:t></w:r></w:p>" for p in paragraphs)
-    xml = f'<?xml version="1.0"?><w:document xmlns:w="{_W}"><w:body>{body}</w:body></w:document>'
-    with zipfile.ZipFile(path, "w") as zf:
-        zf.writestr("[Content_Types].xml", "<Types/>")
-        zf.writestr("word/document.xml", xml)
-    return path
-
-
-def make_pptx(path: Path, slides: list[str]) -> Path:
-    with zipfile.ZipFile(path, "w") as zf:
-        zf.writestr("[Content_Types].xml", "<Types/>")
-        for i, text in enumerate(slides, start=1):
-            xml = (
-                f'<?xml version="1.0"?><p:sld xmlns:p="p" xmlns:a="{_A}"><a:p><a:r>'
-                f"<a:t>{_xml_escape(text)}</a:t></a:r></a:p></p:sld>"
-            )
-            zf.writestr(f"ppt/slides/slide{i}.xml", xml)
-    return path
-
-
-def make_xlsx(path: Path, sheets: list[str], strings: list[str]) -> Path:
-    sheet_xml = "".join(
-        f'<sheet name="{_xml_escape(s)}" sheetId="{i}"/>' for i, s in enumerate(sheets, 1)
-    )
-    si = "".join(f"<si><t>{_xml_escape(s)}</t></si>" for s in strings)
-    with zipfile.ZipFile(path, "w") as zf:
-        zf.writestr("[Content_Types].xml", "<Types/>")
-        zf.writestr(
-            "xl/workbook.xml", f'<workbook xmlns="{_S}"><sheets>{sheet_xml}</sheets></workbook>'
-        )
-        zf.writestr("xl/sharedStrings.xml", f'<sst xmlns="{_S}">{si}</sst>')
-    return path
-
-
-def make_pdf(path: Path, text: str) -> Path:
-    """A minimal one-page PDF with a Helvetica text line."""
-    escaped = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-    stream = f"BT /F1 12 Tf 72 720 Td ({escaped}) Tj ET".encode("latin-1")
-    objects = [
-        b"<< /Type /Catalog /Pages 2 0 R >>",
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
-        b"/Resources << /Font << /F1 5 0 R >> >> >>",
-        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-    ]
-    out = bytearray(b"%PDF-1.4\n")
-    offsets = []
-    for number, body in enumerate(objects, start=1):
-        offsets.append(len(out))
-        out += f"{number} 0 obj\n".encode() + body + b"\nendobj\n"
-    xref = len(out)
-    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
-    out += b"".join(f"{o:010d} 00000 n \n".encode() for o in offsets)
-    out += (
-        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
-    )
-    path.write_bytes(bytes(out))
-    return path
-
-
-def make_eml(
-    path: Path,
-    body: str = "Your October bill is ready.",
-    *,
-    html: str | None = None,
-    subject: str = "Electricity bill",
-    sender: str = "Power Co <billing@power.example>",
-    to: str = "someone@mail.example",
-    attachments: dict[str, bytes] | None = None,
-) -> Path:
-    """A synthetic e-mail message: a plain body, an optional HTML one, attachments."""
-    from email.message import EmailMessage
-
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = sender
-    msg["To"] = to
-    msg["Date"] = "Mon, 05 Oct 2026 10:00:00 -0300"
-    if body:
-        msg.set_content(body)
-    if html is not None:
-        if body:
-            msg.add_alternative(html, subtype="html")
-        else:
-            msg.set_content(html, subtype="html")
-    for name, data in (attachments or {}).items():
-        msg.add_attachment(data, maintype="application", subtype="octet-stream", filename=name)
-    path.write_bytes(msg.as_bytes())
-    return path
 
 
 def make_image(path: Path, width: int, height: int) -> Path:
