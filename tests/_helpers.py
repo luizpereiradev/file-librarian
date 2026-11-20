@@ -11,6 +11,7 @@ from __future__ import annotations
 import builtins
 import ctypes
 import ctypes.util
+import errno
 import json
 import os
 import plistlib
@@ -219,6 +220,58 @@ def mark_cloud_only(monkeypatch: pytest.MonkeyPatch, *paths: Path) -> set[Path]:
     monkeypatch.setattr(os, "scandir", guard("listed", os.scandir))
     monkeypatch.setattr(os, "listdir", guard("listed", os.listdir))
     return set(paths)
+
+
+# --- macOS Data Protection ------------------------------------------------------
+
+
+class FakeProtection:
+    """Stand-in for Data Protection classes and the screen lock (``tests/conftest.py``).
+
+    Every file is class C (3) and the screen unlocked unless a test says
+    otherwise. ``protect`` gives files class A (or B): while the fake screen
+    is locked, opening them fails with ``EPERM``, as macOS does.
+    ``lock_screen(unlock_after=N)`` keeps it locked for ``N`` more questions
+    to ``screen_locked``, then unlocks it; without it, it stays locked.
+    """
+
+    def __init__(self) -> None:
+        self.classes: dict[Path, int] = {}
+        self.locked: bool | None = False
+        self.queue: list[bool | None] = []
+        self.polls = 0
+        self._guarded = False
+
+    def protection_class(self, path: Path) -> int | None:
+        return self.classes.get(Path(path).absolute(), 3)
+
+    def screen_locked(self) -> bool | None:
+        self.polls += 1
+        if self.queue:
+            self.locked = self.queue.pop(0)
+        return self.locked
+
+    def lock_screen(self, *, unlock_after: int | None = None) -> None:
+        self.locked = True
+        self.queue = []
+        if unlock_after is not None:
+            self.queue.extend([True] * unlock_after)
+            self.queue.append(False)
+
+    def protect(self, monkeypatch: pytest.MonkeyPatch, *paths: Path, cls: int = 1) -> None:
+        for path in paths:
+            self.classes[path.absolute()] = cls
+        if self._guarded:
+            return
+        self._guarded = True
+        real_open = Path.open
+
+        def guarded(path: Path, *args: Any, **kwargs: Any) -> Any:
+            if self.locked and self.classes.get(path.absolute(), 3) in (1, 2):
+                raise PermissionError(errno.EPERM, os.strerror(errno.EPERM), str(path))
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", guarded)
 
 
 # --- Synthetic documents ---------------------------------------------------------

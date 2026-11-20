@@ -66,7 +66,7 @@ from file_librarian.context import build_context_safely
 from file_librarian.db.store import FileRow, Store
 from file_librarian.executor import Relocation, RunReport, relocate
 from file_librarian.finder_tags import tag_moved, untag_restored
-from file_librarian.hashing import same_content, unit_manifest
+from file_librarian.hashing import check_content, unit_manifest
 from file_librarian.models import (
     Decision,
     FileContext,
@@ -78,6 +78,7 @@ from file_librarian.models import (
 )
 from file_librarian.pipeline import rules_for
 from file_librarian.planner import plan
+from file_librarian.protection import LOCKED_NOW
 from file_librarian.providers.base import Provider, Usage
 from file_librarian.providers.prompt import system_prompt, user_message
 from file_librarian.reconcile import in_cloud_only
@@ -306,7 +307,10 @@ def _check(row: FileRow, config: Config) -> tuple[FileContext | None, str]:
         return None, "not at its recorded place; run `flib reconcile`"
     if row.is_unit and _partly_in_cloud(path):
         return None, "something inside is only in iCloud; download it to reprocess it"
-    if not same_content(path, row.sha256):
+    same = check_content(path, row.sha256)
+    if same is None:
+        return None, LOCKED_NOW
+    if not same:
         return None, "changed or moved since it was indexed; run `flib reconcile`"
     candidate = Candidate(
         path=path,

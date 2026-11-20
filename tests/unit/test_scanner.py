@@ -13,7 +13,7 @@ from file_librarian.config import Config
 from file_librarian.hashing import SF_DATALESS, file_sha256
 from file_librarian.models import FileState, FileStatus
 from file_librarian.scanner import ScanError, SkipReason, scan
-from tests._helpers import OLD, fake_config, make_old, mark_cloud_only, put
+from tests._helpers import OLD, FakeProtection, fake_config, make_old, mark_cloud_only, put
 
 NOW = time.time()
 
@@ -393,3 +393,124 @@ def test_a_failed_stat_says_so(downloads: Path, monkeypatch: pytest.MonkeyPatch)
 def test_an_error_without_errno_still_explains_itself() -> None:
     detail = scanner.SkipDetail.from_error("read", OSError("no code"))
     assert (str(detail), detail.denied) == ("OSError, on read", False)
+
+
+# --- files readable only while the Mac is unlocked (Data Protection) -------------------
+
+
+@pytest.mark.parametrize("cls", [1, 2])
+def test_a_file_protected_while_locked_is_skipped_as_locked(
+    downloads: Path, monkeypatch: pytest.MonkeyPatch, fake_protection: FakeProtection, cls: int
+) -> None:
+    photo = put(downloads, "photo.jpeg", b"jpeg bytes")
+    put(downloads, "ok.pdf", b"fine")
+    fake_protection.protect(monkeypatch, photo, cls=cls)
+    fake_protection.lock_screen()
+    pauses: list[float] = []
+    result = scan(make_config(downloads), nothing_known, now=NOW, sleep=pauses.append)
+    assert [c.path.name for c in result.candidates] == ["ok.pdf"]
+    assert reasons(result)["photo.jpeg"] is SkipReason.LOCKED
+    assert result.details == {}  # not "unreadable": nothing for the Full Disk Access hint
+    assert pauses == []
+
+
+def test_the_same_file_goes_ahead_once_the_mac_is_unlocked(
+    downloads: Path, monkeypatch: pytest.MonkeyPatch, fake_protection: FakeProtection
+) -> None:
+    photo = put(downloads, "photo.jpeg", b"jpeg bytes")
+    fake_protection.protect(monkeypatch, photo)
+    fake_protection.lock_screen()
+    assert reasons(scan(make_config(downloads), nothing_known, now=NOW)) == {
+        "photo.jpeg": SkipReason.LOCKED
+    }
+    fake_protection.locked = False
+    [candidate] = scan(make_config(downloads), nothing_known, now=NOW).candidates
+    assert candidate.path == photo
+
+
+def test_eperm_on_an_ordinary_file_stays_unreadable(
+    downloads: Path, monkeypatch: pytest.MonkeyPatch, fake_protection: FakeProtection
+) -> None:
+    put(downloads, "photo.jpeg", b"jpeg bytes")
+    failing_read(monkeypatch, "photo.jpeg", [errno.EPERM])
+    fake_protection.lock_screen()  # class C (the default): the lock is not the reason
+    result = scan(make_config(downloads), nothing_known, now=NOW)
+    assert reasons(result)["photo.jpeg"] is SkipReason.UNREADABLE
+    assert result.details[downloads / "photo.jpeg"].denied
+
+
+@pytest.mark.parametrize("code", [errno.EIO, errno.ENOENT])
+def test_other_errors_on_a_protected_file_stay_unreadable(
+    downloads: Path, monkeypatch: pytest.MonkeyPatch, fake_protection: FakeProtection, code: int
+) -> None:
+    photo = put(downloads, "photo.jpeg", b"jpeg bytes")
+    fake_protection.classes[photo] = 1
+    failing_read(monkeypatch, "photo.jpeg", [code])
+    result = scan(make_config(downloads), nothing_known, now=NOW)
+    assert reasons(result)["photo.jpeg"] is SkipReason.UNREADABLE
+
+
+def test_a_folder_unit_with_a_protected_file_waits_while_locked(
+    downloads: Path, monkeypatch: pytest.MonkeyPatch, fake_protection: FakeProtection
+) -> None:
+    photo = put(downloads, "album/photo.jpeg", b"jpeg bytes")
+    put(downloads, "album/notes.txt", b"notes")
+    make_old(downloads / "album")
+    fake_protection.protect(monkeypatch, photo)
+    fake_protection.lock_screen()
+    result = scan(make_config(downloads), nothing_known, now=NOW)
+    assert reasons(result) == {"album": SkipReason.LOCKED}
+    assert result.candidates == []
+
+    fake_protection.locked = False
+    again = scan(make_config(downloads), nothing_known, now=NOW)
+    assert [c.path.name for c in again.candidates] == ["album"]
+
+
+def test_a_folder_unit_refused_inside_is_skipped_whole_as_locked(
+    downloads: Path, monkeypatch: pytest.MonkeyPatch, fake_protection: FakeProtection
+) -> None:
+    photo = put(downloads, "album/photo.jpeg", b"jpeg bytes")
+    make_old(downloads / "album")
+    fake_protection.classes[photo] = 1
+
+    def manifest(_path: Path) -> Any:
+        raise PermissionError(errno.EPERM, os.strerror(errno.EPERM), str(photo))
+
+    monkeypatch.setattr(scanner, "unit_manifest", manifest)
+    result = scan(make_config(downloads), nothing_known, now=NOW)
+    assert reasons(result) == {"album": SkipReason.LOCKED}
+    assert result.details == {}
+
+
+def test_the_screen_is_asked_only_for_folder_units_and_once(
+    downloads: Path, fake_protection: FakeProtection
+) -> None:
+    put(downloads, "photo.jpeg", b"jpeg bytes")
+    scan(make_config(downloads), nothing_known, now=NOW)
+    assert fake_protection.polls == 0
+    put(downloads, "a/one.txt", b"1")
+    put(downloads, "b/two.txt", b"2")
+    make_old(downloads / "a")
+    make_old(downloads / "b")
+    scan(make_config(downloads), nothing_known, now=NOW)
+    assert fake_protection.polls == 1
+
+
+def test_a_duplicate_of_a_library_file_protected_while_locked_waits_as_locked(
+    downloads: Path, monkeypatch: pytest.MonkeyPatch, fake_protection: FakeProtection
+) -> None:
+    filed = put(downloads / "Organized" / "Photos", "photo.jpeg", b"jpeg bytes")
+    put(downloads, "photo copy.jpeg", b"jpeg bytes")
+    state = FileState(FileStatus.ORGANIZED, 0, filed)
+    cfg = make_config(downloads, duplicates="move")
+    fake_protection.protect(monkeypatch, filed)
+    fake_protection.lock_screen()
+    result = scan(cfg, lambda _sha: state, now=NOW)
+    # Neither a duplicate nor a new file: the library copy cannot be checked yet.
+    assert result.duplicates == [] and result.candidates == []
+    assert reasons(result)["photo copy.jpeg"] is SkipReason.LOCKED
+
+    fake_protection.locked = False
+    result = scan(cfg, lambda _sha: state, now=NOW)
+    assert [d.candidate.path.name for d in result.duplicates] == ["photo copy.jpeg"]

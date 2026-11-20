@@ -490,6 +490,27 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Files that macOS lets anyone read only while the Mac is unlocked (Data
+  Protection class A or B, used by some apps built for iOS) are no longer
+  skipped as `unreadable` by every scheduled run that starts while the Mac
+  is locked, with a misleading hint about Full Disk Access. The scanner
+  reads the file's protection class (`getattrlist`, metadata only) when a
+  read fails with `EPERM`/`EACCES` and skips it as `locked` ("protected by
+  macOS while the Mac is locked") instead; no attempt is counted, and a
+  folder unit holding such a file waits as a whole while the screen is
+  locked. After a scheduled run that skipped files this way, flib releases
+  its lock and waits for the Mac to be unlocked, checking once a minute for
+  up to `schedule.wait_for_unlock_hours` (new, default 8, `0` = do not
+  wait), then runs once more. The wait ends cleanly on `SIGTERM`, never
+  blocks `flib run`, exits if another run is going on when it wakes, and a
+  later scheduled start replaces it (`flib-waiter.lock`). `flib status`, its
+  `--json` and the periodic summary count these files with what to do;
+  `flib doctor` shows whether the screen is locked and how many the last
+  run skipped. In the library, such a file that cannot be read while the
+  Mac is locked is "cannot tell now" for `flib reconcile` (reported as
+  `locked`, never `missing`), the duplicate check, `flib undo`, `flib fix`,
+  `flib reprocess` and crash recovery. flib never changes a file's
+  protection class.
 - A file skipped as unreadable now says why, in the `flib run` and `flib
   simulate` output and in the run log: the error and the step that failed,
   as in `(unreadable: EPERM Operation not permitted, on read)`. A read that

@@ -75,7 +75,7 @@ from file_librarian.fsops import (
     resume_copy,
     volume_of,
 )
-from file_librarian.hashing import same_content, unit_manifest
+from file_librarian.hashing import check_content, unit_manifest
 from file_librarian.models import (
     Classification,
     CopyPhase,
@@ -90,6 +90,7 @@ from file_librarian.models import (
 )
 from file_librarian.naming import candidate_names
 from file_librarian.planner import Plan, PlannedItem
+from file_librarian.protection import LOCKED_NOW, LockedOutError
 from file_librarian.reconcile import content_at
 from file_librarian.undo import record_restored, unit_identity
 
@@ -665,7 +666,7 @@ def _recover_rename(store: Store, op: OperationRow, row: FileRow, config: Config
     # it, even if the file was edited since), or holds exactly the content we moved.
     # Its exact name must be there: on a case-insensitive volume "A.pdf" opens "a.pdf".
     moved = has_exact_name(op.dst_path) and (
-        _same_inode(op.dst_path, op.src_identity) or same_content(op.dst_path, row.sha256)
+        _same_inode(op.dst_path, op.src_identity) or _holds_now(op.dst_path, row.sha256)
     )
     if _reprocessed(store, op):
         _settle_relocation(store, op, config, op.dst_path if moved else None)
@@ -680,6 +681,17 @@ def _recover_rename(store: Store, op: OperationRow, row: FileRow, config: Config
             store.set_operation(op.id, OperationStatus.FAILED)
             if row.status is not FileStatus.MISSING:  # a takeover leaves the row as it was
                 store.mark_file_failed(op.file_id, "interrupted before the move finished")
+
+
+def _holds_now(path: Path, sha256: str) -> bool:
+    """``path`` holds ``sha256``; raises when it cannot be told until the Mac is unlocked.
+
+    The entry is then left for a later run (see ``_resolve``), never failed.
+    """
+    same = check_content(path, sha256)
+    if same is None:
+        raise LockedOutError(errno.EPERM, LOCKED_NOW, str(path))
+    return same
 
 
 def _record_recovered(store: Store, op: OperationRow, path: Path, row: FileRow) -> None:

@@ -22,6 +22,8 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
+from file_librarian import protection
+
 _CHUNK = 1 << 20
 _UNIT_HEADER = b"file-librarian unit manifest v2\0"
 FINDER_FILES = frozenset({".DS_Store", "Icon\r", ".localized"})
@@ -119,11 +121,21 @@ def content_digest(path: Path) -> str:
 
 def same_content(path: Path, sha256: str) -> bool:
     """``path`` exists, is not a symlink, and hashes to ``sha256``."""
+    return check_content(path, sha256) is True
+
+
+def check_content(path: Path, sha256: str) -> bool | None:
+    """Like ``same_content``, but ``None`` when it cannot be told now.
+
+    That is a file the system refuses because it is readable only while the
+    Mac is unlocked (see ``protection``): it is neither changed nor gone.
+    Any other error is ``False``.
+    """
     try:
         if not os.path.lexists(path) or path.is_symlink():
             return False
         if path.is_dir():
             return unit_manifest(path).digest == sha256
         return file_sha256(path) == sha256
-    except OSError:
-        return False
+    except OSError as exc:
+        return None if protection.is_locked_out(exc, path) else False

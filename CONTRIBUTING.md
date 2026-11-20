@@ -54,7 +54,10 @@ A new branch of behaviour, especially a failure path, comes with a test.
   `FakeClient`/`reply` for the Anthropic API.
 - **Fixtures** live in `tests/conftest.py`. The safety guards there are
   autouse: no network or DNS, a temporary `HOME`, and fakes of the Keychain,
-  launchctl, sips and `claude` (the `tests/fake_*.py` scripts). `downloads`
+  launchctl, sips and `claude` (the `tests/fake_*.py` scripts), and of the
+  screen lock and Data Protection classes (`fake_protection`, a
+  `FakeProtection` from `tests/_helpers.py`: `protect` and `lock_screen`
+  make a file unreadable while the fake Mac is locked). `downloads`
   and `cfg` give a test a Downloads folder and the fake provider's config;
   `fake_openai` (opt-in) runs an OpenAI-compatible server on 127.0.0.1 for
   that test only.

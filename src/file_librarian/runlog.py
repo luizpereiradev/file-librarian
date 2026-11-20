@@ -33,6 +33,14 @@ def write_log(database: Path, run_id: int, lines: list[str]) -> Path:
     return path
 
 
+def append_log(database: Path, run_id: int, lines: list[str]) -> None:
+    """Add lines to the log of a run that already finished (what happened after it)."""
+    path = logs_dir(database) / f"{_PREFIX}{run_id:06d}.log"
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
+    with os.fdopen(fd, "a", encoding="utf-8") as fh:
+        fh.writelines(line + "\n" for line in lines)
+
+
 def _prune(folder: Path) -> None:
     logs = sorted(p for p in folder.iterdir() if p.name.startswith(_PREFIX) and p.suffix == ".log")
     for old in logs[:-KEEP]:

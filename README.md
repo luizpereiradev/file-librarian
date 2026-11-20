@@ -758,6 +758,37 @@ for example:
 - Anything else, or the same file failing every day: run `flib doctor` and
   open an issue with the report.
 
+### A file is skipped as "locked"
+
+```text
+  skip    photo.jpeg  (protected by macOS while the Mac is locked)
+```
+
+macOS Data Protection gives every file a protection class. Most files can be
+read whenever you have logged in once since the Mac started. Some apps built
+for iOS and run on the Mac, such as some messaging apps, save files with a
+stricter class: macOS refuses to open them at all while the screen is
+locked, even to their owner. Nothing is wrong with the file or with flib's
+permissions, so Full Disk Access does not help here.
+
+When the daily run starts while the Mac is locked, flib skips those files as
+`locked` (no failed attempt is counted) and then waits for you to unlock the
+Mac: it checks once a minute, sleeping in between, for up to
+`schedule.wait_for_unlock_hours` (8 by default; `0` turns the wait off), and
+then runs once more for what is left. The run log and `schedule.out.log` say
+when it starts waiting and how the wait ended. While it waits it holds no
+lock, so `flib run` by hand works as usual; if a run is going on when the Mac
+is unlocked, the wait just ends. `flib schedule --remove` (or logging out)
+stops it cleanly, and the next day's run replaces a wait still going on.
+
+`flib status` counts these files under the last run, and the periodic summary
+mentions them. To file them right away, unlock the Mac and run `flib run`.
+flib never changes a file's protection class: a file moved into the library
+keeps it, so `flib reconcile`, `flib undo`, `flib fix` and `flib reprocess`
+treat such a file they cannot read while the Mac is locked as "cannot tell
+now" (never changed, never missing) and ask you to try again once it is
+unlocked.
+
 ## Roadmap
 
 | Milestone | Delivers |

@@ -326,6 +326,9 @@ class SearchConfig(_Section):
 class ScheduleConfig(_Section):
     time: str = "12:30"
     """Local time of the daily run, HH:MM (24-hour). Applied by ``flib schedule``."""
+    wait_for_unlock_hours: Annotated[int, Field(ge=0, le=23)] = 8
+    """After a scheduled run that skipped files readable only while the Mac is
+    unlocked, how long it waits for an unlock to run once more; 0 = never waits."""
 
     @field_validator("time")
     @classmethod

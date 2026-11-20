@@ -125,6 +125,19 @@ model.
   a match, does not walk into a cloud-only folder, and leaves the row of an
   indexed item that is at its recorded path but only in iCloud unchanged
   (it is there, so not `missing`); `inspect` reports it instead of hashing it.
+- Files readable only while the Mac is unlocked (Data Protection class A or
+  B; `protection.py`) are never taken for broken, changed or gone. When a
+  read fails with `EPERM`/`EACCES`, `protection.is_locked_out` reads the
+  file's class with `getattrlist(ATTR_CMN_DATA_PROTECT_FLAGS)` (metadata
+  only; it works while the Mac is locked). The scanner then skips the item
+  as `locked`, not `unreadable` (no attempt counted, no Full Disk Access
+  hint); while the screen is locked (`protection.screen_locked`, the window
+  server's session dictionary, else `ioreg`) a folder unit with such a file
+  inside waits as a whole. On the library side `hashing.check_content`
+  answers "cannot tell" (`None`) for such a file, and `reconcile` (reported
+  as `locked`), the duplicate check, `undo`, `fix`, `reprocess` and crash
+  recovery leave it as it is. flib never changes a file's protection class.
+  Tests replace both seams (`fake_protection` in `tests/conftest.py`).
 - Duplicates (RF-21) are moved, never deleted. The scanner calls an item a
   duplicate when its content (SHA-256, or a folder unit's manifest digest)
   equals that of another item going ahead in the same run (the original is
@@ -314,14 +327,34 @@ simulate=True)` with a configuration whose `inputs`, `output_root` and
 `database` all point inside that folder, which is deleted afterwards. The
 originals are only read, to copy them.
 
+## Waiting for an unlock after a scheduled run
+
+A scheduled run that skipped files as `locked` does not leave them for the
+next day (when the Mac may be locked again). `cli.py` prints its report,
+releases the instance lock and hands over to `catchup.py`: it takes the
+waiter lock (`flib-waiter.lock` next to the database, an `flock` holding the
+waiter's pid) and sleeps, asking `protection.screen_locked` every 60 seconds,
+for up to `schedule.wait_for_unlock_hours` by the wall clock (time the Mac
+spends asleep counts; `0` turns the wait off). When the lock state cannot be
+told, it tries to `open` one of the skipped files instead. Once the Mac is
+unlocked it releases the waiter lock and runs the pipeline once more with
+trigger `schedule` (a second run record, whose log starts with "Catch-up
+run"); if another run holds the instance lock then, it exits. `SIGTERM`
+ends the wait cleanly. The start of every scheduled run stops a waiter left
+by an earlier one (`SIGTERM` to the pid in the waiter lock), so waiters never
+stack up. Each step is a timestamped line in `schedule.out.log`, and how the
+wait ended is appended to the first run's log. The wait, the clock and the
+signal are injectable, so the tests run it on a fake clock.
+
 ## Status and the periodic summary
 
 `flib status` (`status.py`, RF-40) reads what waits for the user: files in
 review grouped by `review_reason` and suggested category, failed files
 grouped by the kind of error (the text of `last_error` before its first
 colon, since the rest can name a path) and whether the next run retries
-them, files left in place as sensitive, the last run with the unreadable and
-iCloud-only skips counted from its log, the next run from the installed
+them, files left in place as sensitive, the last run with the unreadable,
+iCloud-only, not-where-left and `locked` skips counted from its log (with
+what to do about `locked` ones), the next run from the installed
 launchd agent, and this month's cost from `Store.stats()`. It opens the index
 read-only (`mode=ro`) and takes no lock: it neither creates nor migrates the
 database, so it works before the first run and during one. It names no file,
