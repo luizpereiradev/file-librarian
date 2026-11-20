@@ -155,7 +155,7 @@ def test_bad_arguments_are_rejected_by_the_schema(cfg: Config) -> None:
 
 
 def test_search_before_any_run_finds_nothing(cfg: Config) -> None:
-    assert ok(call(cfg, "search_files", query="bill")) == {"files": []}
+    assert ok(call(cfg, "search_files", query="bill"))["files"] == []
     assert ok(call(cfg, "list_recent", category="finance")) == {"files": []}
     review = ok(call(cfg, "list_review"))
     assert (review["total"], review["files"]) == (0, [])

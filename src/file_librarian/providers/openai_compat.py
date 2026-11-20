@@ -7,7 +7,8 @@ Ollama (see ``providers/ollama.py``, a preset of this one) all accept
 - Where it goes: only to ``provider.base_url``, which the user configured.
   Redirects are refused, not followed, so a server cannot send the file on to
   another address; a loopback ``base_url`` also bypasses any HTTP proxy, so
-  traffic meant for this Mac never leaves it.
+  traffic meant for this Mac never leaves it (``providers/http.py``, shared
+  with semantic search's embeddings).
 - Key: from ``credentials.resolve`` (``provider.api_key_env``, else
   ``FLIB_OPENAI_COMPAT_API_KEY``; the Keychain account
   ``openai-compat-api-key``; ``provider.env_file``). Optional: without one no
@@ -45,18 +46,17 @@ from __future__ import annotations
 import base64
 import json
 import re
-import ssl
 import urllib.error
 import urllib.request
-from http.client import HTTPException
 from typing import Any, Literal
 
 from pydantic import ValidationError
 
-from file_librarian import __version__, credentials
+from file_librarian import credentials
 from file_librarian.config import ProviderConfig, is_loopback_url
 from file_librarian.models import Attachment, Classification, FileContext, Rules
 from file_librarian.providers.base import FatalProviderError, ProviderError, Usage
+from file_librarian.providers.http import RETRYABLE_STATUS, JsonClient, error_detail
 from file_librarian.providers.prompt import (
     normalize_answer,
     response_schema,
@@ -64,8 +64,6 @@ from file_librarian.providers.prompt import (
     user_message,
 )
 
-MAX_RESPONSE_BYTES = 4 * 1024 * 1024
-RETRYABLE_STATUS = frozenset({408, 409, 429, 500, 502, 503, 504, 529})
 IMAGE = "image/jpeg"
 
 Mode = Literal["json_schema", "json_object"]
@@ -77,21 +75,6 @@ class _FormatRejected(Exception):
     def __init__(self, error: ProviderError) -> None:
         super().__init__(str(error))
         self.error = error
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Refuse every redirect: the request (and the file in it) goes to ``base_url`` only."""
-
-    def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
-        return None
-
-
-def build_opener(base_url: str) -> urllib.request.OpenerDirector:
-    """An opener that never follows redirects and never proxies loopback traffic."""
-    handlers: list[urllib.request.BaseHandler] = [_NoRedirect()]
-    if is_loopback_url(base_url):
-        handlers.append(urllib.request.ProxyHandler({}))
-    return urllib.request.build_opener(*handlers)
 
 
 def image_part(attachment: Attachment) -> dict[str, Any]:
@@ -140,7 +123,13 @@ class OpenAICompatProvider:
         self._config = config
         self._base_url = config.base_url
         self._key = self._resolve_key()
-        self._opener = opener or build_opener(self._base_url)
+        self._http = JsonClient(
+            self._base_url,
+            label=self.label,
+            key=self._key,
+            timeout=config.timeout_seconds,
+            opener=opener,
+        )
         self._mode: Mode = "json_schema"
         self.local = is_loopback_url(self._base_url)
         self.attachments: frozenset[str] = frozenset({IMAGE}) if config.vision else frozenset()
@@ -249,49 +238,17 @@ class OpenAICompatProvider:
 
         With ``reject_format``, HTTP 400 and 422 raise ``_FormatRejected`` instead.
         """
-        headers = {
-            "Accept": "application/json",
-            "User-Agent": f"file-librarian/{__version__}",
-        }
-        data = None
-        if body is not None:
-            data = json.dumps(body, ensure_ascii=False).encode("utf-8")
-            headers["Content-Type"] = "application/json"
-        if self._key:
-            headers["Authorization"] = f"Bearer {self._key}"
-        url = self._base_url + path
-        request = urllib.request.Request(url, data=data, headers=headers, method=method)  # noqa: S310 - http(s) only, checked by config
         try:
-            with self._opener.open(
-                request, timeout=timeout or self._config.timeout_seconds
-            ) as resp:
-                raw = resp.read(MAX_RESPONSE_BYTES + 1)
+            return self._http.request(method, path, body, timeout=timeout)
         except urllib.error.HTTPError as exc:
             error = self._status_error(exc)
             if reject_format and exc.code in (400, 422):
                 raise _FormatRejected(error) from None
             raise error from None
-        except urllib.error.URLError as exc:
-            raise self._connection_error(exc.reason) from None
-        except TimeoutError as exc:
-            raise ProviderError(f"{self.label} timed out", retryable=True) from exc
-        except (HTTPException, OSError) as exc:
-            raise ProviderError(
-                f"connection to {self.label} failed: {type(exc).__name__}", retryable=True
-            ) from exc
-        if len(raw) > MAX_RESPONSE_BYTES:
-            raise ProviderError("the answer was too large")
-        try:
-            payload = json.loads(raw)
-        except ValueError as exc:
-            raise ProviderError(f"{self.label} did not answer with JSON") from exc
-        if not isinstance(payload, dict):
-            raise ProviderError(f"{self.label} did not answer with a JSON object")
-        return payload
 
     def _status_error(self, exc: urllib.error.HTTPError) -> ProviderError:
         status = exc.code
-        detail = _error_detail(exc)
+        detail = error_detail(exc)
         if 300 <= status < 400:
             error: ProviderError = FatalProviderError(
                 f"{self.label} redirected the request (HTTP {status}); redirects are not "
@@ -319,20 +276,6 @@ class OpenAICompatProvider:
         if spec is None:
             return "this provider sends no key"
         return f"run `flib key set --provider {spec.provider}`, or set {spec.env_var}"
-
-    def _connection_error(self, reason: object) -> ProviderError:
-        if isinstance(reason, ssl.SSLCertVerificationError):
-            return FatalProviderError(
-                f"{self.label}'s TLS certificate could not be verified: {reason.verify_message}"
-            )
-        if isinstance(reason, TimeoutError):
-            return ProviderError(f"{self.label} timed out", retryable=True)
-        return ProviderError(
-            f"cannot reach {self.label} at {self._base_url}: {type(reason).__name__}"
-            if isinstance(reason, BaseException)
-            else f"cannot reach {self.label} at {self._base_url}",
-            retryable=True,
-        )
 
     def list_models(self, *, timeout: float = 5.0) -> list[str]:
         """The model ids ``GET {base_url}/models`` lists. Sends no file content."""
@@ -373,14 +316,3 @@ def _strip_wrapping(text: str) -> str:
     text = _THINK.sub("", text).strip()
     match = _FENCE.match(text)
     return match.group(1) if match else text
-
-
-def _error_detail(exc: urllib.error.HTTPError) -> str:
-    """``: <message>`` from an OpenAI-style error body, short; empty when there is none."""
-    try:
-        body = json.loads(exc.read(64 * 1024) or b"null")
-    except (ValueError, OSError):
-        return ""
-    error = body.get("error") if isinstance(body, dict) else None
-    message = error.get("message") if isinstance(error, dict) else error
-    return f": {str(message)[:200]}" if message else ""

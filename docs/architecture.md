@@ -175,6 +175,7 @@ One SQLite file, outside the organized folders (default
 | `corrections` | user recategorizations and renames (`flib fix`, `flib reconcile`); the latest per file and field, while still in effect, are sent as examples and are part of the cache key |
 | `files_fts` | FTS5 index over names, description and tags; accents ignored |
 | `meta` | flib's own bookkeeping as key and value; `summary.last_at` is when the periodic summary was last written |
+| `embeddings` | only with `search.semantic.enabled`: one vector per file for semantic search (float32, normalized, as a BLOB), with the model, dimension and a hash of the embedded text (names, category, tags, description; never content), so a changed row or model is embedded again; never for a sensitive or `never_send` file. Searched by brute-force cosine in pure Python (`embeddings.py`), no extension |
 
 Schema changes are new numbered files in `db/migrations/`; the applied version
 is `PRAGMA user_version`. Names and paths are stored in Unicode NFC.
@@ -244,7 +245,7 @@ and without it the command explains how to enable it:
 
 | Tool | Reuses |
 | --- | --- |
-| `search_files` | `search.py`, as `flib search` |
+| `search_files` | `search.py`, as `flib search`; `semantic` is `--semantic` |
 | `get_file` | the index row, plus the download origin and iCloud-only check `flib inspect` uses (a cloud-only file is never read) |
 | `recategorize_file` | `fix.fix_file`, as `flib fix`, with run trigger `mcp` |
 | `undo` | `undo.py`, as `flib undo` |

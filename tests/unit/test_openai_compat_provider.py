@@ -17,7 +17,7 @@ import pytest
 from file_librarian import keychain
 from file_librarian.config import ProviderConfig
 from file_librarian.models import Attachment, CategoryRule, FileContext, Rules
-from file_librarian.providers import Provider, get_provider, openai_compat
+from file_librarian.providers import Provider, get_provider, http
 from file_librarian.providers import ollama as ollama_module
 from file_librarian.providers.base import FatalProviderError, ProviderError, Usage
 from file_librarian.providers.ollama import OllamaProvider, has_model, installed_models
@@ -234,7 +234,7 @@ def test_content_as_a_list_of_text_parts(fake_openai: FakeOpenAI) -> None:
 
 
 def test_a_huge_answer_is_refused(fake_openai: FakeOpenAI, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(openai_compat, "MAX_RESPONSE_BYTES", 100)
+    monkeypatch.setattr(http, "MAX_RESPONSE_BYTES", 100)
     fake_openai.script(completion(GOOD))
     with pytest.raises(ProviderError, match="too large"):
         compat(fake_openai).classify(CTX, RULES)

@@ -6,10 +6,15 @@ nothing and records no run or file state, but it does keep the
 classifications it paid for in the cache, so the ``flib run`` that follows
 reuses them. A real run holds the instance lock from the first read of the
 index to the last write.
+
+With ``search.semantic.enabled``, a real run ends by embedding the rows that
+are new or changed (``embeddings.refresh``). That step never fails the run: a
+problem is reported in ``Outcome.embedding`` and retried by the next run.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import date
 
@@ -17,6 +22,7 @@ from file_librarian.classifier import CACHE_DAYS, classify_all, correction_examp
 from file_librarian.config import Config
 from file_librarian.context import build_context_safely
 from file_librarian.db.store import Store
+from file_librarian.embeddings import RefreshReport, refresh
 from file_librarian.executor import RunReport, execute, recover
 from file_librarian.lock import instance_lock
 from file_librarian.models import CategoryRule, Rules, RunTrigger
@@ -40,6 +46,11 @@ class Outcome:
     """Classifications reused from an earlier simulate or run, at no cost."""
     cost_known: bool = True
     """False when the provider's prices are unknown; the run then records no cost."""
+    embedding: RefreshReport | None = None
+    """Semantic search's vectors made after the run; ``None`` when it is off or simulated."""
+
+
+log = logging.getLogger(__name__)
 
 
 def rules_for(config: Config, store: Store | None = None) -> Rules:
@@ -116,4 +127,18 @@ def _run(
         deferred,
         classified.cached,
         classified.cost_known,
+        embed_after_run(config, store),
     )
+
+
+def embed_after_run(config: Config, store: Store) -> RefreshReport | None:
+    """Vectors for new and changed rows; any failure is reported, never raised."""
+    if not config.search.semantic.enabled:
+        return None
+    try:
+        result = refresh(store, config)
+    except Exception as exc:  # the files are filed already; never fail the run for this
+        result = RefreshReport(error=f"{type(exc).__name__}: {exc}"[:300])
+    if result.error:
+        log.warning("semantic search: embedding failed, retried next run: %s", result.error)
+    return result

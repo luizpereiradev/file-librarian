@@ -12,6 +12,12 @@ dot, any of several) and by period. The period is the day flib last processed
 the file (``processed_at``), in the local time zone: the index keeps no
 document date, and a file's mtime is that of the download, not of when it was
 filed. Without words, matches are listed newest first.
+
+Semantic search (RF-15, opt in with ``search.semantic.enabled``) finds files by
+meaning too: "invoice" finds a file described as a "bill". The words ranking
+(BM25) and the meaning ranking (cosine similarity of embeddings, see
+``embeddings.py``) are fused by reciprocal rank, with the same filters on
+both. When it cannot run, it says why in one line and searches by words.
 """
 
 from __future__ import annotations
@@ -24,7 +30,15 @@ from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, time, timedelta
 
-from file_librarian.db.store import Store
+from file_librarian.config import Config
+from file_librarian.db.store import FileRow, Store
+from file_librarian.embeddings import (
+    MAX_TEXT_CHARS,
+    Embedder,
+    EmbeddingError,
+    embeddable,
+    nearest,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,26 +155,119 @@ def search(
     query = fts_query(text)
     if query is None and not filters:
         return []
-    return [
-        SearchHit(
-            path=str(row.current_path),
-            original_name=row.original_name,
-            category=row.category,
-            description=row.description,
-            tags=row.tags,
-            status=row.status.value,
-            processed_at=row.processed_at,
-            exists=os.path.lexists(row.current_path),
+    return [_hit(row) for row in _word_rows(store, query, filters, limit)]
+
+
+def _word_rows(
+    store: Store, query: str | None, filters: SearchFilters, limit: int
+) -> list[FileRow]:
+    return store.search_files(
+        query,
+        categories=filters.categories,
+        extensions=filters.extensions,
+        since=filters.since,
+        until=filters.until,
+        limit=limit,
+    )
+
+
+def _hit(row: FileRow) -> SearchHit:
+    return SearchHit(
+        path=str(row.current_path),
+        original_name=row.original_name,
+        category=row.category,
+        description=row.description,
+        tags=row.tags,
+        status=row.status.value,
+        processed_at=row.processed_at,
+        exists=os.path.lexists(row.current_path),
+    )
+
+
+# --- semantic search (RF-15) -----------------------------------------------------------
+
+RRF_K = 60
+"""Reciprocal rank fusion constant: a result at rank r scores 1 / (RRF_K + r) per list."""
+
+
+@dataclass(frozen=True, slots=True)
+class SearchOutcome:
+    hits: list[SearchHit]
+    semantic: bool
+    """True when the ranking used embeddings; False when it fell back to words only."""
+    notice: str | None = None
+    """One line saying why it fell back, or that some files have no vector yet."""
+
+
+def semantic_search(
+    store: Store,
+    text: str,
+    config: Config,
+    *,
+    filters: SearchFilters | None = None,
+    limit: int = 20,
+    embedder: Embedder | None = None,
+) -> SearchOutcome:
+    """Words and meaning together: BM25 and cosine rankings fused by reciprocal rank.
+
+    The filters apply to both. Falls back to :func:`search` with a notice when
+    semantic search is off, the query has no words, the embeddings server
+    cannot be used, or no file has a vector for ``search.semantic.model`` yet.
+    """
+    filters = filters or SearchFilters()
+    settings = config.search.semantic
+
+    def words_only(notice: str | None) -> SearchOutcome:
+        return SearchOutcome(search(store, text, filters=filters, limit=limit), False, notice)
+
+    if not settings.enabled:
+        return words_only(
+            "semantic search is off (search.semantic.enabled: false); searched by words only"
         )
-        for row in store.search_files(
-            query,
-            categories=filters.categories,
-            extensions=filters.extensions,
-            since=filters.since,
-            until=filters.until,
-            limit=limit,
+    query = fts_query(text)
+    if query is None:
+        return words_only(None)
+    if store.embedding_count(settings.model) == 0:
+        return words_only(
+            f"no file has an embedding from {settings.model} yet; run `flib search --reindex`. "
+            "Searched by words only"
+        )
+    embedder = embedder or Embedder(settings)
+    try:
+        [vector] = embedder.embed([text.strip()[:MAX_TEXT_CHARS]])
+    except EmbeddingError as exc:
+        return words_only(f"semantic search unavailable ({exc}); searched by words only")
+    pool = max(limit * 2, 50)
+    by_words = [row.id for row in _word_rows(store, query, filters, pool)]
+    by_meaning = [
+        file_id
+        for file_id, _ in nearest(
+            vector,
+            store.embedding_vectors(
+                settings.model,
+                len(vector),
+                categories=filters.categories,
+                extensions=filters.extensions,
+                since=filters.since,
+                until=filters.until,
+            ),
+            limit=pool,
         )
     ]
+    scores: dict[int, float] = {}
+    for ranking in (by_words, by_meaning):
+        for rank, file_id in enumerate(ranking, start=1):
+            scores[file_id] = scores.get(file_id, 0.0) + 1.0 / (RRF_K + rank)
+    best = sorted(scores, key=lambda file_id: -scores[file_id])[:limit]
+    rows = store.files_by_ids(best)
+    notice = None
+    missing = [r for r in store.files_without_embedding(settings.model) if embeddable(r, config)]
+    if missing:
+        notice = (
+            f"{len(missing)} file(s) have no embedding yet and are found by words only; "
+            "the next run or `flib search --reindex` adds them"
+        )
+    return SearchOutcome([_hit(rows[i]) for i in best if i in rows], True, notice)
 
 
 def to_json(hits: list[SearchHit]) -> str:

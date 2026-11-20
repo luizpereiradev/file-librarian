@@ -18,6 +18,8 @@ SERVICE = "file-librarian"
 ACCOUNT = "anthropic-api-key"
 OPENAI_COMPAT_ACCOUNT = "openai-compat-api-key"
 """One account per provider, so an ``openai-compat`` key never replaces the Anthropic one."""
+EMBEDDINGS_ACCOUNT = "embeddings-api-key"
+"""Semantic search's embeddings server (``search.semantic``), apart from the provider's."""
 _NOT_FOUND = 44
 _TIMEOUT = 10
 

@@ -3,7 +3,7 @@
 AI assistants reach the library through these tools. Each one reuses the code
 behind a CLI command or reads the index directly, so the guarantees are the same:
 
-- ``search_files``: ``flib search`` (``search.py``).
+- ``search_files``: ``flib search`` (``search.py``); ``semantic`` is ``--semantic``.
 - ``get_file``: the index record of one file, plus what ``flib inspect``
   shows (hash, size, download origin, iCloud-only) and its journaled moves.
   Like ``inspect`` it never reads a cloud-only file; it never hashes at all,
@@ -51,7 +51,14 @@ from file_librarian.fix import FixError, fix_file
 from file_librarian.lock import AlreadyRunningError, instance_lock
 from file_librarian.models import FileStatus, RunTrigger, explain_review
 from file_librarian.reconcile import in_cloud_only
-from file_librarian.search import SearchError, SearchFilters, SearchHit, make_filters, split_values
+from file_librarian.search import (
+    SearchError,
+    SearchFilters,
+    SearchHit,
+    make_filters,
+    semantic_search,
+    split_values,
+)
 from file_librarian.search import search as run_search
 from file_librarian.undo import NothingToUndoError, UndoReport, undo_file, undo_run
 
@@ -140,6 +147,14 @@ class FileSummary(BaseModel):
 
 class SearchResult(BaseModel):
     files: list[FileSummary] = Field(description="Best matches first.")
+    semantic: bool = Field(
+        default=False, description="True if files were also found by meaning (embeddings)."
+    )
+    notice: str | None = Field(
+        default=None,
+        description="Why a semantic search fell back to words only, or that some files have "
+        "no embedding yet; null otherwise.",
+    )
 
 
 class FileDetail(FileSummary):
@@ -347,6 +362,12 @@ def build_server(config: Config) -> MCPServer:
             description="Only files flib processed on or before this day (YYYY-MM-DD).",
         ),
         limit: int = Field(default=20, ge=1, le=MAX_RESULTS, description="Most results."),
+        semantic: bool | None = Field(
+            default=None,
+            description='Also find files by meaning, not just words ("invoice" finds a '
+            '"bill"), when the user enabled semantic search. Null uses the user\'s default. '
+            "Falls back to words with a notice when it cannot run.",
+        ),
     ) -> SearchResult:
         configured = [c.name for c in config.categories]
         has_filters = bool(split_values(categories) or split_values(extensions) or since or until)
@@ -358,6 +379,14 @@ def build_server(config: Config) -> MCPServer:
         with Store.open(config.database) as store:
             known = configured + store.categories()
             filters = _filters(known, categories, extensions, since, until)
+            settings = config.search.semantic
+            if settings.default if semantic is None else semantic:
+                outcome = semantic_search(store, query, config, filters=filters, limit=limit)
+                return SearchResult(
+                    files=[_summary(hit) for hit in outcome.hits],
+                    semantic=outcome.semantic,
+                    notice=outcome.notice,
+                )
             hits = run_search(store, query, filters=filters, limit=limit)
         return SearchResult(files=[_summary(hit) for hit in hits])
 

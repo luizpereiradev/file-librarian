@@ -3,12 +3,16 @@
 It answers ``POST`` requests from a script: each takes the next ``Reply`` (the
 last one repeats), and every request is recorded with its method, path, headers
 and JSON body. ``GET /v1/models`` lists ``models``, or sends ``models_reply``.
-Tests that use it also need the ``loopback_network`` fixture.
+``POST /v1/embeddings`` answers with ``embedding`` of each input (a bag of words
+over ``SYNONYMS``, so a synonym lands on the same direction), or sends
+``embeddings_reply``. Tests that use it also need the ``loopback_network`` fixture.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import threading
 import time
 from collections.abc import Iterator
@@ -53,6 +57,26 @@ def completion(content: Any, *, tokens: tuple[int, int] = (100, 20), **choice: A
     )
 
 
+EMBEDDING_DIMENSIONS = 64
+SYNONYMS = {"bill": "invoice", "receipt": "invoice", "statement": "invoice", "photo": "picture"}
+"""Words the fake embedding model treats as one meaning."""
+
+
+def embedding(text: str, dimensions: int = EMBEDDING_DIMENSIONS) -> list[float]:
+    """A deterministic vector: one count per word, the word's synonyms folded together.
+
+    Labels such as ``name:`` or ``tags:`` are left out, so only the content counts.
+    """
+    vector = [0.0] * dimensions
+    for word in re.findall(r"[a-z0-9]+", text.lower()):
+        if word in {"name", "original", "category", "tags", "description"}:
+            continue
+        word = SYNONYMS.get(word, word)
+        slot = int(hashlib.sha256(word.encode()).hexdigest(), 16) % dimensions
+        vector[slot] += 1.0
+    return vector
+
+
 def error(status: int, message: str = "nope") -> Reply:
     return Reply(status, {"error": {"message": message, "type": "invalid_request_error"}})
 
@@ -63,6 +87,7 @@ class FakeOpenAI:
         self.requests: list[Seen] = []
         self.models: list[str] = ["test-model"]
         self.models_reply: Reply | None = None
+        self.embeddings_reply: Reply | None = None
         self._lock = threading.Lock()
         self._server: ThreadingHTTPServer | None = None
 
@@ -90,6 +115,8 @@ class FakeOpenAI:
         if handler.command == "GET" and handler.path.endswith("/models"):
             listing = {"object": "list", "data": [{"id": m} for m in self.models]}
             reply = self.models_reply or Reply(body=listing)
+        elif handler.command == "POST" and handler.path.endswith("/embeddings"):
+            reply = self.embeddings_reply or self._embeddings(body)
         else:
             reply = self._next()
         reply = reply or Reply(500, {"error": {"message": "no reply scripted"}})
@@ -106,6 +133,26 @@ class FakeOpenAI:
             handler.wfile.write(data)
         except (BrokenPipeError, ConnectionResetError):
             pass  # the client gave up (a timeout test)
+
+    def embedded_texts(self) -> list[str]:
+        """Every text sent to ``/embeddings`` so far, in order."""
+        return [
+            text
+            for seen in self.requests
+            if seen.path.endswith("/embeddings") and isinstance(seen.body, dict)
+            for text in seen.body.get("input", [])
+        ]
+
+    @staticmethod
+    def _embeddings(body: Any) -> Reply:
+        texts = body.get("input", []) if isinstance(body, dict) else []
+        texts = [texts] if isinstance(texts, str) else texts
+        data = [
+            {"object": "embedding", "index": i, "embedding": embedding(str(t))}
+            for i, t in enumerate(texts)
+        ]
+        model = body.get("model") if isinstance(body, dict) else None
+        return Reply(body={"object": "list", "data": data, "model": model})
 
     @contextmanager
     def running(self) -> Iterator[FakeOpenAI]:

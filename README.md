@@ -280,7 +280,7 @@ provider:
 | `flib inspect FILE...` | Show hash, size and download origin (not the hash of a file only in iCloud), and for an indexed file its status, category, why it is in review (if it is) and name choice | M0 |
 | `flib simulate` | Print the full plan without changing anything | M1 (available) |
 | `flib run` | Classify, rename, move and index new files | M1 (available) |
-| `flib search [QUERY] [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--json]` | Full-text search over names, descriptions and tags, narrowed by category, period or extension ([Searching](#searching)) | M1 (available) |
+| `flib search [QUERY] [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--semantic \| --words] [--reindex] [--json]` | Full-text search over names, descriptions and tags, narrowed by category, period or extension; optionally by meaning too ([Searching](#searching)) | M1 (available) |
 | `flib undo [--run ID \| --file PATH]` | Revert a run or one file | M1 (available) |
 | `flib schedule [--at HH:MM \| --status \| --remove]` | Run every day via launchd, with an access check | M2 (available) |
 | `flib reconcile` | Update the index after you move, rename or delete files by hand; files only in iCloud are left unchecked | M2 (available) |
@@ -314,6 +314,53 @@ flib search --ext pdf --until 2025-12-31 --json
 
 An unknown category, a malformed extension or date, or `--since` after
 `--until` stops with a message saying what is wrong.
+
+#### Semantic search (optional)
+
+Word search finds "electricity invoice" only if those words are in the index.
+Semantic search also finds files by meaning: `flib search "power bill"
+--semantic` finds a file described as an "electricity invoice". Each file gets
+an *embedding*, a list of numbers that places texts with similar meaning close
+together, and the query gets one too. The results of both searches are merged
+(reciprocal rank fusion), so exact word matches still come first, and the
+filters above apply to both. It is off by default. To turn it on with
+[Ollama](https://ollama.com) on this Mac:
+
+1. `ollama pull embeddinggemma` (about 600 MB; multilingual).
+2. In the configuration:
+
+   ```yaml
+   search:
+     semantic:
+       enabled: true
+   ```
+
+3. `flib search --reindex` to embed the files already indexed. After that,
+   every `flib run` embeds the files it adds or changes.
+
+Then search with `--semantic`, or set `search.semantic.default: true` to make
+it the default (`--words` then searches by words only). The MCP tool
+`search_files` takes the same choice as its `semantic` flag.
+
+What is embedded is only what the index already stores about a file: its
+names, category, tags and the AI's description, never its content. A
+sensitive file, or one matching `never_send`, is never embedded. With
+Ollama on this Mac (the default `base_url`), nothing leaves it. Any server
+with an OpenAI-compatible `/embeddings` endpoint works
+(`search.semantic.base_url` and `model`; an optional key from
+`FLIB_EMBEDDINGS_API_KEY`, or
+`search.semantic.api_key_env`, or `flib key set --provider embeddings`, never
+the classification provider's key). With a remote server, that index text
+and every semantic query leave your Mac, `flib check-config` warns about it,
+and the cost is not counted: check your server's prices. Anthropic has no
+embeddings endpoint, so it cannot be used here.
+
+If the embeddings server cannot be reached, or no file has an embedding yet,
+the search says so in one line and searches by words. A run never fails
+because of embeddings: what was not embedded is retried on the next run.
+Changing `search.semantic.model` embeds the library again. Vectors are kept
+in the same database and searched by brute force: about 0.1 s for 10,000
+files and 0.6 s for 50,000.
 
 ## What flib reads
 
@@ -503,7 +550,7 @@ network and reads the same database as `flib search`.
 
 | Tool | What it does |
 | --- | --- |
-| `search_files` | Full-text search over names, descriptions and tags, with the same category, extension and period filters as `flib search` |
+| `search_files` | Full-text search over names, descriptions and tags, with the same category, extension and period filters as `flib search`; `semantic: true` also searches by meaning ([Semantic search](#semantic-search-optional)) |
 | `get_file` | Everything the index knows about one file: where it is and was, category, description, tags, hash, size, download origin, whether it is only in iCloud, why it is in review (if it is), and its history (moves, renames, fixes, undos with when each was undone; newest first, last 20) |
 | `list_recent` | The files organized most recently, newest first, optionally in one category |
 | `list_review` | What waits in the review folder, newest first, with the AI's confidence and why each file is there (see below) |
@@ -608,6 +655,12 @@ metadata to the local model and sensitive files send nothing.
 
 The index and the logs stay on your Mac. The MCP server sends an assistant
 only what `flib search` would show you, never file content.
+
+[Semantic search](#semantic-search-optional) is off by default. On, it sends
+the index's names, categories, tags and descriptions (never content, never a
+sensitive or `never_send` file) and your semantic queries to
+`search.semantic.base_url`: Ollama on this Mac by default, so nothing leaves
+it unless you point it elsewhere.
 
 ## Troubleshooting
 
