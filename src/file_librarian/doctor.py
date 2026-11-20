@@ -44,6 +44,7 @@ from typing import Any, Literal
 import yaml
 
 from file_librarian import __version__, credentials, scheduler
+from file_librarian import status as status_mod
 from file_librarian.config import (
     Config,
     default_config_path,
@@ -298,6 +299,7 @@ def collect(options: Options) -> tuple[list[Section], Redactor]:
         ("API key", lambda s: _api_key(s, redactor, config)),
         ("Schedule", lambda s: _schedule(s, redactor, path)),
         ("Database", lambda s: _database(s, redactor, config, options.runs)),
+        ("Status", lambda s: _status(s, redactor, config)),
         ("Logs", lambda s: _logs(s, redactor, config, options.run_logs)),
     ]
     sections = []
@@ -549,6 +551,15 @@ def _database(section: Section, r: Redactor, config: Config | None, runs: int) -
                 f"{run_id:<3} {mode:<9} {trigger:<9} {started:<26} {done:<8} {numbers} {price:>9}"
             )
         section.blocks.append((f"Last {len(rows)} run(s)", block))
+
+
+def _status(section: Section, r: Redactor, config: Config | None) -> None:
+    """What ``flib status`` shows (it names no file), read-only like the rest."""
+    if config is None:
+        section.lines.append("unknown (the configuration did not load)")
+        return
+    lines = status_mod.render(status_mod.collect(config), config, private=True)
+    section.lines += [r.text(line) for line in lines]
 
 
 def _logs(section: Section, r: Redactor, config: Config | None, count: int) -> None:

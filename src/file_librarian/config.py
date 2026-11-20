@@ -291,6 +291,19 @@ class ScheduleConfig(_Section):
         return f"{int(hour):02d}:{minute}"
 
 
+class SummaryConfig(_Section):
+    """The periodic summary after a scheduled run (RF-40): what waits for the user.
+
+    It comes at most once every ``every_days``, and only when a file has waited
+    in review or failed for ``min_age_days`` or more. It always goes to the run
+    log; with ``notify`` it is also a macOS notification (counts only, no names).
+    """
+
+    notify: bool = True
+    every_days: PositiveInt = 7
+    min_age_days: Annotated[int, Field(ge=0)] = 2
+
+
 def default_database_path() -> Path:
     """The database lives outside the organized folders so it is never moved by mistake."""
     return Path.home() / "Library" / "Application Support" / APP_NAME / "library.db"
@@ -322,6 +335,7 @@ class Config(_Section):
     sensitive: SensitiveConfig = SensitiveConfig()
     mcp: McpConfig = McpConfig()
     schedule: ScheduleConfig = ScheduleConfig()
+    summary: SummaryConfig = SummaryConfig()
 
     @model_validator(mode="before")
     @classmethod

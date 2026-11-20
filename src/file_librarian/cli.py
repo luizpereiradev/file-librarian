@@ -2,8 +2,9 @@
 
 Each command loads and validates the configuration, then calls one module:
 ``pipeline`` for ``run``/``simulate``, ``undo``, ``search``, ``reprocess``...
-Every command but ``reprocess`` (which handles it) warns when organized files
-still use a category the configuration no longer has (RF-37).
+Every command but ``reprocess`` (which handles it) and ``status`` (which only
+reads) warns when organized files still use a category the configuration no
+longer has (RF-37).
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from pydantic import ValidationError
 
 from file_librarian import __version__, credentials, keychain, onboarding, pipeline, scheduler
 from file_librarian import reprocess as reprocess_mod
+from file_librarian import status as status_mod
 from file_librarian.config import (
     Config,
     ConfigError,
@@ -304,6 +306,28 @@ def inspect(
                 typer.echo(f"  name:   {said}" + (f" ({reason})" if reason else ""))
 
 
+@app.command()
+def status(
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    config: ConfigOption = None,
+) -> None:
+    """Show what waits for you: files in review and why, failures, the last and next run.
+
+    Also files left in place as sensitive and this month's provider cost. It
+    only reads: no lock, nothing created, and it works before the first run.
+    """
+    cfg = _load(config, warn_orphans=False)
+    try:
+        state = status_mod.collect(cfg)
+    except (status_mod.StatusError, sqlite3.Error) as exc:
+        _fatal(f"cannot read the index: {exc}")
+    if as_json:
+        typer.echo(status_mod.to_json(state, cfg))
+        return
+    for line in status_mod.render(state, cfg):
+        typer.echo(line)
+
+
 def _index_database(config: Path | None) -> Path | None:
     """The index to look files up in, if there is one. ``inspect`` works without a
     configuration; only one passed with ``--config`` must load."""
@@ -492,9 +516,18 @@ def _pipeline(
         if cost:
             typer.echo(cost)
     elif outcome.report is not None:
-        _print_report(outcome.report, cfg, skipped, cost, hint)
+        summary = _periodic_summary(cfg) if trigger is RunTrigger.SCHEDULE else []
+        _print_report(outcome.report, cfg, skipped, cost, hint, summary)
     if outcome.cached:
         typer.echo(f"{outcome.cached} classification(s) reused from the cache at no cost.")
+
+
+def _periodic_summary(cfg: Config) -> list[str]:
+    """After a scheduled run, what waits for the user, when due (RF-40). Never fails the run."""
+    try:
+        return status_mod.after_scheduled_run(cfg)
+    except Exception as exc:  # the run itself succeeded; the summary is a courtesy
+        return [f"warning: the periodic summary failed: {type(exc).__name__}: {exc}"]
 
 
 def _cost_line(cost_usd: float, *, known: bool) -> str | None:
@@ -577,6 +610,7 @@ def _print_report(
     skipped: list[str],
     cost: str | None = None,
     hint: str | None = None,
+    summary: list[str] | None = None,
 ) -> None:
     lines = []
     for item in report.items:
@@ -600,6 +634,7 @@ def _print_report(
         lines.append(cost)
     if hint:
         lines.append(hint)
+    lines.extend(summary or ())
     for line in lines:
         typer.echo(line)
     if report.run_id is not None:
@@ -1059,6 +1094,7 @@ def init(
         "\nNext:\n"
         "  flib simulate   the plan for your real folders; nothing moves\n"
         "  flib run        organize now; `flib undo` reverts it\n"
+        "  flib status     what waits for you in review or failed, and the last and next run\n"
         "Optional: let Claude search your library through the MCP server; enable it with "
         "`./scripts/install.sh --with-mcp` from the file-librarian folder."
     )

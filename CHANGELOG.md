@@ -8,6 +8,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `flib status` (`--json` too) sums up what waits for you (#38, RF-40): files
+  in review, grouped by why and by the category the AI suggested, with the
+  oldest's age; failed files by kind of error and whether the next run
+  retries them; files left in place as sensitive; the last run, its cost and
+  the items it skipped as unreadable or only in iCloud; the next scheduled
+  run; and this month's cost. It names no file, only reads (no lock, nothing
+  created) and works before the first run; `flib doctor` includes it and
+  `flib init` points to it. After a *scheduled* run, when a file has waited in
+  review or failed for `summary.min_age_days` (2) or more, flib writes the
+  same summary in one line to the run log and posts one macOS notification
+  with counts only, at most once every `summary.every_days` (7);
+  `summary.notify: false` keeps only the log line. A manual `flib run` never
+  notifies, and a notification that fails never fails the run. Migration 0011
+  adds a small `meta` table that remembers when the last summary went out.
 - flib records why a file went to review, what each run cost and when a move
   was undone (#68), in one migration (0010) that leaves earlier rows unknown.
   The review reason is one of `low_confidence`, `unknown_category`,

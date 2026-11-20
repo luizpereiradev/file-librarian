@@ -111,5 +111,10 @@ sensitive:
 schedule:
   time: "12:30"              # daily run, 24-hour local time; applied by `flib schedule`
 
+summary:                     # RF-40: after a scheduled run, what waits in review or failed (`flib status`)
+  notify: true               # one macOS notification, counts only, no file names; false = run log only
+  every_days: 7              # at most once every this many days
+  min_age_days: 2            # only once a file has waited in review or failed this long
+
 mcp:                         # `flib mcp`: the local MCP server for AI assistants
   read_only: false           # true hides the write tools, recategorize_file and undo

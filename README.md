@@ -115,6 +115,44 @@ known).
 To try it without an API key, set `provider: {name: fake, model: offline}`:
 everything is filed under the last category, offline.
 
+### Staying on top of it
+
+Once flib runs by itself, the files it was not sure about wait in the review
+folder, and you only see them if you look. `flib status` sums it up without
+naming any file:
+
+```text
+Review: 3 files in _Review, the oldest for 10 days
+    2  the AI was not sure enough; it suggested Finance
+    1  the AI chose a category that is not configured: Recipes
+Failed: 1 file
+    1  classification failed (1 of 3 attempts; the next run tries again; for 10 days)
+Left in place as sensitive: 1 file
+Last run: 2026-11-19 12:30, scheduled: 4 organized, 3 to review, 1 failed; US$ 0.0123
+  skipped: 1 unreadable, 1 only in iCloud (see its log)
+Next run: 2026-11-20 12:30 (daily at 12:30)
+This month: US$ 0.0456
+```
+
+It only reads (no lock, so it works while a run is going on, and before the
+first one); `--json` gives the same for scripts. You do not have to remember
+to run it: after a *scheduled* run, when a file has waited in review or failed
+for two days or more, flib writes a one-line summary to the run log and shows
+one macOS notification, such as "3 files wait for review, 1 failed. Run `flib
+status` for details." It does this at most once a week, and never after a
+`flib run` you started yourself. The notification holds counts only, never a
+file name, because notifications show on the lock screen. Change it under
+`summary:` in the configuration: `notify: false` keeps only the log line,
+`every_days` and `min_age_days` set how often and how patient.
+
+The notification is posted with `osascript`, so macOS shows it as coming from
+Script Editor, and it can be hidden: macOS may only list Script Editor under
+System Settings > Notifications after its first notification, with alerts off,
+and a Focus mode or "Do Not Disturb" silences it. A notification macOS drops
+cannot be detected, so it is not retried. If you never see one, allow
+notifications for Script Editor there, or rely on the run log and
+`flib status`, which always have the same summary.
+
 ### Where the API key comes from
 
 `provider.api_key_source: auto` (the default) uses the first it finds:
@@ -250,6 +288,7 @@ provider:
 | `flib init [--yes] [--sample N] [--force]` | Guided setup with a trial on copies of recent files | M2 (available) |
 | `flib mcp` | Local MCP server for AI assistants ([Use it from Claude](#use-it-from-claude)) | M2 (available) |
 | `flib reprocess [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--rename] [--simulate] [--yes]` | Reclassify organized files after the rules change (names kept unless `--rename`); `--rename-category OLD NEW` and `--remove-category OLD [--to-review]` migrate a category ([Changing your rules](#changing-your-rules)) | M3 (available) |
+| `flib status [--json]` | What waits for you: files in review and why, failures, files left in place as sensitive, the last and next run, this month's cost ([Staying on top of it](#staying-on-top-of-it)) | v1.0 (available) |
 | `flib doctor [--stdout \| -o PATH] [--format markdown]` | A redacted diagnostics report for bug reports ([Troubleshooting](#troubleshooting)) | M3 (available) |
 
 ### Searching
@@ -583,8 +622,8 @@ flib doctor
 It writes one file, `doctor-<date>-<time>.txt`, and prints its path. The file
 holds flib's, Python's and macOS's versions, how flib was installed, whether
 the MCP extra is there, the configuration (validated), where the API key comes
-from, the schedule's state, the database's schema version and counts, the last
-runs with their cost and the last five run logs (`--logs N` for more). It is made to be posted
+from, the schedule's state, the database's schema version and counts, what
+`flib status` shows, the last runs with their cost and the last five run logs (`--logs N` for more). It is made to be posted
 in a public issue, so before it is written:
 
 - the API key is left out entirely, not even its last characters; only the

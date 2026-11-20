@@ -241,6 +241,18 @@ class LibraryStats:
 
 
 @dataclass(frozen=True, slots=True)
+class WaitingRow:
+    """A file that waits for the user: in review, or failed (``flib status``)."""
+
+    status: FileStatus
+    review_reason: ReviewReason | None
+    review_category: str | None
+    attempts: int
+    last_error: str | None
+    processed_at: str
+
+
+@dataclass(frozen=True, slots=True)
 class CorrectionRow:
     """A correction joined with what the index knows about its file."""
 
@@ -837,6 +849,37 @@ class Store:
             month_unpriced_runs=int(month[1]),
         )
 
+    def waiting(self) -> list[WaitingRow]:
+        """Files in review or failed, oldest first. No names: only why, and since when."""
+        rows = self.conn.execute(
+            """SELECT status, review_reason, review_category, attempts, last_error, processed_at
+               FROM files WHERE status IN ('review', 'failed') ORDER BY processed_at, id"""
+        )
+        return [
+            WaitingRow(
+                status=FileStatus(r["status"]),
+                review_reason=_reason(r["review_reason"]),
+                review_category=r["review_category"],
+                attempts=int(r["attempts"]),
+                last_error=r["last_error"],
+                processed_at=str(r["processed_at"]),
+            )
+            for r in rows
+        ]
+
+    # --- meta: flib's own bookkeeping ---------------------------------------------
+
+    def meta(self, key: str) -> str | None:
+        row = self.conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return None if row is None else str(row[0])
+
+    def set_meta(self, key: str, value: str) -> None:
+        self.conn.execute(
+            """INSERT INTO meta (key, value) VALUES (?, ?)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+            (key, value),
+        )
+
     # --- classification cache --------------------------------------------------------
 
     def cached_answer(self, sha256: str, rules_key: str, *, max_age_days: int) -> str | None:
@@ -1047,6 +1090,10 @@ _KEEP_REVIEW = (
 
 def _code(reason: ReviewReason | None) -> str | None:
     return None if reason is None else reason.value
+
+
+def _reason(code: str | None) -> ReviewReason | None:
+    return None if code is None else ReviewReason(code)
 
 
 def _month_start() -> str:
