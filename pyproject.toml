@@ -1,18 +1,22 @@
 [project]
 name = "file-librarian"
-version = "0.0.1"
+version = "0.1.0"
 description = "Keeps your Downloads folder organized: an AI names, files and describes each new file; deterministic code does the moving."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "file-librarian contributors" }]
-keywords = ["macos", "downloads", "organizer", "cli", "llm", "sqlite"]
+keywords = [
+    "macos", "downloads", "file-organizer", "organizer", "cli", "llm", "ai", "claude", "ollama",
+    "mcp", "sqlite", "search",
+]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: End Users/Desktop",
     "Operating System :: MacOS",
+    "Operating System :: MacOS :: MacOS X",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
@@ -20,6 +24,7 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: 3.15",
+    "Topic :: Desktop Environment :: File Managers",
     "Topic :: Utilities",
 ]
 dependencies = [

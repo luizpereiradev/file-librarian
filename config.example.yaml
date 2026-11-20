@@ -37,7 +37,7 @@ provider:
   model: claude-haiku-5-5    # fast and cheap; for harder files try claude-sonnet-5-5 or claude-opus-5-5
   effort: low                # low | medium | high | xhigh | max: classification needs little (anthropic)
   max_chars_per_file: 4000   # only this much text is ever sent
-  max_examples: 10           # recent corrections (flib fix, reconcile) sent as examples; 0 = none
+  max_examples: 10           # recent corrections (flib fix, reconcile) sent as examples; 0-50, 0 = none
   requests_per_minute: 30    # not applied to a provider on this Mac (ollama, or base_url on localhost)
   max_retries: 3
   timeout_seconds: 60        # raise it for a slow local model
@@ -73,7 +73,7 @@ limits:
 naming:
   pattern: "{date}_{subject}"   # e.g. 2026-11-16_electricity-invoice.pdf
   date_order: DMY               # how to read ambiguous dates in documents: DMY | MDY | YMD
-  max_length: 80
+  max_length: 80                # 16-255 characters, extension included
   rename_confidence_threshold: 0.8
 
 # Closed list: the AI can only pick one of these. Omit it to use the defaults
@@ -117,7 +117,7 @@ sensitive:
 
 schedule:
   time: "12:30"              # daily run, 24-hour local time; applied by `flib schedule`
-  wait_for_unlock_hours: 8   # files some apps protect while the Mac is locked: after a scheduled
+  wait_for_unlock_hours: 8   # 0-23. Files some apps protect while the Mac is locked: after a scheduled
                              # run skipped them, wait up to this long for an unlock and run once
                              # more (0 = don't wait; the next day's run gets them)
 
@@ -138,6 +138,6 @@ search:
     # api_key_env: MY_EMBEDDINGS_KEY  # unset: FLIB_EMBEDDINGS_API_KEY, then the Keychain
     #                          # (`flib key set --provider embeddings`); never the provider's key
     timeout_seconds: 30
-    batch_size: 32           # texts per request
+    batch_size: 32           # texts per request (1-256)
     # Only names, category, tags and description are embedded, never file content or a
     # sensitive file. A remote base_url sends that text, and your queries, off this Mac.
