@@ -282,6 +282,16 @@ class SensitiveConfig(_Section):
     detect_secrets: bool = True
 
 
+class PrivacyConfig(_Section):
+    """What happens to personal identifiers in the model's answers (#82)."""
+
+    descriptions: Literal["redact", "verbatim"] = "redact"
+    """``redact`` replaces phone numbers, e-mail addresses, document, card and account
+    numbers in descriptions, tags and proposed names with markers (``privacy.scrub``)
+    before they are stored; ``verbatim`` stores what the model wrote. The prompt asks
+    the model to leave them out either way."""
+
+
 class McpConfig(_Section):
     read_only: bool = False
 
@@ -397,6 +407,7 @@ class Config(_Section):
     never_send: list[str] = Field(default_factory=list)
     vision: VisionConfig = VisionConfig()
     sensitive: SensitiveConfig = SensitiveConfig()
+    privacy: PrivacyConfig = PrivacyConfig()
     mcp: McpConfig = McpConfig()
     schedule: ScheduleConfig = ScheduleConfig()
     summary: SummaryConfig = SummaryConfig()

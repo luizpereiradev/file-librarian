@@ -22,7 +22,12 @@ Wraps any ``Provider`` with what the provider itself should not decide:
   preparing it fails, it is classified from metadata as with vision off.
   Answers that saw an attachment are cached under their own key, which also
   covers the vision limits, so turning vision on or off never reuses an
-  answer given with the other setting.
+  answer given with the other setting;
+- under ``privacy.descriptions: redact`` (the default) every answer, from the
+  provider or the cache, has its description, tags, proposed name and reason
+  scrubbed (``privacy.scrub_answer``) before anything else sees it: this is the
+  one place answers come through, so the cache, the index, full-text search,
+  embeddings and the MCP tools only ever get the scrubbed text.
 
 The provider's answer is only data; the planner decides what it means.
 
@@ -55,11 +60,12 @@ from file_librarian.models import (
     FileContext,
     Rules,
 )
+from file_librarian.privacy import scrubber
 from file_librarian.providers.base import FatalProviderError, Provider, ProviderError, Usage
 from file_librarian.sensitive import sensitive_name, withheld_by_config
 
 CACHE_DAYS = 7
-PROMPT_VERSION = "4"  # bump when the prompt or answer schema changes, to invalidate the cache
+PROMPT_VERSION = "5"  # bump when the prompt or answer schema changes, to invalidate the cache
 EXAMPLE_DESCRIPTION_CHARS = 200
 
 
@@ -78,6 +84,7 @@ def rules_key(provider: Provider, rules: Rules, config: Config) -> str:
         "model": p.model,
         "effort": p.effort,
         "max_chars": p.max_chars_per_file,
+        "privacy": config.privacy.descriptions,
         "language": rules.language,
         "date_order": rules.date_order,
         "categories": [[c.name, c.hint] for c in rules.categories],
@@ -188,6 +195,7 @@ def classify_all(
     last_call: float | None = None
     text_key = rules_key(provider, rules, config) if cache is not None else ""
     seen_key = vision_key(text_key, config) if cache is not None else ""
+    clean = scrubber(config.privacy.descriptions)
 
     for ctx in contexts:
         if ctx.sensitive:
@@ -199,7 +207,7 @@ def classify_all(
             hit = cache.cached_answer(ctx.sha256, key, max_age_days=CACHE_DAYS)
             if hit is not None:
                 try:
-                    answer = Classification.model_validate_json(hit)
+                    answer = clean(Classification.model_validate_json(hit))
                     result.decisions.append(Decision(replace(ctx, vision_used=vision), answer))
                     result.cached += 1
                     continue
@@ -223,7 +231,7 @@ def classify_all(
                     sleep(wait)
             last_call = clock()
             try:
-                answer = provider.classify(sent, rules)
+                answer = clean(provider.classify(sent, rules))
             except FatalProviderError:
                 raise
             except ProviderError as exc:
