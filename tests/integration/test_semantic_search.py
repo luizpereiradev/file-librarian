@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from file_librarian import embeddings, pipeline
@@ -482,8 +483,10 @@ def test_cli_default_semantic_and_no_semantic_override(
     assert words.exit_code == 0, words.stderr
     assert words.stdout == "No matches.\n" and words.stderr == ""
     assert len(fake_openai.requests) == before  # the query was not embedded
-    helped = runner.invoke(app, ["search", "--help"])
-    assert "--semantic" in helped.stdout and "--no-semantic" in helped.stdout
+    command: Any = typer.main.get_command(app)
+    [option] = [p for p in command.commands["search"].params if p.name == "semantic"]
+    assert (option.opts, option.secondary_opts) == (["--semantic"], ["--no-semantic"])
+    assert option.help is not None and "--no-semantic searches by words only" in option.help
 
 
 def test_cli_says_when_nothing_is_close(
