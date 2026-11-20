@@ -609,6 +609,28 @@ the Desktop is synced to iCloud, which would upload a file you have not read
 yet. `open -R` on the printed path shows it in Finder, ready to drag into the
 issue.
 
+### A file is skipped as "unreadable"
+
+flib could not look at the file, so it left it where it is and will try again
+on the next run. The run summary and the run log say what failed: the step
+(`stat` reads the file's details, `read` its content) and the error macOS gave,
+for example:
+
+```text
+  skip    photo.jpeg  (unreadable: EPERM Operation not permitted, on read)
+```
+
+- `EPERM` or `EACCES` in the daily run: macOS keeps the scheduled run out of
+  that file. Give `flib-python` Full Disk Access as described in
+  [Run it every day](#run-it-every-day), then run `flib schedule` again to
+  check. A scheduled run that hits this ends its log with a hint saying so.
+  In a manual run, check the file's permissions (`ls -l`).
+- `EDEADLK`, `EAGAIN`, `EINTR`, `ETIMEDOUT`, `EBUSY` or `ESTALE`: another
+  program (a sync client, an antivirus, Spotlight) had the file busy. flib
+  already tried once more after half a second; the next run usually reads it.
+- Anything else, or the same file failing every day: run `flib doctor` and
+  open an issue with the report.
+
 ## Roadmap
 
 | Milestone | Delivers |

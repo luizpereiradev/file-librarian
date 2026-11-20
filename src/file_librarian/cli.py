@@ -46,7 +46,7 @@ from file_librarian.providers.base import Provider
 from file_librarian.reconcile import in_cloud_only
 from file_librarian.reconcile import reconcile as run_reconcile
 from file_librarian.runlog import logs_dir, write_log
-from file_librarian.scanner import ScanError, SkipReason
+from file_librarian.scanner import ScanError, ScanResult, SkipReason
 from file_librarian.search import (
     SearchError,
     SearchFilters,
@@ -484,14 +484,15 @@ def _pipeline(
         _fatal(str(exc))
     if outcome.recovered:
         typer.echo(f"Recovered {outcome.recovered} move(s) interrupted by an earlier crash.")
-    skipped = _skipped_lines(outcome.scan.skipped, cfg)
+    skipped = _skipped_lines(outcome.scan, cfg)
     cost = _cost_line(outcome.cost_usd, known=outcome.cost_known)
+    hint = _access_hint(outcome.scan) if trigger is RunTrigger.SCHEDULE else None
     if simulate:
         _print_plan(outcome.plan, outcome.deferred, cfg, skipped)
         if cost:
             typer.echo(cost)
     elif outcome.report is not None:
-        _print_report(outcome.report, cfg, skipped, cost)
+        _print_report(outcome.report, cfg, skipped, cost, hint)
     if outcome.cached:
         typer.echo(f"{outcome.cached} classification(s) reused from the cache at no cost.")
 
@@ -517,17 +518,32 @@ def _short(path: Path, cfg: Config) -> str:
 _QUIET_SKIPS = {SkipReason.HIDDEN, SkipReason.MANAGED}
 
 
-def _skipped_lines(skipped: list[tuple[Path, SkipReason]], cfg: Config) -> list[str]:
+def _skipped_lines(scan: ScanResult, cfg: Config) -> list[str]:
     """Why items were left alone. Already-processed ones are only counted."""
-    lines = [
-        f"  skip    {_short(path, cfg)}  ({reason.value})"
-        for path, reason in skipped
-        if reason not in _QUIET_SKIPS and reason is not SkipReason.KNOWN
-    ]
+    skipped = scan.skipped
+    lines = []
+    for path, reason in skipped:
+        if reason in _QUIET_SKIPS or reason is SkipReason.KNOWN:
+            continue
+        detail = scan.details.get(path) if reason is SkipReason.UNREADABLE else None
+        why = f"{reason.value}: {detail}" if detail else reason.value
+        lines.append(f"  skip    {_short(path, cfg)}  ({why})")
     known = sum(1 for _, reason in skipped if reason is SkipReason.KNOWN)
     if known:
         lines.append(f"  ({known} item(s) already processed earlier were left alone)")
     return lines
+
+
+ACCESS_HINT = (
+    "hint: macOS denied the scheduled run access to some files. Give flib-python Full Disk "
+    "Access (System Settings > Privacy & Security > Full Disk Access) and run `flib schedule` "
+    "to check (README, Run it every day)."
+)
+
+
+def _access_hint(scan: ScanResult) -> str | None:
+    """One line when a scheduled run was denied a file, however many were."""
+    return ACCESS_HINT if any(d.denied for d in scan.details.values()) else None
 
 
 def _print_plan(plan: Plan, deferred: int, cfg: Config, skipped: list[str]) -> None:
@@ -556,7 +572,11 @@ def _moved_line(source: str, item: ItemResult, cfg: Config) -> str:
 
 
 def _print_report(
-    report: RunReport, cfg: Config, skipped: list[str], cost: str | None = None
+    report: RunReport,
+    cfg: Config,
+    skipped: list[str],
+    cost: str | None = None,
+    hint: str | None = None,
 ) -> None:
     lines = []
     for item in report.items:
@@ -578,6 +598,8 @@ def _print_report(
         lines.append(f"{report.deferred} more file(s) wait for the next run.")
     if cost:
         lines.append(cost)
+    if hint:
+        lines.append(hint)
     for line in lines:
         typer.echo(line)
     if report.run_id is not None:
