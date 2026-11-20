@@ -957,16 +957,6 @@ class Store:
         ).fetchone()
         return int(row[0])
 
-    def files_without_embedding(self, model: str) -> list[FileRow]:
-        """Files that are not sensitive and have no vector from ``model``."""
-        rows = self.conn.execute(
-            """SELECT f.* FROM files f LEFT JOIN embeddings e
-                   ON e.file_id = f.id AND e.model = ?
-               WHERE f.status != 'sensitive' AND e.file_id IS NULL""",
-            (model,),
-        )
-        return [FileRow.from_row(r) for r in rows]
-
     def categories(self) -> list[str]:
         """Every category some indexed file has."""
         rows = self.conn.execute(

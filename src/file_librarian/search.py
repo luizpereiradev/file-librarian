@@ -17,7 +17,10 @@ Semantic search (RF-15, opt in with ``search.semantic.enabled``) finds files by
 meaning too: "invoice" finds a file described as a "bill". The words ranking
 (BM25) and the meaning ranking (cosine similarity of embeddings, see
 ``embeddings.py``) are fused by reciprocal rank, with the same filters on
-both. When it cannot run, it says why in one line and searches by words.
+both. A file found only by meaning must be at least
+``search.semantic.min_similarity`` similar to the query; one that matches the
+words always stays. Each hit says how it was found (``source``). When it
+cannot run, it says why in one line and searches by words.
 
 Duplicates (RF-21) are left out unless asked for (``include_duplicates``):
 they are copies of a file the search already finds. They have no embedding,
@@ -27,6 +30,7 @@ original is (``duplicate_of``).
 
 from __future__ import annotations
 
+import heapq
 import json
 import os
 import re
@@ -38,11 +42,11 @@ from datetime import UTC, date, datetime, time, timedelta
 from file_librarian.config import Config
 from file_librarian.db.store import FileRow, Store
 from file_librarian.embeddings import (
-    MAX_TEXT_CHARS,
     Embedder,
     EmbeddingError,
-    embeddable,
-    nearest,
+    outdated_count,
+    query_text,
+    similarities,
 )
 
 
@@ -58,6 +62,11 @@ class SearchHit:
     exists: bool
     duplicate_of: str | None = None
     """For a duplicate, where its original is now."""
+    source: str | None = None
+    """``text`` (found by its words), ``semantic`` (only by meaning) or ``both``;
+    ``None`` when filters alone listed it."""
+    similarity: float | None = None
+    """Cosine similarity of its embedding to the query, when a semantic search had one."""
 
 
 class SearchError(ValueError):
@@ -168,7 +177,8 @@ def search(
     if query is None and not filters:
         return []
     rows = _word_rows(store, query, filters, limit, include_duplicates)
-    return [_hit(store, row) for row in rows]
+    source = None if query is None else "text"
+    return [_hit(store, row, source) for row in rows]
 
 
 def _word_rows(
@@ -194,7 +204,9 @@ def original_path(store: Store, file_id: int | None) -> str | None:
     return None if file_id is None else str(store.file_by_id(file_id).current_path)
 
 
-def _hit(store: Store, row: FileRow) -> SearchHit:
+def _hit(
+    store: Store, row: FileRow, source: str | None = None, similarity: float | None = None
+) -> SearchHit:
     return SearchHit(
         path=str(row.current_path),
         original_name=row.original_name,
@@ -205,6 +217,8 @@ def _hit(store: Store, row: FileRow) -> SearchHit:
         processed_at=row.processed_at,
         exists=os.path.lexists(row.current_path),
         duplicate_of=original_path(store, row.duplicate_of),
+        source=source,
+        similarity=None if similarity is None else round(similarity, 4),
     )
 
 
@@ -221,6 +235,8 @@ class SearchOutcome:
     """True when the ranking used embeddings; False when it fell back to words only."""
     notice: str | None = None
     """One line saying why it fell back, or that some files have no vector yet."""
+    weak: int = 0
+    """Files found only by meaning and left out as below ``search.semantic.min_similarity``."""
 
 
 def semantic_search(
@@ -234,6 +250,10 @@ def semantic_search(
     include_duplicates: bool = False,
 ) -> SearchOutcome:
     """Words and meaning together: BM25 and cosine rankings fused by reciprocal rank.
+
+    The meaning ranking keeps only files at least ``search.semantic.min_similarity``
+    similar to the query, so a weak match never fills the list; a file that
+    matches the words is kept whatever its similarity.
 
     The filters apply to both. Falls back to :func:`search` with a notice when
     semantic search is off, the query has no words, the embeddings server
@@ -262,26 +282,26 @@ def semantic_search(
         )
     embedder = embedder or Embedder(settings)
     try:
-        [vector] = embedder.embed([text.strip()[:MAX_TEXT_CHARS]])
+        [vector] = embedder.embed([query_text(text, settings)])
     except EmbeddingError as exc:
         return words_only(f"semantic search unavailable ({exc}); searched by words only")
     pool = max(limit * 2, 50)
     by_words = [row.id for row in _word_rows(store, query, filters, pool, include_duplicates)]
-    by_meaning = [
-        file_id
-        for file_id, _ in nearest(
-            vector,
-            store.embedding_vectors(
-                settings.model,
-                len(vector),
-                categories=filters.categories,
-                extensions=filters.extensions,
-                since=filters.since,
-                until=filters.until,
-            ),
-            limit=pool,
-        )
-    ]
+    similarity = similarities(
+        vector,
+        store.embedding_vectors(
+            settings.model,
+            len(vector),
+            categories=filters.categories,
+            extensions=filters.extensions,
+            since=filters.since,
+            until=filters.until,
+        ),
+    )
+    nearby = heapq.nlargest(pool, similarity, key=similarity.__getitem__)
+    by_meaning = [i for i in nearby if similarity[i] >= settings.min_similarity]
+    in_words, close = set(by_words), set(by_meaning)
+    weak = sum(1 for i in nearby if i not in close and i not in in_words)
     scores: dict[int, float] = {}
     for ranking in (by_words, by_meaning):
         for rank, file_id in enumerate(ranking, start=1):
@@ -289,13 +309,24 @@ def semantic_search(
     best = sorted(scores, key=lambda file_id: -scores[file_id])[:limit]
     rows = store.files_by_ids(best)
     notice = None
-    missing = [r for r in store.files_without_embedding(settings.model) if embeddable(r, config)]
-    if missing:
+    outdated = outdated_count(store, config)
+    if outdated:
         notice = (
-            f"{len(missing)} file(s) have no embedding yet and are found by words only; "
-            "the next run or `flib search --reindex` adds them"
+            f"{outdated} file(s) have no up-to-date embedding yet and may be found by words "
+            "only; the next run or `flib search --reindex` embeds them"
         )
-    return SearchOutcome([_hit(store, rows[i]) for i in best if i in rows], True, notice)
+    hits = [
+        _hit(store, rows[i], _source(i in in_words, i in close), similarity.get(i))
+        for i in best
+        if i in rows
+    ]
+    return SearchOutcome(hits, True, notice, weak)
+
+
+def _source(by_words: bool, by_meaning: bool) -> str:
+    if by_words and by_meaning:
+        return "both"
+    return "text" if by_words else "semantic"
 
 
 def to_json(hits: list[SearchHit]) -> str:

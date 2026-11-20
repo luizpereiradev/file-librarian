@@ -145,5 +145,10 @@ search:
     #                          # (`flib key set --provider embeddings`); never the provider's key
     timeout_seconds: 30
     batch_size: 32           # texts per request (1-256)
+    min_similarity: 0.25     # files found only by meaning need this cosine similarity (0-1);
+    #                          # word matches always stay. 0 keeps all. Measured for
+    #                          # embeddinggemma: another model needs its own value (README)
+    # query_prefix: ""         # unset: what the model documents (embeddinggemma has one), else
+    # document_prefix: ""      # none; "" turns it off. A new document_prefix re-embeds all
     # Only names, category, tags and description are embedded, never file content or a
     # sensitive file. A remote base_url sends that text, and your queries, off this Mac.

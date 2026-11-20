@@ -246,7 +246,7 @@ Every command takes `--config PATH` (`-c`); without it, flib reads
 | `flib simulate` | Print the full plan without changing anything |
 | `flib run` | Classify, rename, move and index new files |
 | `flib undo [--run ID \| --file PATH]` | Revert the last run, a given run, or the last operation on one file |
-| `flib search [QUERY] [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--semantic \| --words] [--reindex] [--duplicates] [--limit N] [--json]` | Search names, descriptions and tags, narrowed by category, period or extension; optionally by meaning ([Searching](#searching)) |
+| `flib search [QUERY] [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--semantic \| --no-semantic] [--reindex] [--duplicates] [--limit N] [--json]` | Search names, descriptions and tags, narrowed by category, period or extension; optionally by meaning ([Searching](#searching)) |
 | `flib status [--json]` | What waits for you: files in review and why, failures, files left in place as sensitive, the last and next run, this month's cost ([Staying on top of it](#staying-on-top-of-it)) |
 | `flib fix FILE [--category NAME] [--name NAME]` | Correct one file's category or name; flib learns from it ([Teaching it](#teaching-it)) |
 | `flib reconcile` | Update the index after you move, rename or delete files by hand; files only in iCloud are left unchecked |
@@ -306,8 +306,36 @@ filters above apply to both. It is off by default. To turn it on with
    every `flib run` embeds the files it adds or changes.
 
 Then search with `--semantic`, or set `search.semantic.default: true` to make
-it the default (`--words` then searches by words only). The MCP tool
-`search_files` takes the same choice as its `semantic` flag.
+it the default (`--no-semantic` then searches by words only, for one search).
+The MCP tool `search_files` takes the same choice as its `semantic` flag:
+`true`, `false` (words only, even when the default is by meaning) or unset
+(the default). With `--json`, and in MCP results, each file says how it was
+found (`source`: `text`, `semantic` or `both`) and, when it has an embedding,
+its `similarity` to the query.
+
+A search by meaning always has a "nearest" file, even when nothing is related,
+so files found **only** by meaning must be at least
+`search.semantic.min_similarity` similar to the query (cosine, 0 to 1; 0.25 by
+default). A file that matches the words always stays, however low its
+similarity. When the floor leaves nothing, the search says "No close
+matches; try other words or --no-semantic".
+
+The right floor depends on the model. 0.25 was measured for `embeddinggemma`
+on a synthetic corpus of 60 files in Portuguese and English and 32 queries:
+it kept 43 of 45 related pairs (the two lost were loose ones, like "credit
+card statement" for a bank statement, at 0.20) and dropped 98% of unrelated
+ones, leaving on average about one unrelated file per query instead of 18.
+For another model, search for a few things you know are there with `--json`,
+look at the `similarity` of the files you wanted and of the ones you did not,
+and set `min_similarity` between them; `0` turns the floor off.
+
+`embeddinggemma` places a query and a document best when told which is which:
+flib puts `task: search result | query: ` before a query and `title: none |
+text: ` before a file's text, as its model card asks. Without them, unrelated
+files scored nearly as high as related ones (median 0.22, and 5% above 0.34)
+and no floor could tell them apart. Other models get no prefix unless
+`search.semantic.query_prefix` and `document_prefix` say so (`""` turns one
+off). Changing the document prefix embeds the library again on the next run.
 
 What is embedded is only what the index already stores about a file: its
 names, category, tags and the AI's description, never its content. A

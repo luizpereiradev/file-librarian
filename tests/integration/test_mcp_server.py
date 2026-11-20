@@ -393,8 +393,11 @@ def test_search_and_get_file(downloads: Path, cfg: Config) -> None:
         "tags": ["sample"],
         "processed_at": hit["processed_at"],
         "duplicate_of": None,
+        "source": "text",
+        "similarity": None,
     }
     detail = ok(call(cfg, "get_file", path=str(target)))
+    assert "source" not in detail and "similarity" not in detail
     assert detail["original_path"] == str(downloads / "bill.txt")
     assert detail["kind"] == "file"
     assert detail["icloud_only"] is False
