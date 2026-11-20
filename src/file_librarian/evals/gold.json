@@ -1,0 +1,3314 @@
+{
+ "corpus_version": "1",
+ "seed": 87,
+ "categories": {
+  "en": [
+   "Finance",
+   "Contracts",
+   "Installers",
+   "Images",
+   "Other"
+  ],
+  "pt-BR": [
+   "Financeiro",
+   "Impostos",
+   "Contratos",
+   "Documentos pessoais",
+   "Saúde",
+   "Trabalho",
+   "Estudos",
+   "Viagens",
+   "Compras",
+   "Casa e veículos",
+   "Imagens",
+   "Vídeos e áudio",
+   "Instaladores",
+   "Código e dados",
+   "Outros"
+  ]
+ },
+ "fields": [
+  "amount",
+  "currency",
+  "document_date",
+  "due_date",
+  "issuer",
+  "period",
+  "kind"
+ ],
+ "items": [
+  {
+   "path": "bill.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Financeiro"
+    ]
+   },
+   "keep_name": false,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {
+    "amount": "103.91",
+    "currency": "USD",
+    "document_date": "2026-09-03",
+    "due_date": "2026-09-20",
+    "issuer": "Northwind Power & Light",
+    "period": "2026-08",
+    "kind": "utility bill"
+   },
+   "cases": [
+    "generic-name",
+    "near-duplicate"
+   ]
+  },
+  {
+   "path": "bill (1).pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Financeiro"
+    ]
+   },
+   "keep_name": false,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {
+    "amount": "217.47",
+    "currency": "USD",
+    "document_date": "2026-10-03",
+    "due_date": "2026-10-20",
+    "issuer": "Northwind Power & Light",
+    "period": "2026-09",
+    "kind": "utility bill"
+   },
+   "cases": [
+    "generic-name",
+    "near-duplicate"
+   ]
+  },
+  {
+   "path": "bill (2).pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Financeiro"
+    ]
+   },
+   "keep_name": false,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {
+    "amount": "96.74",
+    "currency": "USD",
+    "document_date": "2026-11-03",
+    "due_date": "2026-11-20",
+    "issuer": "Northwind Power & Light",
+    "period": "2026-10",
+    "kind": "utility bill"
+   },
+   "cases": [
+    "generic-name",
+    "near-duplicate"
+   ]
+  },
+  {
+   "path": "documento.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Financeiro"
+    ]
+   },
+   "keep_name": false,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "amount": "367.11",
+    "currency": "BRL",
+    "document_date": "2026-09-05",
+    "due_date": "2026-09-20",
+    "issuer": "Companhia Elétrica Vale Azul",
+    "period": "2026-08",
+    "kind": "utility bill"
+   },
+   "cases": [
+    "generic-name",
+    "near-duplicate"
+   ]
+  },
+  {
+   "path": "documento(1).pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Financeiro"
+    ]
+   },
+   "keep_name": false,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "amount": "331.25",
+    "currency": "BRL",
+    "document_date": "2026-10-05",
+    "due_date": "2026-10-20",
+    "issuer": "Companhia Elétrica Vale Azul",
+    "period": "2026-09",
+    "kind": "utility bill"
+   },
+   "cases": [
+    "generic-name",
+    "near-duplicate"
+   ]
+  },
+  {
+   "path": "documento(2).pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Financeiro"
+    ]
+   },
+   "keep_name": false,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "amount": "351.09",
+    "currency": "BRL",
+    "document_date": "2026-11-05",
+    "due_date": "2026-11-20",
+    "issuer": "Companhia Elétrica Vale Azul",
+    "period": "2026-10",
+    "kind": "utility bill"
+   },
+   "cases": [
+    "generic-name",
+    "near-duplicate"
+   ]
+  },
+  {
+   "path": "2026-09_conta-agua.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Financeiro"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "amount": "176.30",
+    "currency": "BRL",
+    "document_date": "2026-10-08",
+    "due_date": "2026-10-20",
+    "issuer": "Água Clara Saneamento",
+    "period": "2026-09",
+    "kind": "utility bill"
+   },
+   "cases": []
+  },
+  {
+   "path": "2via.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Financeiro"
+    ]
+   },
+   "keep_name": false,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "amount": "80.06",
+    "currency": "BRL",
+    "document_date": "2026-11-08",
+    "due_date": "2026-11-20",
+    "issuer": "Água Clara Saneamento",
+    "period": "2026-10",
+    "kind": "utility bill"
+   },
+   "cases": [
+    "generic-name"
+   ]
+  },
+  {
+   "path": "boleto_04617891.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Financeiro"
+    ]
+   },
+   "keep_name": false,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "amount": "119.79",
+    "currency": "BRL",
+    "document_date": "2026-10-02",
+    "due_date": "2026-10-15",
+    "issuer": "Sabiá Telecom",
+    "period": "2026-09",
+    "kind": "telecom bill"
+   },
+   "cases": [
+    "generic-name"
+   ]
+  },
+  {
+   "path": "invoice_428140.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Financeiro"
+    ]
+   },
+   "keep_name": false,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {
+    "amount": "56.46",
+    "currency": "USD",
+    "document_date": "2026-10-01",
+    "due_date": "2026-10-21",
+    "issuer": "Fabrikam Mobile",
+    "period": "2026-09",
+    "kind": "telecom bill"
+   },
+   "cases": [
+    "generic-name"
+   ]
+  },
+  {
+   "path": "statement_2026-09.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Financeiro"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {
+    "document_date": "2026-10-01",
+    "issuer": "Contoso Bank",
+    "period": "2026-09",
+    "kind": "bank statement",
+    "currency": "USD"
+   },
+   "cases": []
+  },
+  {
+   "path": "Statement-Oct-2026.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Financeiro"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {
+    "document_date": "2026-11-01",
+    "issuer": "Contoso Bank",
+    "period": "2026-10",
+    "kind": "bank statement",
+    "currency": "USD"
+   },
+   "cases": []
+  },
+  {
+   "path": "extrato_out_2026.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Financeiro"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "document_date": "2026-11-01",
+    "issuer": "Banco Ipê Roxo",
+    "period": "2026-10",
+    "kind": "bank statement",
+    "currency": "BRL"
+   },
+   "cases": []
+  },
+  {
+   "path": "fatura-cartao-setembro.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Financeiro"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "amount": "2523.59",
+    "currency": "BRL",
+    "document_date": "2026-09-28",
+    "due_date": "2026-10-05",
+    "issuer": "Banco Ipê Roxo",
+    "period": "2026-09",
+    "kind": "card statement"
+   },
+   "cases": []
+  },
+  {
+   "path": "comprovante.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Financeiro",
+     "Casa e veículos"
+    ]
+   },
+   "keep_name": false,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "amount": "830.46",
+    "currency": "BRL",
+    "document_date": "2026-10-14",
+    "issuer": "Banco Ipê Roxo",
+    "kind": "payment receipt"
+   },
+   "cases": [
+    "generic-name",
+    "ambiguous"
+   ]
+  },
+  {
+   "path": "transactions-export.csv",
+   "format": "csv",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Financeiro",
+     "Código e dados"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {
+    "issuer": "Contoso Bank",
+    "period": "2026-10",
+    "kind": "bank statement",
+    "currency": "USD"
+   },
+   "cases": [
+    "ambiguous"
+   ]
+  },
+  {
+   "path": "household-budget-2026.xlsx",
+   "format": "xlsx",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Financeiro",
+     "Código e dados"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "orcamento-casa.xlsx",
+   "format": "xlsx",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Financeiro",
+     "Casa e veículos",
+     "Código e dados"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "receipt.eml",
+   "format": "eml",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Compras",
+     "Financeiro"
+    ]
+   },
+   "keep_name": false,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {
+    "amount": "23.59",
+    "currency": "USD",
+    "document_date": "2026-10-12",
+    "issuer": "Adventure Works Store",
+    "kind": "receipt"
+   },
+   "cases": [
+    "generic-name"
+   ]
+  },
+  {
+   "path": "alerta-compra.eml",
+   "format": "eml",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Financeiro",
+     "Compras"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": [
+    "ambiguous"
+   ]
+  },
+  {
+   "path": "recibo-irpf-2026.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Impostos"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "document_date": "2026-04-28",
+    "issuer": "Receita Federal",
+    "period": "2025",
+    "kind": "tax return receipt"
+   },
+   "cases": []
+  },
+  {
+   "path": "DARF-carne-leao-setembro.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Impostos"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "amount": "1137.44",
+    "currency": "BRL",
+    "due_date": "2026-10-30",
+    "issuer": "Receita Federal",
+    "period": "2026-09",
+    "kind": "tax payment"
+   },
+   "cases": []
+  },
+  {
+   "path": "informe-rendimentos-2025.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Impostos"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "issuer": "Banco Ipê Roxo",
+    "period": "2025",
+    "kind": "income statement"
+   },
+   "cases": []
+  },
+  {
+   "path": "informe.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Impostos"
+    ]
+   },
+   "keep_name": false,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "issuer": "Andorinha Tecnologia Ltda",
+    "period": "2025",
+    "kind": "income statement"
+   },
+   "cases": [
+    "generic-name"
+   ]
+  },
+  {
+   "path": "recibo-consulta.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance",
+     "Other"
+    ],
+    "pt-BR": [
+     "Impostos",
+     "Saúde"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "amount": "581.96",
+    "currency": "BRL",
+    "document_date": "2026-09-03",
+    "issuer": "Clínica Jatobá",
+    "kind": "medical receipt"
+   },
+   "cases": [
+    "ambiguous"
+   ]
+  },
+  {
+   "path": "2025 Tax Return Summary.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Impostos"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {
+    "period": "2025",
+    "kind": "tax return"
+   },
+   "cases": []
+  },
+  {
+   "path": "IPTU 2026 carne.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Casa e veículos",
+     "Impostos"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "amount": "3920.11",
+    "currency": "BRL",
+    "due_date": "2026-02-10",
+    "period": "2026",
+    "kind": "property tax"
+   },
+   "cases": [
+    "ambiguous"
+   ]
+  },
+  {
+   "path": "lease_agreement_signed.docx",
+   "format": "docx",
+   "categories": {
+    "en": [
+     "Contracts"
+    ],
+    "pt-BR": [
+     "Contratos",
+     "Casa e veículos"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {
+    "issuer": "Proseware Realty",
+    "document_date": "2026-10-20",
+    "kind": "lease"
+   },
+   "cases": []
+  },
+  {
+   "path": "NDA - Litware.docx",
+   "format": "docx",
+   "categories": {
+    "en": [
+     "Contracts"
+    ],
+    "pt-BR": [
+     "Contratos",
+     "Trabalho"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {
+    "issuer": "Litware Inc.",
+    "kind": "nda"
+   },
+   "cases": []
+  },
+  {
+   "path": "contract.docx",
+   "format": "docx",
+   "categories": {
+    "en": [
+     "Contracts"
+    ],
+    "pt-BR": [
+     "Contratos",
+     "Trabalho"
+    ]
+   },
+   "keep_name": false,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {
+    "issuer": "Tailspin Toys",
+    "kind": "services agreement"
+   },
+   "cases": [
+    "generic-name"
+   ]
+  },
+  {
+   "path": "contrato-aluguel-apto.docx",
+   "format": "docx",
+   "categories": {
+    "en": [
+     "Contracts"
+    ],
+    "pt-BR": [
+     "Contratos",
+     "Casa e veículos"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "issuer": "Imobiliária Jacarandá Ltda",
+    "kind": "lease"
+   },
+   "cases": []
+  },
+  {
+   "path": "aditivo contratual.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Contracts"
+    ],
+    "pt-BR": [
+     "Contratos"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "kind": "contract amendment"
+   },
+   "cases": []
+  },
+  {
+   "path": "procuracao.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Contracts",
+     "Other"
+    ],
+    "pt-BR": [
+     "Contratos",
+     "Documentos pessoais"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "kind": "power of attorney"
+   },
+   "cases": []
+  },
+  {
+   "path": "proposta-comercial-v3.docx",
+   "format": "docx",
+   "categories": {
+    "en": [
+     "Contracts",
+     "Other"
+    ],
+    "pt-BR": [
+     "Contratos",
+     "Trabalho"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": [
+    "ambiguous"
+   ]
+  },
+  {
+   "path": "distrato.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Contracts"
+    ],
+    "pt-BR": [
+     "Contratos"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "kind": "termination agreement"
+   },
+   "cases": []
+  },
+  {
+   "path": "Re_ minuta do contrato.eml",
+   "format": "eml",
+   "categories": {
+    "en": [
+     "Contracts",
+     "Other"
+    ],
+    "pt-BR": [
+     "Contratos",
+     "Trabalho"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": [
+    "ambiguous"
+   ]
+  },
+  {
+   "path": "terms-of-service.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Contracts",
+     "Other"
+    ],
+    "pt-BR": [
+     "Contratos",
+     "Outros"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "certidao-nascimento.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Documentos pessoais"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "kind": "birth certificate"
+   },
+   "cases": []
+  },
+  {
+   "path": "comprovante-residencia.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other",
+     "Finance"
+    ],
+    "pt-BR": [
+     "Documentos pessoais",
+     "Financeiro"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": [
+    "ambiguous"
+   ]
+  },
+  {
+   "path": "diploma-graduacao.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Documentos pessoais",
+     "Estudos"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "kind": "diploma"
+   },
+   "cases": []
+  },
+  {
+   "path": "titulo-eleitor.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Documentos pessoais"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "RG-frente.jpg",
+   "format": "jpg",
+   "categories": {
+    "en": [
+     "Images",
+     "Other"
+    ],
+    "pt-BR": [
+     "Documentos pessoais",
+     "Imagens"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "CNH-digital.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Documentos pessoais"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only",
+    "scan"
+   ]
+  },
+  {
+   "path": "passport-scan.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Documentos pessoais",
+     "Viagens"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only",
+    "scan"
+   ]
+  },
+  {
+   "path": "historico-escolar.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Documentos pessoais",
+     "Estudos"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "resultado-exame-sangue.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Saúde"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "document_date": "2026-09-22",
+    "issuer": "Laboratório Ceriba",
+    "kind": "lab result"
+   },
+   "cases": []
+  },
+  {
+   "path": "receita.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Saúde"
+    ]
+   },
+   "keep_name": false,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "document_date": "2026-09-03",
+    "issuer": "Clínica Jatobá",
+    "kind": "prescription"
+   },
+   "cases": [
+    "generic-name",
+    "ambiguous"
+   ]
+  },
+  {
+   "path": "atestado.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Saúde",
+     "Trabalho"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "kind": "medical certificate"
+   },
+   "cases": []
+  },
+  {
+   "path": "laudo-ressonancia-joelho.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Saúde"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "kind": "imaging report"
+   },
+   "cases": []
+  },
+  {
+   "path": "lab_results_2026-10.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Saúde"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {
+    "document_date": "2026-10-04",
+    "issuer": "Litware Health Labs",
+    "kind": "lab result"
+   },
+   "cases": []
+  },
+  {
+   "path": "reembolso-plano-saude.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance",
+     "Other"
+    ],
+    "pt-BR": [
+     "Saúde",
+     "Financeiro"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "amount": "251.98",
+    "currency": "BRL",
+    "document_date": "2026-10-16",
+    "issuer": "Plano de Saúde Bem-te-vi",
+    "kind": "reimbursement"
+   },
+   "cases": [
+    "ambiguous"
+   ]
+  },
+  {
+   "path": "Litware Health invoice.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Saúde",
+     "Financeiro"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {
+    "amount": "338.27",
+    "currency": "USD",
+    "document_date": "2026-10-07",
+    "due_date": "2026-11-06",
+    "issuer": "Litware Health Clinic",
+    "kind": "medical bill"
+   },
+   "cases": [
+    "ambiguous"
+   ]
+  },
+  {
+   "path": "carteira-vacinacao.jpg",
+   "format": "jpg",
+   "categories": {
+    "en": [
+     "Images",
+     "Other"
+    ],
+    "pt-BR": [
+     "Saúde",
+     "Imagens",
+     "Documentos pessoais"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "holerite-setembro-2026.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance",
+     "Other"
+    ],
+    "pt-BR": [
+     "Trabalho",
+     "Financeiro"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "amount": "8950.77",
+    "currency": "BRL",
+    "issuer": "Andorinha Tecnologia Ltda",
+    "period": "2026-09",
+    "kind": "payslip"
+   },
+   "cases": []
+  },
+  {
+   "path": "payslip_oct.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance",
+     "Other"
+    ],
+    "pt-BR": [
+     "Trabalho",
+     "Financeiro"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {
+    "amount": "5188.13",
+    "currency": "USD",
+    "issuer": "Tailspin Toys",
+    "period": "2026-10",
+    "kind": "payslip"
+   },
+   "cases": []
+  },
+  {
+   "path": "Q3 report.pptx",
+   "format": "pptx",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Trabalho"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "relatorio-trimestral.docx",
+   "format": "docx",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Trabalho"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "curriculo-2026.docx",
+   "format": "docx",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Trabalho",
+     "Documentos pessoais"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "resume_final_v2.docx",
+   "format": "docx",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Trabalho",
+     "Documentos pessoais"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "apresentacao-cliente.pptx",
+   "format": "pptx",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Trabalho",
+     "Contratos"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "planilha-horas.xlsx",
+   "format": "xlsx",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Trabalho",
+     "Código e dados"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "meeting-notes.md",
+   "format": "md",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Trabalho",
+     "Outros"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "ata-reuniao-condominio.txt",
+   "format": "txt",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Casa e veículos",
+     "Outros"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": [
+    "ambiguous"
+   ]
+  },
+  {
+   "path": "onboarding-checklist.txt",
+   "format": "txt",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Trabalho"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "Re_ aprovacao ferias.eml",
+   "format": "eml",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Trabalho"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "artigo-aprendizado-de-maquina.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Estudos"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "2310.01234v2.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Estudos"
+    ]
+   },
+   "keep_name": false,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {},
+   "cases": [
+    "generic-name"
+   ]
+  },
+  {
+   "path": "apostila-calculo-1.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Estudos"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "aula03.pptx",
+   "format": "pptx",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Estudos"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "certificado-curso-python.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Estudos",
+     "Documentos pessoais"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "kind": "course certificate"
+   },
+   "cases": []
+  },
+  {
+   "path": "lecture-notes-week2.md",
+   "format": "md",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Estudos"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "ebook-introducao-estatistica.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Estudos"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "tcc-versao-final",
+   "format": "folder",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Estudos"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "unit"
+   ]
+  },
+  {
+   "path": "boarding-pass.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Viagens"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {
+    "document_date": "2026-11-28",
+    "issuer": "Tailspin Airways",
+    "kind": "boarding pass"
+   },
+   "cases": []
+  },
+  {
+   "path": "e-ticket.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other",
+     "Finance"
+    ],
+    "pt-BR": [
+     "Viagens"
+    ]
+   },
+   "keep_name": false,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "issuer": "Garça Linhas Aéreas",
+    "kind": "flight ticket"
+   },
+   "cases": [
+    "generic-name"
+   ]
+  },
+  {
+   "path": "reserva-hotel.eml",
+   "format": "eml",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Viagens"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "kind": "hotel booking"
+   },
+   "cases": []
+  },
+  {
+   "path": "itinerario-lisboa.docx",
+   "format": "docx",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Viagens"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "seguro-viagem-europa.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other",
+     "Contracts"
+    ],
+    "pt-BR": [
+     "Viagens"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "kind": "travel insurance"
+   },
+   "cases": []
+  },
+  {
+   "path": "aluguel-carro-reserva.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Viagens"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": [
+    "ambiguous"
+   ]
+  },
+  {
+   "path": "hotel-confirmation.eml",
+   "format": "eml",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Viagens"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {
+    "kind": "hotel booking"
+   },
+   "cases": []
+  },
+  {
+   "path": "visa-application-form.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Viagens",
+     "Documentos pessoais"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "pedido-2644639.eml",
+   "format": "eml",
+   "categories": {
+    "en": [
+     "Finance",
+     "Other"
+    ],
+    "pt-BR": [
+     "Compras",
+     "Financeiro"
+    ]
+   },
+   "keep_name": false,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "amount": "585.17",
+    "currency": "BRL",
+    "document_date": "2026-10-14",
+    "issuer": "Loja Tucano Online",
+    "kind": "order"
+   },
+   "cases": [
+    "generic-name"
+   ]
+  },
+  {
+   "path": "termo-garantia-geladeira.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Compras",
+     "Casa e veículos"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "manual-cafeteira.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Compras"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "user-guide.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Compras"
+    ]
+   },
+   "keep_name": false,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {},
+   "cases": [
+    "generic-name"
+   ]
+  },
+  {
+   "path": "NFe5353104453.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Financeiro",
+     "Compras"
+    ]
+   },
+   "keep_name": false,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "amount": "704.27",
+    "currency": "BRL",
+    "document_date": "2026-10-11",
+    "issuer": "Eletrodomésticos Arara Ltda",
+    "kind": "invoice"
+   },
+   "cases": [
+    "generic-name",
+    "ambiguous"
+   ]
+  },
+  {
+   "path": "order-confirmation.eml",
+   "format": "eml",
+   "categories": {
+    "en": [
+     "Finance",
+     "Other"
+    ],
+    "pt-BR": [
+     "Compras",
+     "Financeiro"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {
+    "kind": "order"
+   },
+   "cases": []
+  },
+  {
+   "path": "warranty-registration.txt",
+   "format": "txt",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Compras"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "boleto-condominio-outubro.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Casa e veículos",
+     "Financeiro"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "amount": "1109.31",
+    "currency": "BRL",
+    "due_date": "2026-10-10",
+    "issuer": "Condomínio Residencial Flamboyant",
+    "period": "2026-10",
+    "kind": "condo fee"
+   },
+   "cases": [
+    "ambiguous"
+   ]
+  },
+  {
+   "path": "escritura-imovel.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Contracts"
+    ],
+    "pt-BR": [
+     "Casa e veículos",
+     "Contratos"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "IPVA-2026.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Casa e veículos",
+     "Impostos",
+     "Financeiro"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "amount": "2898.08",
+    "currency": "BRL",
+    "period": "2026",
+    "kind": "vehicle tax"
+   },
+   "cases": []
+  },
+  {
+   "path": "notificacao.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other",
+     "Finance"
+    ],
+    "pt-BR": [
+     "Casa e veículos",
+     "Financeiro"
+    ]
+   },
+   "keep_name": false,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {
+    "amount": "269.40",
+    "currency": "BRL",
+    "kind": "traffic fine"
+   },
+   "cases": [
+    "generic-name"
+   ]
+  },
+  {
+   "path": "laudo-vistoria-apartamento.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Contracts",
+     "Other"
+    ],
+    "pt-BR": [
+     "Casa e veículos",
+     "Contratos"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "home-insurance-policy.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Contracts",
+     "Finance"
+    ],
+    "pt-BR": [
+     "Casa e veículos",
+     "Contratos"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {
+    "kind": "insurance policy"
+   },
+   "cases": []
+  },
+  {
+   "path": "car-service-invoice.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Finance"
+    ],
+    "pt-BR": [
+     "Casa e veículos",
+     "Financeiro"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {
+    "kind": "invoice"
+   },
+   "cases": []
+  },
+  {
+   "path": "proposta.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Contracts",
+     "Finance",
+     "Other"
+    ],
+    "pt-BR": [
+     "Casa e veículos",
+     "Contratos",
+     "Compras"
+    ]
+   },
+   "keep_name": false,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": [
+    "generic-name",
+    "ambiguous"
+   ]
+  },
+  {
+   "path": "IMG_4821.jpg",
+   "format": "jpg",
+   "categories": {
+    "en": [
+     "Images"
+    ],
+    "pt-BR": [
+     "Imagens"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "IMG_4822.jpg",
+   "format": "jpg",
+   "categories": {
+    "en": [
+     "Images"
+    ],
+    "pt-BR": [
+     "Imagens"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "IMG_20260914_101522.jpg",
+   "format": "jpg",
+   "categories": {
+    "en": [
+     "Images"
+    ],
+    "pt-BR": [
+     "Imagens"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "DSC_0042.JPG",
+   "format": "jpg",
+   "categories": {
+    "en": [
+     "Images"
+    ],
+    "pt-BR": [
+     "Imagens"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "Screenshot 2026-10-03 at 14.22.10.png",
+   "format": "png",
+   "categories": {
+    "en": [
+     "Images"
+    ],
+    "pt-BR": [
+     "Imagens"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "Captura de Tela 2026-09-12 às 10.15.33.png",
+   "format": "png",
+   "categories": {
+    "en": [
+     "Images"
+    ],
+    "pt-BR": [
+     "Imagens"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "wallpaper-montanhas.jpg",
+   "format": "jpg",
+   "categories": {
+    "en": [
+     "Images"
+    ],
+    "pt-BR": [
+     "Imagens"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "logo-final.png",
+   "format": "png",
+   "categories": {
+    "en": [
+     "Images"
+    ],
+    "pt-BR": [
+     "Imagens"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "foto-perfil.heic",
+   "format": "heic",
+   "categories": {
+    "en": [
+     "Images"
+    ],
+    "pt-BR": [
+     "Imagens"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "WhatsApp Image 2026-10-05 at 19.03.11.jpeg",
+   "format": "jpeg",
+   "categories": {
+    "en": [
+     "Images"
+    ],
+    "pt-BR": [
+     "Imagens"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "diagram-architecture.png",
+   "format": "png",
+   "categories": {
+    "en": [
+     "Images"
+    ],
+    "pt-BR": [
+     "Imagens"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "Fotos Lisboa 2026",
+   "format": "folder",
+   "categories": {
+    "en": [
+     "Images"
+    ],
+    "pt-BR": [
+     "Imagens",
+     "Viagens"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "unit"
+   ]
+  },
+  {
+   "path": "gravacao-reuniao-2026-10-14.mp4",
+   "format": "mp4",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Vídeos e áudio"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "podcast-episodio-42.mp3",
+   "format": "mp3",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Vídeos e áudio"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "screen-recording.mov",
+   "format": "mov",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Vídeos e áudio"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "voice memo.m4a",
+   "format": "m4a",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Vídeos e áudio"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "aniversario-vovo.mp4",
+   "format": "mp4",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Vídeos e áudio"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "Notely-4.2.1.dmg",
+   "format": "dmg",
+   "categories": {
+    "en": [
+     "Installers"
+    ],
+    "pt-BR": [
+     "Instaladores"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "PrinterDriver_3.1.pkg",
+   "format": "pkg",
+   "categories": {
+    "en": [
+     "Installers"
+    ],
+    "pt-BR": [
+     "Instaladores"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "Install Fieldnote.pkg",
+   "format": "pkg",
+   "categories": {
+    "en": [
+     "Installers"
+    ],
+    "pt-BR": [
+     "Instaladores"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "ZapWrite-universal.dmg",
+   "format": "dmg",
+   "categories": {
+    "en": [
+     "Installers"
+    ],
+    "pt-BR": [
+     "Instaladores"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "atualizacao-firmware-roteador.zip",
+   "format": "zip",
+   "categories": {
+    "en": [
+     "Installers",
+     "Other"
+    ],
+    "pt-BR": [
+     "Instaladores",
+     "Outros"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "Clipwise.app",
+   "format": "app",
+   "categories": {
+    "en": [
+     "Installers"
+    ],
+    "pt-BR": [
+     "Instaladores"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "unit"
+   ]
+  },
+  {
+   "path": "script_backup.py",
+   "format": "py",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Código e dados"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "export-tarefas.json",
+   "format": "json",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Código e dados",
+     "Outros"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "dados-vendas-q3.csv",
+   "format": "csv",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Código e dados",
+     "Trabalho"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "schema.sql",
+   "format": "sql",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Código e dados"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "analysis.ipynb",
+   "format": "ipynb",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Código e dados"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "site-portfolio",
+   "format": "folder",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Código e dados"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "unit"
+   ]
+  },
+  {
+   "path": "backup-notas-2026.zip",
+   "format": "zip",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Código e dados",
+     "Outros"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "config.yaml",
+   "format": "yaml",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Código e dados"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "dotfiles-main.zip",
+   "format": "zip",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Código e dados"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "receita-lasanha.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Outros"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": [
+    "ambiguous"
+   ]
+  },
+  {
+   "path": "shopping-list.txt",
+   "format": "txt",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Outros",
+     "Compras"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "newsletter-outubro.eml",
+   "format": "eml",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Outros",
+     "Estudos"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "wedding-invitation.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Outros"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "en",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "playlist-viagem.txt",
+   "format": "txt",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Outros",
+     "Viagens",
+     "Vídeos e áudio"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "ideias.md",
+   "format": "md",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Outros"
+    ]
+   },
+   "keep_name": true,
+   "review": false,
+   "sensitive": false,
+   "language": "pt-BR",
+   "fields": {},
+   "cases": []
+  },
+  {
+   "path": "scan001.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Outros"
+    ]
+   },
+   "keep_name": null,
+   "review": true,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "generic-name",
+    "scan",
+    "review"
+   ]
+  },
+  {
+   "path": "scan002.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Outros"
+    ]
+   },
+   "keep_name": null,
+   "review": true,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "generic-name",
+    "scan",
+    "review"
+   ]
+  },
+  {
+   "path": "Scan 3.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Outros"
+    ]
+   },
+   "keep_name": null,
+   "review": true,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "generic-name",
+    "scan",
+    "review"
+   ]
+  },
+  {
+   "path": "document(4).pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Outros"
+    ]
+   },
+   "keep_name": null,
+   "review": true,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "generic-name",
+    "review"
+   ]
+  },
+  {
+   "path": "untitled.txt",
+   "format": "txt",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Outros"
+    ]
+   },
+   "keep_name": null,
+   "review": true,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "generic-name",
+    "review"
+   ]
+  },
+  {
+   "path": "arquivo",
+   "format": "none",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Outros"
+    ]
+   },
+   "keep_name": null,
+   "review": true,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "generic-name",
+    "review"
+   ]
+  },
+  {
+   "path": "download.bin",
+   "format": "bin",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Outros"
+    ]
+   },
+   "keep_name": null,
+   "review": true,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "generic-name",
+    "review"
+   ]
+  },
+  {
+   "path": "temp.docx",
+   "format": "docx",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Outros"
+    ]
+   },
+   "keep_name": null,
+   "review": true,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "generic-name",
+    "review"
+   ]
+  },
+  {
+   "path": "final_FINAL.pdf",
+   "format": "pdf",
+   "categories": {
+    "en": [
+     "Other"
+    ],
+    "pt-BR": [
+     "Outros"
+    ]
+   },
+   "keep_name": null,
+   "review": true,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "generic-name",
+    "review"
+   ]
+  },
+  {
+   "path": "IMG_0001.HEIC",
+   "format": "heic",
+   "categories": {
+    "en": [
+     "Images"
+    ],
+    "pt-BR": [
+     "Imagens"
+    ]
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": false,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "name-only"
+   ]
+  },
+  {
+   "path": "credentials.json",
+   "format": "json",
+   "categories": {
+    "en": [],
+    "pt-BR": []
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": true,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "sensitive"
+   ]
+  },
+  {
+   "path": "service-account-staging.json",
+   "format": "json",
+   "categories": {
+    "en": [],
+    "pt-BR": []
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": true,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "sensitive"
+   ]
+  },
+  {
+   "path": "cofre-senhas.kdbx",
+   "format": "kdbx",
+   "categories": {
+    "en": [],
+    "pt-BR": []
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": true,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "sensitive"
+   ]
+  },
+  {
+   "path": "office-vpn.ovpn",
+   "format": "ovpn",
+   "categories": {
+    "en": [],
+    "pt-BR": []
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": true,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "sensitive"
+   ]
+  },
+  {
+   "path": "deploy-key.pem",
+   "format": "pem",
+   "categories": {
+    "en": [],
+    "pt-BR": []
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": true,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "sensitive"
+   ]
+  },
+  {
+   "path": "id_ed25519",
+   "format": "none",
+   "categories": {
+    "en": [],
+    "pt-BR": []
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": true,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "sensitive"
+   ]
+  },
+  {
+   "path": "notas-servidor.txt",
+   "format": "txt",
+   "categories": {
+    "en": [],
+    "pt-BR": []
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": true,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "sensitive"
+   ]
+  },
+  {
+   "path": "chave-acesso.txt",
+   "format": "txt",
+   "categories": {
+    "en": [],
+    "pt-BR": []
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": true,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "sensitive"
+   ]
+  },
+  {
+   "path": "db-settings.ini",
+   "format": "ini",
+   "categories": {
+    "en": [],
+    "pt-BR": []
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": true,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "sensitive"
+   ]
+  },
+  {
+   "path": "projeto-api",
+   "format": "folder",
+   "categories": {
+    "en": [],
+    "pt-BR": []
+   },
+   "keep_name": null,
+   "review": false,
+   "sensitive": true,
+   "language": null,
+   "fields": {},
+   "cases": [
+    "sensitive",
+    "unit"
+   ]
+  }
+ ]
+}

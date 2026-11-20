@@ -1,0 +1,2487 @@
+{
+ "format": 1,
+ "meta": {
+  "date": "2026-11-20",
+  "flib": "0.1.0",
+  "provider": "anthropic",
+  "model": "claude-haiku-5-5",
+  "language": "pt-BR",
+  "prompt": "5",
+  "corpus": "1",
+  "seed": 87,
+  "limit": null,
+  "max_cost_usd": 1.0
+ },
+ "metrics": {
+  "items": 154,
+  "category": {
+   "scored": 144,
+   "correct": 144,
+   "accuracy": 1.0,
+   "per_category": {
+    "Casa e veículos": {
+     "items": 10,
+     "correct": 10,
+     "accuracy": 1.0
+    },
+    "Compras": {
+     "items": 7,
+     "correct": 7,
+     "accuracy": 1.0
+    },
+    "Contratos": {
+     "items": 10,
+     "correct": 10,
+     "accuracy": 1.0
+    },
+    "Código e dados": {
+     "items": 9,
+     "correct": 9,
+     "accuracy": 1.0
+    },
+    "Documentos pessoais": {
+     "items": 8,
+     "correct": 8,
+     "accuracy": 1.0
+    },
+    "Estudos": {
+     "items": 8,
+     "correct": 8,
+     "accuracy": 1.0
+    },
+    "Financeiro": {
+     "items": 20,
+     "correct": 20,
+     "accuracy": 1.0
+    },
+    "Imagens": {
+     "items": 13,
+     "correct": 13,
+     "accuracy": 1.0
+    },
+    "Impostos": {
+     "items": 6,
+     "correct": 6,
+     "accuracy": 1.0
+    },
+    "Instaladores": {
+     "items": 6,
+     "correct": 6,
+     "accuracy": 1.0
+    },
+    "Outros": {
+     "items": 15,
+     "correct": 15,
+     "accuracy": 1.0
+    },
+    "Saúde": {
+     "items": 8,
+     "correct": 8,
+     "accuracy": 1.0
+    },
+    "Trabalho": {
+     "items": 11,
+     "correct": 11,
+     "accuracy": 1.0
+    },
+    "Viagens": {
+     "items": 8,
+     "correct": 8,
+     "accuracy": 1.0
+    },
+    "Vídeos e áudio": {
+     "items": 5,
+     "correct": 5,
+     "accuracy": 1.0
+    }
+   },
+   "confusion": []
+  },
+  "review": {
+   "reviewed": 13,
+   "rate": 0.0903,
+   "expected": 9,
+   "expected_and_reviewed": 9
+  },
+  "name_kept": {
+   "scored": 97,
+   "precision": 1.0,
+   "recall": 0.75
+  },
+  "sensitive": {
+   "expected": 10,
+   "withheld": 10,
+   "sent": 0
+  },
+  "status": {
+   "organized": 131,
+   "review": 13,
+   "sensitive": 10
+  },
+  "sent": 144,
+  "items_per_minute": 29.9,
+  "input_tokens": 332147,
+  "output_tokens": 32141,
+  "cost_usd": 0.049285
+ },
+ "usage": {
+  "elapsed_seconds": 289.243,
+  "calls": 144,
+  "input_tokens": 332147,
+  "output_tokens": 32141,
+  "cost_usd": 0.049285199999999994,
+  "cost_known": true
+ },
+ "items": [
+  {
+   "path": "bill.pdf",
+   "status": "organized",
+   "expected": [
+    "Financeiro"
+   ],
+   "category": "Financeiro",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": false,
+   "kept": false,
+   "name": "2026-09-03_conta-de-luz-agosto-2026.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "bill (1).pdf",
+   "status": "organized",
+   "expected": [
+    "Financeiro"
+   ],
+   "category": "Financeiro",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": false,
+   "kept": false,
+   "name": "2026-10-03_conta-de-luz-setembro-2026.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "bill (2).pdf",
+   "status": "organized",
+   "expected": [
+    "Financeiro"
+   ],
+   "category": "Financeiro",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": false,
+   "kept": false,
+   "name": "2026-11-03_conta-de-luz-northwind-outubro-2026.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "documento.pdf",
+   "status": "organized",
+   "expected": [
+    "Financeiro"
+   ],
+   "category": "Financeiro",
+   "confidence": 0.97,
+   "expected_review": false,
+   "expected_kept": false,
+   "kept": false,
+   "name": "2026-09-05_conta-de-energia-elétrica-agosto-2026.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "documento(1).pdf",
+   "status": "organized",
+   "expected": [
+    "Financeiro"
+   ],
+   "category": "Financeiro",
+   "confidence": 0.97,
+   "expected_review": false,
+   "expected_kept": false,
+   "kept": false,
+   "name": "2026-10-05_conta-de-energia-elétrica.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "documento(2).pdf",
+   "status": "organized",
+   "expected": [
+    "Financeiro"
+   ],
+   "category": "Financeiro",
+   "confidence": 0.97,
+   "expected_review": false,
+   "expected_kept": false,
+   "kept": false,
+   "name": "2026-11-05_conta-de-energia-elétrica.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "2026-09_conta-agua.pdf",
+   "status": "organized",
+   "expected": [
+    "Financeiro"
+   ],
+   "category": "Financeiro",
+   "confidence": 0.97,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-10-08_2026-09-conta-agua.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "2via.pdf",
+   "status": "organized",
+   "expected": [
+    "Financeiro"
+   ],
+   "category": "Financeiro",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": false,
+   "kept": false,
+   "name": "2026-11-08_segunda-via-conta-de-água.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "boleto_04617891.pdf",
+   "status": "organized",
+   "expected": [
+    "Financeiro"
+   ],
+   "category": "Financeiro",
+   "confidence": 0.97,
+   "expected_review": false,
+   "expected_kept": false,
+   "kept": false,
+   "name": "2026-10-15_boleto-internet-fibra-sabiá-telecom.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "invoice_428140.pdf",
+   "status": "organized",
+   "expected": [
+    "Financeiro"
+   ],
+   "category": "Financeiro",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": false,
+   "kept": false,
+   "name": "2026-10-01_fatura-fabrikam-mobile-setembro-2026.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "statement_2026-09.pdf",
+   "status": "organized",
+   "expected": [
+    "Financeiro"
+   ],
+   "category": "Financeiro",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": false,
+   "name": "2026-09-01_extrato-bancário-contoso-bank-setembro.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "Statement-Oct-2026.pdf",
+   "status": "organized",
+   "expected": [
+    "Financeiro"
+   ],
+   "category": "Financeiro",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-10-01_statement-oct-2026.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "extrato_out_2026.pdf",
+   "status": "organized",
+   "expected": [
+    "Financeiro"
+   ],
+   "category": "Financeiro",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": false,
+   "name": "2026-10-31_extrato-conta-corrente-outubro-2026.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "fatura-cartao-setembro.pdf",
+   "status": "organized",
+   "expected": [
+    "Financeiro"
+   ],
+   "category": "Financeiro",
+   "confidence": 0.97,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-28_fatura-cartao-setembro.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "comprovante.pdf",
+   "status": "organized",
+   "expected": [
+    "Financeiro",
+    "Casa e veículos"
+   ],
+   "category": "Financeiro",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": false,
+   "kept": false,
+   "name": "2026-10-14_comprovante-pix-aluguel-outubro.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "transactions-export.csv",
+   "status": "organized",
+   "expected": [
+    "Financeiro",
+    "Código e dados"
+   ],
+   "category": "Código e dados",
+   "confidence": 0.8,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "2026-10-02_transactions-export.csv",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "household-budget-2026.xlsx",
+   "status": "organized",
+   "expected": [
+    "Financeiro",
+    "Código e dados"
+   ],
+   "category": "Financeiro",
+   "confidence": 0.85,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_household-budget-2026.xlsx",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "orcamento-casa.xlsx",
+   "status": "organized",
+   "expected": [
+    "Financeiro",
+    "Casa e veículos",
+    "Código e dados"
+   ],
+   "category": "Financeiro",
+   "confidence": 0.85,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_orcamento-casa.xlsx",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "receipt.eml",
+   "status": "organized",
+   "expected": [
+    "Compras",
+    "Financeiro"
+   ],
+   "category": "Compras",
+   "confidence": 0.93,
+   "expected_review": false,
+   "expected_kept": false,
+   "kept": false,
+   "name": "2026-10-12_recibo-pedido-adventure-works.eml",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "alerta-compra.eml",
+   "status": "organized",
+   "expected": [
+    "Financeiro",
+    "Compras"
+   ],
+   "category": "Financeiro",
+   "confidence": 0.93,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "2026-10-18_alerta-compra.eml",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "recibo-irpf-2026.pdf",
+   "status": "organized",
+   "expected": [
+    "Impostos"
+   ],
+   "category": "Impostos",
+   "confidence": 0.97,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-04-28_recibo-irpf-2026.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "DARF-carne-leao-setembro.pdf",
+   "status": "organized",
+   "expected": [
+    "Impostos"
+   ],
+   "category": "Impostos",
+   "confidence": 0.97,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-30_darf-carne-leao-setembro.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "informe-rendimentos-2025.pdf",
+   "status": "organized",
+   "expected": [
+    "Impostos"
+   ],
+   "category": "Impostos",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2025-12-31_informe-rendimentos-2025.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "informe.pdf",
+   "status": "organized",
+   "expected": [
+    "Impostos"
+   ],
+   "category": "Impostos",
+   "confidence": 0.93,
+   "expected_review": false,
+   "expected_kept": false,
+   "kept": false,
+   "name": "2026-09-21_comprovante-de-rendimentos-2025.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "recibo-consulta.pdf",
+   "status": "organized",
+   "expected": [
+    "Impostos",
+    "Saúde"
+   ],
+   "category": "Impostos",
+   "confidence": 0.85,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": false,
+   "name": "2026-09-03_recibo-de-consulta-médica.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "2025 Tax Return Summary.pdf",
+   "status": "organized",
+   "expected": [
+    "Impostos"
+   ],
+   "category": "Impostos",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_2025-tax-return-summary.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "IPTU 2026 carne.pdf",
+   "status": "organized",
+   "expected": [
+    "Casa e veículos",
+    "Impostos"
+   ],
+   "category": "Casa e veículos",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-02-10_iptu-2026-carne.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "lease_agreement_signed.docx",
+   "status": "organized",
+   "expected": [
+    "Contratos",
+    "Casa e veículos"
+   ],
+   "category": "Contratos",
+   "confidence": 0.97,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-11-01_lease-agreement-signed.docx",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "NDA - Litware.docx",
+   "status": "organized",
+   "expected": [
+    "Contratos",
+    "Trabalho"
+   ],
+   "category": "Contratos",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_nda-litware.docx",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "contract.docx",
+   "status": "organized",
+   "expected": [
+    "Contratos",
+    "Trabalho"
+   ],
+   "category": "Contratos",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": false,
+   "kept": false,
+   "name": "2026-09-21_contrato-de-prestação-de-serviços-freelance.docx",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "contrato-aluguel-apto.docx",
+   "status": "organized",
+   "expected": [
+    "Contratos",
+    "Casa e veículos"
+   ],
+   "category": "Contratos",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_contrato-aluguel-apto.docx",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "aditivo contratual.pdf",
+   "status": "organized",
+   "expected": [
+    "Contratos"
+   ],
+   "category": "Contratos",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_aditivo-contratual.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "procuracao.pdf",
+   "status": "organized",
+   "expected": [
+    "Contratos",
+    "Documentos pessoais"
+   ],
+   "category": "Contratos",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_procuracao.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "proposta-comercial-v3.docx",
+   "status": "organized",
+   "expected": [
+    "Contratos",
+    "Trabalho"
+   ],
+   "category": "Contratos",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": false,
+   "name": "2026-09-21_proposta-comercial-desenvolvimento-de-aplicativo.docx",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "distrato.pdf",
+   "status": "organized",
+   "expected": [
+    "Contratos"
+   ],
+   "category": "Contratos",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": false,
+   "name": "2026-09-21_distrato-de-contrato-de-prestação-de-serviços.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "Re_ minuta do contrato.eml",
+   "status": "organized",
+   "expected": [
+    "Contratos",
+    "Trabalho"
+   ],
+   "category": "Contratos",
+   "confidence": 0.93,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": false,
+   "name": "2026-10-06_minuta-revisada-contrato-de-fornecimento.eml",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "terms-of-service.pdf",
+   "status": "organized",
+   "expected": [
+    "Contratos",
+    "Outros"
+   ],
+   "category": "Contratos",
+   "confidence": 0.85,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": false,
+   "name": "2026-09-01_termos-de-serviço-wingtip-cloud.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "certidao-nascimento.pdf",
+   "status": "organized",
+   "expected": [
+    "Documentos pessoais"
+   ],
+   "category": "Documentos pessoais",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_certidao-nascimento.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "comprovante-residencia.pdf",
+   "status": "organized",
+   "expected": [
+    "Documentos pessoais",
+    "Financeiro"
+   ],
+   "category": "Documentos pessoais",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-10-02_comprovante-residencia.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "diploma-graduacao.pdf",
+   "status": "organized",
+   "expected": [
+    "Documentos pessoais",
+    "Estudos"
+   ],
+   "category": "Documentos pessoais",
+   "confidence": 0.93,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2020-12-15_diploma-graduacao.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "titulo-eleitor.pdf",
+   "status": "organized",
+   "expected": [
+    "Documentos pessoais"
+   ],
+   "category": "Documentos pessoais",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_titulo-eleitor.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "RG-frente.jpg",
+   "status": "organized",
+   "expected": [
+    "Documentos pessoais",
+    "Imagens"
+   ],
+   "category": "Documentos pessoais",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "RG-frente.jpg",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "CNH-digital.pdf",
+   "status": "organized",
+   "expected": [
+    "Documentos pessoais"
+   ],
+   "category": "Documentos pessoais",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "CNH-digital.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "passport-scan.pdf",
+   "status": "organized",
+   "expected": [
+    "Documentos pessoais",
+    "Viagens"
+   ],
+   "category": "Documentos pessoais",
+   "confidence": 0.8,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "passport-scan.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "historico-escolar.pdf",
+   "status": "organized",
+   "expected": [
+    "Documentos pessoais",
+    "Estudos"
+   ],
+   "category": "Documentos pessoais",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": false,
+   "name": "2015-01-01_histórico-escolar-escola-técnica-andorinha.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "resultado-exame-sangue.pdf",
+   "status": "organized",
+   "expected": [
+    "Saúde"
+   ],
+   "category": "Saúde",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-22_resultado-exame-sangue.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "receita.pdf",
+   "status": "organized",
+   "expected": [
+    "Saúde"
+   ],
+   "category": "Saúde",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": false,
+   "kept": false,
+   "name": "2026-09-03_receituário-amoxicilina-clínica-jatobá.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "atestado.pdf",
+   "status": "organized",
+   "expected": [
+    "Saúde",
+    "Trabalho"
+   ],
+   "category": "Saúde",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": false,
+   "name": "2026-09-03_atestado-médico-clínica-jatobá.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "laudo-ressonancia-joelho.pdf",
+   "status": "organized",
+   "expected": [
+    "Saúde"
+   ],
+   "category": "Saúde",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_laudo-ressonancia-joelho.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "lab_results_2026-10.pdf",
+   "status": "organized",
+   "expected": [
+    "Saúde"
+   ],
+   "category": "Saúde",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-10-04_lab-results-2026-10.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "reembolso-plano-saude.pdf",
+   "status": "organized",
+   "expected": [
+    "Saúde",
+    "Financeiro"
+   ],
+   "category": "Saúde",
+   "confidence": 0.93,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-10-16_reembolso-plano-saude.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "Litware Health invoice.pdf",
+   "status": "organized",
+   "expected": [
+    "Saúde",
+    "Financeiro"
+   ],
+   "category": "Financeiro",
+   "confidence": 0.85,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-10-07_litware-health-invoice.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "carteira-vacinacao.jpg",
+   "status": "organized",
+   "expected": [
+    "Saúde",
+    "Imagens",
+    "Documentos pessoais"
+   ],
+   "category": "Saúde",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "carteira-vacinacao.jpg",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "holerite-setembro-2026.pdf",
+   "status": "organized",
+   "expected": [
+    "Trabalho",
+    "Financeiro"
+   ],
+   "category": "Trabalho",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-30_holerite-setembro-2026.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "payslip_oct.pdf",
+   "status": "organized",
+   "expected": [
+    "Trabalho",
+    "Financeiro"
+   ],
+   "category": "Trabalho",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": false,
+   "name": "2026-10-31_holerite-tailspin-toys-outubro.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "Q3 report.pptx",
+   "status": "organized",
+   "expected": [
+    "Trabalho"
+   ],
+   "category": "Trabalho",
+   "confidence": 0.93,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_q3-report.pptx",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "relatorio-trimestral.docx",
+   "status": "organized",
+   "expected": [
+    "Trabalho"
+   ],
+   "category": "Trabalho",
+   "confidence": 0.93,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_relatorio-trimestral.docx",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "curriculo-2026.docx",
+   "status": "organized",
+   "expected": [
+    "Trabalho",
+    "Documentos pessoais"
+   ],
+   "category": "Trabalho",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_curriculo-2026.docx",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "resume_final_v2.docx",
+   "status": "organized",
+   "expected": [
+    "Trabalho",
+    "Documentos pessoais"
+   ],
+   "category": "Trabalho",
+   "confidence": 0.93,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_resume-final-v2.docx",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "apresentacao-cliente.pptx",
+   "status": "organized",
+   "expected": [
+    "Trabalho",
+    "Contratos"
+   ],
+   "category": "Trabalho",
+   "confidence": 0.85,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_apresentacao-cliente.pptx",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "planilha-horas.xlsx",
+   "status": "organized",
+   "expected": [
+    "Trabalho",
+    "Código e dados"
+   ],
+   "category": "Trabalho",
+   "confidence": 0.85,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": false,
+   "name": "2026-09-21_controle-de-horas-tucano-outubro.xlsx",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "meeting-notes.md",
+   "status": "organized",
+   "expected": [
+    "Trabalho",
+    "Outros"
+   ],
+   "category": "Trabalho",
+   "confidence": 0.8,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": false,
+   "name": "2026-10-14_notas-da-reunião-semanal.md",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "ata-reuniao-condominio.txt",
+   "status": "organized",
+   "expected": [
+    "Casa e veículos",
+    "Outros"
+   ],
+   "category": "Casa e veículos",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_ata-reuniao-condominio.txt",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "onboarding-checklist.txt",
+   "status": "organized",
+   "expected": [
+    "Trabalho"
+   ],
+   "category": "Trabalho",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_onboarding-checklist.txt",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "Re_ aprovacao ferias.eml",
+   "status": "organized",
+   "expected": [
+    "Trabalho"
+   ],
+   "category": "Trabalho",
+   "confidence": 0.93,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-10-15_re-aprovacao-ferias.eml",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "artigo-aprendizado-de-maquina.pdf",
+   "status": "organized",
+   "expected": [
+    "Estudos"
+   ],
+   "category": "Estudos",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_artigo-aprendizado-de-maquina.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "2310.01234v2.pdf",
+   "status": "organized",
+   "expected": [
+    "Estudos"
+   ],
+   "category": "Estudos",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": false,
+   "kept": false,
+   "name": "2026-09-21_artigo-sobre-classificação-de-documentos-pessoais.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "apostila-calculo-1.pdf",
+   "status": "organized",
+   "expected": [
+    "Estudos"
+   ],
+   "category": "Estudos",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_apostila-calculo-1.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "aula03.pptx",
+   "status": "organized",
+   "expected": [
+    "Estudos"
+   ],
+   "category": "Estudos",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "2026-09-21_aula03.pptx",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "certificado-curso-python.pdf",
+   "status": "organized",
+   "expected": [
+    "Estudos",
+    "Documentos pessoais"
+   ],
+   "category": "Estudos",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-08-30_certificado-curso-python.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "lecture-notes-week2.md",
+   "status": "organized",
+   "expected": [
+    "Estudos"
+   ],
+   "category": "Estudos",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_lecture-notes-week2.md",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "ebook-introducao-estatistica.pdf",
+   "status": "organized",
+   "expected": [
+    "Estudos"
+   ],
+   "category": "Estudos",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_ebook-introducao-estatistica.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "tcc-versao-final",
+   "status": "organized",
+   "expected": [
+    "Estudos"
+   ],
+   "category": "Estudos",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "tcc-versao-final",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "boarding-pass.pdf",
+   "status": "organized",
+   "expected": [
+    "Viagens"
+   ],
+   "category": "Viagens",
+   "confidence": 0.97,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": false,
+   "name": "2026-11-28_cartão-de-embarque-tailspin-gru-lis.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "e-ticket.pdf",
+   "status": "organized",
+   "expected": [
+    "Viagens"
+   ],
+   "category": "Viagens",
+   "confidence": 0.97,
+   "expected_review": false,
+   "expected_kept": false,
+   "kept": false,
+   "name": "2026-12-12_bilhete-eletrônico-garça-são-paulo-recife.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "reserva-hotel.eml",
+   "status": "organized",
+   "expected": [
+    "Viagens"
+   ],
+   "category": "Viagens",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": false,
+   "name": "2026-10-02_confirmação-reserva-hotel-sabiá-praia.eml",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "itinerario-lisboa.docx",
+   "status": "organized",
+   "expected": [
+    "Viagens"
+   ],
+   "category": "Viagens",
+   "confidence": 0.93,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_itinerario-lisboa.docx",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "seguro-viagem-europa.pdf",
+   "status": "organized",
+   "expected": [
+    "Viagens"
+   ],
+   "category": "Viagens",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-11-27_seguro-viagem-europa.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "aluguel-carro-reserva.pdf",
+   "status": "organized",
+   "expected": [
+    "Viagens"
+   ],
+   "category": "Viagens",
+   "confidence": 0.93,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-12-12_aluguel-carro-reserva.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "hotel-confirmation.eml",
+   "status": "organized",
+   "expected": [
+    "Viagens"
+   ],
+   "category": "Viagens",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": false,
+   "name": "2026-10-10_confirmação-de-hotel-wingtip-suites.eml",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "visa-application-form.pdf",
+   "status": "organized",
+   "expected": [
+    "Viagens",
+    "Documentos pessoais"
+   ],
+   "category": "Viagens",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_visa-application-form.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "pedido-2644639.eml",
+   "status": "organized",
+   "expected": [
+    "Compras",
+    "Financeiro"
+   ],
+   "category": "Compras",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": false,
+   "kept": false,
+   "name": "2026-10-14_pedido-enviado-loja-tucano.eml",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "termo-garantia-geladeira.pdf",
+   "status": "organized",
+   "expected": [
+    "Compras",
+    "Casa e veículos"
+   ],
+   "category": "Compras",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_termo-garantia-geladeira.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "manual-cafeteira.pdf",
+   "status": "organized",
+   "expected": [
+    "Compras"
+   ],
+   "category": "Compras",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_manual-cafeteira.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "user-guide.pdf",
+   "status": "organized",
+   "expected": [
+    "Compras"
+   ],
+   "category": "Compras",
+   "confidence": 0.85,
+   "expected_review": false,
+   "expected_kept": false,
+   "kept": false,
+   "name": "2026-09-21_manual-do-usuário-trailcam-2.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "NFe5353104453.pdf",
+   "status": "organized",
+   "expected": [
+    "Financeiro",
+    "Compras"
+   ],
+   "category": "Financeiro",
+   "confidence": 0.93,
+   "expected_review": false,
+   "expected_kept": false,
+   "kept": false,
+   "name": "2026-10-11_nota-fiscal-danfe-eletrodomésticos-arara.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "order-confirmation.eml",
+   "status": "organized",
+   "expected": [
+    "Compras",
+    "Financeiro"
+   ],
+   "category": "Compras",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": false,
+   "name": "2026-10-22_confirmação-de-pedido-adventure-works.eml",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "warranty-registration.txt",
+   "status": "organized",
+   "expected": [
+    "Compras"
+   ],
+   "category": "Compras",
+   "confidence": 0.93,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": false,
+   "name": "2026-09-01_registro-de-garantia-contoso-air-fryer-xl.txt",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "boleto-condominio-outubro.pdf",
+   "status": "organized",
+   "expected": [
+    "Casa e veículos",
+    "Financeiro"
+   ],
+   "category": "Casa e veículos",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": false,
+   "name": "2026-10-10_boleto-condomínio-residencial-flamboyant-outubro-2026.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "escritura-imovel.pdf",
+   "status": "organized",
+   "expected": [
+    "Casa e veículos",
+    "Contratos"
+   ],
+   "category": "Casa e veículos",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_escritura-imovel.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "IPVA-2026.pdf",
+   "status": "organized",
+   "expected": [
+    "Casa e veículos",
+    "Impostos",
+    "Financeiro"
+   ],
+   "category": "Casa e veículos",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_ipva-2026.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "notificacao.pdf",
+   "status": "organized",
+   "expected": [
+    "Casa e veículos",
+    "Financeiro"
+   ],
+   "category": "Casa e veículos",
+   "confidence": 0.93,
+   "expected_review": false,
+   "expected_kept": false,
+   "kept": false,
+   "name": "2026-09-21_notificação-de-autuação-de-trânsito.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "laudo-vistoria-apartamento.pdf",
+   "status": "organized",
+   "expected": [
+    "Casa e veículos",
+    "Contratos"
+   ],
+   "category": "Casa e veículos",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_laudo-vistoria-apartamento.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "home-insurance-policy.pdf",
+   "status": "organized",
+   "expected": [
+    "Casa e veículos",
+    "Contratos"
+   ],
+   "category": "Contratos",
+   "confidence": 0.8,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-11-01_home-insurance-policy.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "car-service-invoice.pdf",
+   "status": "organized",
+   "expected": [
+    "Casa e veículos",
+    "Financeiro"
+   ],
+   "category": "Casa e veículos",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-10-09_car-service-invoice.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "proposta.pdf",
+   "status": "organized",
+   "expected": [
+    "Casa e veículos",
+    "Contratos",
+    "Compras"
+   ],
+   "category": "Compras",
+   "confidence": 0.8,
+   "expected_review": false,
+   "expected_kept": false,
+   "kept": false,
+   "name": "2026-09-21_orçamento-armários-cozinha-marcenaria-ipê-amarelo.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "IMG_4821.jpg",
+   "status": "organized",
+   "expected": [
+    "Imagens"
+   ],
+   "category": "Imagens",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "IMG_4821.jpg",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "IMG_4822.jpg",
+   "status": "organized",
+   "expected": [
+    "Imagens"
+   ],
+   "category": "Imagens",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "IMG_4822.jpg",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "IMG_20260914_101522.jpg",
+   "status": "organized",
+   "expected": [
+    "Imagens"
+   ],
+   "category": "Imagens",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "IMG_20260914_101522.jpg",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "DSC_0042.JPG",
+   "status": "organized",
+   "expected": [
+    "Imagens"
+   ],
+   "category": "Imagens",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "DSC_0042.JPG",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "Screenshot 2026-10-03 at 14.22.10.png",
+   "status": "organized",
+   "expected": [
+    "Imagens"
+   ],
+   "category": "Imagens",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "Screenshot 2026-10-03 at 14.22.10.png",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "Captura de Tela 2026-09-12 às 10.15.33.png",
+   "status": "organized",
+   "expected": [
+    "Imagens"
+   ],
+   "category": "Imagens",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "Captura de Tela 2026-09-12 às 10.15.33.png",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "wallpaper-montanhas.jpg",
+   "status": "organized",
+   "expected": [
+    "Imagens"
+   ],
+   "category": "Imagens",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "wallpaper-montanhas.jpg",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "logo-final.png",
+   "status": "organized",
+   "expected": [
+    "Imagens"
+   ],
+   "category": "Imagens",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "logo-final.png",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "foto-perfil.heic",
+   "status": "organized",
+   "expected": [
+    "Imagens"
+   ],
+   "category": "Imagens",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "foto-perfil.heic",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "WhatsApp Image 2026-10-05 at 19.03.11.jpeg",
+   "status": "organized",
+   "expected": [
+    "Imagens"
+   ],
+   "category": "Imagens",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "WhatsApp Image 2026-10-05 at 19.03.11.jpeg",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "diagram-architecture.png",
+   "status": "organized",
+   "expected": [
+    "Imagens"
+   ],
+   "category": "Imagens",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "diagram-architecture.png",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "Fotos Lisboa 2026",
+   "status": "organized",
+   "expected": [
+    "Imagens",
+    "Viagens"
+   ],
+   "category": "Imagens",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "Fotos Lisboa 2026",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "gravacao-reuniao-2026-10-14.mp4",
+   "status": "organized",
+   "expected": [
+    "Vídeos e áudio"
+   ],
+   "category": "Vídeos e áudio",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "gravacao-reuniao-2026-10-14.mp4",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "podcast-episodio-42.mp3",
+   "status": "organized",
+   "expected": [
+    "Vídeos e áudio"
+   ],
+   "category": "Vídeos e áudio",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "podcast-episodio-42.mp3",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "screen-recording.mov",
+   "status": "organized",
+   "expected": [
+    "Vídeos e áudio"
+   ],
+   "category": "Vídeos e áudio",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "screen-recording.mov",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "voice memo.m4a",
+   "status": "organized",
+   "expected": [
+    "Vídeos e áudio"
+   ],
+   "category": "Vídeos e áudio",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "voice memo.m4a",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "aniversario-vovo.mp4",
+   "status": "organized",
+   "expected": [
+    "Vídeos e áudio"
+   ],
+   "category": "Vídeos e áudio",
+   "confidence": 0.93,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "aniversario-vovo.mp4",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "Notely-4.2.1.dmg",
+   "status": "organized",
+   "expected": [
+    "Instaladores"
+   ],
+   "category": "Instaladores",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "Notely-4.2.1.dmg",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "PrinterDriver_3.1.pkg",
+   "status": "organized",
+   "expected": [
+    "Instaladores"
+   ],
+   "category": "Instaladores",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "PrinterDriver_3.1.pkg",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "Install Fieldnote.pkg",
+   "status": "organized",
+   "expected": [
+    "Instaladores"
+   ],
+   "category": "Instaladores",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "Install Fieldnote.pkg",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "ZapWrite-universal.dmg",
+   "status": "organized",
+   "expected": [
+    "Instaladores"
+   ],
+   "category": "Instaladores",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "ZapWrite-universal.dmg",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "atualizacao-firmware-roteador.zip",
+   "status": "organized",
+   "expected": [
+    "Instaladores",
+    "Outros"
+   ],
+   "category": "Instaladores",
+   "confidence": 0.8,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "atualizacao-firmware-roteador.zip",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "Clipwise.app",
+   "status": "organized",
+   "expected": [
+    "Instaladores"
+   ],
+   "category": "Instaladores",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "Clipwise.app",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "script_backup.py",
+   "status": "organized",
+   "expected": [
+    "Código e dados"
+   ],
+   "category": "Código e dados",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_script-backup.py",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "export-tarefas.json",
+   "status": "organized",
+   "expected": [
+    "Código e dados",
+    "Outros"
+   ],
+   "category": "Código e dados",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_export-tarefas.json",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "dados-vendas-q3.csv",
+   "status": "organized",
+   "expected": [
+    "Código e dados",
+    "Trabalho"
+   ],
+   "category": "Código e dados",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_dados-vendas-q3.csv",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "schema.sql",
+   "status": "organized",
+   "expected": [
+    "Código e dados"
+   ],
+   "category": "Código e dados",
+   "confidence": 0.95,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_schema.sql",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "analysis.ipynb",
+   "status": "organized",
+   "expected": [
+    "Código e dados"
+   ],
+   "category": "Código e dados",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": false,
+   "name": "2026-09-21_análise-de-vendas-em-notebook.ipynb",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "site-portfolio",
+   "status": "organized",
+   "expected": [
+    "Código e dados"
+   ],
+   "category": "Código e dados",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "site-portfolio",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "backup-notas-2026.zip",
+   "status": "organized",
+   "expected": [
+    "Código e dados",
+    "Outros"
+   ],
+   "category": "Código e dados",
+   "confidence": 0.85,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_backup-notas-2026.zip",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "config.yaml",
+   "status": "organized",
+   "expected": [
+    "Código e dados"
+   ],
+   "category": "Código e dados",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": false,
+   "name": "2026-09-21_configuração-de-tema-e-plugins.yaml",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "dotfiles-main.zip",
+   "status": "organized",
+   "expected": [
+    "Código e dados"
+   ],
+   "category": "Código e dados",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_dotfiles-main.zip",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "receita-lasanha.pdf",
+   "status": "review",
+   "expected": [
+    "Outros"
+   ],
+   "category": "Outros",
+   "confidence": 0.6,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": null,
+   "name": "receita-lasanha.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "shopping-list.txt",
+   "status": "review",
+   "expected": [
+    "Outros",
+    "Compras"
+   ],
+   "category": "Outros",
+   "confidence": 0.6,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": null,
+   "name": "shopping-list.txt",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "newsletter-outubro.eml",
+   "status": "organized",
+   "expected": [
+    "Outros",
+    "Estudos"
+   ],
+   "category": "Outros",
+   "confidence": 0.75,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "newsletter-outubro.eml",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "wedding-invitation.pdf",
+   "status": "review",
+   "expected": [
+    "Outros"
+   ],
+   "category": "Outros",
+   "confidence": 0.6,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": null,
+   "name": "wedding-invitation.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "playlist-viagem.txt",
+   "status": "organized",
+   "expected": [
+    "Outros",
+    "Viagens",
+    "Vídeos e áudio"
+   ],
+   "category": "Vídeos e áudio",
+   "confidence": 0.8,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-09-21_playlist-viagem.txt",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "ideias.md",
+   "status": "review",
+   "expected": [
+    "Outros"
+   ],
+   "category": "Outros",
+   "confidence": 0.6,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": null,
+   "name": "ideias.md",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "scan001.pdf",
+   "status": "review",
+   "expected": [
+    "Outros"
+   ],
+   "category": "Outros",
+   "confidence": 0.3,
+   "expected_review": true,
+   "expected_kept": null,
+   "kept": null,
+   "name": "scan001.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "scan002.pdf",
+   "status": "review",
+   "expected": [
+    "Outros"
+   ],
+   "category": "Outros",
+   "confidence": 0.3,
+   "expected_review": true,
+   "expected_kept": null,
+   "kept": null,
+   "name": "scan002.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "Scan 3.pdf",
+   "status": "review",
+   "expected": [
+    "Outros"
+   ],
+   "category": "Outros",
+   "confidence": 0.3,
+   "expected_review": true,
+   "expected_kept": null,
+   "kept": null,
+   "name": "Scan 3.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "document(4).pdf",
+   "status": "review",
+   "expected": [
+    "Outros"
+   ],
+   "category": "Outros",
+   "confidence": 0.3,
+   "expected_review": true,
+   "expected_kept": null,
+   "kept": null,
+   "name": "document(4).pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "untitled.txt",
+   "status": "review",
+   "expected": [
+    "Outros"
+   ],
+   "category": "Outros",
+   "confidence": 0.4,
+   "expected_review": true,
+   "expected_kept": null,
+   "kept": null,
+   "name": "untitled.txt",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "arquivo",
+   "status": "review",
+   "expected": [
+    "Outros"
+   ],
+   "category": "Outros",
+   "confidence": 0.2,
+   "expected_review": true,
+   "expected_kept": null,
+   "kept": null,
+   "name": "arquivo",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "download.bin",
+   "status": "review",
+   "expected": [
+    "Outros"
+   ],
+   "category": "Outros",
+   "confidence": 0.3,
+   "expected_review": true,
+   "expected_kept": null,
+   "kept": null,
+   "name": "download.bin",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "temp.docx",
+   "status": "review",
+   "expected": [
+    "Outros"
+   ],
+   "category": "Outros",
+   "confidence": 0.5,
+   "expected_review": true,
+   "expected_kept": null,
+   "kept": null,
+   "name": "temp.docx",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "final_FINAL.pdf",
+   "status": "review",
+   "expected": [
+    "Outros"
+   ],
+   "category": "Outros",
+   "confidence": 0.3,
+   "expected_review": true,
+   "expected_kept": null,
+   "kept": null,
+   "name": "final_FINAL.pdf",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "IMG_0001.HEIC",
+   "status": "organized",
+   "expected": [
+    "Imagens"
+   ],
+   "category": "Imagens",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": true,
+   "name": "IMG_0001.HEIC",
+   "sensitive": false,
+   "sent": true
+  },
+  {
+   "path": "credentials.json",
+   "status": "sensitive",
+   "expected": [],
+   "category": null,
+   "confidence": null,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": null,
+   "name": null,
+   "sensitive": true,
+   "sent": false
+  },
+  {
+   "path": "service-account-staging.json",
+   "status": "sensitive",
+   "expected": [],
+   "category": null,
+   "confidence": null,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": null,
+   "name": null,
+   "sensitive": true,
+   "sent": false
+  },
+  {
+   "path": "cofre-senhas.kdbx",
+   "status": "sensitive",
+   "expected": [],
+   "category": null,
+   "confidence": null,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": null,
+   "name": null,
+   "sensitive": true,
+   "sent": false
+  },
+  {
+   "path": "office-vpn.ovpn",
+   "status": "sensitive",
+   "expected": [],
+   "category": null,
+   "confidence": null,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": null,
+   "name": null,
+   "sensitive": true,
+   "sent": false
+  },
+  {
+   "path": "deploy-key.pem",
+   "status": "sensitive",
+   "expected": [],
+   "category": null,
+   "confidence": null,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": null,
+   "name": null,
+   "sensitive": true,
+   "sent": false
+  },
+  {
+   "path": "id_ed25519",
+   "status": "sensitive",
+   "expected": [],
+   "category": null,
+   "confidence": null,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": null,
+   "name": null,
+   "sensitive": true,
+   "sent": false
+  },
+  {
+   "path": "notas-servidor.txt",
+   "status": "sensitive",
+   "expected": [],
+   "category": null,
+   "confidence": null,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": null,
+   "name": null,
+   "sensitive": true,
+   "sent": false
+  },
+  {
+   "path": "chave-acesso.txt",
+   "status": "sensitive",
+   "expected": [],
+   "category": null,
+   "confidence": null,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": null,
+   "name": null,
+   "sensitive": true,
+   "sent": false
+  },
+  {
+   "path": "db-settings.ini",
+   "status": "sensitive",
+   "expected": [],
+   "category": null,
+   "confidence": null,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": null,
+   "name": null,
+   "sensitive": true,
+   "sent": false
+  },
+  {
+   "path": "projeto-api",
+   "status": "sensitive",
+   "expected": [],
+   "category": null,
+   "confidence": null,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": null,
+   "name": null,
+   "sensitive": true,
+   "sent": false
+  }
+ ]
+}
