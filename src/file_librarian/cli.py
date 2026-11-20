@@ -858,9 +858,9 @@ def search(
     semantic: Annotated[
         bool | None,
         typer.Option(
-            "--semantic/--words",
+            "--semantic/--no-semantic",
             help="Also find files by meaning, with embeddings (needs search.semantic.enabled); "
-            "--words searches by words only. [default: search.semantic.default]",
+            "--no-semantic searches by words only. [default: search.semantic.default]",
             show_default=False,
         ),
     ] = None,
@@ -882,7 +882,9 @@ def search(
     """Find organized files by name, description or tags, and by category, period or type.
 
     Without a query, the files matching the filters are listed newest first.
-    With --semantic, files are also found by meaning ("invoice" finds a "bill").
+    With --semantic, files are also found by meaning ("invoice" finds a "bill"),
+    if close enough (search.semantic.min_similarity); --no-semantic turns it off
+    for one search when search.semantic.default is true.
     Duplicates are left out unless --duplicates is given.
     """
     cfg = _load(config)
@@ -897,6 +899,7 @@ def search(
     configured = [c.name for c in cfg.categories]
     hits: list[SearchHit] = []
     notice: str | None = None
+    weak = 0
     if not cfg.database.exists():
         _search_filters(configured, category, ext, since, until)  # still validate them
     else:
@@ -911,18 +914,24 @@ def search(
                     limit=limit,
                     include_duplicates=duplicates,
                 )
-                hits, notice = outcome.hits, outcome.notice
+                hits, notice, weak = outcome.hits, outcome.notice, outcome.weak
             else:
                 hits = run_search(
                     store, query, filters=filters, limit=limit, include_duplicates=duplicates
                 )
     if notice:
         typer.echo(f"note: {notice}", err=True)
+    # Results the relevance floor left out are only mentioned when none is left.
     if as_json:
+        if weak and not hits:
+            typer.echo("note: no close matches; try other words or --no-semantic", err=True)
         typer.echo(search_json(hits))
         return
     if not hits:
-        typer.echo("No matches.")
+        if weak:
+            typer.echo("No close matches; try other words or --no-semantic.")
+        else:
+            typer.echo("No matches.")
         return
     for hit in hits:
         where = hit.path if hit.exists else f"{hit.path}  (missing: moved by hand?)"

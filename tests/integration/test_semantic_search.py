@@ -166,7 +166,7 @@ def test_word_matches_still_rank_first(downloads: Path, fake_openai: FakeOpenAI)
 
 
 def test_filters_apply_to_the_meaning_ranking(downloads: Path, fake_openai: FakeOpenAI) -> None:
-    cfg = config_for(downloads, fake_openai.url)
+    cfg = config_for(downloads, fake_openai.url, min_similarity=0)  # keep even unrelated files
     run(cfg, *ANSWERS)
     with Store.open(cfg.database) as store:
         images = make_filters(categories=["images"], known_categories=store.categories())
@@ -175,6 +175,53 @@ def test_filters_apply_to_the_meaning_ranking(downloads: Path, fake_openai: Fake
         only_pdf = semantic_search(store, "beach", cfg, filters=pdfs)
     assert originals(result.hits) == ["IMG_4821.png"]
     assert originals(only_pdf.hits) == ["scan_0042.pdf"]
+
+
+# --- the relevance floor ----------------------------------------------------------------
+
+
+def test_weak_matches_by_meaning_only_are_left_out(
+    downloads: Path, fake_openai: FakeOpenAI
+) -> None:
+    cfg = config_for(downloads, fake_openai.url)  # the default floor, 0.25
+    run(cfg, *ANSWERS)
+    with Store.open(cfg.database) as store:
+        result = semantic_search(store, "bill", cfg)
+        images = make_filters(categories=["images"], known_categories=store.categories())
+        unrelated = semantic_search(store, "bill", cfg, filters=images)
+    # Without the floor every file would fill the list; only the close one is left.
+    assert originals(result.hits) == ["scan_0042.pdf"]
+    assert result.weak == len(ANSWERS) - 1
+    assert unrelated.hits == [] and unrelated.weak == 1 and unrelated.notice is None
+
+
+def test_the_floor_never_drops_a_word_match(downloads: Path, fake_openai: FakeOpenAI) -> None:
+    cfg = config_for(downloads, fake_openai.url, min_similarity=0.99)
+    run(cfg, *ANSWERS)
+    with Store.open(cfg.database) as store:
+        words = semantic_search(store, "lease", cfg)
+        meaning = semantic_search(store, "bill", cfg)
+    [lease] = words.hits
+    assert lease.original_name == "lease.docx" and lease.source == "text"
+    assert lease.similarity is not None and 0.25 < lease.similarity < 0.99
+    assert meaning.hits == [] and meaning.weak == len(ANSWERS)
+
+
+def test_hits_say_how_they_were_found(downloads: Path, fake_openai: FakeOpenAI) -> None:
+    cfg = config_for(downloads, fake_openai.url, min_similarity=0)
+    run(cfg, *ANSWERS)
+    with Store.open(cfg.database) as store:
+        both = semantic_search(store, "lease", cfg)
+        meaning = semantic_search(store, "bill", cfg)
+        plain = search(store, "lease")
+        listed = search(store, "", filters=make_filters(extensions=["pdf"]))
+    assert (both.hits[0].original_name, both.hits[0].source) == ("lease.docx", "both")
+    assert {h.source for h in both.hits[1:]} == {"semantic"}
+    first = meaning.hits[0]
+    assert (first.original_name, first.source) == ("scan_0042.pdf", "semantic")
+    assert first.similarity is not None and 0.25 < first.similarity < 1
+    assert [(h.source, h.similarity) for h in plain] == [("text", None)]
+    assert [(h.source, h.similarity) for h in listed] == [(None, None)]
 
 
 def test_filters_without_words_list_as_before(downloads: Path, fake_openai: FakeOpenAI) -> None:
@@ -250,7 +297,41 @@ def test_new_files_without_a_vector_yet_are_noted(downloads: Path, fake_openai: 
         store.delete_embeddings([next(iter(store.embedding_keys()))])
         result = semantic_search(store, "bill", cfg)
     assert result.semantic is True
-    assert "1 file(s) have no embedding yet" in (result.notice or "")
+    assert "1 file(s) have no up-to-date embedding yet" in (result.notice or "")
+
+
+def test_the_task_prefixes_are_sent_for_embeddinggemma(
+    downloads: Path, fake_openai: FakeOpenAI
+) -> None:
+    cfg = config_for(downloads, fake_openai.url, model="embeddinggemma")
+    run(cfg, *ANSWERS)
+    sent = fake_openai.embedded_texts()
+    assert sent and all(t.startswith("title: none | text: name: ") for t in sent)
+    with Store.open(cfg.database) as store:
+        result = semantic_search(store, " bill ", cfg)
+    assert fake_openai.embedded_texts()[-1] == "task: search result | query: bill"
+    assert originals(result.hits)[0] == "scan_0042.pdf"
+
+
+def test_a_prefix_change_embeds_everything_again(downloads: Path, fake_openai: FakeOpenAI) -> None:
+    cfg = config_for(downloads, fake_openai.url, model="embeddinggemma")
+    run(cfg, *ANSWERS)
+    unprefixed = config_for(
+        downloads, fake_openai.url, model="embeddinggemma", query_prefix="", document_prefix=""
+    )
+    with Store.open(cfg.database) as store:
+        assert semantic_search(store, "bill", cfg).notice is None
+        # Vectors made with the old prefix are outdated: the search says so...
+        stale = semantic_search(store, "bill", unprefixed)
+        assert stale.semantic is True
+        assert f"{len(ANSWERS)} file(s) have no up-to-date embedding" in (stale.notice or "")
+        before = len(fake_openai.embedded_texts())
+        # ...and the next refresh makes them again, without the prefix.
+        report = refresh(store, unprefixed)
+        sent = fake_openai.embedded_texts()[before:]
+        assert semantic_search(store, "bill", unprefixed).notice is None
+    assert report.embedded == len(ANSWERS)
+    assert len(sent) == len(ANSWERS) and all(t.startswith("name: ") for t in sent)
 
 
 # --- failures ---------------------------------------------------------------------------
@@ -381,10 +462,14 @@ def test_cli_semantic_search_and_json(
     assert found.exit_code == 0, found.stderr
     assert found.stdout.splitlines()[1].strip().startswith("[Finance] was scan_0042.pdf")
     as_json = runner.invoke(app, ["search", "bill", "--semantic", "--json", "-c", str(config)])
-    assert json.loads(as_json.stdout)[0]["original_name"] == "scan_0042.pdf"
+    [hit] = json.loads(as_json.stdout)  # the unrelated files are below the floor
+    assert hit["original_name"] == "scan_0042.pdf" and hit["source"] == "semantic"
+    assert 0.25 < hit["similarity"] < 1
+    plain = runner.invoke(app, ["search", "electricity", "--json", "-c", str(config)])
+    assert [(h["source"], h["similarity"]) for h in json.loads(plain.stdout)] == [("text", None)]
 
 
-def test_cli_default_semantic_and_words_override(
+def test_cli_default_semantic_and_no_semantic_override(
     downloads: Path, tmp_path: Path, fake_openai: FakeOpenAI
 ) -> None:
     config = cli_config(tmp_path, downloads, fake_openai.url, "    default: true\n")
@@ -392,8 +477,32 @@ def test_cli_default_semantic_and_words_override(
     runner = CliRunner()
     found = runner.invoke(app, ["search", "bill", "-c", str(config)])
     assert "scan_0042.pdf" in found.stdout
-    words = runner.invoke(app, ["search", "bill", "--words", "-c", str(config)])
-    assert "No matches." in words.stdout
+    before = len(fake_openai.requests)
+    words = runner.invoke(app, ["search", "bill", "--no-semantic", "-c", str(config)])
+    assert words.exit_code == 0, words.stderr
+    assert words.stdout == "No matches.\n" and words.stderr == ""
+    assert len(fake_openai.requests) == before  # the query was not embedded
+    helped = runner.invoke(app, ["search", "--help"])
+    assert "--semantic" in helped.stdout and "--no-semantic" in helped.stdout
+
+
+def test_cli_says_when_nothing_is_close(
+    downloads: Path, tmp_path: Path, fake_openai: FakeOpenAI
+) -> None:
+    config = cli_config(tmp_path, downloads, fake_openai.url, "    min_similarity: 0.9\n")
+    run(load_config(config), *ANSWERS)
+    runner = CliRunner()
+    weak = runner.invoke(app, ["search", "bill", "--semantic", "-c", str(config)])
+    assert weak.exit_code == 0, weak.stderr
+    assert weak.stdout == "No close matches; try other words or --no-semantic.\n"
+    as_json = runner.invoke(app, ["search", "bill", "--semantic", "--json", "-c", str(config)])
+    assert json.loads(as_json.stdout) == []
+    assert "no close matches" in as_json.stderr
+    # When something is left, the floor's work goes unmentioned.
+    kept = runner.invoke(app, ["search", "lease", "--semantic", "-c", str(config)])
+    assert "lease.docx" in kept.stdout and "close" not in kept.stdout + kept.stderr
+    nothing = runner.invoke(app, ["search", "zebra", "--no-semantic", "-c", str(config)])
+    assert nothing.stdout == "No matches.\n"
 
 
 def test_cli_notice_when_semantic_search_is_off(downloads: Path, tmp_path: Path) -> None:
@@ -456,15 +565,27 @@ def test_mcp_semantic_flag(downloads: Path, fake_openai: FakeOpenAI) -> None:
     meaning = mcp_search(cfg, query="bill", semantic=True)
     assert meaning["semantic"] is True and meaning["notice"] is None
     assert meaning["files"][0]["original_name"] == "scan_0042.pdf"
+    assert meaning["files"][0]["source"] == "semantic"
+    assert 0.25 < meaning["files"][0]["similarity"] < 1
     filtered = mcp_search(cfg, query="bill", semantic=True, categories=["Images"])
-    assert [f["original_name"] for f in filtered["files"]] == ["IMG_4821.png"]
+    assert filtered["files"] == []
+    assert filtered["notice"] == "no close matches; try other words or semantic=false"
+    lenient = config_for(downloads, fake_openai.url, min_similarity=0)
+    kept = mcp_search(lenient, query="bill", semantic=True, categories=["Images"])
+    assert [f["original_name"] for f in kept["files"]] == ["IMG_4821.png"]
+    assert kept["notice"] is None
 
 
 def test_mcp_follows_the_default_and_falls_back(downloads: Path, fake_openai: FakeOpenAI) -> None:
     cfg = config_for(downloads, fake_openai.url, default=True)
     run(cfg, *ANSWERS)
     assert mcp_search(cfg, query="bill")["semantic"] is True
-    assert mcp_search(cfg, query="bill", semantic=False)["files"] == []
+    before = len(fake_openai.requests)
+    words = mcp_search(cfg, query="bill", semantic=False)
+    assert words == {"files": [], "semantic": False, "notice": None}
+    [plain] = mcp_search(cfg, query="electricity", semantic=False)["files"]
+    assert (plain["source"], plain["similarity"]) == ("text", None)
+    assert len(fake_openai.requests) == before  # false never embeds the query
     gone = config_for(downloads, CLOSED, default=True)
     result = mcp_search(gone, query="invoice")
     assert result["semantic"] is False

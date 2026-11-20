@@ -310,6 +310,15 @@ class SemanticConfig(_Section):
     timeout_seconds: Annotated[float, Field(gt=0)] = 30.0
     batch_size: Annotated[int, Field(ge=1, le=256)] = 32
     """Texts sent per request."""
+    min_similarity: Annotated[float, Field(ge=0, le=1)] = 0.25
+    """Files found only by meaning need at least this cosine similarity to the query;
+    files that match the words are always kept. 0 keeps every one. Measured for
+    ``embeddinggemma`` with its prefixes; another model needs its own value."""
+    query_prefix: Annotated[str | None, Field(max_length=200)] = None
+    """Put before each query; unset, the one ``model`` documents (``embeddinggemma``),
+    else none. ``""`` turns it off."""
+    document_prefix: Annotated[str | None, Field(max_length=200)] = None
+    """Put before each file's text; like ``query_prefix``. Changing it re-embeds the library."""
 
     @field_validator("api_key_env")
     @classmethod

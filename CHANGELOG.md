@@ -75,11 +75,18 @@ All notable changes to this project are documented here. The format follows
   `--category`, `--ext`, `--since`/`--until` (`YYYY-MM-DD`) work with or
   without a query.
 - Optional semantic search (`search.semantic.enabled`, off by default):
-  `--semantic` (or `search.semantic.default`) so "power bill" finds an
+  `--semantic` (or `search.semantic.default`, which `--no-semantic` and the
+  MCP `semantic: false` turn off for one search) so "power bill" finds an
   "electricity invoice". Any OpenAI-compatible `/embeddings` server (Ollama
   with `embeddinggemma` by default; key via `FLIB_EMBEDDINGS_API_KEY` or `flib
   key set --provider embeddings`). Only index metadata is embedded, never
   content; `--reindex` backfills; without a server it searches by words.
+  Files found only by meaning need a cosine similarity of at least
+  `search.semantic.min_similarity` (0.25, measured for `embeddinggemma`), so
+  weak matches no longer fill `--limit`; word matches always stay.
+  `embeddinggemma` gets its documented query and document prefixes
+  (`query_prefix`, `document_prefix` for other models). `--json` and MCP hits
+  carry `source` (`text`, `semantic`, `both`) and `similarity`.
 
 **Corrections and reprocess**
 

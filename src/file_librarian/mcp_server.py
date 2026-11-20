@@ -157,15 +157,30 @@ class FileSummary(BaseModel):
     )
 
 
+class SearchHitSummary(FileSummary):
+    """One search result."""
+
+    source: str | None = Field(
+        default=None,
+        description="How it was found: 'text' (its words), 'semantic' (only by meaning) or "
+        "'both'; null when filters alone listed it.",
+    )
+    similarity: float | None = Field(
+        default=None,
+        description="Cosine similarity of its embedding to the query (-1 to 1, higher is "
+        "closer), when a semantic search had one; null otherwise.",
+    )
+
+
 class SearchResult(BaseModel):
-    files: list[FileSummary] = Field(description="Best matches first.")
+    files: list[SearchHitSummary] = Field(description="Best matches first.")
     semantic: bool = Field(
         default=False, description="True if files were also found by meaning (embeddings)."
     )
     notice: str | None = Field(
         default=None,
-        description="Why a semantic search fell back to words only, or that some files have "
-        "no embedding yet; null otherwise.",
+        description="Why a semantic search fell back to words only, that some files have "
+        "no embedding yet, or that nothing was close enough to the query; null otherwise.",
     )
 
 
@@ -390,8 +405,10 @@ def build_server(config: Config) -> MCPServer:
         semantic: bool | None = Field(
             default=None,
             description='Also find files by meaning, not just words ("invoice" finds a '
-            '"bill"), when the user enabled semantic search. Null uses the user\'s default. '
-            "Falls back to words with a notice when it cannot run.",
+            '"bill"), when the user enabled semantic search; files found only by meaning '
+            "must be close enough to the query. False searches by words only, even when "
+            "the user's default is by meaning. Null uses the user's default. Falls back to "
+            "words with a notice when it cannot run.",
         ),
         include_duplicates: bool = Field(
             default=False,
@@ -418,10 +435,13 @@ def build_server(config: Config) -> MCPServer:
                     limit=limit,
                     include_duplicates=include_duplicates,
                 )
+                notice = outcome.notice
+                if outcome.weak and not outcome.hits:
+                    notice = "no close matches; try other words or semantic=false"
                 return SearchResult(
                     files=[_summary(hit) for hit in outcome.hits],
                     semantic=outcome.semantic,
-                    notice=outcome.notice,
+                    notice=notice,
                 )
             hits = run_search(
                 store, query, filters=filters, limit=limit, include_duplicates=include_duplicates
@@ -628,9 +648,9 @@ def _filters(
         raise ToolError(str(exc)) from exc
 
 
-def _summary(hit: SearchHit) -> FileSummary:
+def _summary(hit: SearchHit) -> SearchHitSummary:
     sensitive = hit.status == FileStatus.SENSITIVE
-    return FileSummary(
+    return SearchHitSummary(
         path=hit.path,
         exists=hit.exists,
         original_name=hit.original_name,
@@ -640,6 +660,8 @@ def _summary(hit: SearchHit) -> FileSummary:
         tags=[] if sensitive else hit.tags,
         processed_at=hit.processed_at,
         duplicate_of=hit.duplicate_of,
+        source=hit.source,
+        similarity=hit.similarity,
     )
 
 

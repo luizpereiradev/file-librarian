@@ -60,16 +60,21 @@ def completion(content: Any, *, tokens: tuple[int, int] = (100, 20), **choice: A
 EMBEDDING_DIMENSIONS = 64
 SYNONYMS = {"bill": "invoice", "receipt": "invoice", "statement": "invoice", "photo": "picture"}
 """Words the fake embedding model treats as one meaning."""
+LABELS = frozenset(
+    {"name", "original", "category", "tags", "description"}
+    | {"task", "search", "result", "query", "title", "none", "text"}
+)
 
 
 def embedding(text: str, dimensions: int = EMBEDDING_DIMENSIONS) -> list[float]:
     """A deterministic vector: one count per word, the word's synonyms folded together.
 
-    Labels such as ``name:`` or ``tags:`` are left out, so only the content counts.
+    Labels such as ``name:`` or ``tags:``, and the words of embeddinggemma's task
+    prefixes, are left out, so only the content counts.
     """
     vector = [0.0] * dimensions
     for word in re.findall(r"[a-z0-9]+", text.lower()):
-        if word in {"name", "original", "category", "tags", "description"}:
+        if word in LABELS:
             continue
         word = SYNONYMS.get(word, word)
         slot = int(hashlib.sha256(word.encode()).hexdigest(), 16) % dimensions

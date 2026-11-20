@@ -12,9 +12,17 @@
 - Key: optional, from ``search.semantic.api_key_env`` (else
   ``FLIB_EMBEDDINGS_API_KEY``) or the Keychain account ``embeddings-api-key``;
   never the provider's key.
+- Prefixes: some models embed a query and a document differently when told which
+  is which. ``embeddinggemma`` (its model card) wants ``task: search result |
+  query: `` before a query and ``title: none | text: `` before a document; on a
+  synthetic bilingual corpus they lowered unrelated pairs' similarity from a
+  median of 0.22 to 0.08 and put the right file first for every query. Other
+  models get none unless ``search.semantic.query_prefix`` and
+  ``document_prefix`` say so.
 - Storage: one float32 vector per file in ``embeddings``, normalized so cosine
-  similarity is a dot product, with the model and a hash of the embedded text;
-  a different model or text means the vector is stale and is made again.
+  similarity is a dot product, with the model and a hash of the embedded text
+  (prefix included); a different model or text means the vector is stale and is
+  made again.
 - When: after each run (``refresh``), for new and changed rows, and with
   ``flib search --reindex``. A failure never fails a run: what was not embedded
   is retried the next time.
@@ -159,12 +167,17 @@ def dot(a: array[float], b: array[float]) -> float:
     return float(sum(map(operator.mul, a, b)))  # Python 3.11
 
 
+def similarities(query: array[float], vectors: Iterable[tuple[int, bytes]]) -> dict[int, float]:
+    """``file_id -> cosine similarity`` to ``query``, for every vector."""
+    return {file_id: dot(query, unpack(blob)) for file_id, blob in vectors}
+
+
 def nearest(
     query: array[float], vectors: Iterable[tuple[int, bytes]], *, limit: int
 ) -> list[tuple[int, float]]:
     """The ``limit`` most similar ``(file_id, similarity)``, best first."""
-    scored = ((dot(query, unpack(blob)), file_id) for file_id, blob in vectors)
-    return [(file_id, score) for score, file_id in heapq.nlargest(limit, scored)]
+    scored = similarities(query, vectors)
+    return [(i, scored[i]) for i in heapq.nlargest(limit, scored, key=scored.__getitem__)]
 
 
 # --- what is embedded ---------------------------------------------------------------------
@@ -193,8 +206,65 @@ def row_text(row: FileRow) -> str:
     return "\n".join(lines)[:MAX_TEXT_CHARS]
 
 
+KNOWN_PREFIXES: dict[str, tuple[str, str]] = {
+    "embeddinggemma": ("task: search result | query: ", "title: none | text: "),
+}
+"""``(query prefix, document prefix)`` a model family's documentation asks for."""
+
+
+def prefixes(settings: SemanticConfig) -> tuple[str, str]:
+    """``(query prefix, document prefix)`` for ``settings.model``: the configured ones,
+    else the ones its family documents (``embeddinggemma:300m`` is ``embeddinggemma``)."""
+    family = settings.model.lower().rsplit("/", 1)[-1].split(":", 1)[0]
+    known = next(
+        (pair for name, pair in KNOWN_PREFIXES.items() if family.startswith(name)), ("", "")
+    )
+    query = known[0] if settings.query_prefix is None else settings.query_prefix
+    document = known[1] if settings.document_prefix is None else settings.document_prefix
+    return query, document
+
+
+def query_text(text: str, settings: SemanticConfig) -> str:
+    """What is embedded for a search query."""
+    return prefixes(settings)[0] + text.strip()[:MAX_TEXT_CHARS]
+
+
+def document_text(row: FileRow, settings: SemanticConfig) -> str:
+    """What is embedded for ``row``: its index text after the model's document prefix."""
+    return prefixes(settings)[1] + row_text(row)
+
+
 def text_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _outdated(
+    store: Store, config: Config, *, full: bool = False
+) -> tuple[list[tuple[int, str, str]], list[int]]:
+    """``(file_id, text, hash)`` of each file to embed, and the vectors to delete.
+
+    A file is embedded again when it has no vector, or one of another model or
+    of another text (its row changed, or the prefix did); ``full`` takes them all.
+    """
+    semantic = config.search.semantic
+    keys = store.embedding_keys()
+    todo: list[tuple[int, str, str]] = []
+    drop: list[int] = []
+    for row in store.all_files():
+        if not embeddable(row, config):
+            if row.id in keys:
+                drop.append(row.id)
+            continue
+        text = document_text(row, semantic)
+        digest = text_hash(text)
+        if full or keys.get(row.id) != (semantic.model, digest):
+            todo.append((row.id, text, digest))
+    return todo, drop
+
+
+def outdated_count(store: Store, config: Config) -> int:
+    """Files that may be embedded but have no up-to-date vector yet."""
+    return len(_outdated(store, config)[0])
 
 
 @dataclass(slots=True)
@@ -217,18 +287,7 @@ def refresh(
     """
     semantic = config.search.semantic
     report = RefreshReport()
-    keys = store.embedding_keys()
-    todo: list[tuple[int, str, str]] = []
-    drop: list[int] = []
-    for row in store.all_files():
-        if not embeddable(row, config):
-            if row.id in keys:
-                drop.append(row.id)
-            continue
-        text = row_text(row)
-        digest = text_hash(text)
-        if full or keys.get(row.id) != (semantic.model, digest):
-            todo.append((row.id, text, digest))
+    todo, drop = _outdated(store, config, full=full)
     if drop:
         report.removed = store.delete_embeddings(drop)
     if not todo:

@@ -50,12 +50,49 @@ def test_defaults_are_off_local_and_documented() -> None:
         ({"api_key_env": "1BAD"}, "environment variable name"),
         ({"model": ""}, "search.semantic.model"),
         ({"batch_size": 0}, "batch_size"),
+        ({"min_similarity": -0.1}, "min_similarity"),
+        ({"min_similarity": 1.5}, "min_similarity"),
+        ({"min_similarity": "high"}, "min_similarity"),
+        ({"query_prefix": "x" * 201}, "query_prefix"),
+        ({"document_prefix": "x" * 201}, "document_prefix"),
         ({"surprise": True}, "surprise"),
     ],
 )
 def test_bad_settings_are_refused(values: dict[str, object], message: str) -> None:
     with pytest.raises(ConfigError, match=message):
         parse_config(semantic(**values))
+
+
+def test_the_relevance_floor_defaults_and_bounds() -> None:
+    assert parse_config({"provider": FAKE}).search.semantic.min_similarity == 0.25
+    assert parse_config(semantic(min_similarity=0)).search.semantic.min_similarity == 0
+    assert parse_config(semantic(min_similarity=1)).search.semantic.min_similarity == 1
+
+
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [
+        ({}, ("task: search result | query: ", "title: none | text: ")),
+        ({"model": "embeddinggemma:300m"}, ("task: search result | query: ", "title: none | ")),
+        ({"model": "google/EmbeddingGemma-300m"}, ("task: search result | query: ", "title: ")),
+        ({"model": "nomic-embed-text"}, ("", "")),
+        ({"query_prefix": "", "document_prefix": ""}, ("", "")),
+        ({"model": "other", "query_prefix": "q: ", "document_prefix": "d: "}, ("q: ", "d: ")),
+        ({"document_prefix": "doc: "}, ("task: search result | query: ", "doc: ")),
+    ],
+)
+def test_prefixes_follow_the_model_unless_configured(
+    values: dict[str, object], expected: tuple[str, str]
+) -> None:
+    query, document = embeddings.prefixes(parse_config(semantic(**values)).search.semantic)
+    assert query == expected[0] and document.startswith(expected[1])
+
+
+def test_query_text_is_trimmed_and_prefixed() -> None:
+    settings = parse_config(semantic(query_prefix="q: ")).search.semantic
+    assert embeddings.query_text("  power bill \n", settings) == "q: power bill"
+    long = embeddings.query_text("x" * 5000, settings)
+    assert len(long) == len("q: ") + embeddings.MAX_TEXT_CHARS
 
 
 def test_a_trailing_slash_is_dropped() -> None:
@@ -91,6 +128,8 @@ def test_nearest_is_best_first() -> None:
         (3, pack(array("f", [0.6, 0.8]))),
     ]
     assert [i for i, _ in nearest(query, vectors, limit=2)] == [2, 3]
+    scores = embeddings.similarities(query, vectors)
+    assert scores.keys() == {1, 2, 3} and math.isclose(scores[3], 0.6, rel_tol=1e-6)
 
 
 def test_row_text_is_index_metadata_only() -> None:
@@ -115,6 +154,8 @@ def test_row_text_is_index_metadata_only() -> None:
         "name: Power bill.pdf\noriginal name: scan.pdf\ncategory: Finance\ntags: energy, home\n"
     )
     assert len(text) == embeddings.MAX_TEXT_CHARS
+    settings = parse_config({"provider": FAKE}).search.semantic
+    assert embeddings.document_text(row, settings) == "title: none | text: " + text
 
 
 # --- keys ---------------------------------------------------------------------------------
