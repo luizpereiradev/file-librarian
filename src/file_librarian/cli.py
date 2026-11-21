@@ -1383,7 +1383,7 @@ def due(
     """List bills and other documents with a due date: overdue first, then the next 7 days.
 
     Only due dates the AI read in a document count; nothing is guessed. By
-    default the bills, invoices and taxes (due.kinds) from 30 days ago to 7 days
+    default the bills, invoices, statements and taxes (due.kinds) from 30 days ago to 7 days
     ahead that are not marked done (`flib fix PATH --done`), soonest first, with
     totals per currency. It only reads: no lock, and it works before the first run.
     """

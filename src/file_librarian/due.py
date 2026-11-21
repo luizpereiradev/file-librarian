@@ -7,7 +7,7 @@ duplicate, and never a sensitive file (it is left in place, unread).
 
 Which documents are listed:
 
-- Kinds: those in ``due.kinds`` (bills, invoices and taxes by default). A due
+- Kinds: those in ``due.kinds`` (bills, invoices, statements and taxes by default). A due
   date on another kind, or on a document whose kind is unknown, is shown only
   with ``--all``.
 - Done: a document marked paid or done (``flib fix PATH --done``, journaled,

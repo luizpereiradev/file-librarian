@@ -485,7 +485,7 @@ works before the first run.
 
 - **Nothing is guessed.** Only a due date the document states counts; a
   document without one is never listed, with any option.
-- **Which kinds.** `due.kinds` (bills, invoices and taxes by default). A due
+- **Which kinds.** `due.kinds` (bills, invoices, statements and taxes by default). A due
   date on any other kind, or on a document of unknown kind, is shown only
   with `--all`; `--kind` names the kinds you want, listed or not. Organized
   files and files in review count; duplicates and sensitive files never do.

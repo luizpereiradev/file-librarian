@@ -599,7 +599,7 @@ class SummaryConfig(_Section):
 
 
 def _due_kinds() -> list[Kind]:
-    return ["bill", "invoice", "tax"]
+    return ["bill", "invoice", "statement", "tax"]
 
 
 class DueConfig(_Section):
