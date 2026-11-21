@@ -27,7 +27,8 @@ for a category with a ``layout``, ``output_root / <category> / <sub-folders> /
 Layouts (#86): each segment of the category's ``layout`` becomes one folder.
 ``{year}`` and ``{month}`` (two digits) come from the document date the model
 read, else the file's download date, else the processing date: the same date
-the naming pattern uses, so a file's folder and its name agree. ``{issuer}``
+the naming pattern uses, so a file's folder and its name agree. That date is
+kept in the index (``files.layout_date``) and used as it is ever after. ``{issuer}``
 is the organisation the model named; its folder is matched against the
 sub-folders already there (and those planned earlier in the same plan) with
 ``naming.issuer_matches``, so the same company lands in the same folder,
@@ -57,8 +58,11 @@ the copy, and nothing is recorded about it.
 from __future__ import annotations
 
 import os
+import re
 import stat
-from collections.abc import Collection, Mapping
+import string
+import unicodedata
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -78,6 +82,7 @@ from file_librarian.naming import (
     build_name,
     candidate_names,
     issuer_folder_name,
+    issuer_key,
     issuer_matches,
     original_subject,
     safe_component,
@@ -101,6 +106,9 @@ class PlannedItem:
     """Why it goes to review; ``None`` unless ``status`` is ``review``."""
     original: Path | None = None
     """For a duplicate, where its original is (or goes, in this run)."""
+    layout_date: date | None = None
+    """For an organized item, the date its category layout's ``{year}``/``{month}``
+    come from; the index keeps it so the file never changes folders on its own."""
 
     @property
     def review_category(self) -> str | None:
@@ -193,12 +201,19 @@ class _Folders:
         if not any(folder_key(n) == folder_key(name) for n in names):
             names.append(name)
 
-    def level(self, top: Path, depth: int) -> list[Path]:
-        """The folders ``depth`` levels below ``top`` (``top`` itself for 0), on disk
-        or planned, in a fixed order."""
+    def level(self, top: Path, segments: Sequence[str]) -> list[Path]:
+        """The folders below ``top`` that the layout ``segments`` could have made (one
+        level per segment: four digits for ``{year}``, two for ``{month}``), on disk
+        or planned, in a fixed order. The user's own folders are not among them."""
         found = [top]
-        for _ in range(depth):
-            found = [parent / name for parent in found for name in self.names(parent)]
+        for segment in segments:
+            pattern = _segment_pattern(segment)
+            found = [
+                parent / name
+                for parent in found
+                for name in self.names(parent)
+                if pattern.fullmatch(unicodedata.normalize("NFC", name))
+            ]
         return sorted(found)
 
     def issuer(
@@ -231,10 +246,12 @@ class _Folders:
         if found:
             return self._prefer(parent, found)
         name = None
+        key = issuer_key(issuer)
         for other in siblings:
             if same_folder(other, parent):
                 continue
-            spelled = issuer_matches(issuer, self.names(other))
+            # Only the same name: a spelling is never borrowed through a slip.
+            spelled = [n for n in self.names(other) if issuer_key(n) == key]
             if spelled:
                 name = issuer_folder_name(self._prefer(other, spelled))
                 break
@@ -259,14 +276,40 @@ def _born(path: Path) -> float:
 
 
 def _real_folders(parent: Path) -> list[str]:
-    """The visible real folders in ``parent`` (no symlinks, no files), by name as stored."""
+    """The visible real folders in ``parent`` (no symlinks, no files, nothing only in
+    iCloud), by name as stored. A ``parent`` only in iCloud, or unreadable, is not
+    listed at all: listing it would download it (RF-24)."""
     try:
+        if is_dataless(os.lstat(parent)):
+            return []
         entries = list(os.scandir(parent))
     except OSError:
         return []
-    return sorted(
-        e.name for e in entries if not e.name.startswith(".") and e.is_dir(follow_symlinks=False)
-    )
+    names = []
+    for entry in entries:
+        try:
+            if entry.name.startswith(".") or not entry.is_dir(follow_symlinks=False):
+                continue
+            if is_dataless(entry.stat(follow_symlinks=False)):
+                continue
+        except OSError:
+            continue
+        names.append(entry.name)
+    return sorted(names)
+
+
+def _segment_pattern(segment: str) -> re.Pattern[str]:
+    """What a folder made from one layout segment looks like."""
+    pattern = ""
+    for text, name, _, _ in string.Formatter().parse(segment):
+        pattern += re.escape(text)
+        if name == "year":
+            pattern += r"\d{4}"
+        elif name == "month":
+            pattern += r"(?:0[1-9]|1[0-2])"
+        elif name is not None:
+            pattern += r".+"
+    return re.compile(pattern)
 
 
 def _real_folder(path: Path) -> bool:
@@ -306,10 +349,11 @@ def layout_parts(
         return ()
     top = folder
     parts: list[str] = []
-    for depth, segment in enumerate(layout_segments(category.layout)):
+    segments = layout_segments(category.layout)
+    for depth, segment in enumerate(segments):
         name: str | None
         if segment == "{issuer}":
-            siblings = folders.level(top, depth) if depth else []
+            siblings = folders.level(top, segments[:depth]) if depth else []
             name = folders.issuer(folder, issuer, own=own, siblings=siblings) if issuer else None
         else:
             name = segment.format(year=f"{when.year:04d}", month=f"{when.month:02d}")
@@ -366,29 +410,29 @@ def plan(
     today: date | None = None,
     keep_names: Collection[Path] = (),
     duplicates: Collection[Duplicate] = (),
-    filed_on: Mapping[Path, date] | None = None,
+    layout_dates: Mapping[Path, date] | None = None,
     made_by_flib: Collection[Path] = (),
 ) -> Plan:
     """Plan every decision, then every duplicate. ``today`` names files that carry
     no other date.
 
     Items at a path in ``keep_names`` are never renamed (``flib reprocess``:
-    a name the user chose). ``filed_on`` gives files already in the library
-    the day they were filed, used instead of ``today`` by a layout's
-    ``{year}`` and ``{month}``, so reprocessing never moves a file to this
-    year's folder just because it carries no date. ``made_by_flib``: the
+    a name the user chose). ``layout_dates`` gives files already in the
+    library the date the index keeps for their layout (``files.layout_date``);
+    it is used as it is, so reprocessing never moves a file to another year or
+    month because of a new answer or of file metadata. ``made_by_flib``: the
     folders the journal shows flib moved files into (``Store.flib_folders``).
     """
     result = Plan()
     placement = Placement(made_by_flib)
     names = placement.names
     today = today or date.today()
-    filed_on = filed_on or {}
+    layout_dates = layout_dates or {}
     for decision in decisions:
         path = decision.context.path
         try:
             item = _plan_one(
-                decision, config, placement, today, path in keep_names, filed_on.get(path, today)
+                decision, config, placement, today, path in keep_names, layout_dates.get(path)
             )
         except (UnsafeDestinationError, OSError) as exc:
             # One odd item must never stop the run: it stays where it is.
@@ -463,7 +507,7 @@ def _plan_one(
     placement: Placement,
     today: date,
     keep_name: bool,
-    filed: date,
+    fixed: date | None,
 ) -> PlannedItem:
     ctx = decision.context
     names = placement.names
@@ -503,13 +547,9 @@ def _plan_one(
         if choice == "proposed":
             new_name = build_name(original, answer.suggested_name, when, config.naming)
     chosen = new_name or original
+    layout_date = fixed or answer.document_date or ctx.downloaded or today
     destination, note = placement.in_category(
-        config,
-        category,
-        chosen,
-        ctx,
-        when=answer.document_date or ctx.downloaded or filed,
-        issuer=answer.issuer,
+        config, category, chosen, ctx, when=layout_date, issuer=answer.issuer
     )
     reason = f"category {category.name}"
     if choice == "original":
@@ -524,6 +564,7 @@ def _plan_one(
         answer,
         renamed=destination.name != original,
         name_choice=choice,
+        layout_date=layout_date,
     )
 
 

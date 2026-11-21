@@ -106,11 +106,12 @@ folder only in iCloud) already has that name.
 flib compares the name with the folders already there, ignoring case,
 accents (in either Unicode form), punctuation, a leading "The", a trailing
 `.com` or `.com.br`, and legal forms that are never ordinary words (`Inc`,
-`Ltd`, `LLC`, `Corp`, `GmbH`, `PLC`, `Ltda`, `EIRELI`, `S.A.` with its
-dots...): `Acme Inc.`, `ACME`, `Acme Ltda`, `Ácme` and `acme.com` all join
-an `Acme` folder, and `Power Co` and `PowerCo` share one. `Co`, `Company`,
-`Spa`, `Me` or `SA` without dots can be part of a name (`Lotus Spa`, `Pay
-Me`), so they count. Only then, and only when a single folder is that
+`Ltd`, `LLC`, `Corp`, `GmbH`, `PLC`, `Ltda`, `EIRELI`, `S.A.`, `SpA`...):
+`Acme Inc.`, `ACME`, `Acme Ltda`, `Ácme` and `acme.com` all join an `Acme`
+folder, `Banco Inter SA` joins `Banco Inter` (a trailing `SA` after another
+word; `SA` alone is a name), and `Power Co` and `PowerCo` share one. `Co`,
+`Company`, `Spa` and `Me` can be part of a name (`Lotus Spa`, `Pay Me`), so
+they count. Only then, and only when a single folder is that
 close, it accepts a slip: a doubled letter (`Fabrikkam`) or two letters
 swapped (`Nortwhind`), never with digits. One different letter
 (`Acme`/`Acne`), a plural (`Morgan`/`Morgans`), a different number or an
@@ -120,7 +121,8 @@ The folder keeps the spelling it was made with, so rename it by hand if you
 prefer another (a change of case only is fine: the files stay and the index
 follows); flib matches the new name from then on. With `{year}/{issuer}`,
 a company new to a year gets the spelling its folder has in the other
-years. If two folders hold the same company, a file already in one of them
+years (only year folders count, never one of your own, and only the same
+name, never a slip). If two folders hold the same company, a file already in one of them
 stays there; a new file goes to the one flib made, else the oldest. An
 existing folder is used as it is spelled on disk, even with a `:` (what
 Finder shows as `/`). A layout folder that cannot take a file never leaves
@@ -148,8 +150,20 @@ and asking first, and keeps only the issuer and date from the answer (the
 category and name stay). Names are kept; a taken one gets `-2`.
 
 It never moves a file you placed yourself: one not where flib last put it
-(moved by hand into a sub-folder, or out of one to the category's top, then
-`flib reconcile`) stays. A date or issuer it takes from a cached answer is
+(moved or renamed by hand, into a sub-folder, out of one to the category's
+top, then `flib reconcile`) stays, and the plan says "you moved or renamed
+it". To hand such a file back to flib, move it with `flib fix` (for example
+`flib fix FILE --category Finance`, which puts it at the category's top for
+the next `--apply-layout`), or move it into its layout folder yourself and
+run `flib reconcile`.
+
+The year and month a file is filed under are kept in the index from the
+moment it is filed (the document's date, else its download date, else the
+day it was filed) and used ever after: copying the library to another disk,
+restoring it from a backup or travelling to another time zone never moves a
+file. For files organized before this was kept, `--apply-layout` takes it
+once from the layout folder the file is already in, or else resolves it as
+above, and stores it with the run (`flib undo` removes it). A date or issuer it takes from a cached answer is
 written to the index with the run, so the file stays where it went once the
 cache has expired, and `flib undo` takes them back out. A category whose layout you removed gets the files flib had put
 in its sub-folders back to its top folder. Everything moved is one run:

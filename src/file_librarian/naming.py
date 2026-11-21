@@ -98,14 +98,19 @@ def safe_component(name: str) -> str:
 # --- issuer folders (#86) ----------------------------------------------------------
 
 # Legal forms dropped from the end of a name before comparing ("Acme Inc." is
-# "Acme"). Only forms that are never an ordinary word: "Co", "Company", "Spa",
-# "Me" or "SA" without dots can be part of a name ("Lotus Spa", "Pay Me"), so
-# they stay. Matched on the lower-cased, accent-free text, punctuation kept.
+# "Acme"). Only forms that are never an ordinary word: "Co", "Company", "Spa"
+# or "Me" can be part of a name ("Lotus Spa", "Pay Me"), so they stay.
+# Matched on the lower-cased, accent-free text, punctuation kept.
 _LEGAL_FORM = re.compile(
     r"(?:^|[\s,]+)(?:inc|incorporated|llc|l\.\s?l\.\s?c|llp|ltd|limited|ltda|limitada|corp"
     r"|corporation|gmbh|plc|eireli|s\.\s?a\.\s?s|s\.\s?a|s\s?/\s?a|s\.\s?r\.\s?l"
     r"|s\.\s?p\.\s?a|b\.\s?v|n\.\s?v)\.?\s*$"
 )
+# "SA" without dots ends many Brazilian company names ("Banco Inter SA"): dropped
+# after at least one other word, kept as a name of its own. "SpA" only in that
+# exact capitalisation ("Lotus Spa" is a spa).
+_TRAILING_SA = re.compile(r"[\s,]+s\s?a$")
+_SPA = re.compile(r"[\s,]+SpA\.?\s*$")
 # A web address used as a brand: "Amazon.com", "Example.com.br" are "Amazon", "Example".
 _WEB_SUFFIX = re.compile(r"\.(?:com|net|org)(?:\.[a-z]{2})?$")
 MAX_ISSUER_FOLDER = 64
@@ -134,9 +139,10 @@ def issuer_key(name: str) -> str:
 
 
 def _key_words(name: str) -> list[str]:
+    name = _SPA.sub("", name)
     text = _WEB_SUFFIX.sub("", _plain(name).rstrip(" ."))
     while True:
-        stripped = _LEGAL_FORM.sub("", text).rstrip(" ,.")
+        stripped = _TRAILING_SA.sub("", _LEGAL_FORM.sub("", text)).rstrip(" ,.")
         if stripped == text or not re.search(r"[^\W_]", stripped):
             break
         text = stripped

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import unicodedata
 from datetime import date
 from pathlib import Path
@@ -104,11 +105,29 @@ def test_a_legal_form_alone_is_kept() -> None:
 
 
 @pytest.mark.parametrize(
-    "name", ["Power Co", "Power Company", "Lotus Spa", "Pay Me", "Acme SA", "Acme & Co"]
+    "name", ["Power Co", "Power Company", "Lotus Spa", "Pay Me", "Fiat Spa", "Acme & Co"]
 )
 def test_ordinary_words_are_never_taken_for_a_legal_form(name: str) -> None:
-    # "Co", "Company", "Spa", "Me" and "SA" without dots can be part of a name.
+    # "Co", "Company", "Spa" and "Me" can be part of a name.
     assert issuer_key(name) != issuer_key(name.split()[0])
+
+
+@pytest.mark.parametrize(
+    ("name", "key"),
+    [
+        ("Banco Inter SA", "banco inter"),
+        ("Banco Inter S A", "banco inter"),
+        ("Banco Inter, SA.", "banco inter"),
+        ("SA", "sa"),  # a name of its own
+        ("Fiat SpA", "fiat"),
+        ("Fiat S.p.A.", "fiat"),
+        ("Visa", "visa"),
+    ],
+)
+def test_a_trailing_sa_or_spa_is_a_legal_form(name: str, key: str) -> None:
+    assert issuer_key(name) == key
+    if key != "sa":
+        assert issuer_key("Lotus Spa") != issuer_key("Lotus")
 
 
 @pytest.mark.parametrize(
@@ -316,11 +335,13 @@ def test_the_download_date_comes_before_the_processing_date(tmp_path: Path) -> N
     )
     planned = plan([Decision(ctx, answer("Finance"))], cfg, today=TODAY)
     assert planned.items[0].destination == cfg.output_root / "Finance" / "2023" / "a.pdf"
-    # A file already filed carries the day it was filed instead of today.
-    ctx = FileContext(path=ctx.path, sha256=ctx.sha256, size_bytes=1, extension=".pdf")
-    filed = {ctx.path: date(2022, 7, 7)}
-    planned = plan([Decision(ctx, answer("Finance"))], cfg, today=TODAY, filed_on=filed)
+    assert planned.items[0].layout_date == date(2023, 1, 2)
+    # A file already filed keeps the date the index has, over any other.
+    kept = {ctx.path: date(2022, 7, 7)}
+    reply = answer("Finance", document_date=date(2021, 1, 1))
+    planned = plan([Decision(ctx, reply)], cfg, today=TODAY, layout_dates=kept)
     assert planned.items[0].destination == cfg.output_root / "Finance" / "2022" / "a.pdf"
+    assert planned.items[0].layout_date == date(2022, 7, 7)
 
 
 def test_names_collide_per_final_folder(tmp_path: Path) -> None:
@@ -369,3 +390,51 @@ def test_destination_takes_sub_folders_only_in_a_category(tmp_path: Path) -> Non
     (cfg.output_root / "Finance" / "Acme:Partners").mkdir(parents=True)
     taken = planner._destination(cfg, "Finance", "a.pdf", planner._Names(), ctx, ("Acme:Partners",))
     assert taken.parent.name == "Acme:Partners"
+
+
+# --- review round 2: tie-breaks and folder identity -----------------------------------
+
+
+def test_same_folder_compares_names_when_a_folder_does_not_exist(tmp_path: Path) -> None:
+    assert planner.same_folder(tmp_path / "Acme" / "x", tmp_path / "ACME" / "x")
+    nfd = unicodedata.normalize("NFD", "Café")
+    assert planner.same_folder(tmp_path / nfd, tmp_path / "Café")
+    assert not planner.same_folder(tmp_path / "Acme", tmp_path / "Acne")
+    (tmp_path / "real").mkdir()
+    assert planner.same_folder(tmp_path / "real", tmp_path / "REAL")
+
+
+def test_tie_break_the_folder_the_file_is_in(tmp_path: Path) -> None:
+    for name in ("ACME Corp", "Acme"):
+        (tmp_path / name).mkdir()
+    folders = planner._Folders(made_by_flib=[tmp_path / "ACME Corp"])
+    own = tmp_path / "Acme" / "a.pdf"
+    assert folders.issuer(tmp_path, "Acme Inc.", own=own) == "Acme"
+
+
+def test_tie_break_the_folder_flib_made(tmp_path: Path) -> None:
+    for name in ("ACME Corp", "Acme"):
+        (tmp_path / name).mkdir()
+    os.utime(tmp_path / "Acme", (1e9, 1e9))  # older too, so flib's must win on its own
+    folders = planner._Folders(made_by_flib=[tmp_path / "ACME Corp"])
+    assert folders.issuer(tmp_path, "Acme") == "ACME Corp"
+
+
+def test_tie_break_the_oldest_folder(tmp_path: Path) -> None:
+    for name in ("ACME Corp", "Acme"):
+        (tmp_path / name).mkdir()
+    os.utime(tmp_path / "Acme", (1e9, 1e9))  # on APFS this moves the birth time back too
+    assert planner._Folders().issuer(tmp_path, "acme") == "Acme"
+
+
+def test_siblings_are_only_layout_folders_and_lend_only_the_same_name(tmp_path: Path) -> None:
+    (tmp_path / "Taxes" / "Fabrikkam").mkdir(parents=True)  # the user's own folder
+    (tmp_path / "2024" / "Fabrikkam").mkdir(parents=True)  # a misspelling in a year folder
+    (tmp_path / "2023" / "ACME Inc").mkdir(parents=True)
+    cat = Category(name="Finance", layout="{year}/{issuer}")
+    folders = planner._Folders()
+    assert folders.level(tmp_path, ["{year}"]) == [tmp_path / "2023", tmp_path / "2024"]
+    when = date(2026, 1, 1)
+    # A slip is never borrowed from another year; the same name is.
+    assert layout_parts(cat, tmp_path, when, "Fabrikam", folders) == ("2026", "Fabrikam")
+    assert layout_parts(cat, tmp_path, when, "Acme", folders) == ("2026", "ACME Inc")

@@ -101,6 +101,9 @@ class FileRow:
     """The date the document refers to (YYYY-MM-DD); ``None`` if unknown (#86)."""
     issuer: str | None = None
     """The organisation the document comes from; ``None`` if unknown (#86)."""
+    layout_date: str | None = None
+    """The date its layout's ``{year}``/``{month}`` come from, kept from when it was
+    filed (YYYY-MM-DD); ``None`` until then (#86)."""
 
     @property
     def review(self) -> tuple[ReviewReason | None, str | None]:
@@ -137,6 +140,7 @@ class FileRow:
             duplicate_of=None if row["duplicate_of"] is None else int(row["duplicate_of"]),
             document_date=row["document_date"],
             issuer=row["issuer"],
+            layout_date=row["layout_date"],
         )
 
 
@@ -334,6 +338,7 @@ _INDEX_TARGETS = {
     **{f"files.{c}": ("files", c) for c in (*_ANSWER_COLUMNS, "processed_at")},
     "files.review_reason": ("files", "review_reason"),
     "files.review_category": ("files", "review_category"),
+    "files.layout_date": ("files", "layout_date"),
     "corrections.old_value": ("corrections", "old_value"),
     "corrections.new_value": ("corrections", "new_value"),
     "operations.finder_tag": ("operations", "finder_tag"),
@@ -490,9 +495,9 @@ class Store:
                    current_path, extension, size_bytes, source_url, category, description,
                    tags, confidence, status, attempts, last_error, provider, model, run_id,
                    processed_at, is_unit, name_choice, name_choice_reason, review_reason,
-                   review_category, document_date, issuer)
+                   review_category, document_date, issuer, layout_date)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?)
+                       ?, ?, ?)
                ON CONFLICT(sha256) WHERE duplicate_of IS NULL DO UPDATE SET
                    current_name = excluded.current_name, current_path = excluded.current_path,
                    category = excluded.category, description = excluded.description,
@@ -504,7 +509,8 @@ class Store:
                    name_choice_reason = excluded.name_choice_reason,
                    review_reason = excluded.review_reason,
                    review_category = excluded.review_category,
-                   document_date = excluded.document_date, issuer = excluded.issuer""",
+                   document_date = excluded.document_date, issuer = excluded.issuer,
+                   layout_date = excluded.layout_date""",
             (
                 r.sha256, normalize(r.original_path.name), normalize(str(r.original_path)),
                 normalize(r.current_path.name), normalize(str(r.current_path)), r.extension,
@@ -513,7 +519,7 @@ class Store:
                 r.attempts, r.last_error, r.provider, r.model, run_id, _now(), int(r.is_unit),
                 r.name_choice, r.name_choice_reason,
                 None if r.review_reason is None else r.review_reason.value, r.review_category,
-                r.document_date, r.issuer,
+                r.document_date, r.issuer, r.layout_date,
             ),
         )  # fmt: skip
         row = self.conn.execute(
@@ -1239,13 +1245,15 @@ class Store:
         return moves
 
     def flib_folders(self) -> set[Path]:
-        """Every folder flib moved a file into (and the folders above it), from the
-        moves still in effect."""
-        folders: set[Path] = set()
-        rows = self.conn.execute("SELECT DISTINCT dst_path FROM operations WHERE status = 'done'")
-        for (dst,) in rows:
-            folders.update(Path(dst).parents)
-        return folders
+        """The folders flib created while moving a file into the library."""
+        return {Path(r[0]) for r in self.conn.execute("SELECT path FROM layout_folders")}
+
+    def add_flib_folders(self, run_id: int, folders: Sequence[Path]) -> None:
+        """Remember folders flib just created (``fsops.ensure_folder`` made them)."""
+        self.conn.executemany(
+            "INSERT OR IGNORE INTO layout_folders (path, run_id, created_at) VALUES (?, ?, ?)",
+            [(normalize(str(f)), run_id, _now()) for f in folders],
+        )
 
     def file_history(self, file_id: int, *, limit: int) -> list[HistoryRow]:
         """The file's journaled moves, newest first, at most ``limit``."""
@@ -1368,7 +1376,7 @@ def record_to_json(r: FileRecord) -> str:
             "sha256", "extension", "size_bytes", "is_unit", "source_url", "category",
             "description", "confidence", "attempts", "last_error", "provider", "model",
             "name_choice", "name_choice_reason", "review_category", "duplicate_of",
-            "document_date", "issuer",
+            "document_date", "issuer", "layout_date",
         )
     }  # fmt: skip
     data |= {

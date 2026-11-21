@@ -300,6 +300,8 @@ class FileRecord:
     """The date the document refers to (YYYY-MM-DD), as the model read it."""
     issuer: str | None = None
     """The organisation the document comes from, as the model named it."""
+    layout_date: str | None = None
+    """The date a category layout's ``{year}``/``{month}`` came from when it was filed."""
 
 
 @dataclass(frozen=True, slots=True)

@@ -72,6 +72,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import string
 import unicodedata
 from collections.abc import Collection
 from dataclasses import dataclass, field
@@ -111,6 +113,8 @@ from file_librarian.scanner import Candidate
 from file_librarian.search import SearchFilters
 
 _REPROCESSABLE = {FileStatus.ORGANIZED, FileStatus.REVIEW}
+# What a reprocess may write where the index has nothing yet (``ReprocessPlan.learned``).
+_LEARNABLE = frozenset({"document_date", "issuer", "layout_date"})
 
 # A rough price of one request: about four characters per token, and the
 # answer with its thinking. An image costs about (pixels / 750) tokens at its
@@ -186,9 +190,11 @@ class ReprocessPlan:
     """For ``--rename-category``: the old and new names, applied to the index with the moves."""
     same_folder: bool = False
     """The rename only changes the case: the same folder, so only the index changes."""
-    learned: dict[int, tuple[str | None, str | None]] = field(default_factory=dict)
-    """For ``--apply-layout --ask-issuer``: file id -> (document date, issuer) the
-    provider gave where the index had none; written with the run, undone with it."""
+    learned: dict[int, dict[str, str]] = field(default_factory=dict)
+    """File id -> ``files`` column (``document_date``, ``issuer``, ``layout_date``) ->
+    value, for values the index did not have yet: from the cache, the provider
+    (``--ask-issuer``) or the layout date resolved once. Written with the run
+    (journaled, only where the index still has none), undone with it."""
     in_place: int = 0
     """For ``--apply-layout``: files already where their layout puts them."""
     respelled: dict[int, Path] = field(default_factory=dict)
@@ -466,8 +472,15 @@ def plan_reprocess(
     )
     decisions = [_respect_correction(d, by_path[d.context.path]) for d in classified.decisions]
     keep_names: Collection[Path] = {t.context.path for t in targets if t.keep_name}
-    filed_on = {t.context.path: _processed_on(t.row) for t in targets}
-    planned = plan(decisions, config, today=today, keep_names=keep_names, filed_on=filed_on)
+    dates = {
+        t.context.path: layout_date(
+            t.row, config, nested=t.nested, first=_iso(t.row.document_date),
+            born=t.context.downloaded,
+        )
+        for t in targets
+    }  # fmt: skip
+    layout_dates = {path: when for path, (when, _) in dates.items()}
+    planned = plan(decisions, config, today=today, keep_names=keep_names, layout_dates=layout_dates)
     result = ReprocessPlan(
         deferred=len(classified.deferred),
         cost_usd=classified.cost_usd,
@@ -512,6 +525,9 @@ def plan_reprocess(
             review_category=item.review_category,
         )
         result.changes.append(Change(row, relocation))
+        when, resolved = dates[path]
+        if resolved and item.status is FileStatus.ORGANIZED:
+            result.learned.setdefault(row.id, {})["layout_date"] = when.isoformat()
     for ctx in classified.deferred:
         result.kept.append((ctx.path, "cost limit reached; run `flib reprocess` again"))
     return result
@@ -593,6 +609,68 @@ def plan_to_review(targets: list[Target], config: Config) -> ReprocessPlan:
     return result
 
 
+def layout_date(
+    row: FileRow,
+    config: Config,
+    *,
+    nested: bool = False,
+    first: date | None = None,
+    born: date | None = None,
+) -> tuple[date, bool]:
+    """The date ``row``'s layout ``{year}``/``{month}`` come from, and whether it is
+    resolved now (not yet in the index, so to be written there).
+
+    The index's ``layout_date`` wins, always: file metadata (a birth date a
+    copy to another volume resets, a time zone) never moves a filed file.
+    Without one it is resolved once: from the layout folder the file is in,
+    if flib put it there (``nested`` False), else ``first`` (a document date),
+    the download (birth) date ``born``, or the day it was processed.
+    """
+    stored = _iso(row.layout_date)
+    if stored is not None:
+        return stored, False
+    chain = first or born or _processed_on(row)
+    parsed = None if nested else _date_in_path(row.current_path, config, row.category)
+    if parsed is None:
+        return chain, True
+    year, month = parsed
+    year = year or chain.year
+    if month is None:
+        month = chain.month if chain.year == year else 1
+    day = chain.day if (chain.year, chain.month) == (year, month) else 1
+    return date(year, month, day), True
+
+
+def _date_in_path(
+    path: Path, config: Config, category: str | None
+) -> tuple[int | None, int | None] | None:
+    """(year, month) read from the layout folders ``path`` is in; ``None`` when its
+    folders do not show its category layout's ``{year}`` or ``{month}``."""
+    found = config.category(category or "")
+    folder = config.output_root / (category or "")
+    if found is None or found.layout is None or not path.is_relative_to(folder):
+        return None
+    inside = path.relative_to(folder).parts[:-1]
+    year = month = None
+    for segment, part in zip(layout_segments(found.layout), inside, strict=False):
+        if "{year}" not in segment and "{month}" not in segment:
+            continue
+        pattern = "".join(
+            re.escape(text)
+            + {"year": r"(?P<year>\d{4})", "month": r"(?P<month>0[1-9]|1[0-2])"}.get(name or "", "")
+            for text, name, _, _ in string.Formatter().parse(segment)
+        )
+        match = re.fullmatch(pattern, unicodedata.normalize("NFC", part))
+        if match is None:
+            return None
+        groups = match.groupdict()
+        year = int(groups["year"]) if groups.get("year") else year
+        month = int(groups["month"]) if groups.get("month") else month
+    if year is None and month is None:
+        return None
+    return year, month
+
+
 def _processed_on(row: FileRow) -> date:
     """The day the index last filed ``row`` (``processed_at`` is an ISO time in UTC)."""
     try:
@@ -611,9 +689,10 @@ class _Placed:
     row: FileRow
     when: date
     issuer: str | None
-    learned: tuple[str | None, str | None] = (None, None)
-    """(document date, issuer) taken from outside the index (a cached answer, the
-    provider): written to the index with the run, so the next one finds them there."""
+    learned: dict[str, str] = field(default_factory=dict)
+    """``files`` column -> value taken from outside the index (a cached answer, the
+    provider, the layout date resolved once): written to the index with the run,
+    so the next one finds them there."""
 
 
 @dataclass(slots=True)
@@ -669,7 +748,8 @@ def select_layout(
             selection.left.append((path, f"not in the {category.name} folder"))
             continue
         if placed_by_hand(row, moves.get(row.id, []), config):
-            selection.left.append((path, "in a sub-folder you chose; it stays"))
+            reason = "you moved or renamed it; it stays (`flib fix` hands it back)"
+            selection.left.append((path, reason))
             continue
         try:
             st = os.lstat(path)
@@ -679,17 +759,20 @@ def select_layout(
         cached_date, cached_issuer = _cached_values(store, row.sha256)
         stored_date = _iso(row.document_date)
         born = getattr(st, "st_birthtime", None)
-        when = (
-            stored_date
-            or cached_date
-            or (date.fromtimestamp(born) if born else None)
-            or _processed_on(row)
+        when, resolved = layout_date(
+            row,
+            config,
+            first=stored_date or cached_date,
+            born=date.fromtimestamp(born) if born else None,
         )
         issuer = row.issuer or cached_issuer
-        learned = (
-            cached_date.isoformat() if cached_date and not stored_date else None,
-            cached_issuer if cached_issuer and not row.issuer else None,
-        )
+        learned: dict[str, str] = {}
+        if cached_date and not stored_date:
+            learned["document_date"] = cached_date.isoformat()
+        if cached_issuer and not row.issuer:
+            learned["issuer"] = cached_issuer
+        if resolved:
+            learned["layout_date"] = when.isoformat()
         needs_issuer = category.layout is not None and "{issuer}" in layout_segments(
             category.layout
         )
@@ -771,10 +854,17 @@ def plan_layout(
                 result.kept.append((row.current_path, f"{why}; it stays"[:300]))
                 continue
             stored = _iso(row.document_date)
-            when = stored or answer.document_date or decision.context.downloaded
-            when = when or _processed_on(row)
-            learned = None if stored else answer.document_date
-            values = (learned.isoformat() if learned else None, answer.issuer)
+            when, resolved = layout_date(
+                row,
+                config,
+                first=stored or answer.document_date,
+                born=decision.context.downloaded,
+            )
+            values = {"issuer": answer.issuer}
+            if not stored and answer.document_date:
+                values["document_date"] = answer.document_date.isoformat()
+            if resolved:
+                values["layout_date"] = when.isoformat()
             placed.append(_Placed(row, when, answer.issuer, values))
         for ctx in classified.deferred:
             result.kept.append((ctx.path, "cost limit reached; run it again"))
@@ -832,9 +922,9 @@ def _place_in_layout(
     _learn(result, row, item.learned)
 
 
-def _learn(result: ReprocessPlan, row: FileRow, values: tuple[str | None, str | None]) -> None:
-    if values != (None, None):
-        result.learned[row.id] = values
+def _learn(result: ReprocessPlan, row: FileRow, values: dict[str, str]) -> None:
+    if values:
+        result.learned.setdefault(row.id, {}).update(values)
 
 
 def _same_place(destination: Path, path: Path) -> bool:
@@ -889,12 +979,11 @@ def apply(
             renamed = [r.id for r in store.all_files() if r.category == old]
             store.adopt_index_changes(run_id, old, new)
             store.rename_category(run_id, old, new, organized=planned.same_folder)
-        for file_id, (when, issuer) in planned.learned.items():
+        for file_id, values in planned.learned.items():
             row = store.file_by_id(file_id)
-            if issuer is not None and row.issuer is None:
-                store.change_index(run_id, "files.issuer", file_id, None, issuer)
-            if when is not None and row.document_date is None:
-                store.change_index(run_id, "files.document_date", file_id, None, when)
+            for column, value in values.items():
+                if column in _LEARNABLE and getattr(row, column) is None:
+                    store.change_index(run_id, f"files.{column}", file_id, None, value)
         for file_id, spelled in planned.respelled.items():
             row = store.file_by_id(file_id)
             if _same_path(row.current_path, spelled):

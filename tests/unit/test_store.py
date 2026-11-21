@@ -206,8 +206,13 @@ def test_migration_0014_keeps_index_changes_and_leaves_layout_values_unknown(
         )
         store.change_index(1, "files.issuer", file_id, None, "Acme")
         store.change_index(1, "files.document_date", file_id, None, "2026-01-02")
+        store.change_index(1, "files.layout_date", file_id, None, "2026-01-03")
         row = store.file_by_id(file_id)
         assert (row.document_date, row.issuer) == ("2026-01-02", "Acme")
+        assert row.layout_date == "2026-01-03"
+        assert store.flib_folders() == set()
+        store.add_flib_folders(1, [Path("/lib/Finance/Acme")])
+        assert store.flib_folders() == {Path("/lib/Finance/Acme")}
         assert store.conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
