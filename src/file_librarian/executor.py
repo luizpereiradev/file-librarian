@@ -56,9 +56,11 @@ from dataclasses import dataclass, field
 from functools import partial
 from itertools import chain
 from pathlib import Path
+from typing import Any
 
 from file_librarian.config import Config
 from file_librarian.db.store import FileRow, OperationRow, Store
+from file_librarian.fields import to_minor
 from file_librarian.finder_tags import tag_moved, untag_restored
 from file_librarian.fix import complete_interrupted, swap_tag
 from file_librarian.fsops import (
@@ -195,7 +197,22 @@ def file_record(
         layout_date=item.layout_date.isoformat()
         if item.layout_date and status is FileStatus.ORGANIZED
         else None,
+        **answer_fields(answer),
     )
+
+
+def answer_fields(answer: Classification | None) -> dict[str, Any]:
+    """The structured fields of an answer (#88) as ``FileRecord`` keeps them: the amount
+    in minor units, dates as ISO text; all ``None`` without an answer."""
+    if answer is None:
+        return dict.fromkeys(("amount_minor", "currency", "due_date", "period", "kind"))
+    return {
+        "amount_minor": to_minor(answer.amount, answer.currency),
+        "currency": answer.currency,
+        "due_date": answer.due_date.isoformat() if answer.due_date else None,
+        "period": answer.period,
+        "kind": answer.kind,
+    }
 
 
 def _document_date(answer: Classification | None) -> str | None:
@@ -464,6 +481,7 @@ def _answer_record(item: Relocation, provider: str | None, model: str | None) ->
         name_choice_reason=answer.name_choice_reason if item.name_choice else None,
         document_date=_document_date(answer),
         issuer=answer.issuer,
+        **answer_fields(answer),
     )
 
 

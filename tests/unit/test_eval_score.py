@@ -8,17 +8,23 @@ from typing import Any
 
 import pytest
 
+from file_librarian.evals import corpus
 from file_librarian.evals.score import (
+    FIELDS,
+    GOLD_KINDS,
     ItemResult,
     ResultError,
     Run,
     Usage,
     compare,
+    field_correct,
+    gold_kinds,
     load,
     metrics,
     report_lines,
     to_json,
 )
+from file_librarian.fields import KINDS
 
 META = {"provider": "fake", "model": "m", "language": "en", "prompt": "5", "corpus": "1"}
 
@@ -177,3 +183,117 @@ def test_compare_warns_about_different_corpora_or_settings() -> None:
     assert "different corpus versions" in text
     assert "different languages" in text
     assert "different samples" in text
+
+
+# --- structured fields (#88) ----------------------------------------------------------------
+
+BILL = {
+    "kind": "utility bill",
+    "issuer": "Power Co",
+    "amount": "103.91",
+    "currency": "USD",
+    "due_date": "2026-09-20",
+    "period": "2026-08",
+}
+
+
+def answered(**fields: str | None) -> dict[str, str | None]:
+    return dict.fromkeys(FIELDS) | fields
+
+
+def fields_run() -> Run:
+    items = [
+        # All right; the issuer differs only in case and legal form, the amount in format.
+        item(
+            "a.pdf", "organized", ("Finance",), "Finance", expected_fields=BILL,
+            fields=answered(kind="bill", issuer="POWER CO, Inc.", amount="103.910",
+                            currency="USD", due_date="2026-09-20", period="2026-08"),
+        ),
+        # Wrong amount and kind, no due date, an invented document date.
+        item(
+            "b.pdf", "organized", ("Finance",), "Finance", expected_fields=BILL,
+            fields=answered(kind="receipt", issuer="Power Co", amount="13.91", currency="USD",
+                            period="2026-08", document_date="2026-09-01"),
+        ),
+        # Not classified: every gold value is a miss, nothing answered.
+        item("c.pdf", "failed", ("Finance",), None, expected_fields=BILL),
+        # A contract: gold has its kind only; an amount there is invented.
+        item(
+            "d.docx", "organized", ("Contracts",), "Contracts", expected_fields={"kind": "lease"},
+            fields=answered(kind="contract", amount="900.00", currency="BRL"),
+        ),
+        # No gold fields at all: not scored for fields.
+        item("e.png", "organized", ("Images",), "Images", fields=answered(kind="other")),
+        item("id_rsa", "sensitive", (), None, sensitive=True, expected_fields={"kind": "x"}),
+    ]  # fmt: skip
+    return Run(META, items)
+
+
+def test_field_scoring_math() -> None:
+    fields = metrics(fields_run())["fields"]
+    assert fields["kind"] == {
+        "gold": 4, "answered": 3, "correct": 2, "precision": 0.6667, "recall": 0.5,
+        "without_gold": 0, "invented": 0, "invented_rate": None,
+    }  # fmt: skip
+    assert fields["issuer"] == {
+        "gold": 3, "answered": 2, "correct": 2, "precision": 1.0, "recall": 0.6667,
+        "without_gold": 1, "invented": 0, "invented_rate": 0.0,
+    }  # fmt: skip
+    amount = fields["amount"]
+    assert (amount["correct"], amount["answered"], amount["gold"]) == (1, 2, 3)
+    assert (amount["invented"], amount["without_gold"]) == (1, 1)
+    assert fields["currency"]["invented"] == 1
+    assert (fields["due_date"]["precision"], fields["due_date"]["recall"]) == (1.0, 0.3333)
+    document_date = fields["document_date"]
+    assert (document_date["gold"], document_date["invented"], document_date["invented_rate"]) == (
+        0,
+        1,
+        0.25,
+    )
+    assert document_date["precision"] is None  # no gold value to be right about
+
+
+def test_field_report_and_compare() -> None:
+    run = fields_run()
+    lines = report_lines(run)
+    text = "\n".join(lines)
+    assert "Fields over 4 item(s) with gold fields: precision (when answered), recall " in text
+    assert any(
+        line.startswith("  amount") and "50.0% (1/2)" in line and "invented 1/1" in line
+        for line in lines
+    )
+    assert any(line.startswith("  kind") and "invented n/a" in line for line in lines)
+    table = compare(hand_built(), run)  # an older result without fields: n/a, no delta
+    assert any(line.lstrip().startswith("amount recall") and "n/a" in line for line in table)
+    assert not any(line.lstrip().startswith("document_date recall") for line in table)
+
+
+def test_every_gold_kind_maps_to_known_kinds() -> None:
+    for entry in corpus.items():
+        kind = entry.gold.fields.get("kind")
+        if kind is not None:
+            assert kind in GOLD_KINDS, kind
+            assert set(gold_kinds(kind)) <= set(KINDS)
+    assert gold_kinds("quarterly statement") == ("statement",)  # not listed: its last word
+    assert gold_kinds("certificate of something") == ("other",)
+
+
+def test_field_correct_rules() -> None:
+    gold_issuer = {"issuer": "Northwind Power & Light"}
+    assert field_correct("issuer", "Northwind Power and Light", gold_issuer)
+    assert field_correct("amount", "1234.5", {"amount": "1234.50", "currency": "BRL"})
+    assert not field_correct("amount", "1234.5", {"amount": "1234.51", "currency": "BRL"})
+    assert field_correct("period", "2026-09", {"period": "2026-09"})
+    assert not field_correct("period", "2026", {"period": "2026-09"})
+    assert not field_correct("period", None, {"period": "2026-09"})
+    assert not field_correct("currency", "USD", {})
+
+
+def test_a_result_saved_before_fields_reads_back(tmp_path: Path) -> None:
+    data = to_json(hand_built())
+    for raw in data["items"]:
+        del raw["fields"], raw["expected_fields"]
+    path = tmp_path / "old.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    run = load(path)
+    assert run.items[0].fields == {} and metrics(run)["fields"]["amount"]["gold"] == 0

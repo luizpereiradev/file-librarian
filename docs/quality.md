@@ -70,6 +70,17 @@ works from a fresh clone.
 - **Sensitive**: items flib must withhold, how many it withheld and how many
   reached the provider. That last number must be 0: if it is not, `flib eval`
   exits with an error (after saving `--out`, to look into).
+- **Fields** (#88), over the items whose gold lists structured fields
+  (bills, statements, receipts, contracts, tickets...: 56 items), for each of
+  kind, issuer, amount, currency, document date, due date and period:
+  *precision*, the share of the model's answers that are right where the
+  gold has a value; *recall*, the share of gold values it gave right (an item
+  not classified counts as a miss); *invented*, how many values it gave
+  where the gold has none. Kind, currency, dates and period must be equal
+  (the gold's kinds are free text, so `GOLD_KINDS` in `evals/score.py` lists
+  which of flib's kinds count for each: a "utility bill" is a `bill`, a
+  "lease" a `contract`), amounts equal in cents, issuers equal ignoring
+  case, accents, punctuation and legal forms (`naming.issuer_key`).
 - Items per minute, tokens and cost. Items per minute counts the provider's
   calls over wall time, so for a remote provider it mostly reflects
   `provider.requests_per_minute` (30 by default), not the model's speed.
@@ -102,9 +113,15 @@ run `uv run python -m file_librarian.evals.corpus`, and bump `CORPUS_VERSION`).
 For each item: the acceptable categories per language, whether the original
 name should be kept (`null`: not scored, flib never renames it), whether it
 should go to review, whether it is sensitive, its text's language, hard-case
-tags, and, for bills, statements and receipts, the fields a later milestone
-extracts (`amount`, `currency`, `document_date`, `due_date`, `issuer`,
-`period`, `kind`). `flib eval` does not score those fields yet.
+tags, and, for bills, statements, receipts and other documents, the
+structured fields it states (`amount`, `currency`, `document_date`,
+`due_date`, `issuer`, `period`, `kind`), which `flib eval` scores.
+
+The gold fields were written for the amounts and dates that matter, not as
+a full transcription: some documents state an issuer, a date or an amount
+the gold leaves out (a diploma's university, a hotel booking's total, a
+lease's monthly rent). An answer there counts as *invented*, so that number
+is an upper bound: read the items it lists before calling it a mistake.
 
 The gold labels are deliberately lenient about categories: where two are
 defensible (a condo fee is both `Financeiro` and `Casa e veículos`), both
@@ -113,18 +130,48 @@ review and name keeping are where models and prompts differ.
 
 ## Baselines
 
-Measured on 2026-11-20 with flib 0.1.0, prompt version 5, corpus version 1,
-default seed, all 154 items (144 sent; the 10 sensitive ones withheld).
+Corpus version 1, default seed, all 154 items (144 sent; the 10 sensitive
+ones withheld). Prompt version 5 was measured on 2026-11-20 with flib 0.1.0,
+before the structured fields; prompt version 7 (with them) on 2026-11-21.
 
-| Provider / model | Language | Category accuracy | Review (expected caught) | Name kept precision / recall | Sensitive sent | Items/min | Tokens in / out | Cost |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `anthropic` / `claude-haiku-5-5` | `en` | 97.9% (141/144) | 12 sent, 8/9 expected | 98.6% / 87.5% | 0 | 29.6 | 220,403 / 27,673 | US$ 0.036 |
-| `anthropic` / `claude-haiku-5-5` | `pt-BR` | 100.0% (144/144) | 13 sent, 9/9 expected | 100.0% / 75.0% | 0 | 29.9 | 332,147 / 32,141 | US$ 0.049 |
-| `ollama` (a local model) | | not measured | | | | | | |
+| Provider / model | Language | Prompt | Category accuracy | Review (expected caught) | Name kept precision / recall | Sensitive sent | Items/min | Tokens in / out | Cost |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `anthropic` / `claude-haiku-5-5` | `en` | 7 | 98.6% (142/144) | 14 sent, 8/9 expected | 98.6% / 89.7% | 0 | 28.1 | 374,483 / 33,415 | US$ 0.054 |
+| `anthropic` / `claude-haiku-5-5` | `en` | 5 | 97.9% (141/144) | 12 sent, 8/9 expected | 98.6% / 87.5% | 0 | 29.6 | 220,403 / 27,673 | US$ 0.036 |
+| `anthropic` / `claude-haiku-5-5` | `pt-BR` | 5 | 100.0% (144/144) | 13 sent, 9/9 expected | 100.0% / 75.0% | 0 | 29.9 | 332,147 / 32,141 | US$ 0.049 |
+| `ollama` (a local model) | | | not measured | | | | | | |
+
+The structured fields with prompt version 7 (`en`, the same run), over the
+56 items with gold fields:
+
+| Field | Precision (when answered) | Recall (of gold values) | Invented (where the gold has none) |
+| --- | --- | --- | --- |
+| `kind` | 100.0% (56/56) | 100.0% (56/56) | n/a (every item has one) |
+| `issuer` | 97.1% (34/35) | 89.5% (34/38) | 14/18 |
+| `amount` | 100.0% (25/25) | 100.0% (25/25) | 12/31 |
+| `currency` | 100.0% (28/28) | 96.5% (28/29) | 13/27 |
+| `document_date` | 100.0% (21/21) | 77.8% (21/27) | 8/29 |
+| `due_date` | 100.0% (15/15) | 100.0% (15/15) | 0/41 |
+| `period` | 100.0% (25/25) | 100.0% (25/25) | 13/31 |
+
+Every amount, due date and period the model gave where the gold has one is
+right, to the cent. Most "invented" values are in the documents but not in
+the gold (a hotel booking's total, a diploma's university and date, the rent
+of a lease, the month of a receipt); the rest are periods given to receipts
+and tickets, which state a date rather than a period. The prompt version 7
+run is the one saved as `anthropic-claude-haiku-5-5-en.json`; the
+Portuguese file is still the prompt version 5 run.
 
 The full results are saved in [`docs/quality/`](quality/). The Ollama row
 waits for issue #92 (a measured, fully local setup); no chat model was
 installed on the machine that measured these.
+
+Two items more went to review with prompt version 7 than with version 5
+(`aula03.pptx` and `podcast-episodio-42.mp3`, known by name only, at
+confidence 0.6). Items between 0.6 and 0.8 change sides from one run to the
+next: the three runs made while writing version 7, whose wording changed
+only in the name-choice and confidence instructions, sent 14, 12 and 14,
+each time a different pair. Expected reviews caught stayed at 8 of 9.
 
 What the Haiku baselines show:
 

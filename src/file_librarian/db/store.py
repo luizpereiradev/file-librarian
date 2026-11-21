@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 import sqlite3
@@ -19,10 +20,12 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from importlib import resources
 from pathlib import Path
 from types import TracebackType
 
+from file_librarian.fields import exponent
 from file_librarian.models import (
     CopyPhase,
     FileRecord,
@@ -33,6 +36,7 @@ from file_librarian.models import (
     RunMode,
     RunTrigger,
 )
+from file_librarian.naming import issuer_key
 
 _MIGRATION_NAME = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
 BUSY_TIMEOUT_MS = 5000
@@ -104,6 +108,13 @@ class FileRow:
     layout_date: str | None = None
     """The date its layout's ``{year}``/``{month}`` come from, kept from when it was
     filed (YYYY-MM-DD); ``None`` until then (#86)."""
+    amount_minor: int | None = None
+    """The document's amount in ``currency``'s minor units; ``None`` if unknown (#88)."""
+    currency: str | None = None
+    due_date: str | None = None
+    period: str | None = None
+    """What the document refers to: ``YYYY-MM`` or ``YYYY``."""
+    kind: str | None = None
 
     @property
     def review(self) -> tuple[ReviewReason | None, str | None]:
@@ -141,6 +152,11 @@ class FileRow:
             document_date=row["document_date"],
             issuer=row["issuer"],
             layout_date=row["layout_date"],
+            amount_minor=None if row["amount_minor"] is None else int(row["amount_minor"]),
+            currency=row["currency"],
+            due_date=row["due_date"],
+            period=row["period"],
+            kind=row["kind"],
         )
 
 
@@ -321,6 +337,72 @@ class IndexChange:
     status: str
 
 
+@dataclass(frozen=True, slots=True)
+class FieldFilters:
+    """Search filters on a document's structured fields (#88), already validated.
+
+    ``period`` is a year (``YYYY``) or a month (``YYYY-MM``), matched against
+    what the document refers to (``files.period``), else the month of its
+    document date. Amounts are in major units (``1234.56``) and need an
+    amount; ``due_before`` and ``due_after`` are exclusive ISO dates.
+    """
+
+    issuer_key: str | None = None
+    """``naming.issuer_key`` of the issuer: case, accents and legal forms ignored."""
+    kinds: tuple[str, ...] = ()
+    min_amount: Decimal | None = None
+    max_amount: Decimal | None = None
+    currency: str | None = None
+    due_before: str | None = None
+    due_after: str | None = None
+    period: str | None = None
+
+    def __bool__(self) -> bool:
+        return any(getattr(self, f.name) not in (None, ()) for f in dataclasses.fields(self))
+
+
+@dataclass(frozen=True, slots=True)
+class AmountTotal:
+    """Matching files with an amount, summed per group and currency (never mixed)."""
+
+    group: str | None
+    """The group's value (an issuer, ``YYYY-MM``, ``YYYY``, a kind or a category);
+    ``None`` for files without one, and when nothing groups the totals."""
+    currency: str
+    total_minor: int
+    files: int
+
+
+GROUPS = ("issuer", "month", "year", "kind", "category")
+"""What ``Store.sum_amounts`` can group totals by."""
+
+# What a document refers to: its period, else the month of its document date.
+EFFECTIVE_PERIOD = "coalesce(f.period, substr(f.document_date, 1, 7))"
+_GROUP_SQL = {
+    "issuer": ("flib_issuer_key(f.issuer)", "min(f.issuer)"),
+    "month": (
+        f"CASE WHEN length({EFFECTIVE_PERIOD}) = 7 THEN {EFFECTIVE_PERIOD} END",
+        f"CASE WHEN length({EFFECTIVE_PERIOD}) = 7 THEN {EFFECTIVE_PERIOD} END",
+    ),
+    "year": (f"substr({EFFECTIVE_PERIOD}, 1, 4)", f"substr({EFFECTIVE_PERIOD}, 1, 4)"),
+    "kind": ("f.kind", "f.kind"),
+    "category": ("f.category", "f.category"),
+}
+
+
+def _issuer_key_sql(value: object) -> str | None:
+    return issuer_key(value) or None if isinstance(value, str) else None
+
+
+def _amount_sql(minor: object, currency: object) -> float | None:
+    """An amount in major units, for comparing with a typed threshold. Dividing an
+    integer by a power of ten gives the double nearest the exact value, as parsing
+    the threshold does, so an amount equal to the threshold compares equal."""
+    if not isinstance(minor, int) or not isinstance(currency, str):
+        return None
+    return float(minor / 10 ** exponent(currency))
+
+
 # The columns ``index_changes`` may point at. Only these fixed names ever reach SQL.
 _ANSWER_COLUMNS = (
     "description",
@@ -332,6 +414,21 @@ _ANSWER_COLUMNS = (
     "name_choice_reason",
     "document_date",
     "issuer",
+    "amount_minor",
+    "currency",
+    "due_date",
+    "period",
+    "kind",
+)
+# The structured fields of a document (#88), as ``FileRecord`` and ``FileRow`` name them.
+FIELD_COLUMNS = (
+    "document_date",
+    "issuer",
+    "amount_minor",
+    "currency",
+    "due_date",
+    "period",
+    "kind",
 )
 _INDEX_TARGETS = {
     "files.category": ("files", "category"),
@@ -350,6 +447,9 @@ class Store:
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
+        # Used by the field filters (#88); deterministic, so SQLite may reuse results.
+        conn.create_function("flib_issuer_key", 1, _issuer_key_sql, deterministic=True)
+        conn.create_function("flib_amount", 2, _amount_sql, deterministic=True)
 
     @classmethod
     def open(cls, path: Path) -> Store:
@@ -495,9 +595,10 @@ class Store:
                    current_path, extension, size_bytes, source_url, category, description,
                    tags, confidence, status, attempts, last_error, provider, model, run_id,
                    processed_at, is_unit, name_choice, name_choice_reason, review_reason,
-                   review_category, document_date, issuer, layout_date)
+                   review_category, document_date, issuer, layout_date, amount_minor, currency,
+                   due_date, period, kind)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?)
+                       ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(sha256) WHERE duplicate_of IS NULL DO UPDATE SET
                    current_name = excluded.current_name, current_path = excluded.current_path,
                    category = excluded.category, description = excluded.description,
@@ -510,7 +611,9 @@ class Store:
                    review_reason = excluded.review_reason,
                    review_category = excluded.review_category,
                    document_date = excluded.document_date, issuer = excluded.issuer,
-                   layout_date = excluded.layout_date""",
+                   layout_date = excluded.layout_date, amount_minor = excluded.amount_minor,
+                   currency = excluded.currency, due_date = excluded.due_date,
+                   period = excluded.period, kind = excluded.kind""",
             (
                 r.sha256, normalize(r.original_path.name), normalize(str(r.original_path)),
                 normalize(r.current_path.name), normalize(str(r.current_path)), r.extension,
@@ -519,7 +622,8 @@ class Store:
                 r.attempts, r.last_error, r.provider, r.model, run_id, _now(), int(r.is_unit),
                 r.name_choice, r.name_choice_reason,
                 None if r.review_reason is None else r.review_reason.value, r.review_category,
-                r.document_date, r.issuer, r.layout_date,
+                r.document_date, r.issuer, r.layout_date, r.amount_minor, r.currency,
+                r.due_date, r.period, r.kind,
             ),
         )  # fmt: skip
         row = self.conn.execute(
@@ -779,6 +883,11 @@ class Store:
             "name_choice_reason": r.name_choice_reason,
             "document_date": r.document_date,
             "issuer": r.issuer,
+            "amount_minor": r.amount_minor,
+            "currency": r.currency,
+            "due_date": r.due_date,
+            "period": r.period,
+            "kind": r.kind,
         }
         old = self.conn.execute(
             f"SELECT {', '.join(_ANSWER_COLUMNS)}, processed_at FROM files "  # noqa: S608
@@ -872,6 +981,7 @@ class Store:
         until: str | None = None,
         statuses: Sequence[FileStatus] = (),
         include_duplicates: bool = False,
+        fields: FieldFilters | None = None,
         limit: int,
     ) -> list[FileRow]:
         """Rows matching an FTS5 query and the filters; duplicates only if asked.
@@ -881,7 +991,7 @@ class Store:
         exclusive, both UTC ISO text like ``processed_at``. Filter values are
         always bound as parameters.
         """
-        where, params = _filter_clause(categories, extensions, since, until, statuses)
+        where, params = _filter_clause(categories, extensions, since, until, statuses, fields)
         if not include_duplicates:
             where.append("f.duplicate_of IS NULL")
         if fts_query is not None:
@@ -899,6 +1009,52 @@ class Store:
             (*params, limit),
         ).fetchall()
         return [FileRow.from_row(r) for r in rows]
+
+    def sum_amounts(
+        self,
+        fts_query: str | None,
+        *,
+        by: str | None = None,
+        categories: Sequence[str] = (),
+        extensions: Sequence[str] = (),
+        since: str | None = None,
+        until: str | None = None,
+        fields: FieldFilters | None = None,
+    ) -> tuple[list[AmountTotal], int]:
+        """Totals of the amounts of every file matching the query and filters, per
+        currency and, with ``by`` (one of ``GROUPS``), per group; largest first.
+
+        Duplicates and sensitive files are never counted. Also returns how many
+        matching files have no amount (left out of the totals).
+        """
+        where, params = _filter_clause(categories, extensions, since, until, (), fields)
+        where += ["f.duplicate_of IS NULL", "f.status != 'sensitive'"]
+        source = "files f"
+        if fts_query is not None:
+            where.insert(0, "files_fts MATCH ?")
+            params.insert(0, fts_query)
+            source = "files_fts JOIN files f ON f.id = files_fts.rowid"
+        condition = " AND ".join(where)
+        key, label = _GROUP_SQL[by] if by is not None else ("NULL", "NULL")
+        # Only fixed SQL fragments and placeholders are joined; every value is bound.
+        rows = self.conn.execute(
+            f"""SELECT {label} AS label, f.currency, SUM(f.amount_minor), COUNT(*)
+                FROM {source}
+                WHERE {condition} AND f.amount_minor IS NOT NULL AND f.currency IS NOT NULL
+                GROUP BY {key}, f.currency
+                ORDER BY SUM(f.amount_minor) DESC, label""",  # noqa: S608
+            params,
+        ).fetchall()
+        missing = self.conn.execute(
+            f"SELECT COUNT(*) FROM {source} "  # noqa: S608
+            f"WHERE {condition} AND (f.amount_minor IS NULL OR f.currency IS NULL)",
+            params,
+        ).fetchone()[0]
+        totals = [
+            AmountTotal(None if r[0] is None else str(r[0]), str(r[1]), int(r[2]), int(r[3]))
+            for r in rows
+        ]
+        return totals, int(missing)
 
     def files_by_ids(self, ids: Sequence[int]) -> dict[int, FileRow]:
         found: dict[int, FileRow] = {}
@@ -951,12 +1107,13 @@ class Store:
         extensions: Sequence[str] = (),
         since: str | None = None,
         until: str | None = None,
+        fields: FieldFilters | None = None,
     ) -> Iterator[tuple[int, bytes]]:
         """``(file_id, vector)`` of ``model``'s vectors for files matching the filters.
 
         A sensitive file is never returned, even if a vector was stored for it.
         """
-        where, params = _filter_clause(categories, extensions, since, until, ())
+        where, params = _filter_clause(categories, extensions, since, until, (), fields)
         where[:0] = ["e.model = ?", "e.dimension = ?", "f.status != 'sensitive'"]
         params[:0] = [model, dimension]
         rows = self.conn.execute(
@@ -1346,6 +1503,7 @@ def _filter_clause(
     since: str | None,
     until: str | None,
     statuses: Sequence[FileStatus],
+    fields: FieldFilters | None = None,
 ) -> tuple[list[str], list[object]]:
     """SQL conditions on ``files f`` for the search filters, with their bound values."""
     where: list[str] = []
@@ -1365,7 +1523,38 @@ def _filter_clause(
     if until is not None:
         where.append("f.processed_at < ?")
         params.append(until)
+    if fields:
+        _field_clause(fields, where, params)
     return where, params
+
+
+def _field_clause(fields: FieldFilters, where: list[str], params: list[object]) -> None:
+    if fields.issuer_key is not None:
+        where.append("flib_issuer_key(f.issuer) = ?")
+        params.append(fields.issuer_key)
+    if fields.kinds:
+        where.append(f"f.kind IN ({', '.join('?' * len(fields.kinds))})")
+        params.extend(fields.kinds)
+    if fields.currency is not None:
+        where.append("f.currency = ?")
+        params.append(fields.currency)
+    for bound, operator in ((fields.min_amount, ">="), (fields.max_amount, "<=")):
+        if bound is not None:
+            where.append(f"flib_amount(f.amount_minor, f.currency) {operator} ?")
+            params.append(float(bound))
+    if fields.due_before is not None:
+        where.append("f.due_date < ?")
+        params.append(fields.due_before)
+    if fields.due_after is not None:
+        where.append("f.due_date > ?")
+        params.append(fields.due_after)
+    if fields.period is not None:
+        if len(fields.period) == 4:
+            where.append(f"({EFFECTIVE_PERIOD} = ? OR {EFFECTIVE_PERIOD} LIKE ?)")
+            params.extend((fields.period, fields.period + "-%"))
+        else:
+            where.append(f"{EFFECTIVE_PERIOD} = ?")
+            params.append(fields.period)
 
 
 def record_to_json(r: FileRecord) -> str:
@@ -1376,7 +1565,8 @@ def record_to_json(r: FileRecord) -> str:
             "sha256", "extension", "size_bytes", "is_unit", "source_url", "category",
             "description", "confidence", "attempts", "last_error", "provider", "model",
             "name_choice", "name_choice_reason", "review_category", "duplicate_of",
-            "document_date", "issuer", "layout_date",
+            "document_date", "issuer", "layout_date", "amount_minor", "currency", "due_date",
+            "period", "kind",
         )
     }  # fmt: skip
     data |= {

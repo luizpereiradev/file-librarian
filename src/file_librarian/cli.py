@@ -19,7 +19,7 @@ import sys
 from datetime import datetime
 from functools import partial
 from pathlib import Path
-from typing import Annotated, NoReturn, cast
+from typing import Annotated, Any, NoReturn, cast
 
 import typer
 from pydantic import ValidationError
@@ -47,10 +47,11 @@ from file_librarian.config import (
     load_config,
 )
 from file_librarian.context import build_context_safely
-from file_librarian.db.store import MigrationError, Store
+from file_librarian.db.store import GROUPS, FileRow, MigrationError, Store
 from file_librarian.executor import ItemResult, RunReport, recover
 from file_librarian.extractors import ocr
 from file_librarian.extractors.origin import download_origin
+from file_librarian.fields import KINDS, format_amount, format_decimal
 from file_librarian.fix import FixError, fix_file
 from file_librarian.hashing import file_sha256, unit_manifest
 from file_librarian.locales import LOCALES, Language
@@ -67,10 +68,12 @@ from file_librarian.search import (
     SearchError,
     SearchFilters,
     SearchHit,
+    Sums,
     make_filters,
     original_path,
     semantic_search,
     split_values,
+    sum_amounts,
 )
 from file_librarian.search import search as run_search
 from file_librarian.search import to_json as search_json
@@ -391,6 +394,13 @@ def inspect(
                 said = "original name kept" if choice == "original" else "new name from the AI"
                 reason = entry["name_choice_reason"]
                 typer.echo(f"  name:   {said}" + (f" ({reason})" if reason else ""))
+            fields = entry["fields"]
+            if isinstance(fields, dict):
+                for key, value in fields.items():
+                    if value is not None and key != "currency":
+                        if key == "amount":
+                            value = f"{value} {fields['currency']}"
+                        typer.echo(f"  {key.replace('_', ' ') + ':':<8}{value}")
 
 
 @app.command()
@@ -494,6 +504,23 @@ def _index_entry(database: Path | None, digest: str | None, path: Path) -> dict[
         "name_choice": row.name_choice,
         "name_choice_reason": None if sensitive else row.name_choice_reason,
         "duplicate_of": original,
+        "fields": None if sensitive else _row_fields(row),
+    }
+
+
+def _row_fields(row: FileRow) -> dict[str, str | None]:
+    """What the AI read in the document (#88); the amount as a decimal string."""
+    amount = None
+    if row.amount_minor is not None and row.currency is not None:
+        amount = format_decimal(row.amount_minor, row.currency)
+    return {
+        "kind": row.kind,
+        "issuer": row.issuer,
+        "amount": amount,
+        "currency": row.currency,
+        "document_date": row.document_date,
+        "due_date": row.due_date,
+        "period": row.period,
     }
 
 
@@ -899,10 +926,17 @@ def _search_filters(
     ext: list[str] | None,
     since: str | None,
     until: str | None,
+    fields: dict[str, Any] | None = None,
 ) -> SearchFilters:
+    """``fields``: the structured-field filters (#88), as ``make_filters`` names them."""
     try:
         return make_filters(
-            categories=category, extensions=ext, since=since, until=until, known_categories=known
+            categories=category,
+            extensions=ext,
+            since=since,
+            until=until,
+            known_categories=known,
+            **(fields or {}),
         )
     except SearchError as exc:
         _fatal(str(exc))
@@ -958,6 +992,53 @@ def search(
             "--duplicates", help="Also list duplicates set aside in the duplicates folder."
         ),
     ] = False,
+    issuer: Annotated[
+        str | None,
+        typer.Option(
+            "--issuer",
+            help="Only documents from this organisation (case, accents, Inc/Ltd... ignored).",
+        ),
+    ] = None,
+    kind: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--kind",
+            help=f"Only this kind of document: {', '.join(KINDS)}. Repeat it or use commas.",
+        ),
+    ] = None,
+    min_amount: Annotated[
+        str | None, typer.Option("--min-amount", help="Only amounts of at least this much.")
+    ] = None,
+    max_amount: Annotated[
+        str | None, typer.Option("--max-amount", help="Only amounts of at most this much.")
+    ] = None,
+    currency: Annotated[
+        str | None, typer.Option("--currency", help="Only amounts in this currency (USD, BRL...).")
+    ] = None,
+    due_before: Annotated[
+        str | None, typer.Option("--due-before", help="Only due before this day (YYYY-MM-DD).")
+    ] = None,
+    due_after: Annotated[
+        str | None, typer.Option("--due-after", help="Only due after this day (YYYY-MM-DD).")
+    ] = None,
+    period: Annotated[
+        str | None,
+        typer.Option(
+            "--period",
+            help="Only documents about this year or month (2026, 2026-09): the period they "
+            "refer to, else their date.",
+        ),
+    ] = None,
+    total: Annotated[
+        bool,
+        typer.Option(
+            "--sum", help="Add up the amounts of every match, per currency, instead of listing."
+        ),
+    ] = False,
+    by: Annotated[
+        str | None,
+        typer.Option("--by", help=f"With --sum: totals per {', per '.join(GROUPS)}."),
+    ] = None,
     config: ConfigOption = None,
 ) -> None:
     """Find organized files by name, description or tags, and by category, period or type.
@@ -967,9 +1048,33 @@ def search(
     if close enough (search.semantic.min_similarity); --no-semantic turns it off
     for one search when search.semantic.default is true.
     Duplicates are left out unless --duplicates is given.
+    --issuer, --kind, --min-amount/--max-amount, --currency, --due-before/--due-after
+    and --period filter by what the AI read in the document. --sum adds up the
+    amounts of every match instead (never mixing currencies), --by groups them.
     """
     cfg = _load(config)
-    has_filters = bool(split_values(category) or split_values(ext) or since or until)
+    fields: dict[str, Any] = {
+        "issuer": issuer,
+        "kinds": kind,
+        "min_amount": min_amount,
+        "max_amount": max_amount,
+        "currency": currency,
+        "due_before": due_before,
+        "due_after": due_after,
+        "period": period,
+    }
+    has_filters = bool(
+        split_values(category)
+        or split_values(ext)
+        or since
+        or until
+        or split_values(kind)
+        or any(v is not None for k, v in fields.items() if k != "kinds")
+    )
+    if by is not None and not total:
+        _fatal("--by goes with --sum")
+    if total and duplicates:
+        _fatal("--sum never counts duplicates; leave out --duplicates")
     if reindex:
         _reindex(cfg)
         if not query.strip() and not has_filters:
@@ -981,11 +1086,15 @@ def search(
     hits: list[SearchHit] = []
     notice: str | None = None
     weak = 0
+    if total:
+        _sum(cfg, query, (category, ext, since, until), fields, by, as_json, semantic=semantic)
+        return
     if not cfg.database.exists():
-        _search_filters(configured, category, ext, since, until)  # still validate them
+        _search_filters(configured, category, ext, since, until, fields)  # still validate them
     else:
         with Store.open(cfg.database) as store:
-            filters = _search_filters(configured + store.categories(), category, ext, since, until)
+            known = configured + store.categories()
+            filters = _search_filters(known, category, ext, since, until, fields)
             if use_semantic:
                 outcome = semantic_search(
                     store,
@@ -1020,8 +1129,56 @@ def search(
         typer.echo(f"{where}\n  [{label}] was {hit.original_name}")
         if hit.duplicate_of is not None:
             typer.echo(f"  duplicate of {hit.duplicate_of}")
+        line = hit.fields_line()
+        if line:
+            typer.echo(f"  {line}")
         if hit.description:
             typer.echo(f"  {hit.description}")
+
+
+def _sum(
+    cfg: Config,
+    query: str,
+    filters: tuple[list[str] | None, list[str] | None, str | None, str | None],
+    fields: dict[str, Any],
+    by: str | None,
+    as_json: bool,
+    *,
+    semantic: bool | None,
+) -> None:
+    """``flib search --sum``: totals of the matches' amounts, per currency (and group)."""
+    if by is not None and by not in GROUPS:
+        _fatal(f"--by must be one of {', '.join(GROUPS)}, not {by!r}")
+    if semantic:
+        typer.echo("note: --sum matches the words only, not by meaning", err=True)
+    configured = [c.name for c in cfg.categories]
+    sums = Sums(by, [], [], 0)
+    if not cfg.database.exists():
+        _search_filters(configured, *filters, fields)  # still validate them
+    else:
+        with Store.open(cfg.database) as store:
+            chosen = _search_filters(configured + store.categories(), *filters, fields)
+            sums = sum_amounts(store, query, filters=chosen, by=by)
+    if as_json:
+        typer.echo(json.dumps(sums.to_dict(), ensure_ascii=False, indent=2))
+        return
+    if not sums.totals:
+        typer.echo("No amounts among the matches.")
+    if sums.groups:
+        typer.echo(f"Totals by {by}:")
+        width = max(len(t.group or "") for t in sums.groups)
+        width = min(max(width, len("(none)")), 40)
+        for item in sums.groups:
+            label = (item.group or "(none)")[:40]
+            amount = format_amount(item.total_minor, item.currency)
+            typer.echo(f"  {label:<{width}}  {amount:>18}  ({item.files} file(s))")
+    if sums.totals:
+        overall = "; ".join(
+            f"{format_amount(t.total_minor, t.currency)} ({t.files} file(s))" for t in sums.totals
+        )
+        typer.echo(f"Total: {overall}")
+    if sums.without_amount:
+        typer.echo(f"{sums.without_amount} matching file(s) state no amount; not counted.")
 
 
 def _reindex(cfg: Config) -> None:
@@ -1791,6 +1948,14 @@ def reprocess(
             "for (shows the cost and asks first); without it they stay.",
         ),
     ] = False,
+    fill_fields: Annotated[
+        bool,
+        typer.Option(
+            "--fill-fields",
+            help="Ask the AI only for the amount, dates, issuer, period and kind of files the "
+            "index has none for (shows the cost and asks first). Nothing moves.",
+        ),
+    ] = False,
     simulate: Annotated[
         bool,
         typer.Option(
@@ -1812,9 +1977,26 @@ def reprocess(
     --rename-category or --remove-category first. --scrub-descriptions only
     cleans what the index already stores, without asking the AI.
     --apply-layout only moves files into their category's sub-folders.
+    --fill-fields only records the structured fields of files filed before them.
     """
     if ask_issuer and not apply_layout:
         _fatal("--ask-issuer goes with --apply-layout")
+    if fill_fields:
+        if (
+            rename or override_corrections or rename_category or remove_category or to_review
+            or scrub_descriptions or apply_layout
+        ):  # fmt: skip
+            _fatal(
+                "--fill-fields only records fields in the index; it takes --category, --ext, "
+                "--since, --until, --simulate and --yes"
+            )
+        _fill_fields(
+            _load(config, warn_orphans=False),
+            (category, ext, since, until),
+            simulate=simulate,
+            yes=yes,
+        )
+        return
     if apply_layout:
         others = (
             split_values(ext) or since or until or rename or override_corrections
@@ -1912,6 +2094,81 @@ def _scrub_descriptions(cfg: Config, *, simulate: bool, yes: bool) -> None:
     if report.embeddings:
         line += f" {report.embeddings} embedding(s) removed; the next run makes them again."
     typer.echo(line)
+
+
+def _fill_fields(
+    cfg: Config,
+    filters: tuple[list[str] | None, list[str] | None, str | None, str | None],
+    *,
+    simulate: bool,
+    yes: bool,
+) -> None:
+    """``flib reprocess --fill-fields``: the structured fields of files filed before them."""
+    try:
+        provider = get_provider(cfg.provider)
+    except ProviderError as exc:
+        _fatal(str(exc))
+    try:
+        with reprocess_lock(cfg.database):
+            with instance_lock(cfg.database), Store.open(cfg.database) as store:
+                recovered = recover(store, cfg)
+            if recovered:
+                typer.echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
+            with Store.open(cfg.database) as store:
+                known = [c.name for c in cfg.categories] + store.categories()
+                selection = reprocess_mod.select_fields(
+                    cfg, store, filters=_search_filters(known, *filters)
+                )
+                for path, reason in selection.left:
+                    typer.echo(f"  leave   {_short(path, cfg)}  ({reason})")
+                if not selection.targets:
+                    typer.echo("Every file in the library already has its fields.")
+                    return
+                estimate = reprocess_mod.estimate(selection.targets, provider, cfg, store)
+                typer.echo(
+                    f"{estimate.files} file(s) without fields: {estimate.cached} answered by "
+                    f"the cache, {estimate.to_ask} to send to {provider.name} "
+                    f"(estimated US$ {estimate.cost_usd:.4f})."
+                )
+                if (
+                    estimate.to_ask
+                    and not yes
+                    and not typer.confirm(
+                        f"Send {estimate.to_ask} file(s) to {provider.name}?", default=False
+                    )
+                ):
+                    typer.echo("Nothing sent, nothing changed.")
+                    return
+                planned = reprocess_mod.plan_fields(selection.targets, provider, cfg, store)
+            for file_id, values in planned.learned.items():
+                path = next(t.row.current_path for t in selection.targets if t.row.id == file_id)
+                names = ", ".join(c.replace("_minor", "").replace("_", " ") for c in values)
+                typer.echo(f"  fill    {_short(path, cfg)}  ({names})")
+            for path, reason in planned.kept:
+                typer.echo(f"  keep    {_short(path, cfg)}  ({reason})")
+            cost = _cost_line(planned.cost_usd, known=planned.cost_known)
+            if cost:
+                typer.echo(cost)
+            if simulate:
+                typer.echo("Simulation: nothing changed.")
+                return
+            if not planned.learned:
+                typer.echo("Nothing to record.")
+                return
+            question = (
+                f"Record the fields of {len(planned.learned)} file(s) in the index? "
+                "`flib undo` reverts it"
+            )
+            if not yes and not typer.confirm(question, default=False):
+                typer.echo("Nothing changed.")
+                return
+            with instance_lock(cfg.database), Store.open(cfg.database) as store:
+                applied = reprocess_mod.apply(
+                    planned, cfg, store, provider=provider.name, model=cfg.provider.model
+                )
+    except (reprocess_mod.ReprocessError, ProviderError, AlreadyRunningError) as exc:
+        _fatal(str(exc))
+    _print_reprocess_report(applied, cfg, planned)
 
 
 def _apply_layout(

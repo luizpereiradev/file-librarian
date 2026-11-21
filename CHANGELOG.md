@@ -8,6 +8,29 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Amounts, dates and issuers (#88): the answer also carries what a document
+  states, and nothing it does not: its `kind` (bill, receipt, invoice,
+  statement, contract, payslip, tax, ticket, policy, report, form, letter,
+  manual, other), `issuer`, `amount` with its ISO 4217 `currency`, document
+  and `due_date`, and the `period` it refers to (prompt version 7). Values
+  are read tolerantly (`1.234,56` and `1,234.56`, `R$`, `€`, dates with
+  `/`); one that cannot be read is dropped, never the whole answer, and an
+  amount that looks like a document or account number is never kept. They
+  are stored in typed columns (the amount in cents; migration 0015) and
+  journaled like the rest of the answer. `flib search` filters by
+  `--issuer` (case, accents and legal forms ignored), `--kind`,
+  `--min-amount`/`--max-amount`, `--currency`, `--due-before`/`--due-after`
+  and `--period 2026` or `2026-09`, shows the fields with each result, and
+  `--sum [--by issuer|month|year|kind|category]` adds up amounts per
+  currency: "what did I pay to Power Co in 2026?" is `flib search --issuer
+  "Power Co" --period 2026 --sum`. The MCP server's `search_files` takes the
+  same filters, every file carries its fields, and a new read-only
+  `summarize_amounts` tool gives the totals. `flib inspect` shows the
+  fields; `flib reprocess --fill-fields` asks only for the fields of files
+  filed before them, after showing the cost, and records them in one run
+  `flib undo` reverts. `flib eval` scores each field (precision, recall,
+  values given where the gold has none); see
+  [docs/quality.md](docs/quality.md) for the baseline.
 - Sub-folders inside a category (#86): an optional `layout` per category,
   with `{year}`, `{month}` and `{issuer}` (`"{year}"`, `"{issuer}/{year}"`...,
   up to three levels, validated at load). The year and month come from the

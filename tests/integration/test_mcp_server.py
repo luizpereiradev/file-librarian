@@ -43,7 +43,14 @@ from tests._helpers import (
 
 pytestmark = pytest.mark.integration
 
-READ_TOOLS = {"search_files", "get_file", "list_recent", "list_review", "get_stats"}
+READ_TOOLS = {
+    "search_files",
+    "get_file",
+    "list_recent",
+    "list_review",
+    "get_stats",
+    "summarize_amounts",
+}
 
 SECRET = "token = " + "ghp_" + "a" * 36
 
@@ -395,6 +402,9 @@ def test_search_and_get_file(downloads: Path, cfg: Config) -> None:
         "duplicate_of": None,
         "source": "text",
         "similarity": None,
+        "fields": dict.fromkeys(
+            ("kind", "issuer", "amount", "currency", "document_date", "due_date", "period")
+        ),
     }
     detail = ok(call(cfg, "get_file", path=str(target)))
     assert "source" not in detail and "similarity" not in detail

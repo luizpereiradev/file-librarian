@@ -20,7 +20,9 @@ classifier, uses AI. Each stage is a module with typed input and output
  3. Classifier   classifier.py,    Classification (schema-validated): category, name, description,
       │          providers/        tags, confidence; rate limits, retries, timeouts, cost cap;
       │                            a visual file's downscaled image or first pages
-      │                            (extractors/visual.py) go to providers that read them
+      │                            (extractors/visual.py) go to providers that read them;
+      │                            fields.py reads the structured fields (amount, dates,
+      │                            period, kind) tolerantly
  4. Planner      planner.py        Operations: naming pattern, rename policy, collisions,
       │                            low confidence → review folder.   `flib simulate` stops here
  5. Executor     executor.py,      record "planned" → move → mark "done"; crash recovery;
@@ -246,10 +248,10 @@ One SQLite file, outside the organized folders (default
 
 | Table | Holds |
 | --- | --- |
-| `files` | one row per file or folder unit. Identity: `sha256` (a folder unit's manifest digest, with `is_unit` 1), `extension`, `size_bytes`. Where: `original_name`/`original_path` and `current_name`/`current_path`. What: `source_url` (the download origin), `category`, `description`, `tags` (JSON array), `confidence`, and which name the model judged better (`name_choice`: `original` or `proposed`, with `name_choice_reason`; NULL when no rename was considered), and what category layouts file by (#86): the date the document refers to (`document_date`, YYYY-MM-DD) and the organisation it comes from (`issuer`), both from the answer and NULL when the model gave none or on rows filed before migration 0014, and the date the file's `{year}`/`{month}` were taken from when it was filed (`layout_date`: the document date, else the download date, else the processing date), kept from then on so file metadata never moves a filed file. State: `status` (`organized`, `review`, `skipped`, `missing`, `failed`, `sensitive`, `duplicate`), `attempts` and `last_error` (RF-30), `provider`, `model`, `run_id`, `processed_at`. For a file in review, why (`review_reason`: `low_confidence`, `unknown_category`, `category_removed`, `moved_by_hand`) and the category the model suggested (`review_category`), both NULL outside review. For a duplicate (status `duplicate`, RF-21), the row of its original (`duplicate_of`), kept whatever its status becomes later. A content has one row besides its duplicates' (a partial unique index on `sha256`) |
+| `files` | one row per file or folder unit. Identity: `sha256` (a folder unit's manifest digest, with `is_unit` 1), `extension`, `size_bytes`. Where: `original_name`/`original_path` and `current_name`/`current_path`. What: `source_url` (the download origin), `category`, `description`, `tags` (JSON array), `confidence`, and which name the model judged better (`name_choice`: `original` or `proposed`, with `name_choice_reason`; NULL when no rename was considered), and what category layouts file by (#86): the date the document refers to (`document_date`, YYYY-MM-DD) and the organisation it comes from (`issuer`), both from the answer and NULL when the model gave none or on rows filed before migration 0014, and the date the file's `{year}`/`{month}` were taken from when it was filed (`layout_date`: the document date, else the download date, else the processing date), kept from then on so file metadata never moves a filed file. What the document states (#88, migration 0015), from the answer and NULL when the model gave none or on rows filed before: its total or amount due in the currency's minor units (`amount_minor`, an integer, so sums are exact) with its ISO 4217 code (`currency`), when it is due (`due_date`, YYYY-MM-DD), the month or year it refers to (`period`, YYYY-MM or YYYY) and what sort of document it is (`kind`, a CHECK on the closed list of `fields.KINDS`); never a document, account or ID number. State: `status` (`organized`, `review`, `skipped`, `missing`, `failed`, `sensitive`, `duplicate`), `attempts` and `last_error` (RF-30), `provider`, `model`, `run_id`, `processed_at`. For a file in review, why (`review_reason`: `low_confidence`, `unknown_category`, `category_removed`, `moved_by_hand`) and the category the model suggested (`review_category`), both NULL outside review. For a duplicate (status `duplicate`, RF-21), the row of its original (`duplicate_of`), kept whatever its status becomes later. A content has one row besides its duplicates' (a partial unique index on `sha256`) |
 | `runs` | one row per `flib run`, `flib fix` or `flib reprocess` (and each MCP `recategorize_file`), with `mode` (always `run`: simulations record none), what started it (`trigger`: `schedule`, `manual`, `mcp`, `reprocess`), `started_at`/`finished_at`, counts (`files_seen`, `files_moved`, `files_review`, `errors`, and `files_duplicates`, the duplicates set aside) and the estimated provider cost (`cost_usd`: 0 for a fix, NULL when the provider's prices are unknown and on runs recorded before migration 0010; `files_duplicates` is NULL on runs before 0013) |
 | `operations` | the journal behind `flib undo`: one entry per move (`src_path`, `dst_path`, `status`: `planned`, `done`, `undone`, `failed`, `skipped`), with the device and inode moved (`src_dev`, `src_ino`, so recovery and reconcile know the very item even if it was edited), the Finder tag the move added (`finder_tag`), the phase of a cross-volume copy in progress (`copy_phase`, with `copy_key` naming its staging and trash paths and `copy_src_dev`/`copy_dst_dev`), for `flib fix` and `flib reprocess` the status and category it sets (`fix_status`, `fix_category`) and, for `flib reprocess`, the ones the file had before (`prev_status`, `prev_category`; undo gives those back), when it was undone (`undone_at`, set by undo and by the recovery of an interrupted undo), and, for a move that takes over a `missing` row (RF-21), the record the row gets (`pending_record`, JSON) |
-| `index_changes` | what a run changed in the index without moving a file (a category renamed in rows and corrections, a Finder tag renamed in the journal, a new description, tags, confidence, document date, issuer or layout date, a review reason set or cleared by `flib reprocess` or `flib fix`): `target` (one of a fixed list of columns), `row_id`, `old_value`, `new_value`, `status` (`done`, `undone`). Reverted by `flib undo` with the run, and with one file by `flib undo --file` |
+| `index_changes` | what a run changed in the index without moving a file (a category renamed in rows and corrections, a Finder tag renamed in the journal, a new description, tags, confidence, document date, issuer, layout date, amount, currency, due date, period or kind, a review reason set or cleared by `flib reprocess` or `flib fix`): `target` (one of a fixed list of columns), `row_id`, `old_value`, `new_value`, `status` (`done`, `undone`). Reverted by `flib undo` with the run, and with one file by `flib undo --file` |
 | `corrections` | user recategorizations and renames (`flib fix`, and those `flib reconcile` finds): `field` (`category` or `name`), `old_value`, `new_value`; the latest per file and field, while still in effect, are sent as examples and are part of the cache key |
 | `layout_folders` | the folders flib created while moving files (`path`, NFC, with `run_id` and `created_at`): of two folders holding the same issuer, the planner prefers one of these |
 | `classification_cache` | answers already paid for, per content (`sha256`) and `rules_key` (a hash of provider, model, effort, categories and hints, language, examples and prompt version; answers that saw an image or PDF have a key of their own), kept 7 days (`classifier.CACHE_DAYS`), so `flib run` after `flib simulate`, or `flib reprocess`, does not pay twice |
@@ -316,6 +318,12 @@ what the first left, so one undo reverts both. The emptied folder is left in pla
 missing folder inside `output_root` again. After a reprocess that changed
 nothing, plain `flib undo` refuses rather than reach back to an earlier run.
 
+`--fill-fields` (#88) selects only the library files without structured
+fields (no `kind`), asks after the estimate, and keeps only those fields of
+each answer, written where the index has none: categories, names,
+descriptions and places stay. The values are journaled in `index_changes`
+with one `reprocess` run, so `flib undo` clears them again.
+
 ## The MCP server
 
 `flib mcp` (`mcp_server.py`) is another front end over the same modules, built
@@ -325,7 +333,8 @@ and without it the command explains how to enable it:
 
 | Tool | Reuses |
 | --- | --- |
-| `search_files` | `search.py`, as `flib search`; `semantic` is `--semantic` |
+| `search_files` | `search.py`, as `flib search`; `semantic` is `--semantic`; the field filters are `--issuer`, `--kind`... |
+| `summarize_amounts` | `search.sum_amounts`, as `flib search --sum`: totals per currency, optionally grouped |
 | `get_file` | the index row and its journaled moves, plus the download origin and iCloud-only check `flib inspect` uses (a cloud-only file is never read) |
 | `list_recent` | the index: the newest organized files, optionally in one category |
 | `list_review` | the index: what waits in the review folder and why (`review_reason`) |
@@ -419,7 +428,8 @@ Everything is in `src/file_librarian/`:
 | `planner.py`, `naming.py` | stage 4; safe file names and dates; category layouts (sub-folders by year, month or issuer) and issuer folder matching |
 | `executor.py`, `fsops.py` | stage 5 and crash recovery; `fsops.py` is the only code that moves, copies or deletes your files (the rest writes only flib's own: logs, reports, the trial copies of `flib init`) |
 | `db/store.py`, `db/migrations/` | the SQLite store and its numbered migrations |
-| `search.py`, `embeddings.py`, `finder_tags.py` | full-text search and filters; optional semantic search; the category as a Finder tag |
+| `search.py`, `embeddings.py`, `finder_tags.py` | full-text search and filters (structured fields included) and totals of amounts; optional semantic search; the category as a Finder tag |
+| `fields.py` | the structured fields of an answer (amount and currency, dates, period, kind) read tolerantly, and amounts in minor units |
 | `lock.py`, `protection.py`, `catchup.py` | the instance and reprocess locks; Data Protection (files readable only while the Mac is unlocked); the wait for an unlock after a scheduled run |
 | `undo.py`, `fix.py`, `reconcile.py`, `reprocess.py` | `flib undo`, `flib fix`, `flib reconcile`, `flib reprocess` |
 | `status.py`, `doctor.py`, `runlog.py` | `flib status` and the periodic summary; the redacted `flib doctor` report; one log file per run |
