@@ -1,12 +1,12 @@
 {
  "format": 1,
  "meta": {
-  "date": "2026-11-20",
+  "date": "2026-11-21",
   "flib": "0.1.0",
   "provider": "anthropic",
   "model": "claude-haiku-5-5",
   "language": "en",
-  "prompt": "5",
+  "prompt": "7",
   "corpus": "1",
   "seed": 87,
   "limit": null,
@@ -16,8 +16,8 @@
   "items": 154,
   "category": {
    "scored": 144,
-   "correct": 141,
-   "accuracy": 0.9792,
+   "correct": 142,
+   "accuracy": 0.9861,
    "per_category": {
     "Contracts": {
      "items": 14,
@@ -41,56 +41,128 @@
     },
     "Other": {
      "items": 72,
-     "correct": 69,
-     "accuracy": 0.9583
+     "correct": 70,
+     "accuracy": 0.9722
     }
    },
    "confusion": [
     {
      "expected": "Other",
-     "chosen": "Finance",
-     "count": 2
+     "chosen": "Contracts",
+     "count": 1
     },
     {
      "expected": "Other",
-     "chosen": "Contracts",
+     "chosen": "Finance",
      "count": 1
     }
    ]
   },
   "review": {
-   "reviewed": 12,
-   "rate": 0.0833,
+   "reviewed": 14,
+   "rate": 0.0972,
    "expected": 9,
    "expected_and_reviewed": 8
   },
   "name_kept": {
-   "scored": 101,
+   "scored": 99,
    "precision": 0.9859,
-   "recall": 0.875
+   "recall": 0.8974
   },
   "sensitive": {
    "expected": 10,
    "withheld": 10,
    "sent": 0
   },
+  "fields": {
+   "kind": {
+    "gold": 56,
+    "answered": 56,
+    "correct": 56,
+    "precision": 1.0,
+    "recall": 1.0,
+    "without_gold": 0,
+    "invented": 0,
+    "invented_rate": null
+   },
+   "issuer": {
+    "gold": 38,
+    "answered": 35,
+    "correct": 34,
+    "precision": 0.9714,
+    "recall": 0.8947,
+    "without_gold": 18,
+    "invented": 14,
+    "invented_rate": 0.7778
+   },
+   "amount": {
+    "gold": 25,
+    "answered": 25,
+    "correct": 25,
+    "precision": 1.0,
+    "recall": 1.0,
+    "without_gold": 31,
+    "invented": 12,
+    "invented_rate": 0.3871
+   },
+   "currency": {
+    "gold": 29,
+    "answered": 28,
+    "correct": 28,
+    "precision": 1.0,
+    "recall": 0.9655,
+    "without_gold": 27,
+    "invented": 13,
+    "invented_rate": 0.4815
+   },
+   "document_date": {
+    "gold": 27,
+    "answered": 21,
+    "correct": 21,
+    "precision": 1.0,
+    "recall": 0.7778,
+    "without_gold": 29,
+    "invented": 8,
+    "invented_rate": 0.2759
+   },
+   "due_date": {
+    "gold": 15,
+    "answered": 15,
+    "correct": 15,
+    "precision": 1.0,
+    "recall": 1.0,
+    "without_gold": 41,
+    "invented": 0,
+    "invented_rate": 0.0
+   },
+   "period": {
+    "gold": 25,
+    "answered": 25,
+    "correct": 25,
+    "precision": 1.0,
+    "recall": 1.0,
+    "without_gold": 31,
+    "invented": 13,
+    "invented_rate": 0.4194
+   }
+  },
   "status": {
-   "organized": 132,
-   "review": 12,
+   "organized": 130,
+   "review": 14,
    "sensitive": 10
   },
   "sent": 144,
-  "items_per_minute": 29.6,
-  "input_tokens": 220403,
-  "output_tokens": 27673,
-  "cost_usd": 0.035877
+  "items_per_minute": 28.1,
+  "input_tokens": 374483,
+  "output_tokens": 33415,
+  "cost_usd": 0.054156
  },
  "usage": {
-  "elapsed_seconds": 291.746,
+  "elapsed_seconds": 307.482,
   "calls": 144,
-  "input_tokens": 220403,
-  "output_tokens": 27673,
-  "cost_usd": 0.03587680000000001,
+  "input_tokens": 374483,
+  "output_tokens": 33415,
+  "cost_usd": 0.0541558,
   "cost_known": true
  },
  "items": [
@@ -105,9 +177,27 @@
    "expected_review": false,
    "expected_kept": false,
    "kept": false,
-   "name": "2026-09-03_northwind-electricity-bill-august-2026.pdf",
+   "name": "2026-09-03_northwind-power-electricity-bill.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "bill",
+    "issuer": "Northwind Power & Light",
+    "amount": "103.91",
+    "currency": "USD",
+    "document_date": "2026-09-03",
+    "due_date": "2026-09-20",
+    "period": "2026-08"
+   },
+   "expected_fields": {
+    "amount": "103.91",
+    "currency": "USD",
+    "document_date": "2026-09-03",
+    "due_date": "2026-09-20",
+    "issuer": "Northwind Power & Light",
+    "period": "2026-08",
+    "kind": "utility bill"
+   }
   },
   {
    "path": "bill (1).pdf",
@@ -116,13 +206,31 @@
     "Finance"
    ],
    "category": "Finance",
-   "confidence": 0.97,
+   "confidence": 0.95,
    "expected_review": false,
    "expected_kept": false,
    "kept": false,
-   "name": "2026-10-03_northwind-electricity-bill-september-2026.pdf",
+   "name": "2026-10-03_northwind-power-electricity-bill.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "bill",
+    "issuer": "Northwind Power & Light",
+    "amount": "217.47",
+    "currency": "USD",
+    "document_date": "2026-10-03",
+    "due_date": "2026-10-20",
+    "period": "2026-09"
+   },
+   "expected_fields": {
+    "amount": "217.47",
+    "currency": "USD",
+    "document_date": "2026-10-03",
+    "due_date": "2026-10-20",
+    "issuer": "Northwind Power & Light",
+    "period": "2026-09",
+    "kind": "utility bill"
+   }
   },
   {
    "path": "bill (2).pdf",
@@ -131,13 +239,31 @@
     "Finance"
    ],
    "category": "Finance",
-   "confidence": 0.97,
+   "confidence": 0.95,
    "expected_review": false,
    "expected_kept": false,
    "kept": false,
-   "name": "2026-11-03_northwind-electricity-bill-october-2026.pdf",
+   "name": "2026-11-03_northwind-power-electricity-bill.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "bill",
+    "issuer": "Northwind Power & Light",
+    "amount": "96.74",
+    "currency": "USD",
+    "document_date": "2026-11-03",
+    "due_date": "2026-11-20",
+    "period": "2026-10"
+   },
+   "expected_fields": {
+    "amount": "96.74",
+    "currency": "USD",
+    "document_date": "2026-11-03",
+    "due_date": "2026-11-20",
+    "issuer": "Northwind Power & Light",
+    "period": "2026-10",
+    "kind": "utility bill"
+   }
   },
   {
    "path": "documento.pdf",
@@ -146,13 +272,31 @@
     "Finance"
    ],
    "category": "Finance",
-   "confidence": 0.97,
+   "confidence": 0.95,
    "expected_review": false,
    "expected_kept": false,
    "kept": false,
    "name": "2026-09-05_electricity-bill-august-2026.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "bill",
+    "issuer": "Companhia Elétrica Vale Azul",
+    "amount": "367.11",
+    "currency": "BRL",
+    "document_date": "2026-09-05",
+    "due_date": "2026-09-20",
+    "period": "2026-08"
+   },
+   "expected_fields": {
+    "amount": "367.11",
+    "currency": "BRL",
+    "document_date": "2026-09-05",
+    "due_date": "2026-09-20",
+    "issuer": "Companhia Elétrica Vale Azul",
+    "period": "2026-08",
+    "kind": "utility bill"
+   }
   },
   {
    "path": "documento(1).pdf",
@@ -167,7 +311,25 @@
    "kept": false,
    "name": "2026-10-05_electricity-bill-september-2026.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "bill",
+    "issuer": "Companhia Elétrica Vale Azul",
+    "amount": "331.25",
+    "currency": "BRL",
+    "document_date": "2026-10-05",
+    "due_date": "2026-10-20",
+    "period": "2026-09"
+   },
+   "expected_fields": {
+    "amount": "331.25",
+    "currency": "BRL",
+    "document_date": "2026-10-05",
+    "due_date": "2026-10-20",
+    "issuer": "Companhia Elétrica Vale Azul",
+    "period": "2026-09",
+    "kind": "utility bill"
+   }
   },
   {
    "path": "documento(2).pdf",
@@ -182,7 +344,25 @@
    "kept": false,
    "name": "2026-11-05_electricity-bill-october-2026.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "bill",
+    "issuer": "Companhia Elétrica Vale Azul",
+    "amount": "351.09",
+    "currency": "BRL",
+    "document_date": "2026-11-05",
+    "due_date": "2026-11-20",
+    "period": "2026-10"
+   },
+   "expected_fields": {
+    "amount": "351.09",
+    "currency": "BRL",
+    "document_date": "2026-11-05",
+    "due_date": "2026-11-20",
+    "issuer": "Companhia Elétrica Vale Azul",
+    "period": "2026-10",
+    "kind": "utility bill"
+   }
   },
   {
    "path": "2026-09_conta-agua.pdf",
@@ -191,13 +371,31 @@
     "Finance"
    ],
    "category": "Finance",
-   "confidence": 0.97,
+   "confidence": 0.95,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
    "name": "2026-10-08_2026-09-conta-agua.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "bill",
+    "issuer": "Água Clara Saneamento",
+    "amount": "176.30",
+    "currency": "BRL",
+    "document_date": "2026-10-08",
+    "due_date": "2026-10-20",
+    "period": "2026-09"
+   },
+   "expected_fields": {
+    "amount": "176.30",
+    "currency": "BRL",
+    "document_date": "2026-10-08",
+    "due_date": "2026-10-20",
+    "issuer": "Água Clara Saneamento",
+    "period": "2026-09",
+    "kind": "utility bill"
+   }
   },
   {
    "path": "2via.pdf",
@@ -212,7 +410,25 @@
    "kept": false,
    "name": "2026-11-08_water-and-sewage-bill-copy.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "bill",
+    "issuer": "Água Clara Saneamento",
+    "amount": "80.06",
+    "currency": "BRL",
+    "document_date": "2026-11-08",
+    "due_date": "2026-11-20",
+    "period": "2026-10"
+   },
+   "expected_fields": {
+    "amount": "80.06",
+    "currency": "BRL",
+    "document_date": "2026-11-08",
+    "due_date": "2026-11-20",
+    "issuer": "Água Clara Saneamento",
+    "period": "2026-10",
+    "kind": "utility bill"
+   }
   },
   {
    "path": "boleto_04617891.pdf",
@@ -225,9 +441,27 @@
    "expected_review": false,
    "expected_kept": false,
    "kept": false,
-   "name": "2026-10-15_sabiá-telecom-internet-fibra-bill.pdf",
+   "name": "2026-09-21_sabiá-telecom-internet-fiber-bill.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "bill",
+    "issuer": "Sabiá Telecom",
+    "amount": "119.79",
+    "currency": "BRL",
+    "document_date": null,
+    "due_date": "2026-10-15",
+    "period": "2026-09"
+   },
+   "expected_fields": {
+    "amount": "119.79",
+    "currency": "BRL",
+    "document_date": "2026-10-02",
+    "due_date": "2026-10-15",
+    "issuer": "Sabiá Telecom",
+    "period": "2026-09",
+    "kind": "telecom bill"
+   }
   },
   {
    "path": "invoice_428140.pdf",
@@ -236,13 +470,31 @@
     "Finance"
    ],
    "category": "Finance",
-   "confidence": 0.97,
+   "confidence": 0.95,
    "expected_review": false,
    "expected_kept": false,
    "kept": false,
    "name": "2026-10-01_fabrikam-mobile-invoice-september-2026.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "invoice",
+    "issuer": "Fabrikam Mobile",
+    "amount": "56.46",
+    "currency": "USD",
+    "document_date": "2026-10-01",
+    "due_date": "2026-10-21",
+    "period": "2026-09"
+   },
+   "expected_fields": {
+    "amount": "56.46",
+    "currency": "USD",
+    "document_date": "2026-10-01",
+    "due_date": "2026-10-21",
+    "issuer": "Fabrikam Mobile",
+    "period": "2026-09",
+    "kind": "telecom bill"
+   }
   },
   {
    "path": "statement_2026-09.pdf",
@@ -255,9 +507,25 @@
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
-   "name": "2026-09-01_statement-2026-09.pdf",
+   "name": "2026-09-21_statement-2026-09.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "statement",
+    "issuer": "Contoso Bank",
+    "amount": null,
+    "currency": "USD",
+    "document_date": null,
+    "due_date": null,
+    "period": "2026-09"
+   },
+   "expected_fields": {
+    "document_date": "2026-10-01",
+    "issuer": "Contoso Bank",
+    "period": "2026-09",
+    "kind": "bank statement",
+    "currency": "USD"
+   }
   },
   {
    "path": "Statement-Oct-2026.pdf",
@@ -266,13 +534,29 @@
     "Finance"
    ],
    "category": "Finance",
-   "confidence": 0.97,
+   "confidence": 0.95,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
-   "name": "2026-10-01_statement-oct-2026.pdf",
+   "name": "2026-09-21_statement-oct-2026.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "statement",
+    "issuer": "Contoso Bank",
+    "amount": null,
+    "currency": "USD",
+    "document_date": null,
+    "due_date": null,
+    "period": "2026-10"
+   },
+   "expected_fields": {
+    "document_date": "2026-11-01",
+    "issuer": "Contoso Bank",
+    "period": "2026-10",
+    "kind": "bank statement",
+    "currency": "USD"
+   }
   },
   {
    "path": "extrato_out_2026.pdf",
@@ -281,13 +565,29 @@
     "Finance"
    ],
    "category": "Finance",
-   "confidence": 0.97,
+   "confidence": 0.95,
    "expected_review": false,
    "expected_kept": true,
-   "kept": true,
-   "name": "2026-10-31_extrato-out-2026.pdf",
+   "kept": false,
+   "name": "2026-09-21_banco-ipê-roxo-checking-account-statement.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "statement",
+    "issuer": "Banco Ipê Roxo",
+    "amount": null,
+    "currency": "BRL",
+    "document_date": null,
+    "due_date": null,
+    "period": "2026-10"
+   },
+   "expected_fields": {
+    "document_date": "2026-11-01",
+    "issuer": "Banco Ipê Roxo",
+    "period": "2026-10",
+    "kind": "bank statement",
+    "currency": "BRL"
+   }
   },
   {
    "path": "fatura-cartao-setembro.pdf",
@@ -302,7 +602,25 @@
    "kept": true,
    "name": "2026-09-28_fatura-cartao-setembro.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "statement",
+    "issuer": "Banco Ipê Roxo",
+    "amount": "2523.59",
+    "currency": "BRL",
+    "document_date": "2026-09-28",
+    "due_date": "2026-10-05",
+    "period": "2026-09"
+   },
+   "expected_fields": {
+    "amount": "2523.59",
+    "currency": "BRL",
+    "document_date": "2026-09-28",
+    "due_date": "2026-10-05",
+    "issuer": "Banco Ipê Roxo",
+    "period": "2026-09",
+    "kind": "card statement"
+   }
   },
   {
    "path": "comprovante.pdf",
@@ -311,13 +629,29 @@
     "Finance"
    ],
    "category": "Finance",
-   "confidence": 0.97,
+   "confidence": 0.95,
    "expected_review": false,
    "expected_kept": false,
    "kept": false,
-   "name": "2026-10-14_pix-transfer-receipt-rent.pdf",
+   "name": "2026-10-14_pix-transfer-receipt-rent-payment.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "receipt",
+    "issuer": "Banco Ipê Roxo",
+    "amount": "830.46",
+    "currency": "BRL",
+    "document_date": "2026-10-14",
+    "due_date": null,
+    "period": "2026-10"
+   },
+   "expected_fields": {
+    "amount": "830.46",
+    "currency": "BRL",
+    "document_date": "2026-10-14",
+    "issuer": "Banco Ipê Roxo",
+    "kind": "payment receipt"
+   }
   },
   {
    "path": "transactions-export.csv",
@@ -330,27 +664,27 @@
    "expected_review": false,
    "expected_kept": null,
    "kept": true,
-   "name": "2026-10-02_transactions-export.csv",
+   "name": "2026-09-21_transactions-export.csv",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "statement",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": "2026-10"
+   },
+   "expected_fields": {
+    "issuer": "Contoso Bank",
+    "period": "2026-10",
+    "kind": "bank statement",
+    "currency": "USD"
+   }
   },
   {
    "path": "household-budget-2026.xlsx",
-   "status": "organized",
-   "expected": [
-    "Finance"
-   ],
-   "category": "Finance",
-   "confidence": 0.9,
-   "expected_review": false,
-   "expected_kept": true,
-   "kept": true,
-   "name": "2026-09-21_household-budget-2026.xlsx",
-   "sensitive": false,
-   "sent": true
-  },
-  {
-   "path": "orcamento-casa.xlsx",
    "status": "organized",
    "expected": [
     "Finance"
@@ -360,9 +694,44 @@
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
+   "name": "2026-09-21_household-budget-2026.xlsx",
+   "sensitive": false,
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": "2026"
+   },
+   "expected_fields": {}
+  },
+  {
+   "path": "orcamento-casa.xlsx",
+   "status": "organized",
+   "expected": [
+    "Finance"
+   ],
+   "category": "Finance",
+   "confidence": 0.9,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
    "name": "2026-09-21_orcamento-casa.xlsx",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "receipt.eml",
@@ -377,7 +746,23 @@
    "kept": false,
    "name": "2026-10-12_adventure-works-order-receipt.eml",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "receipt",
+    "issuer": "Adventure Works Store",
+    "amount": "23.59",
+    "currency": "USD",
+    "document_date": "2026-10-12",
+    "due_date": null,
+    "period": "2026-10"
+   },
+   "expected_fields": {
+    "amount": "23.59",
+    "currency": "USD",
+    "document_date": "2026-10-12",
+    "issuer": "Adventure Works Store",
+    "kind": "receipt"
+   }
   },
   {
    "path": "alerta-compra.eml",
@@ -386,13 +771,23 @@
     "Finance"
    ],
    "category": "Finance",
-   "confidence": 0.93,
+   "confidence": 0.95,
    "expected_review": false,
    "expected_kept": null,
    "kept": false,
-   "name": "2026-10-18_bank-card-purchase-approval-alert.eml",
+   "name": "2026-10-18_card-purchase-approval-alert.eml",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "statement",
+    "issuer": "Banco Ipê Roxo",
+    "amount": "123.70",
+    "currency": "BRL",
+    "document_date": "2026-10-18",
+    "due_date": null,
+    "period": "2026-10"
+   },
+   "expected_fields": {}
   },
   {
    "path": "recibo-irpf-2026.pdf",
@@ -407,7 +802,22 @@
    "kept": true,
    "name": "2026-04-28_recibo-irpf-2026.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "tax",
+    "issuer": "Receita Federal do Brasil",
+    "amount": "2000.30",
+    "currency": "BRL",
+    "document_date": "2026-04-28",
+    "due_date": null,
+    "period": "2025"
+   },
+   "expected_fields": {
+    "document_date": "2026-04-28",
+    "issuer": "Receita Federal",
+    "period": "2025",
+    "kind": "tax return receipt"
+   }
   },
   {
    "path": "DARF-carne-leao-setembro.pdf",
@@ -420,9 +830,26 @@
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
-   "name": "2026-10-30_darf-carne-leao-setembro.pdf",
+   "name": "2026-09-21_darf-carne-leao-setembro.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "tax",
+    "issuer": null,
+    "amount": "1137.44",
+    "currency": "BRL",
+    "document_date": null,
+    "due_date": "2026-10-30",
+    "period": "2026-09"
+   },
+   "expected_fields": {
+    "amount": "1137.44",
+    "currency": "BRL",
+    "due_date": "2026-10-30",
+    "issuer": "Receita Federal",
+    "period": "2026-09",
+    "kind": "tax payment"
+   }
   },
   {
    "path": "informe-rendimentos-2025.pdf",
@@ -435,9 +862,23 @@
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
-   "name": "2025-12-31_informe-rendimentos-2025.pdf",
+   "name": "2026-09-21_informe-rendimentos-2025.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "statement",
+    "issuer": "Banco Ipê Roxo",
+    "amount": "182.02",
+    "currency": "BRL",
+    "document_date": null,
+    "due_date": null,
+    "period": "2025"
+   },
+   "expected_fields": {
+    "issuer": "Banco Ipê Roxo",
+    "period": "2025",
+    "kind": "income statement"
+   }
   },
   {
    "path": "informe.pdf",
@@ -450,9 +891,23 @@
    "expected_review": false,
    "expected_kept": false,
    "kept": false,
-   "name": "2026-09-21_income-and-withholding-tax-statement-2025.pdf",
+   "name": "2026-09-21_income-and-withholding-tax-certificate.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "tax",
+    "issuer": "Andorinha Tecnologia Ltda",
+    "amount": "92750.95",
+    "currency": "BRL",
+    "document_date": null,
+    "due_date": null,
+    "period": "2025"
+   },
+   "expected_fields": {
+    "issuer": "Andorinha Tecnologia Ltda",
+    "period": "2025",
+    "kind": "income statement"
+   }
   },
   {
    "path": "recibo-consulta.pdf",
@@ -462,13 +917,29 @@
     "Other"
    ],
    "category": "Finance",
-   "confidence": 0.95,
+   "confidence": 0.9,
    "expected_review": false,
    "expected_kept": null,
    "kept": true,
    "name": "2026-09-03_recibo-consulta.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "receipt",
+    "issuer": "Clínica Jatobá",
+    "amount": "581.96",
+    "currency": "BRL",
+    "document_date": "2026-09-03",
+    "due_date": null,
+    "period": "2026-09"
+   },
+   "expected_fields": {
+    "amount": "581.96",
+    "currency": "BRL",
+    "document_date": "2026-09-03",
+    "issuer": "Clínica Jatobá",
+    "kind": "medical receipt"
+   }
   },
   {
    "path": "2025 Tax Return Summary.pdf",
@@ -477,13 +948,26 @@
     "Finance"
    ],
    "category": "Finance",
-   "confidence": 0.97,
+   "confidence": 0.95,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
    "name": "2026-09-21_2025-tax-return-summary.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "tax",
+    "issuer": null,
+    "amount": "1340.52",
+    "currency": "USD",
+    "document_date": null,
+    "due_date": null,
+    "period": "2025"
+   },
+   "expected_fields": {
+    "period": "2025",
+    "kind": "tax return"
+   }
   },
   {
    "path": "IPTU 2026 carne.pdf",
@@ -496,9 +980,25 @@
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
-   "name": "2026-01-01_iptu-2026-carne.pdf",
+   "name": "2026-09-21_iptu-2026-carne.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "tax",
+    "issuer": "Prefeitura Municipal",
+    "amount": "3920.11",
+    "currency": "BRL",
+    "document_date": null,
+    "due_date": "2026-02-10",
+    "period": "2026"
+   },
+   "expected_fields": {
+    "amount": "3920.11",
+    "currency": "BRL",
+    "due_date": "2026-02-10",
+    "period": "2026",
+    "kind": "property tax"
+   }
   },
   {
    "path": "lease_agreement_signed.docx",
@@ -507,13 +1007,27 @@
     "Contracts"
    ],
    "category": "Contracts",
-   "confidence": 0.95,
+   "confidence": 0.97,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
-   "name": "2026-11-01_lease-agreement-signed.docx",
+   "name": "2026-09-21_lease-agreement-signed.docx",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "contract",
+    "issuer": "Proseware Realty",
+    "amount": "2451.87",
+    "currency": "USD",
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {
+    "issuer": "Proseware Realty",
+    "document_date": "2026-10-20",
+    "kind": "lease"
+   }
   },
   {
    "path": "NDA - Litware.docx",
@@ -522,13 +1036,26 @@
     "Contracts"
    ],
    "category": "Contracts",
-   "confidence": 0.95,
+   "confidence": 0.97,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
    "name": "2026-09-21_nda-litware.docx",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "contract",
+    "issuer": "Litware Inc.",
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {
+    "issuer": "Litware Inc.",
+    "kind": "nda"
+   }
   },
   {
    "path": "contract.docx",
@@ -543,7 +1070,20 @@
    "kept": false,
    "name": "2026-09-21_freelance-services-agreement-tailspin-toys.docx",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "contract",
+    "issuer": null,
+    "amount": "3577.40",
+    "currency": "USD",
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {
+    "issuer": "Tailspin Toys",
+    "kind": "services agreement"
+   }
   },
   {
    "path": "contrato-aluguel-apto.docx",
@@ -558,7 +1098,20 @@
    "kept": true,
    "name": "2026-09-21_contrato-aluguel-apto.docx",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "contract",
+    "issuer": "Imobiliária Jacarandá Ltda",
+    "amount": "1658.89",
+    "currency": "BRL",
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {
+    "issuer": "Imobiliária Jacarandá Ltda",
+    "kind": "lease"
+   }
   },
   {
    "path": "aditivo contratual.pdf",
@@ -573,7 +1126,19 @@
    "kept": true,
    "name": "2026-09-21_aditivo-contratual.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "contract",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {
+    "kind": "contract amendment"
+   }
   },
   {
    "path": "procuracao.pdf",
@@ -589,7 +1154,19 @@
    "kept": true,
    "name": "2026-09-21_procuracao.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "contract",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {
+    "kind": "power of attorney"
+   }
   },
   {
    "path": "proposta-comercial-v3.docx",
@@ -599,13 +1176,23 @@
     "Other"
    ],
    "category": "Contracts",
-   "confidence": 0.85,
+   "confidence": 0.9,
    "expected_review": false,
    "expected_kept": true,
    "kept": false,
    "name": "2026-09-21_andorinha-tecnologia-app-development-proposal.docx",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "contract",
+    "issuer": "Andorinha Tecnologia",
+    "amount": "64747.78",
+    "currency": "BRL",
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "distrato.pdf",
@@ -614,13 +1201,25 @@
     "Contracts"
    ],
    "category": "Contracts",
-   "confidence": 0.9,
+   "confidence": 0.93,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
    "name": "2026-09-21_distrato.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "contract",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": "2024"
+   },
+   "expected_fields": {
+    "kind": "termination agreement"
+   }
   },
   {
    "path": "Re_ minuta do contrato.eml",
@@ -636,7 +1235,17 @@
    "kept": true,
    "name": "2026-10-06_re-minuta-do-contrato.eml",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "contract",
+    "issuer": "Pau-Brasil",
+    "amount": null,
+    "currency": null,
+    "document_date": "2026-10-06",
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "terms-of-service.pdf",
@@ -646,13 +1255,23 @@
     "Other"
    ],
    "category": "Contracts",
-   "confidence": 0.95,
+   "confidence": 0.9,
    "expected_review": false,
    "expected_kept": true,
    "kept": false,
    "name": "2026-09-01_wingtip-cloud-terms-of-service.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "contract",
+    "issuer": "Wingtip Cloud",
+    "amount": null,
+    "currency": null,
+    "document_date": "2026-09-01",
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "certidao-nascimento.pdf",
@@ -661,13 +1280,25 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.9,
+   "confidence": 0.85,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
    "name": "2026-09-21_certidao-nascimento.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": "Cartório do 2º Ofício",
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {
+    "kind": "birth certificate"
+   }
   },
   {
    "path": "comprovante-residencia.pdf",
@@ -676,14 +1307,24 @@
     "Other",
     "Finance"
    ],
-   "category": "Other",
+   "category": "Finance",
    "confidence": 0.75,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
    "name": "comprovante-residencia.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "letter",
+    "issuer": "Companhia Elétrica Vale Azul",
+    "amount": null,
+    "currency": null,
+    "document_date": "2026-10-02",
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "diploma-graduacao.pdf",
@@ -692,13 +1333,25 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.8,
+   "confidence": 0.85,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
    "name": "2020-12-15_diploma-graduacao.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": "Universidade Federal do Cerrado",
+    "amount": null,
+    "currency": null,
+    "document_date": "2020-12-15",
+    "due_date": null,
+    "period": "2020"
+   },
+   "expected_fields": {
+    "kind": "diploma"
+   }
   },
   {
    "path": "titulo-eleitor.pdf",
@@ -713,7 +1366,17 @@
    "kept": true,
    "name": "2026-09-21_titulo-eleitor.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": "Justiça Eleitoral",
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "RG-frente.jpg",
@@ -723,13 +1386,23 @@
     "Other"
    ],
    "category": "Images",
-   "confidence": 0.8,
+   "confidence": 0.9,
    "expected_review": false,
    "expected_kept": null,
    "kept": true,
    "name": "RG-frente.jpg",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "CNH-digital.pdf",
@@ -738,28 +1411,48 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.4,
+   "confidence": 0.5,
    "expected_review": false,
    "expected_kept": null,
    "kept": null,
    "name": "CNH-digital.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "passport-scan.pdf",
-   "status": "review",
+   "status": "organized",
    "expected": [
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.6,
+   "confidence": 0.8,
    "expected_review": false,
    "expected_kept": null,
-   "kept": null,
+   "kept": true,
    "name": "passport-scan.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "historico-escolar.pdf",
@@ -768,13 +1461,23 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.85,
+   "confidence": 0.8,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
-   "name": "2015-01-01_historico-escolar.pdf",
+   "name": "2026-09-21_historico-escolar.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "report",
+    "issuer": "Escola Técnica Andorinha",
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": "2015"
+   },
+   "expected_fields": {}
   },
   {
    "path": "resultado-exame-sangue.pdf",
@@ -789,7 +1492,21 @@
    "kept": true,
    "name": "2026-09-22_resultado-exame-sangue.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "report",
+    "issuer": "Laboratório Ceriba",
+    "amount": null,
+    "currency": null,
+    "document_date": "2026-09-22",
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {
+    "document_date": "2026-09-22",
+    "issuer": "Laboratório Ceriba",
+    "kind": "lab result"
+   }
   },
   {
    "path": "receita.pdf",
@@ -798,13 +1515,27 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.85,
+   "confidence": 0.8,
    "expected_review": false,
    "expected_kept": false,
    "kept": false,
-   "name": "2026-09-03_clinica-jatoba-prescription-amoxicillin.pdf",
+   "name": "2026-09-03_clinic-prescription-amoxicillin-course.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": "Clínica Jatobá",
+    "amount": null,
+    "currency": null,
+    "document_date": "2026-09-03",
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {
+    "document_date": "2026-09-03",
+    "issuer": "Clínica Jatobá",
+    "kind": "prescription"
+   }
   },
   {
    "path": "atestado.pdf",
@@ -816,10 +1547,22 @@
    "confidence": 0.8,
    "expected_review": false,
    "expected_kept": true,
-   "kept": false,
-   "name": "2026-09-03_medical-certificate-from-clinic.pdf",
+   "kept": true,
+   "name": "2026-09-03_atestado.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "report",
+    "issuer": "Clínica Jatobá",
+    "amount": null,
+    "currency": null,
+    "document_date": "2026-09-03",
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {
+    "kind": "medical certificate"
+   }
   },
   {
    "path": "laudo-ressonancia-joelho.pdf",
@@ -828,28 +1571,54 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.8,
+   "confidence": 0.85,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
    "name": "2026-09-21_laudo-ressonancia-joelho.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "report",
+    "issuer": "Centro de Imagem Ipê",
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {
+    "kind": "imaging report"
+   }
   },
   {
    "path": "lab_results_2026-10.pdf",
-   "status": "organized",
+   "status": "review",
    "expected": [
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.8,
+   "confidence": 0.6,
    "expected_review": false,
    "expected_kept": true,
-   "kept": false,
-   "name": "2026-10-04_lipid-panel-lab-results.pdf",
+   "kept": null,
+   "name": "lab_results_2026-10.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "report",
+    "issuer": "Litware Health Labs",
+    "amount": null,
+    "currency": null,
+    "document_date": "2026-10-04",
+    "due_date": null,
+    "period": "2026-10"
+   },
+   "expected_fields": {
+    "document_date": "2026-10-04",
+    "issuer": "Litware Health Labs",
+    "kind": "lab result"
+   }
   },
   {
    "path": "reembolso-plano-saude.pdf",
@@ -859,13 +1628,29 @@
     "Other"
    ],
    "category": "Finance",
-   "confidence": 0.9,
+   "confidence": 0.95,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
-   "name": "2026-10-16_reembolso-plano-saude.pdf",
+   "name": "2026-09-21_reembolso-plano-saude.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "statement",
+    "issuer": "Plano de Saúde Bem-te-vi",
+    "amount": "251.98",
+    "currency": "BRL",
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {
+    "amount": "251.98",
+    "currency": "BRL",
+    "document_date": "2026-10-16",
+    "issuer": "Plano de Saúde Bem-te-vi",
+    "kind": "reimbursement"
+   }
   },
   {
    "path": "Litware Health invoice.pdf",
@@ -874,13 +1659,30 @@
     "Finance"
    ],
    "category": "Finance",
-   "confidence": 0.97,
+   "confidence": 0.95,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
    "name": "2026-10-07_litware-health-invoice.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "invoice",
+    "issuer": "Litware Health Clinic",
+    "amount": "338.27",
+    "currency": "USD",
+    "document_date": "2026-10-07",
+    "due_date": "2026-11-06",
+    "period": "2026-10"
+   },
+   "expected_fields": {
+    "amount": "338.27",
+    "currency": "USD",
+    "document_date": "2026-10-07",
+    "due_date": "2026-11-06",
+    "issuer": "Litware Health Clinic",
+    "kind": "medical bill"
+   }
   },
   {
    "path": "carteira-vacinacao.jpg",
@@ -896,7 +1698,17 @@
    "kept": true,
    "name": "carteira-vacinacao.jpg",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "holerite-setembro-2026.pdf",
@@ -906,13 +1718,29 @@
     "Other"
    ],
    "category": "Finance",
-   "confidence": 0.95,
+   "confidence": 0.97,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
-   "name": "2026-09-01_holerite-setembro-2026.pdf",
+   "name": "2026-09-21_holerite-setembro-2026.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "payslip",
+    "issuer": "Andorinha Tecnologia Ltda",
+    "amount": "8950.77",
+    "currency": "BRL",
+    "document_date": null,
+    "due_date": null,
+    "period": "2026-09"
+   },
+   "expected_fields": {
+    "amount": "8950.77",
+    "currency": "BRL",
+    "issuer": "Andorinha Tecnologia Ltda",
+    "period": "2026-09",
+    "kind": "payslip"
+   }
   },
   {
    "path": "payslip_oct.pdf",
@@ -926,9 +1754,25 @@
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
-   "name": "2026-10-31_payslip-oct.pdf",
+   "name": "2026-09-21_payslip-oct.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "payslip",
+    "issuer": "Tailspin Toys",
+    "amount": "5188.13",
+    "currency": "USD",
+    "document_date": null,
+    "due_date": null,
+    "period": "2026-10"
+   },
+   "expected_fields": {
+    "amount": "5188.13",
+    "currency": "USD",
+    "issuer": "Tailspin Toys",
+    "period": "2026-10",
+    "kind": "payslip"
+   }
   },
   {
    "path": "Q3 report.pptx",
@@ -943,7 +1787,17 @@
    "kept": true,
    "name": "2026-09-21_q3-report.pptx",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "report",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "relatorio-trimestral.docx",
@@ -958,7 +1812,17 @@
    "kept": true,
    "name": "2026-09-21_relatorio-trimestral.docx",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "report",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": "2026"
+   },
+   "expected_fields": {}
   },
   {
    "path": "curriculo-2026.docx",
@@ -973,7 +1837,17 @@
    "kept": true,
    "name": "2026-09-21_curriculo-2026.docx",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": "2026"
+   },
+   "expected_fields": {}
   },
   {
    "path": "resume_final_v2.docx",
@@ -982,28 +1856,48 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.85,
+   "confidence": 0.8,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
    "name": "2026-09-21_resume-final-v2.docx",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "apresentacao-cliente.pptx",
-   "status": "organized",
+   "status": "review",
    "expected": [
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.75,
+   "confidence": 0.6,
    "expected_review": false,
    "expected_kept": true,
-   "kept": true,
+   "kept": null,
    "name": "apresentacao-cliente.pptx",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "planilha-horas.xlsx",
@@ -1018,7 +1912,17 @@
    "kept": true,
    "name": "2026-09-21_planilha-horas.xlsx",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "meeting-notes.md",
@@ -1027,13 +1931,23 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.85,
+   "confidence": 0.9,
    "expected_review": false,
    "expected_kept": true,
-   "kept": false,
-   "name": "2026-09-21_weekly-sync-meeting-notes.md",
+   "kept": true,
+   "name": "2026-09-21_meeting-notes.md",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "ata-reuniao-condominio.txt",
@@ -1048,7 +1962,17 @@
    "kept": true,
    "name": "2026-09-21_ata-reuniao-condominio.txt",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "report",
+    "issuer": "Condomínio Residencial Flamboyant",
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "onboarding-checklist.txt",
@@ -1057,13 +1981,23 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.85,
+   "confidence": 0.8,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
    "name": "2026-09-21_onboarding-checklist.txt",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "Re_ aprovacao ferias.eml",
@@ -1078,7 +2012,17 @@
    "kept": true,
    "name": "2026-10-15_re-aprovacao-ferias.eml",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "letter",
+    "issuer": "Andorinha",
+    "amount": null,
+    "currency": null,
+    "document_date": "2026-10-15",
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "artigo-aprendizado-de-maquina.pdf",
@@ -1087,13 +2031,23 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.85,
+   "confidence": 0.8,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
    "name": "2026-09-21_artigo-aprendizado-de-maquina.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "report",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "2310.01234v2.pdf",
@@ -1102,13 +2056,23 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.9,
+   "confidence": 0.85,
    "expected_review": false,
    "expected_kept": false,
    "kept": false,
    "name": "2026-09-21_retrieval-augmented-classification-of-personal-documents.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "report",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "apostila-calculo-1.pdf",
@@ -1123,22 +2087,42 @@
    "kept": true,
    "name": "2026-09-21_apostila-calculo-1.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "aula03.pptx",
-   "status": "organized",
+   "status": "review",
    "expected": [
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.85,
+   "confidence": 0.6,
    "expected_review": false,
    "expected_kept": null,
-   "kept": false,
-   "name": "2026-09-21_data-structures-lecture-3.pptx",
+   "kept": null,
+   "name": "aula03.pptx",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "certificado-curso-python.pdf",
@@ -1153,7 +2137,19 @@
    "kept": true,
    "name": "2026-08-30_certificado-curso-python.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": "Escola Técnica Andorinha",
+    "amount": null,
+    "currency": null,
+    "document_date": "2026-08-30",
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {
+    "kind": "course certificate"
+   }
   },
   {
    "path": "lecture-notes-week2.md",
@@ -1168,7 +2164,17 @@
    "kept": true,
    "name": "2026-09-21_lecture-notes-week2.md",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "ebook-introducao-estatistica.pdf",
@@ -1177,13 +2183,23 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.9,
+   "confidence": 0.85,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
    "name": "2026-09-21_ebook-introducao-estatistica.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "tcc-versao-final",
@@ -1198,7 +2214,17 @@
    "kept": true,
    "name": "tcc-versao-final",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "boarding-pass.pdf",
@@ -1207,13 +2233,27 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.85,
+   "confidence": 0.8,
    "expected_review": false,
    "expected_kept": true,
    "kept": false,
    "name": "2026-11-28_tailspin-airways-boarding-pass-gru-lis.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "ticket",
+    "issuer": "Tailspin Airways",
+    "amount": null,
+    "currency": null,
+    "document_date": "2026-11-28",
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {
+    "document_date": "2026-11-28",
+    "issuer": "Tailspin Airways",
+    "kind": "boarding pass"
+   }
   },
   {
    "path": "e-ticket.pdf",
@@ -1223,13 +2263,26 @@
     "Finance"
    ],
    "category": "Finance",
-   "confidence": 0.8,
+   "confidence": 0.85,
    "expected_review": false,
    "expected_kept": false,
    "kept": false,
-   "name": "2026-12-12_airline-e-ticket-são-paulo-to-recife.pdf",
+   "name": "2026-12-12_garça-airlines-e-ticket-são-paulo-to-recife.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "ticket",
+    "issuer": "Garça Linhas Aéreas",
+    "amount": "423.65",
+    "currency": "BRL",
+    "document_date": "2026-12-12",
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {
+    "issuer": "Garça Linhas Aéreas",
+    "kind": "flight ticket"
+   }
   },
   {
    "path": "reserva-hotel.eml",
@@ -1242,9 +2295,21 @@
    "expected_review": false,
    "expected_kept": true,
    "kept": false,
-   "name": "2026-10-02_hotel-sabiá-praia-booking-confirmation.eml",
+   "name": "2026-10-02_hotel-sabia-praia-booking-confirmation.eml",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "ticket",
+    "issuer": "Hotel Sabiá Praia",
+    "amount": "2352.26",
+    "currency": "BRL",
+    "document_date": "2026-10-02",
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {
+    "kind": "hotel booking"
+   }
   },
   {
    "path": "itinerario-lisboa.docx",
@@ -1253,13 +2318,23 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.85,
+   "confidence": 0.9,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
    "name": "2026-09-21_itinerario-lisboa.docx",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "seguro-viagem-europa.pdf",
@@ -1268,14 +2343,26 @@
     "Other",
     "Contracts"
    ],
-   "category": "Contracts",
+   "category": "Finance",
    "confidence": 0.85,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
-   "name": "2026-11-27_seguro-viagem-europa.pdf",
+   "name": "2026-09-21_seguro-viagem-europa.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "policy",
+    "issuer": "Seguradora Quero-Quero",
+    "amount": null,
+    "currency": "EUR",
+    "document_date": null,
+    "due_date": null,
+    "period": "2026-11"
+   },
+   "expected_fields": {
+    "kind": "travel insurance"
+   }
   },
   {
    "path": "aluguel-carro-reserva.pdf",
@@ -1284,31 +2371,26 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.75,
+   "confidence": 0.85,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
-   "name": "aluguel-carro-reserva.pdf",
+   "name": "2026-09-21_aluguel-carro-reserva.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "ticket",
+    "issuer": "Locadora Tamanduá",
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "hotel-confirmation.eml",
-   "status": "organized",
-   "expected": [
-    "Other"
-   ],
-   "category": "Finance",
-   "confidence": 0.75,
-   "expected_review": false,
-   "expected_kept": true,
-   "kept": true,
-   "name": "hotel-confirmation.eml",
-   "sensitive": false,
-   "sent": true
-  },
-  {
-   "path": "visa-application-form.pdf",
    "status": "organized",
    "expected": [
     "Other"
@@ -1317,10 +2399,47 @@
    "confidence": 0.8,
    "expected_review": false,
    "expected_kept": true,
-   "kept": true,
-   "name": "2026-09-21_visa-application-form.pdf",
+   "kept": false,
+   "name": "2026-10-10_wingtip-suites-hotel-stay-confirmation.eml",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "ticket",
+    "issuer": "Wingtip Suites",
+    "amount": "408.47",
+    "currency": "USD",
+    "document_date": "2026-10-10",
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {
+    "kind": "hotel booking"
+   }
+  },
+  {
+   "path": "visa-application-form.pdf",
+   "status": "organized",
+   "expected": [
+    "Other"
+   ],
+   "category": "Other",
+   "confidence": 0.75,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "visa-application-form.pdf",
+   "sensitive": false,
+   "sent": true,
+   "fields": {
+    "kind": "form",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "pedido-2644639.eml",
@@ -1330,13 +2449,29 @@
     "Other"
    ],
    "category": "Finance",
-   "confidence": 0.75,
+   "confidence": 0.8,
    "expected_review": false,
    "expected_kept": false,
-   "kept": true,
-   "name": "pedido-2644639.eml",
+   "kept": false,
+   "name": "2026-10-14_tucano-online-order-shipped-notice.eml",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "receipt",
+    "issuer": "Loja Tucano Online",
+    "amount": "585.17",
+    "currency": "BRL",
+    "document_date": "2026-10-14",
+    "due_date": null,
+    "period": "2026-10"
+   },
+   "expected_fields": {
+    "amount": "585.17",
+    "currency": "BRL",
+    "document_date": "2026-10-14",
+    "issuer": "Loja Tucano Online",
+    "kind": "order"
+   }
   },
   {
    "path": "termo-garantia-geladeira.pdf",
@@ -1351,7 +2486,17 @@
    "kept": true,
    "name": "2026-09-21_termo-garantia-geladeira.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "contract",
+    "issuer": "Eletrodomésticos Arara",
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "manual-cafeteira.pdf",
@@ -1360,13 +2505,23 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.9,
+   "confidence": 0.85,
    "expected_review": false,
    "expected_kept": true,
-   "kept": false,
-   "name": "2026-09-21_arara-cf-20-electric-coffee-maker-manual.pdf",
+   "kept": true,
+   "name": "2026-09-21_manual-cafeteira.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "manual",
+    "issuer": "Arara",
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "user-guide.pdf",
@@ -1381,7 +2536,17 @@
    "kept": false,
    "name": "2026-09-21_adventure-works-trailcam-2-user-guide.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "manual",
+    "issuer": "Adventure Works",
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "NFe5353104453.pdf",
@@ -1390,13 +2555,29 @@
     "Finance"
    ],
    "category": "Finance",
-   "confidence": 0.95,
+   "confidence": 0.93,
    "expected_review": false,
    "expected_kept": false,
    "kept": false,
-   "name": "2026-10-11_brazilian-electronic-invoice-danfe.pdf",
+   "name": "2026-10-11_electronic-invoice-danfe-from-arara-eletrodomésticos.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "invoice",
+    "issuer": "Eletrodomésticos Arara Ltda",
+    "amount": "704.27",
+    "currency": "BRL",
+    "document_date": "2026-10-11",
+    "due_date": null,
+    "period": "2026-10"
+   },
+   "expected_fields": {
+    "amount": "704.27",
+    "currency": "BRL",
+    "document_date": "2026-10-11",
+    "issuer": "Eletrodomésticos Arara Ltda",
+    "kind": "invoice"
+   }
   },
   {
    "path": "order-confirmation.eml",
@@ -1409,10 +2590,22 @@
    "confidence": 0.85,
    "expected_review": false,
    "expected_kept": true,
-   "kept": true,
-   "name": "2026-10-22_order-confirmation.eml",
+   "kept": false,
+   "name": "2026-10-22_adventure-works-camping-stove-order-confirmation.eml",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "receipt",
+    "issuer": "Adventure Works Store",
+    "amount": "76.82",
+    "currency": "USD",
+    "document_date": "2026-10-22",
+    "due_date": null,
+    "period": "2026-10"
+   },
+   "expected_fields": {
+    "kind": "order"
+   }
   },
   {
    "path": "warranty-registration.txt",
@@ -1425,9 +2618,19 @@
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
-   "name": "2026-09-01_warranty-registration.txt",
+   "name": "2026-09-21_warranty-registration.txt",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": "2026-09"
+   },
+   "expected_fields": {}
   },
   {
    "path": "boleto-condominio-outubro.pdf",
@@ -1440,9 +2643,26 @@
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
-   "name": "2026-10-10_boleto-condominio-outubro.pdf",
+   "name": "2026-09-21_boleto-condominio-outubro.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "bill",
+    "issuer": "Condomínio Residencial Flamboyant",
+    "amount": "1109.31",
+    "currency": "BRL",
+    "document_date": null,
+    "due_date": "2026-10-10",
+    "period": "2026-10"
+   },
+   "expected_fields": {
+    "amount": "1109.31",
+    "currency": "BRL",
+    "due_date": "2026-10-10",
+    "issuer": "Condomínio Residencial Flamboyant",
+    "period": "2026-10",
+    "kind": "condo fee"
+   }
   },
   {
    "path": "escritura-imovel.pdf",
@@ -1451,13 +2671,23 @@
     "Contracts"
    ],
    "category": "Contracts",
-   "confidence": 0.93,
+   "confidence": 0.95,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
    "name": "2026-09-21_escritura-imovel.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "contract",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "IPVA-2026.pdf",
@@ -1472,7 +2702,22 @@
    "kept": true,
    "name": "2026-09-21_ipva-2026.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "tax",
+    "issuer": "Secretaria da Fazenda",
+    "amount": "2898.08",
+    "currency": "BRL",
+    "document_date": null,
+    "due_date": null,
+    "period": "2026"
+   },
+   "expected_fields": {
+    "amount": "2898.08",
+    "currency": "BRL",
+    "period": "2026",
+    "kind": "vehicle tax"
+   }
   },
   {
    "path": "notificacao.pdf",
@@ -1482,13 +2727,27 @@
     "Finance"
    ],
    "category": "Finance",
-   "confidence": 0.8,
+   "confidence": 0.9,
    "expected_review": false,
    "expected_kept": false,
    "kept": false,
-   "name": "2026-09-21_traffic-fine-notification.pdf",
+   "name": "2026-09-21_traffic-fine-notification-for-speeding.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "letter",
+    "issuer": "Departamento de Trânsito",
+    "amount": "269.40",
+    "currency": "BRL",
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {
+    "amount": "269.40",
+    "currency": "BRL",
+    "kind": "traffic fine"
+   }
   },
   {
    "path": "laudo-vistoria-apartamento.pdf",
@@ -1504,7 +2763,17 @@
    "kept": true,
    "name": "2026-09-21_laudo-vistoria-apartamento.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "report",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "home-insurance-policy.pdf",
@@ -1513,14 +2782,26 @@
     "Contracts",
     "Finance"
    ],
-   "category": "Contracts",
-   "confidence": 0.8,
+   "category": "Finance",
+   "confidence": 0.85,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
-   "name": "2026-11-01_home-insurance-policy.pdf",
+   "name": "2026-09-21_home-insurance-policy.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "policy",
+    "issuer": "Wingtip Insurance",
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": "2026-11"
+   },
+   "expected_fields": {
+    "kind": "insurance policy"
+   }
   },
   {
    "path": "car-service-invoice.pdf",
@@ -1535,7 +2816,19 @@
    "kept": true,
    "name": "2026-10-09_car-service-invoice.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "invoice",
+    "issuer": "Proseware Auto Service",
+    "amount": "289.71",
+    "currency": "USD",
+    "document_date": "2026-10-09",
+    "due_date": null,
+    "period": "2026-10"
+   },
+   "expected_fields": {
+    "kind": "invoice"
+   }
   },
   {
    "path": "proposta.pdf",
@@ -1546,13 +2839,23 @@
     "Other"
    ],
    "category": "Contracts",
-   "confidence": 0.8,
+   "confidence": 0.75,
    "expected_review": false,
    "expected_kept": false,
-   "kept": false,
-   "name": "2026-09-21_custom-kitchen-cabinets-quote.pdf",
+   "kept": true,
+   "name": "proposta.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "form",
+    "issuer": "Marcenaria Ipê Amarelo",
+    "amount": "6599.15",
+    "currency": "BRL",
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "IMG_4821.jpg",
@@ -1561,13 +2864,23 @@
     "Images"
    ],
    "category": "Images",
-   "confidence": 0.9,
+   "confidence": 0.95,
    "expected_review": false,
    "expected_kept": null,
    "kept": true,
    "name": "IMG_4821.jpg",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "IMG_4822.jpg",
@@ -1582,7 +2895,17 @@
    "kept": true,
    "name": "IMG_4822.jpg",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "IMG_20260914_101522.jpg",
@@ -1597,7 +2920,17 @@
    "kept": true,
    "name": "IMG_20260914_101522.jpg",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "DSC_0042.JPG",
@@ -1612,7 +2945,17 @@
    "kept": true,
    "name": "DSC_0042.JPG",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "Screenshot 2026-10-03 at 14.22.10.png",
@@ -1621,13 +2964,23 @@
     "Images"
    ],
    "category": "Images",
-   "confidence": 0.9,
+   "confidence": 0.95,
    "expected_review": false,
    "expected_kept": null,
    "kept": true,
    "name": "Screenshot 2026-10-03 at 14.22.10.png",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "Captura de Tela 2026-09-12 às 10.15.33.png",
@@ -1642,7 +2995,17 @@
    "kept": true,
    "name": "Captura de Tela 2026-09-12 às 10.15.33.png",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "wallpaper-montanhas.jpg",
@@ -1651,13 +3014,23 @@
     "Images"
    ],
    "category": "Images",
-   "confidence": 0.95,
+   "confidence": 0.97,
    "expected_review": false,
    "expected_kept": null,
    "kept": true,
    "name": "wallpaper-montanhas.jpg",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "logo-final.png",
@@ -1672,7 +3045,17 @@
    "kept": true,
    "name": "logo-final.png",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "foto-perfil.heic",
@@ -1687,7 +3070,17 @@
    "kept": true,
    "name": "foto-perfil.heic",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "WhatsApp Image 2026-10-05 at 19.03.11.jpeg",
@@ -1702,7 +3095,17 @@
    "kept": true,
    "name": "WhatsApp Image 2026-10-05 at 19.03.11.jpeg",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "diagram-architecture.png",
@@ -1717,7 +3120,17 @@
    "kept": true,
    "name": "diagram-architecture.png",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "Fotos Lisboa 2026",
@@ -1726,31 +3139,26 @@
     "Images"
    ],
    "category": "Images",
-   "confidence": 0.95,
+   "confidence": 0.9,
    "expected_review": false,
    "expected_kept": null,
    "kept": true,
    "name": "Fotos Lisboa 2026",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": "2026"
+   },
+   "expected_fields": {}
   },
   {
    "path": "gravacao-reuniao-2026-10-14.mp4",
-   "status": "review",
-   "expected": [
-    "Other"
-   ],
-   "category": "Other",
-   "confidence": 0.6,
-   "expected_review": false,
-   "expected_kept": null,
-   "kept": null,
-   "name": "gravacao-reuniao-2026-10-14.mp4",
-   "sensitive": false,
-   "sent": true
-  },
-  {
-   "path": "podcast-episodio-42.mp3",
    "status": "organized",
    "expected": [
     "Other"
@@ -1760,9 +3168,44 @@
    "expected_review": false,
    "expected_kept": null,
    "kept": true,
+   "name": "gravacao-reuniao-2026-10-14.mp4",
+   "sensitive": false,
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
+  },
+  {
+   "path": "podcast-episodio-42.mp3",
+   "status": "review",
+   "expected": [
+    "Other"
+   ],
+   "category": "Other",
+   "confidence": 0.6,
+   "expected_review": false,
+   "expected_kept": null,
+   "kept": null,
    "name": "podcast-episodio-42.mp3",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "screen-recording.mov",
@@ -1777,7 +3220,17 @@
    "kept": null,
    "name": "screen-recording.mov",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "voice memo.m4a",
@@ -1792,7 +3245,17 @@
    "kept": true,
    "name": "voice memo.m4a",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "aniversario-vovo.mp4",
@@ -1801,13 +3264,23 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.8,
+   "confidence": 0.85,
    "expected_review": false,
    "expected_kept": null,
    "kept": true,
    "name": "aniversario-vovo.mp4",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "Notely-4.2.1.dmg",
@@ -1822,7 +3295,17 @@
    "kept": true,
    "name": "Notely-4.2.1.dmg",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "PrinterDriver_3.1.pkg",
@@ -1837,7 +3320,17 @@
    "kept": true,
    "name": "PrinterDriver_3.1.pkg",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "Install Fieldnote.pkg",
@@ -1852,7 +3345,17 @@
    "kept": true,
    "name": "Install Fieldnote.pkg",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "ZapWrite-universal.dmg",
@@ -1867,7 +3370,17 @@
    "kept": true,
    "name": "ZapWrite-universal.dmg",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "atualizacao-firmware-roteador.zip",
@@ -1883,7 +3396,17 @@
    "kept": true,
    "name": "atualizacao-firmware-roteador.zip",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "Clipwise.app",
@@ -1892,13 +3415,23 @@
     "Installers"
    ],
    "category": "Installers",
-   "confidence": 0.9,
+   "confidence": 0.95,
    "expected_review": false,
    "expected_kept": null,
    "kept": true,
    "name": "Clipwise.app",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "script_backup.py",
@@ -1907,13 +3440,23 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.9,
+   "confidence": 0.95,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
    "name": "2026-09-21_script-backup.py",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "export-tarefas.json",
@@ -1922,13 +3465,23 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.9,
+   "confidence": 0.85,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
    "name": "2026-09-21_export-tarefas.json",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "dados-vendas-q3.csv",
@@ -1936,14 +3489,24 @@
    "expected": [
     "Other"
    ],
-   "category": "Finance",
-   "confidence": 0.85,
+   "category": "Other",
+   "confidence": 0.8,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
    "name": "2026-09-21_dados-vendas-q3.csv",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "schema.sql",
@@ -1952,13 +3515,23 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.8,
+   "confidence": 0.9,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
    "name": "2026-09-21_schema.sql",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "analysis.ipynb",
@@ -1967,13 +3540,23 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.8,
+   "confidence": 0.9,
    "expected_review": false,
    "expected_kept": true,
    "kept": false,
    "name": "2026-09-21_sales-analysis-notebook.ipynb",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "site-portfolio",
@@ -1982,13 +3565,23 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.8,
+   "confidence": 0.9,
    "expected_review": false,
    "expected_kept": null,
    "kept": true,
    "name": "site-portfolio",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "backup-notas-2026.zip",
@@ -2003,7 +3596,17 @@
    "kept": true,
    "name": "2026-09-21_backup-notas-2026.zip",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": "2026"
+   },
+   "expected_fields": {}
   },
   {
    "path": "config.yaml",
@@ -2012,13 +3615,23 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.8,
+   "confidence": 0.85,
    "expected_review": false,
    "expected_kept": true,
-   "kept": false,
-   "name": "2026-09-21_application-configuration-settings.yaml",
+   "kept": true,
+   "name": "2026-09-21_config.yaml",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "dotfiles-main.zip",
@@ -2033,7 +3646,17 @@
    "kept": true,
    "name": "2026-09-21_dotfiles-main.zip",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "receita-lasanha.pdf",
@@ -2048,7 +3671,17 @@
    "kept": true,
    "name": "2026-09-21_receita-lasanha.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "shopping-list.txt",
@@ -2063,10 +3696,45 @@
    "kept": true,
    "name": "2026-09-21_shopping-list.txt",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "newsletter-outubro.eml",
+   "status": "organized",
+   "expected": [
+    "Other"
+   ],
+   "category": "Other",
+   "confidence": 0.93,
+   "expected_review": false,
+   "expected_kept": true,
+   "kept": true,
+   "name": "2026-10-01_newsletter-outubro.eml",
+   "sensitive": false,
+   "sent": true,
+   "fields": {
+    "kind": "letter",
+    "issuer": "Clube do Livro Sabiá",
+    "amount": null,
+    "currency": null,
+    "document_date": "2026-10-01",
+    "due_date": null,
+    "period": "2026-10"
+   },
+   "expected_fields": {}
+  },
+  {
+   "path": "wedding-invitation.pdf",
    "status": "organized",
    "expected": [
     "Other"
@@ -2076,24 +3744,19 @@
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
-   "name": "2026-10-01_newsletter-outubro.eml",
-   "sensitive": false,
-   "sent": true
-  },
-  {
-   "path": "wedding-invitation.pdf",
-   "status": "organized",
-   "expected": [
-    "Other"
-   ],
-   "category": "Other",
-   "confidence": 0.85,
-   "expected_review": false,
-   "expected_kept": true,
-   "kept": true,
    "name": "2026-12-05_wedding-invitation.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "letter",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": "2026-12-05",
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "playlist-viagem.txt",
@@ -2108,7 +3771,17 @@
    "kept": true,
    "name": "2026-09-21_playlist-viagem.txt",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "ideias.md",
@@ -2117,13 +3790,23 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.9,
+   "confidence": 0.85,
    "expected_review": false,
    "expected_kept": true,
    "kept": true,
    "name": "2026-09-21_ideias.md",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "scan001.pdf",
@@ -2132,13 +3815,23 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.3,
+   "confidence": 0.4,
    "expected_review": true,
    "expected_kept": null,
    "kept": null,
    "name": "scan001.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "scan002.pdf",
@@ -2153,7 +3846,17 @@
    "kept": null,
    "name": "scan002.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "Scan 3.pdf",
@@ -2162,13 +3865,23 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.3,
+   "confidence": 0.4,
    "expected_review": true,
    "expected_kept": null,
    "kept": null,
    "name": "Scan 3.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "document(4).pdf",
@@ -2183,7 +3896,17 @@
    "kept": null,
    "name": "document(4).pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "untitled.txt",
@@ -2198,7 +3921,17 @@
    "kept": null,
    "name": "untitled.txt",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "arquivo",
@@ -2213,7 +3946,17 @@
    "kept": null,
    "name": "arquivo",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "download.bin",
@@ -2228,7 +3971,17 @@
    "kept": null,
    "name": "download.bin",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "temp.docx",
@@ -2237,13 +3990,23 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.8,
+   "confidence": 0.85,
    "expected_review": true,
    "expected_kept": null,
    "kept": false,
    "name": "2026-09-21_placeholder-lorem-ipsum-text.docx",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "final_FINAL.pdf",
@@ -2252,13 +4015,23 @@
     "Other"
    ],
    "category": "Other",
-   "confidence": 0.3,
+   "confidence": 0.4,
    "expected_review": true,
    "expected_kept": null,
    "kept": null,
    "name": "final_FINAL.pdf",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "IMG_0001.HEIC",
@@ -2273,7 +4046,17 @@
    "kept": true,
    "name": "IMG_0001.HEIC",
    "sensitive": false,
-   "sent": true
+   "sent": true,
+   "fields": {
+    "kind": "other",
+    "issuer": null,
+    "amount": null,
+    "currency": null,
+    "document_date": null,
+    "due_date": null,
+    "period": null
+   },
+   "expected_fields": {}
   },
   {
    "path": "credentials.json",
@@ -2286,7 +4069,9 @@
    "kept": null,
    "name": null,
    "sensitive": true,
-   "sent": false
+   "sent": false,
+   "fields": {},
+   "expected_fields": {}
   },
   {
    "path": "service-account-staging.json",
@@ -2299,7 +4084,9 @@
    "kept": null,
    "name": null,
    "sensitive": true,
-   "sent": false
+   "sent": false,
+   "fields": {},
+   "expected_fields": {}
   },
   {
    "path": "cofre-senhas.kdbx",
@@ -2312,7 +4099,9 @@
    "kept": null,
    "name": null,
    "sensitive": true,
-   "sent": false
+   "sent": false,
+   "fields": {},
+   "expected_fields": {}
   },
   {
    "path": "office-vpn.ovpn",
@@ -2325,7 +4114,9 @@
    "kept": null,
    "name": null,
    "sensitive": true,
-   "sent": false
+   "sent": false,
+   "fields": {},
+   "expected_fields": {}
   },
   {
    "path": "deploy-key.pem",
@@ -2338,7 +4129,9 @@
    "kept": null,
    "name": null,
    "sensitive": true,
-   "sent": false
+   "sent": false,
+   "fields": {},
+   "expected_fields": {}
   },
   {
    "path": "id_ed25519",
@@ -2351,7 +4144,9 @@
    "kept": null,
    "name": null,
    "sensitive": true,
-   "sent": false
+   "sent": false,
+   "fields": {},
+   "expected_fields": {}
   },
   {
    "path": "notas-servidor.txt",
@@ -2364,7 +4159,9 @@
    "kept": null,
    "name": null,
    "sensitive": true,
-   "sent": false
+   "sent": false,
+   "fields": {},
+   "expected_fields": {}
   },
   {
    "path": "chave-acesso.txt",
@@ -2377,7 +4174,9 @@
    "kept": null,
    "name": null,
    "sensitive": true,
-   "sent": false
+   "sent": false,
+   "fields": {},
+   "expected_fields": {}
   },
   {
    "path": "db-settings.ini",
@@ -2390,7 +4189,9 @@
    "kept": null,
    "name": null,
    "sensitive": true,
-   "sent": false
+   "sent": false,
+   "fields": {},
+   "expected_fields": {}
   },
   {
    "path": "projeto-api",
@@ -2403,7 +4204,9 @@
    "kept": null,
    "name": null,
    "sensitive": true,
-   "sent": false
+   "sent": false,
+   "fields": {},
+   "expected_fields": {}
   }
  ]
 }

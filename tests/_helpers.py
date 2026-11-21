@@ -143,6 +143,30 @@ def answer(
     )
 
 
+def gold_answer(item: Any, language: str = "en") -> Classification:
+    """What a perfect model answers for an evaluation corpus item (``corpus.Item``): its
+    first acceptable category (or review), and the structured fields of its gold (#88)."""
+    from file_librarian.evals.score import gold_kinds
+
+    gold = item.gold
+    fields = gold.fields
+    cats = gold.categories[language]
+    return Classification(
+        category=cats[0] if cats else "Other",
+        suggested_name="named by the oracle",
+        description="d",
+        confidence=0.4 if gold.review else 0.95,
+        name_choice="original" if gold.keep_name else "proposed",
+        kind=gold_kinds(fields["kind"])[0] if "kind" in fields else None,
+        issuer=fields.get("issuer"),
+        amount=fields.get("amount"),
+        currency=fields.get("currency"),
+        document_date=fields.get("document_date"),
+        due_date=fields.get("due_date"),
+        period=fields.get("period"),
+    )
+
+
 def library(downloads: Path) -> Path:
     """Where organized files land by default."""
     return downloads / "Organized"

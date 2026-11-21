@@ -164,6 +164,29 @@ def test_answer_schema_is_pinned() -> None:
             "confidence": {"type": "number"},
             "document_date": {"anyOf": [{"type": "string"}, {"type": "null"}]},
             "issuer": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "kind": {
+                "type": "string",
+                "enum": [
+                    "bill",
+                    "receipt",
+                    "invoice",
+                    "statement",
+                    "contract",
+                    "payslip",
+                    "tax",
+                    "ticket",
+                    "policy",
+                    "report",
+                    "form",
+                    "letter",
+                    "manual",
+                    "other",
+                ],
+            },
+            "amount": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "currency": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "due_date": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "period": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         },
         "required": [
             "category",
@@ -175,10 +198,34 @@ def test_answer_schema_is_pinned() -> None:
             "confidence",
             "document_date",
             "issuer",
+            "kind",
+            "amount",
+            "currency",
+            "due_date",
+            "period",
         ],
         "additionalProperties": False,
     }
-    assert PROMPT_VERSION == "6"
+    assert PROMPT_VERSION == "7"
+
+
+def test_field_instructions_are_pinned() -> None:
+    """#88: amount, dates, period and kind, left empty rather than guessed."""
+    prompt = system_prompt(RULES)
+    assert (
+        "- amount: the total the document charges, pays or confirms (the amount due on\n"
+        "  a bill, invoice or card statement, the amount paid on a receipt, the net\n"
+        "  pay on a payslip), as digits with a dot before the cents and no thousands\n"
+        '  separator, for example "1234.56". null when the document states no such\n'
+        "  total: never add numbers up, and never take a balance, a limit, a unit\n"
+        "  price, an account, document or ID number, or any other number.\n"
+    ) in prompt
+    assert (
+        "Leave document_date, issuer, amount, currency, due_date and period null rather\n"
+        "than guess: give only what the document itself states.\n"
+    ) in prompt
+    for kind in ("bill (", "receipt (", "payslip", "policy (insurance)", "other (anything"):
+        assert kind in prompt
 
 
 def test_issuer_instructions_are_pinned() -> None:
@@ -205,6 +252,11 @@ def test_name_choice_instructions_are_pinned() -> None:
         "  or meaningless (scan001, document (3), IMG_2041, download, untitled) or\n"
         "  does not match the content. A shorter or vaguer name never wins: when both\n"
         '  are good, choose "original". flib adds the date and formatting either way.\n'
+        # Prompt 7 (#88): with the issuer and kind asked for, the model put them in its
+        # subjects and stopped keeping good names; this brought "kept" recall back.
+        "  A name such as statement-2025-05, payslip_june or notes.sql already says\n"
+        '  what the file is: choose "original" for it, even when your subject adds\n'
+        "  the issuer, more detail or a translation.\n"
     ) in system_prompt(RULES)
 
 

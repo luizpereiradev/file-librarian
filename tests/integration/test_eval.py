@@ -20,7 +20,7 @@ from file_librarian.evals import corpus, harness
 from file_librarian.models import Classification, FileContext, Rules
 from file_librarian.providers.base import Usage
 from file_librarian.providers.fake import FakeProvider
-from tests._helpers import put
+from tests._helpers import gold_answer, put
 
 pytestmark = pytest.mark.integration
 
@@ -40,16 +40,7 @@ class Oracle(FakeProvider):
     """Answers every corpus item with its first acceptable category (or review)."""
 
     def __init__(self, language: str, *, local: bool = True, price: float = 0.0) -> None:
-        answers = {}
-        for item in corpus.items():
-            cats = item.gold.categories[language]  # type: ignore[index]
-            answers[item.path] = Classification(
-                category=cats[0] if cats else "Other",
-                suggested_name="named by the oracle",
-                description="d",
-                confidence=0.4 if item.gold.review else 0.95,
-                name_choice="original" if item.gold.keep_name else "proposed",
-            )
+        answers = {item.path: gold_answer(item, language) for item in corpus.items()}
         super().__init__(answers)
         self.local = local
         self.price = price
@@ -118,6 +109,12 @@ def test_an_oracle_scores_full_marks(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert "Name kept: precision 100.0%" in result.stdout
     assert "tokens" in result.stdout
+    # The structured fields (#88): every gold value given, nothing invented.
+    assert "Fields over 56 item(s) with gold fields" in result.stdout
+    for name in ("kind", "issuer", "amount", "currency", "document_date", "due_date", "period"):
+        [line] = [line for line in result.stdout.splitlines() if line.startswith(f"  {name} ")]
+        assert line.count("100.0%") == 2, line
+        assert "invented 0/" in line or "invented n/a" in line, line
 
 
 def test_a_sensitive_item_that_reaches_the_provider_fails_the_run(

@@ -282,6 +282,64 @@ classification cache. Nothing moves and no file is renamed. Full-text search
 follows at once; the embeddings of the changed files are removed and made
 again by the next run. It is one run: `flib undo` puts the old text back.
 
+## Amounts, dates and issuers
+
+With each answer the AI fills in what the document itself states (see
+[Amounts, dates and issuers](../README.md#amounts-dates-and-issuers)): its
+kind, issuer, amount and currency, document date, due date and the period it
+refers to. A field the document does not state stays empty; the prompt asks
+for that explicitly, and for the amount to be the document's total or amount
+due, never a sum the AI made, a balance, a limit or a unit price.
+
+How flib reads what the AI wrote:
+
+- **Amounts.** `1.234,56`, `1,234.56`, `1 234,56` and `1'234.56` are the same
+  amount. A single separator followed by exactly three digits is a thousands
+  separator (`1.234` is one thousand two hundred thirty-four), except in a
+  currency with three decimals (`KWD`). A symbol or code written with the
+  amount names the currency (`R$` is BRL, `US$` USD, `€` EUR); a bare `$`
+  names none, so the `currency` field must. An amount without a currency, a
+  negative one, one with more decimals than its currency has, or one that
+  looks like an identifier (nine or more digits in a row, a card number) is
+  dropped. The index keeps it as an integer number of cents (of the
+  currency's minor unit), so totals are exact.
+- **Currencies** are ISO 4217 codes.
+- **Dates** are `YYYY-MM-DD` (a time after them is ignored); an impossible
+  date is dropped.
+- **Periods** are `YYYY-MM` or `YYYY`; `2026-9`, `09/2026` and a full date
+  are read as their month.
+- **Kinds** come from a fixed list; `utility bill` is read as `bill`, a
+  plural as its singular, anything else is dropped.
+
+None of this is an identifier: the privacy scrub (see
+[Privacy](../README.md#privacy)) leaves amounts and dates in descriptions,
+and document, account and ID numbers never get a field of their own.
+
+`--period` and `--sum --by month|year` use the period a document refers to,
+else the month of its document date: a receipt states when it was paid, not
+which month it pays for. A bill for December 2025 issued in January 2026
+counts for 2025. `--sum` counts organized files and files in review, never
+duplicates or sensitive files, adds up each currency on its own, and says how
+many matching files state no amount.
+
+### Filling in the fields of files already filed
+
+Files filed before flib kept these fields have none. Ask for them:
+
+```sh
+flib reprocess --fill-fields --simulate        # shows the cost, asks, lists what it would record
+flib reprocess --fill-fields                   # asks again before recording
+flib reprocess --fill-fields --category Finance --since 2026-01-01
+```
+
+Only files with no fields are sent (`--category`, `--ext`, `--since` and
+`--until` narrow them further), and the cost is shown before anything is
+sent; answers already in the cache cost nothing, so a simulation followed by
+the real thing pays once. From each answer flib keeps only the fields, and
+only where the index has none: category, name, description and the file's
+place stay as they are, and nothing moves. It is one run: `flib undo` clears
+what it recorded.
+
 ## What vision costs
 
 Estimated on the default model (Claude Haiku 5.5, US$0.10 per million input

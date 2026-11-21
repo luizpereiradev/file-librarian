@@ -10,9 +10,9 @@ validates it.
 from __future__ import annotations
 
 import json
-from datetime import date
 from typing import Any
 
+from file_librarian.fields import KINDS, clean_amount, clean_date, clean_kind, clean_period
 from file_librarian.models import Attachment, Correction, FileContext, Rules
 from file_librarian.privacy import scrub
 
@@ -32,6 +32,11 @@ def response_schema(rules: Rules) -> dict[str, Any]:
             "confidence": {"type": "number"},
             "document_date": {"anyOf": [{"type": "string"}, {"type": "null"}]},
             "issuer": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "kind": {"type": "string", "enum": list(KINDS)},
+            "amount": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "currency": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "due_date": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "period": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         },
         "required": [
             "category",
@@ -43,6 +48,11 @@ def response_schema(rules: Rules) -> dict[str, Any]:
             "confidence",
             "document_date",
             "issuer",
+            "kind",
+            "amount",
+            "currency",
+            "due_date",
+            "period",
         ],
         "additionalProperties": False,
     }
@@ -100,6 +110,9 @@ Answer fields:
   or meaningless (scan001, document (3), IMG_2041, download, untitled) or
   does not match the content. A shorter or vaguer name never wins: when both
   are good, choose "original". flib adds the date and formatting either way.
+  A name such as statement-2025-05, payslip_june or notes.sql already says
+  what the file is: choose "original" for it, even when your subject adds
+  the issuer, more detail or a translation.
 - description: 1 to 3 sentences in {language} saying what the file is, with the
   names of organisations and products, amounts and dates someone would search
   for.
@@ -109,7 +122,8 @@ Answer fields:
   download source. A clear signal from the name alone (IMG_1234.png is an
   image, Setup.dmg an installer) deserves high confidence. Use a value below
   0.7 only when two or more categories are genuinely plausible or nothing
-  points to any.
+  points to any. It is about the category only: fields the document does
+  not state do not lower it.
 - document_date: the date the document itself refers to (issue date, invoice
   date) as YYYY-MM-DD, or null if the content does not show one with
   confidence. Read ambiguous numeric dates as {order}.
@@ -118,6 +132,27 @@ Answer fields:
   for example "Acme" or "Power Co". null when there is none, it is unclear,
   or the document comes from a private individual: never a private person's
   name.
+- kind: what sort of document it is: bill (a utility, phone or condo bill, a
+  fee to pay), receipt (proof of a payment made), invoice (a seller's invoice
+  or order), statement (a bank, card or income statement), contract, payslip,
+  tax (a tax form, return or tax payment slip), ticket (travel or event
+  tickets and bookings), policy (insurance), report (medical results, a
+  technical or business report), form, letter, manual, or other (anything
+  else, including images, software and data).
+- amount: the total the document charges, pays or confirms (the amount due on
+  a bill, invoice or card statement, the amount paid on a receipt, the net
+  pay on a payslip), as digits with a dot before the cents and no thousands
+  separator, for example "1234.56". null when the document states no such
+  total: never add numbers up, and never take a balance, a limit, a unit
+  price, an account, document or ID number, or any other number.
+- currency: the ISO 4217 code of the document's amounts ("USD", "BRL",
+  "EUR"), or null.
+- due_date: the date the amount must be paid by, as YYYY-MM-DD, or null.
+- period: the month or year the document is about (the billing month of a
+  bill, the month of a payslip or statement, the tax year), as YYYY-MM or
+  YYYY, or null.
+Leave document_date, issuer, amount, currency, due_date and period null rather
+than guess: give only what the document itself states.
 
 Describe what the file is without copying personal identifiers from it into
 suggested_name, name_choice_reason, description or tags: no phone numbers,
@@ -183,8 +218,13 @@ def normalize_answer(data: dict[str, Any]) -> dict[str, Any]:
     data["name_choice"] = "original" if choice == "original" else "proposed"
     data["name_choice_reason"] = str(data.get("name_choice_reason") or "").strip()[:300] or None
     data["description"] = str(data.get("description", "")).strip()[:600] or "No description."
-    data["document_date"] = _iso_date(data.get("document_date"))
+    data["document_date"] = clean_date(data.get("document_date"))
     data["issuer"] = clean_issuer(data.get("issuer"))
+    # Structured fields (#88): each read tolerantly; one that cannot be read is dropped.
+    data["amount"], data["currency"] = clean_amount(data.get("amount"), data.get("currency"))
+    data["due_date"] = clean_date(data.get("due_date"))
+    data["period"] = clean_period(data.get("period"))
+    data["kind"] = clean_kind(data.get("kind"))
     return data
 
 
@@ -204,13 +244,3 @@ def clean_issuer(value: object) -> str | None:
     if not text or text.casefold() in {"null", "none", "unknown", "n/a"}:
         return None
     return text if scrub(text) == text else None
-
-
-def _iso_date(value: object) -> str | None:
-    """A valid YYYY-MM-DD, or None: a bad optional date must not cost the whole answer."""
-    if not isinstance(value, str):
-        return None
-    try:
-        return date.fromisoformat(value.strip()[:10]).isoformat()
-    except ValueError:
-        return None

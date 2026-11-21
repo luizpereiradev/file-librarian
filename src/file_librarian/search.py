@@ -9,9 +9,9 @@ with names weighted above descriptions.
 Filters (RF-14) narrow the results and work with or without words: by
 category (case-insensitive, any of several), by extension (with or without the
 dot, any of several) and by period. The period is the day flib last processed
-the file (``processed_at``), in the local time zone: the index keeps no
-document date, and a file's mtime is that of the download, not of when it was
-filed. Without words, matches are listed newest first.
+the file (``processed_at``), in the local time zone (a file's mtime is that
+of the download, not of when it was filed; the document's own date is the
+``period`` filter below). Without words, matches are listed newest first.
 
 Semantic search (RF-15, opt in with ``search.semantic.enabled``) finds files by
 meaning too: "invoice" finds a file described as a "bill". The words ranking
@@ -21,6 +21,15 @@ both. A file found only by meaning must be at least
 ``search.semantic.min_similarity`` similar to the query; one that matches the
 words always stays. Each hit says how it was found (``source``). When it
 cannot run, it says why in one line and searches by words.
+
+Structured fields (#88) narrow the results too: the issuer (matched by
+``naming.issuer_key``, so case, accents, punctuation and legal forms such as
+``Inc`` or ``Ltda`` do not matter), the kind of document, the amount (at least,
+at most, in a currency), the due date (before, after) and the period the
+document refers to (a year or a month: the answer's ``period``, else the month
+of its document date). ``sum_amounts`` adds up the amounts of every match per
+currency, never mixing two, optionally grouped by issuer, month, year, kind
+or category; it matches the query by words only.
 
 Duplicates (RF-21) are left out unless asked for (``include_duplicates``):
 they are copies of a file the search already finds. They have no embedding,
@@ -36,11 +45,12 @@ import os
 import re
 import unicodedata
 from collections.abc import Iterable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
+from decimal import Decimal
 
 from file_librarian.config import Config
-from file_librarian.db.store import FileRow, Store
+from file_librarian.db.store import GROUPS, AmountTotal, FieldFilters, FileRow, Store
 from file_librarian.embeddings import (
     Embedder,
     EmbeddingError,
@@ -48,6 +58,15 @@ from file_librarian.embeddings import (
     query_text,
     similarities,
 )
+from file_librarian.fields import (
+    KINDS,
+    clean_currency,
+    clean_period,
+    format_amount,
+    format_decimal,
+    parse_threshold,
+)
+from file_librarian.naming import issuer_key
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +86,29 @@ class SearchHit:
     ``None`` when filters alone listed it."""
     similarity: float | None = None
     """Cosine similarity of its embedding to the query, when a semantic search had one."""
+    kind: str | None = None
+    issuer: str | None = None
+    amount: str | None = None
+    """The document's amount as a decimal string (``"1234.56"``), in ``currency``."""
+    currency: str | None = None
+    document_date: str | None = None
+    due_date: str | None = None
+    period: str | None = None
+    amount_minor: int | None = None
+    """``amount`` in the currency's minor units (cents)."""
+
+    def fields_line(self) -> str | None:
+        """The structured fields in one short line, or ``None`` when there are none."""
+        parts = [p for p in (self.kind, self.issuer) if p]
+        if self.amount_minor is not None and self.currency is not None:
+            parts.append(format_amount(self.amount_minor, self.currency))
+        if self.due_date:
+            parts.append(f"due {self.due_date}")
+        if self.period:
+            parts.append(f"for {self.period}")
+        elif self.document_date:
+            parts.append(f"dated {self.document_date}")
+        return " · ".join(parts) or None
 
 
 class SearchError(ValueError):
@@ -81,9 +123,11 @@ class SearchFilters:
     extensions: tuple[str, ...] = ()
     since: str | None = None
     until: str | None = None
+    fields: FieldFilters = field(default_factory=FieldFilters)
+    """On the structured fields (#88): issuer, kind, amount, due date, period."""
 
     def __bool__(self) -> bool:
-        return bool(self.categories or self.extensions or self.since or self.until)
+        return bool(self.categories or self.extensions or self.since or self.until or self.fields)
 
 
 def split_values(values: Iterable[str] | None) -> list[str]:
@@ -98,11 +142,20 @@ def make_filters(
     since: str | None = None,
     until: str | None = None,
     known_categories: Iterable[str] = (),
+    issuer: str | None = None,
+    kinds: Iterable[str] | None = None,
+    min_amount: str | None = None,
+    max_amount: str | None = None,
+    currency: str | None = None,
+    due_before: str | None = None,
+    due_after: str | None = None,
+    period: str | None = None,
 ) -> SearchFilters:
     """Validate raw filter values; raises :class:`SearchError` on a bad one.
 
     Categories match ``known_categories`` case-insensitively and come back
-    spelled as known. Dates are ``YYYY-MM-DD``, both ends inclusive.
+    spelled as known. Dates are ``YYYY-MM-DD``, both ends inclusive; the due
+    date bounds are exclusive. Amounts are inclusive, in major units.
     """
     known = {normalize_category(c): c for c in known_categories}
     chosen: list[str] = []
@@ -129,7 +182,78 @@ def make_filters(
         extensions=tuple(exts),
         since=None if start is None else _utc_start(start),
         until=None if end is None else _utc_start(end + timedelta(days=1)),
+        fields=_field_filters(
+            issuer=issuer,
+            kinds=kinds,
+            min_amount=min_amount,
+            max_amount=max_amount,
+            currency=currency,
+            due_before=due_before,
+            due_after=due_after,
+            period=period,
+        ),
     )
+
+
+def _field_filters(
+    *,
+    issuer: str | None,
+    kinds: Iterable[str] | None,
+    min_amount: str | None,
+    max_amount: str | None,
+    currency: str | None,
+    due_before: str | None,
+    due_after: str | None,
+    period: str | None,
+) -> FieldFilters:
+    key = None
+    if issuer is not None:
+        key = issuer_key(issuer)
+        if not key:
+            raise SearchError(f"--issuer {issuer!r} names no organisation")
+    chosen: list[str] = []
+    for raw in split_values(kinds):
+        kind = raw.casefold()
+        if kind not in KINDS:
+            raise SearchError(f"unknown kind {raw!r} (kinds: {', '.join(KINDS)})")
+        if kind not in chosen:
+            chosen.append(kind)
+    low = _amount(min_amount, "--min-amount")
+    high = _amount(max_amount, "--max-amount")
+    if low is not None and high is not None and low > high:
+        raise SearchError(f"--min-amount {min_amount} is more than --max-amount {max_amount}")
+    code = None
+    if currency is not None:
+        code = clean_currency(currency)
+        if code is None:
+            raise SearchError(f"--currency {currency!r} is not a currency code like USD or BRL")
+    before = _day(due_before, "--due-before").isoformat() if due_before is not None else None
+    after = _day(due_after, "--due-after").isoformat() if due_after is not None else None
+    wanted = None
+    if period is not None:
+        text = period.strip()
+        wanted = clean_period(text) if re.fullmatch(r"\d{4}(-\d{2})?", text) else None
+        if wanted is None:
+            raise SearchError(f"--period {period!r} is not a year or month like 2026 or 2026-09")
+    return FieldFilters(
+        issuer_key=key,
+        kinds=tuple(chosen),
+        min_amount=low,
+        max_amount=high,
+        currency=code,
+        due_before=before,
+        due_after=after,
+        period=wanted,
+    )
+
+
+def _amount(text: str | None, flag: str) -> Decimal | None:
+    if text is None:
+        return None
+    value = parse_threshold(text)
+    if value is None:
+        raise SearchError(f"{flag} {text!r} is not an amount like 100 or 99.90")
+    return value
 
 
 def normalize_category(name: str) -> str:
@@ -195,6 +319,7 @@ def _word_rows(
         since=filters.since,
         until=filters.until,
         include_duplicates=include_duplicates,
+        fields=filters.fields,
         limit=limit,
     )
 
@@ -219,6 +344,16 @@ def _hit(
         duplicate_of=original_path(store, row.duplicate_of),
         source=source,
         similarity=None if similarity is None else round(similarity, 4),
+        kind=row.kind,
+        issuer=row.issuer,
+        amount=None
+        if row.amount_minor is None or row.currency is None
+        else format_decimal(row.amount_minor, row.currency),
+        currency=row.currency,
+        document_date=row.document_date,
+        due_date=row.due_date,
+        period=row.period,
+        amount_minor=row.amount_minor if row.currency is not None else None,
     )
 
 
@@ -296,6 +431,7 @@ def semantic_search(
             extensions=filters.extensions,
             since=filters.since,
             until=filters.until,
+            fields=filters.fields,
         ),
     )
     nearby = heapq.nlargest(pool, similarity, key=similarity.__getitem__)
@@ -331,3 +467,66 @@ def _source(by_words: bool, by_meaning: bool) -> str:
 
 def to_json(hits: list[SearchHit]) -> str:
     return json.dumps([asdict(h) for h in hits], ensure_ascii=False, indent=2)
+
+
+# --- totals (#88) ------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class Sums:
+    """What ``sum_amounts`` found: totals per group and currency, and overall."""
+
+    by: str | None
+    groups: list[AmountTotal]
+    """Per group and currency, largest first; empty without ``by``."""
+    totals: list[AmountTotal]
+    """Per currency over every match, largest first."""
+    without_amount: int
+    """Matching files that state no amount, left out of the totals."""
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "by": self.by,
+            "groups": [total_dict(t) for t in self.groups],
+            "totals": [total_dict(t) for t in self.totals],
+            "files_without_amount": self.without_amount,
+        }
+
+
+def total_dict(total: AmountTotal) -> dict[str, object]:
+    """One total as JSON shows it: the amount as a decimal string, never a float."""
+    return {
+        "group": total.group,
+        "currency": total.currency,
+        "total": format_decimal(total.total_minor, total.currency),
+        "files": total.files,
+    }
+
+
+def sum_amounts(
+    store: Store, text: str, *, filters: SearchFilters | None = None, by: str | None = None
+) -> Sums:
+    """Add up the amounts of every file matching ``text`` (by words) and ``filters``.
+
+    No words and no filters add up nothing. ``by`` is one of ``GROUPS``.
+    """
+    if by is not None and by not in GROUPS:
+        raise SearchError(f"cannot group by {by!r} (one of: {', '.join(GROUPS)})")
+    filters = filters or SearchFilters()
+    query = fts_query(text)
+    if query is None and not filters:
+        return Sums(by, [], [], 0)
+
+    def totals(group: str | None) -> tuple[list[AmountTotal], int]:
+        return store.sum_amounts(
+            query,
+            by=group,
+            categories=filters.categories,
+            extensions=filters.extensions,
+            since=filters.since,
+            until=filters.until,
+            fields=filters.fields,
+        )
+
+    overall, missing = totals(None)
+    return Sums(by, totals(by)[0] if by is not None else [], overall, missing)

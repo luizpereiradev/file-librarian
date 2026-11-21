@@ -278,13 +278,13 @@ Every command takes `--config PATH` (`-c`); without it, flib reads
 | `flib simulate` | Print the full plan without changing anything |
 | `flib run` | Classify, rename, move and index new files |
 | `flib undo [--run ID \| --file PATH]` | Revert the last run, a given run, or the last operation on one file |
-| `flib search [QUERY] [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--semantic \| --no-semantic] [--reindex] [--duplicates] [--limit N] [--json]` | Search names, descriptions and tags, narrowed by category, period or extension; optionally by meaning ([Searching](#searching)) |
+| `flib search [QUERY] [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--issuer NAME] [--kind KIND] [--min-amount N] [--max-amount N] [--currency CODE] [--due-before DATE] [--due-after DATE] [--period YYYY[-MM]] [--sum [--by GROUP]] [--semantic \| --no-semantic] [--reindex] [--duplicates] [--limit N] [--json]` | Search names, descriptions and tags, narrowed by category, period, extension or what the document states (issuer, kind, amount, due date); add up amounts with `--sum`; optionally by meaning ([Searching](#searching)) |
 | `flib status [--json]` | What waits for you: files in review and why, failures, files left in place as sensitive, the last and next run, this month's cost ([Staying on top of it](#staying-on-top-of-it)) |
 | `flib fix FILE [--category NAME] [--name NAME]` | Correct one file's category or name; flib learns from it ([Teaching it](#teaching-it)) |
 | `flib reconcile` | Update the index after you move, rename or delete files by hand; files only in iCloud are left unchecked |
-| `flib reprocess [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--rename] [--override-corrections] [--simulate] [--yes]` | Reclassify organized files after the rules change; `--rename-category OLD NEW` and `--remove-category OLD [--to-review]` migrate a category ([guide](docs/guide.md#changing-your-rules)); `--apply-layout [--category NAME] [--ask-issuer]` moves organized files into their category's layout ([Sub-folders](#sub-folders-by-year-or-issuer)); `--scrub-descriptions` removes identifiers from stored descriptions, no AI ([Privacy](#privacy)) |
+| `flib reprocess [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--rename] [--override-corrections] [--simulate] [--yes]` | Reclassify organized files after the rules change; `--rename-category OLD NEW` and `--remove-category OLD [--to-review]` migrate a category ([guide](docs/guide.md#changing-your-rules)); `--apply-layout [--category NAME] [--ask-issuer]` moves organized files into their category's layout ([Sub-folders](#sub-folders-by-year-or-issuer)); `--scrub-descriptions` removes identifiers from stored descriptions, no AI ([Privacy](#privacy)); `--fill-fields` asks only for the amount, dates, issuer, period and kind of files filed before flib kept them ([Amounts and dates](#amounts-dates-and-issuers)) |
 | `flib schedule [--at HH:MM \| --status \| --remove \| --refresh] [--no-save-key] [--no-check]` | Run every day via launchd, with an access check ([Run it every day](#run-it-every-day)) |
-| `flib inspect FILE... [--json]` | Show hash, size and download origin (no hash for a file only in iCloud), and for an indexed file its status, category, why it is in review and the name choice |
+| `flib inspect FILE... [--json]` | Show hash, size and download origin (no hash for a file only in iCloud), and for an indexed file its status, category, why it is in review, the name choice and what the AI read in it (kind, issuer, amount, dates, period) |
 | `flib mcp` | Local MCP server for AI assistants ([Use it from Claude](#use-it-from-claude)) |
 | `flib eval [--provider NAME] [--model M] [--language en\|pt-BR] [--limit N] [--json] [--out FILE] [--compare FILE]` | Measure classification quality on a built-in synthetic corpus, never touching your files ([Measuring quality](#measuring-quality)) |
 | `flib doctor [--stdout \| -o PATH] [--format markdown] [--logs N]` | A redacted diagnostics report for bug reports ([Troubleshooting](#troubleshooting)) |
@@ -303,8 +303,9 @@ matches are listed newest first:
   commas for several (`--ext jpg,png`).
 - `--since DATE` / `--until DATE`: `YYYY-MM-DD`, both days included, in your
   local time. The date is when flib last processed the file (filed it, or sent
-  it to review), not the date written in the document, which the index does not
-  keep, nor the file's modification time.
+  it to review), not the date written in the document (`--period` filters by
+  that, see [below](#amounts-dates-and-issuers)), nor the file's modification
+  time.
 - `--limit N`: at most this many results (20 by default, up to 500).
 
 ```sh
@@ -314,6 +315,50 @@ flib search --ext pdf --until 2025-12-31 --json
 
 An unknown category, a malformed extension or date, or `--since` after
 `--until` stops with a message saying what is wrong.
+
+### Amounts, dates and issuers
+
+When flib files a document, the AI also notes what the document itself
+states, and leaves out what it does not (it is asked never to guess):
+
+- `kind`: one of `bill`, `receipt`, `invoice`, `statement`, `contract`,
+  `payslip`, `tax`, `ticket`, `policy`, `report`, `form`, `letter`,
+  `manual`, `other`;
+- `issuer`: the organisation it comes from (never a private person);
+- `amount` and `currency`: the total or amount due (not a balance or any
+  other number), with its ISO 4217 code;
+- `document_date`, `due_date`, and `period`: the month or year it refers to
+  (the billing month of a bill, the tax year).
+
+Numbers are read whatever the format (`1.234,56`, `1,234.56`, `R$`, `€`);
+a value flib cannot read is dropped, never guessed, and document, account and
+ID numbers are never kept. Results show the fields on one line
+(`bill · Power Co · USD 103.91 · due 2026-09-20 · for 2026-08`), and these
+filters combine with the others and with a query:
+
+- `--issuer NAME`: case, accents, punctuation and legal forms (`Inc`, `Ltd`,
+  `S.A.`) do not matter, so `--issuer "power co"` finds `POWER CO, Inc.`;
+- `--kind KIND`: repeat it or use commas for any of several;
+- `--min-amount N` / `--max-amount N`, both included; `--currency CODE`;
+- `--due-before DATE` / `--due-after DATE`, the day itself excluded;
+- `--period 2026` or `--period 2026-09`: the period the document refers to,
+  else the month of its date.
+
+`--sum` adds up the amounts of every match instead of listing them, per
+currency (two currencies are never added together), and `--by issuer`,
+`month`, `year`, `kind` or `category` groups the totals:
+
+```sh
+flib search --issuer "Power Co" --period 2026 --sum     # what did I pay Power Co in 2026?
+flib search --kind bill --period 2026 --sum --by month --json
+flib search --kind bill --due-after 2026-11-20          # bills still to pay
+```
+
+Files filed before flib kept these fields have none: `flib reprocess
+--fill-fields` asks the AI about those files only, after showing the cost,
+records the fields in the index (nothing moves, categories and names stay)
+and `flib undo` reverts it. With `--sum`, a query matches words only, not
+meaning.
 
 ### Semantic search (optional)
 
@@ -647,8 +692,9 @@ meaning sends the query there (the `search_files` tool then says so).
 
 | Tool | What it does |
 | --- | --- |
-| `search_files` | Search names, descriptions and tags, with the same category, extension and period filters as `flib search`; `semantic: true` also searches by meaning ([Semantic search](#semantic-search-optional)); duplicates only with `include_duplicates` |
-| `get_file` | Everything the index knows about one file: where it is and was, category, description, tags, hash, size, download origin, whether it is only in iCloud, why it is in review (if it is), and its history (moves, renames, fixes, undos with when each was undone; newest first, last 20) |
+| `search_files` | Search names, descriptions and tags, with the same category, extension, period, issuer, kind, amount, currency, due date and document period filters as `flib search`; `semantic: true` also searches by meaning ([Semantic search](#semantic-search-optional)); duplicates only with `include_duplicates` |
+| `summarize_amounts` | Add up the amounts of the matching documents per currency, optionally by issuer, month, year, kind or category, like `flib search --sum` ("what did I pay to Power Co in 2026?") |
+| `get_file` | Everything the index knows about one file: where it is and was, category, description, tags, kind, issuer, amount, dates and period, hash, size, download origin, whether it is only in iCloud, why it is in review (if it is), and its history (moves, renames, fixes, undos with when each was undone; newest first, last 20) |
 | `list_recent` | The files organized most recently, newest first, optionally in one category |
 | `list_review` | What waits in the review folder, newest first, with the AI's confidence and why each file is there |
 | `get_stats` | Counts by status and by category, total size filed, the last run and its provider cost, and this month's total cost |
@@ -667,8 +713,9 @@ fix` costs nothing). A run whose provider prices flib does not know (an
 has no recorded cost rather than a cost of zero; `get_stats` and `flib status`
 count those runs apart.
 
-Results carry metadata and descriptions, never file content; sensitive files
-show no description, tags or origin. The write tools go through the same
+Results carry metadata, descriptions and the fields the AI read in each
+document, never file content; sensitive files show no description, tags,
+fields or origin, and their amounts are never added up. The write tools go through the same
 journal as the CLI, so `flib undo` reverts what an assistant did, and they
 refuse to run while a run is in progress. Set `mcp.read_only: true` to offer
 only the read tools.

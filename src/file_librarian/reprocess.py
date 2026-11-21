@@ -59,6 +59,14 @@ hand (``placed_by_hand``), review, duplicates and sensitive files are never
 touched. A category without a layout gets the files flib had put in its
 sub-folders back to its top level.
 
+``--fill-fields`` (#88) asks the provider only about library files the index
+has no structured fields for (``select_fields``: no ``kind``), after the cost
+question, and keeps only those fields of each answer (``plan_fields``): kind,
+issuer, amount and currency, document and due dates, period, each written
+only where the index has none. Category, name, description and place stay;
+nothing moves. The values are journaled with one ``reprocess`` run that
+``flib undo`` reverts.
+
 ``--scrub-descriptions`` is different: no provider call and no move. It runs
 ``privacy.scrub`` over what the index already stores (descriptions, tags and
 name-choice reasons written before #82), as one ``reprocess`` run whose index
@@ -89,8 +97,8 @@ from file_librarian.classifier import (
 )
 from file_librarian.config import Config, folder_key, is_within, layout_segments
 from file_librarian.context import build_context_safely
-from file_librarian.db.store import FileRow, Store
-from file_librarian.executor import Relocation, RunReport, relocate
+from file_librarian.db.store import FIELD_COLUMNS, FileRow, Store
+from file_librarian.executor import Relocation, RunReport, answer_fields, relocate
 from file_librarian.finder_tags import tag_moved, untag_restored
 from file_librarian.hashing import check_content, unit_manifest
 from file_librarian.models import (
@@ -114,7 +122,7 @@ from file_librarian.search import SearchFilters
 
 _REPROCESSABLE = {FileStatus.ORGANIZED, FileStatus.REVIEW}
 # What a reprocess may write where the index has nothing yet (``ReprocessPlan.learned``).
-_LEARNABLE = frozenset({"document_date", "issuer", "layout_date"})
+_LEARNABLE = frozenset({*FIELD_COLUMNS, "layout_date"})
 
 # A rough price of one request: about four characters per token, and the
 # answer with its thinking. An image costs about (pixels / 750) tokens at its
@@ -950,6 +958,81 @@ def _spelled_on_disk(path: Path, root: Path) -> Path | None:
             return None
         current = current / unicodedata.normalize("NFC", found)
     return current
+
+
+# --- structured fields (#88) ----------------------------------------------------------
+
+
+def select_fields(
+    config: Config, store: Store, *, filters: SearchFilters | None = None
+) -> Selection:
+    """The library files (organized or in review) the index has no structured fields for
+    (no ``kind``: filed before #88, or the answer gave none), checked like ``select``.
+
+    Sensitive files and duplicates are never selected. Nothing is sent here.
+    """
+    selection = Selection()
+    for row in store.all_files():
+        if not _wanted(row, config, filters, None) or row.kind is not None:
+            continue
+        context, problem = _check(row, config)
+        if context is None:
+            selection.left.append((row.current_path, problem))
+            continue
+        selection.targets.append(Target(row, context, keep_category=True, keep_name=True))
+    return selection
+
+
+def plan_fields(
+    targets: list[Target], provider: Provider, config: Config, store: Store
+) -> ReprocessPlan:
+    """Ask the provider about the targets (cache and cost cap as in a run) and keep only
+    the structured fields of each answer, for the columns the index has none in.
+
+    Categories, names, descriptions and places stay as they are: nothing moves.
+    The values go in ``learned``, written and journaled by ``apply``.
+    """
+    classified = classify_all(
+        [t.context for t in targets], provider, rules_for(config, store), config, cache=store
+    )
+    result = ReprocessPlan(
+        deferred=len(classified.deferred),
+        cost_usd=classified.cost_usd,
+        cost_known=classified.cost_known,
+        cached=classified.cached,
+    )
+    by_path = {t.context.path: t.row for t in targets}
+    for decision in classified.decisions:
+        row = by_path[decision.context.path]
+        answer = decision.classification
+        if answer is None:
+            why = "sensitive: never sent" if decision.context.sensitive else decision.error
+            result.kept.append((row.current_path, f"{why or 'not classified'}; nothing filled"))
+            continue
+        given = answer_fields(answer)
+        found: dict[str, object] = {
+            "kind": given["kind"],
+            "issuer": answer.issuer,
+            "amount_minor": given["amount_minor"],
+            "currency": given["currency"],
+            "document_date": answer.document_date.isoformat() if answer.document_date else None,
+            "due_date": given["due_date"],
+            "period": given["period"],
+        }
+        if row.amount_minor is not None or row.currency is not None:
+            found["amount_minor"] = found["currency"] = None  # an amount goes with its currency
+        values = {
+            column: str(value)
+            for column, value in found.items()
+            if value is not None and getattr(row, column) is None
+        }
+        if values:
+            result.learned[row.id] = values
+        else:
+            result.kept.append((row.current_path, "the document states none of the fields"))
+    for ctx in classified.deferred:
+        result.kept.append((ctx.path, "cost limit reached; run it again"))
+    return result
 
 
 # --- 4. applying --------------------------------------------------------------------

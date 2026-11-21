@@ -138,6 +138,7 @@ def test_inspect_shows_the_name_choice(downloads: Path, cfg: Config, tmp_path: P
 
     result = runner.invoke(app, ["inspect", "--json", "-c", str(config), str(target)])
     [item] = json.loads(result.stdout)
+    assert item["index"].pop("fields")["kind"] is None  # the structured fields (#88)
     assert item["index"] == {
         "status": "organized",
         "category": "Finance",

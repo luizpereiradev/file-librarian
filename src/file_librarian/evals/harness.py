@@ -205,6 +205,8 @@ def run(prep: Prepared, provider: Provider, *, clock: Callable[[], float] = time
                 name=name,
                 sensitive=gold.sensitive,
                 sent=item.path in sent,
+                fields=answer_fields(answer),
+                expected_fields=dict(gold.fields),
             )
         )
     usage = Usage(
@@ -216,6 +218,21 @@ def run(prep: Prepared, provider: Provider, *, clock: Callable[[], float] = time
         cost_known=outcome.cost_known,
     )
     return Run(meta(prep), results, usage)
+
+
+def answer_fields(answer: Classification | None) -> dict[str, str | None]:
+    """The structured fields of an answer (#88) as ``score.FIELDS`` names them."""
+    if answer is None:
+        return {}
+    return {
+        "kind": answer.kind,
+        "issuer": answer.issuer,
+        "amount": answer.amount,
+        "currency": answer.currency,
+        "document_date": answer.document_date.isoformat() if answer.document_date else None,
+        "due_date": answer.due_date.isoformat() if answer.due_date else None,
+        "period": answer.period,
+    }
 
 
 def meta(prep: Prepared) -> dict[str, Any]:

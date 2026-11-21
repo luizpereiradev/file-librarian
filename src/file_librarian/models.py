@@ -15,9 +15,27 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from file_librarian.locales import Language
+
+Kind = Literal[
+    "bill",
+    "receipt",
+    "invoice",
+    "statement",
+    "contract",
+    "payslip",
+    "tax",
+    "ticket",
+    "policy",
+    "report",
+    "form",
+    "letter",
+    "manual",
+    "other",
+]
+"""What sort of document a file is (#88); ``fields.KINDS`` lists them in this order."""
 
 
 class FileStatus(StrEnum):
@@ -216,6 +234,23 @@ class Classification(BaseModel):
     brand); the prompt asks for no private person's name, which nothing can check.
     ``None`` when there is none or it is unclear.
     Category layouts with ``{issuer}`` file into a folder named after it."""
+    amount: str | None = Field(default=None, pattern=r"^\d{1,15}(\.\d{1,4})?$")
+    """The document's total or amount due as a decimal string (``"1234.56"``), in
+    ``currency``; ``None`` when it states none (#88). ``fields.clean_amount`` reads it."""
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    """The ISO 4217 code of the document's amounts."""
+    due_date: date | None = None
+    """When the amount is due, for a bill or an invoice."""
+    period: str | None = Field(default=None, pattern=r"^\d{4}(-(0[1-9]|1[0-2]))?$")
+    """What the document refers to: a month (``YYYY-MM``) or a year (``YYYY``)."""
+    kind: Kind | None = None
+    """What sort of document it is, from a closed list (``fields.KINDS``)."""
+
+    @model_validator(mode="after")
+    def _amount_has_currency(self) -> Classification:
+        if self.amount is not None and self.currency is None:
+            raise ValueError("an amount needs its currency")
+        return self
 
 
 @dataclass(frozen=True, slots=True)
@@ -302,6 +337,15 @@ class FileRecord:
     """The organisation the document comes from, as the model named it."""
     layout_date: str | None = None
     """The date a category layout's ``{year}``/``{month}`` came from when it was filed."""
+    amount_minor: int | None = None
+    """The document's amount in ``currency``'s minor units (cents), as the model read it (#88)."""
+    currency: str | None = None
+    due_date: str | None = None
+    """When the amount is due (YYYY-MM-DD)."""
+    period: str | None = None
+    """What the document refers to: ``YYYY-MM`` or ``YYYY``."""
+    kind: str | None = None
+    """One of ``fields.KINDS``."""
 
 
 @dataclass(frozen=True, slots=True)

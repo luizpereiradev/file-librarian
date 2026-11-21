@@ -216,6 +216,59 @@ def test_migration_0014_keeps_index_changes_and_leaves_layout_values_unknown(
         assert store.conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
+def test_migration_0015_adds_structured_fields_and_journals_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "library.db"
+    before = [m for m in load_migrations() if m.version < 15]
+    with monkeypatch.context() as patch:
+        patch.setattr("file_librarian.db.store.load_migrations", lambda: before)
+        old = Store.open(path)
+    with old:
+        assert old.schema_version == 14
+        file_id = insert_file(old, "a.pdf", "d")
+        old.change_index(1, "files.issuer", file_id, None, "Acme")
+        with pytest.raises(sqlite3.IntegrityError):  # not a target before 0015
+            old.conn.execute(
+                """INSERT INTO index_changes (run_id, target, row_id, status, created_at)
+                   VALUES (1, 'files.amount_minor', ?, 'done', 'x')""",
+                (file_id,),
+            )
+    with Store.open(path) as store:
+        assert store.schema_version == len(load_migrations()) >= 15
+        row = store.file_by_id(file_id)
+        assert (row.issuer, row.amount_minor, row.currency, row.kind) == ("Acme", None, None, None)
+        [change] = store.index_changes(1)
+        assert (change.target, change.new_value) == ("files.issuer", "Acme")
+        for target, value in (
+            ("files.amount_minor", "10391"),
+            ("files.currency", "USD"),
+            ("files.due_date", "2026-09-20"),
+            ("files.period", "2026-08"),
+            ("files.kind", "bill"),
+        ):
+            store.change_index(1, target, file_id, None, value)
+        row = store.file_by_id(file_id)
+        assert (row.amount_minor, row.currency, row.due_date, row.period, row.kind) == (
+            10391,  # INTEGER affinity: the journal's text comes back a number
+            "USD",
+            "2026-09-20",
+            "2026-08",
+            "bill",
+        )
+        # Undo puts each back: the journaled text matches the stored integer.
+        assert all(store.revert_index_change(c) for c in store.index_changes(1))
+        row = store.file_by_id(file_id)
+        assert (row.issuer, row.amount_minor, row.kind) == (None, None, None)
+        for column, bad in (("kind", "spaceship"), ("amount_minor", -1), ("currency", "EURO")):
+            with pytest.raises(sqlite3.IntegrityError):
+                store.conn.execute(
+                    f"UPDATE files SET {column} = ? WHERE id = ?",  # noqa: S608
+                    (bad, file_id),
+                )
+        assert store.conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
 def test_month_cost_counts_this_months_finished_runs(store: Store) -> None:
     def finished(started: str, cost: float | None) -> None:
         run_id = store.start_run(RunMode.RUN, RunTrigger.MANUAL)

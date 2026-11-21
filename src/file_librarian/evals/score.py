@@ -22,6 +22,14 @@ How each number is counted:
   the model chose its original subject (``name_choice: original``).
 - **Sensitive**: items flib must withhold, how many it withheld, and how many
   reached the provider. That last number must be 0; ``flib eval`` fails otherwise.
+- **Fields** (#88), over the items whose gold lists structured fields, per
+  field: *precision*, the share of the model's answers that are right among
+  the items where the gold has a value; *recall*, the share of gold values the
+  model gave right (an item not classified counts as a miss); *invented*, how
+  many answers the model gave where the gold has none. Kind, currency, dates
+  and period must be equal (a gold kind is free text: ``GOLD_KINDS`` lists the
+  kinds that count for it), amounts equal in the currency's minor units,
+  issuers equal by ``naming.issuer_key``.
 """
 
 from __future__ import annotations
@@ -31,6 +39,9 @@ from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+
+from file_librarian.fields import clean_kind, to_minor
+from file_librarian.naming import issuer_key
 
 FORMAT_VERSION = 1
 NOT_CLASSIFIED = "(none)"
@@ -55,6 +66,10 @@ class ItemResult:
     """Gold: flib must withhold it."""
     sent: bool = False
     """It reached the provider."""
+    fields: dict[str, str | None] = field(default_factory=dict)
+    """The structured fields of the model's answer (#88), as ``FIELDS`` names them."""
+    expected_fields: dict[str, str] = field(default_factory=dict)
+    """Gold: the fields the document states; a field it does not state is absent."""
 
     @property
     def correct(self) -> bool | None:
@@ -89,6 +104,95 @@ class Run:
     def leaked(self) -> list[str]:
         """Sensitive items that reached the provider. Must be empty."""
         return [i.path for i in self.items if i.sensitive and i.sent]
+
+
+FIELDS = ("kind", "issuer", "amount", "currency", "document_date", "due_date", "period")
+
+# The corpus's gold kinds are free text; these are the kinds (``fields.KINDS``) that count
+# as right for each. A gold kind not listed counts as the kind it ends in, else ``other``.
+GOLD_KINDS: dict[str, tuple[str, ...]] = {
+    "utility bill": ("bill", "invoice"),
+    "telecom bill": ("bill", "invoice"),
+    "medical bill": ("bill", "invoice"),
+    "condo fee": ("bill",),
+    "bank statement": ("statement",),
+    "card statement": ("statement", "bill"),
+    "income statement": ("statement", "tax"),
+    "payment receipt": ("receipt",),
+    "receipt": ("receipt",),
+    "medical receipt": ("receipt",),
+    "tax return receipt": ("receipt", "tax"),
+    "reimbursement": ("statement", "receipt", "letter"),
+    "invoice": ("invoice", "receipt"),
+    "order": ("invoice", "receipt"),
+    "payslip": ("payslip",),
+    "tax payment": ("tax", "bill"),
+    "property tax": ("tax", "bill"),
+    "vehicle tax": ("tax", "bill"),
+    "tax return": ("tax",),
+    "traffic fine": ("bill", "letter", "form", "other"),
+    "lease": ("contract",),
+    "nda": ("contract",),
+    "services agreement": ("contract",),
+    "contract amendment": ("contract",),
+    "termination agreement": ("contract",),
+    "power of attorney": ("contract", "form", "other"),
+    "boarding pass": ("ticket",),
+    "flight ticket": ("ticket",),
+    "hotel booking": ("ticket", "receipt", "letter", "other"),
+    "insurance policy": ("policy",),
+    "travel insurance": ("policy",),
+    "lab result": ("report",),
+    "imaging report": ("report",),
+    "prescription": ("other", "form", "report", "letter"),
+    "medical certificate": ("letter", "form", "report", "other"),
+    "birth certificate": ("other", "form"),
+    "diploma": ("other", "form"),
+    "course certificate": ("other", "form"),
+}
+
+
+def gold_kinds(gold: str) -> tuple[str, ...]:
+    """The kinds that count as right for a gold kind."""
+    return GOLD_KINDS.get(gold) or (clean_kind(gold) or "other",)
+
+
+def field_correct(name: str, answer: str | None, expected: dict[str, str]) -> bool:
+    """Whether the model's value of field ``name`` matches the gold value."""
+    gold = expected.get(name)
+    if answer is None or gold is None:
+        return False
+    if name == "kind":
+        return answer in gold_kinds(gold)
+    if name == "issuer":
+        return issuer_key(answer) == issuer_key(gold)
+    if name == "amount":
+        currency = expected.get("currency") or "USD"
+        return to_minor(answer, currency) == to_minor(gold, currency)
+    return answer == gold
+
+
+def field_metrics(items: list[ItemResult]) -> dict[str, dict[str, Any]]:
+    """Per field: how many gold values, answers, right answers and invented values."""
+    scored = [i for i in items if i.expected_fields and not i.sensitive]
+    result: dict[str, dict[str, Any]] = {}
+    for name in FIELDS:
+        with_gold = [i for i in scored if name in i.expected_fields]
+        without = [i for i in scored if name not in i.expected_fields]
+        answered = [i for i in with_gold if i.fields.get(name) is not None]
+        correct = sum(1 for i in answered if field_correct(name, i.fields[name], i.expected_fields))
+        invented = sum(1 for i in without if i.fields.get(name) is not None)
+        result[name] = {
+            "gold": len(with_gold),
+            "answered": len(answered),
+            "correct": correct,
+            "precision": _ratio(correct, len(answered)),
+            "recall": _ratio(correct, len(with_gold)),
+            "without_gold": len(without),
+            "invented": invented,
+            "invented_rate": _ratio(invented, len(without)),
+        }
+    return result
 
 
 def _ratio(part: int, whole: int) -> float | None:
@@ -146,6 +250,7 @@ def metrics(run: Run) -> dict[str, Any]:
             "withheld": sum(1 for i in sensitive if i.status == "sensitive" and not i.sent),
             "sent": len(run.leaked),
         },
+        "fields": field_metrics(items),
         "status": dict(sorted(Counter(i.status for i in items).items())),
         "sent": sent,
         "items_per_minute": round(sent / minutes, 1) if minutes > 0 else None,
@@ -222,8 +327,20 @@ def report_lines(run: Run, *, worst: int = 8) -> list[str]:
         f"Name kept: precision {_pct(names['precision'])}, recall {_pct(names['recall'])} "
         f"over {names['scored']} filed item(s).",
         f"Sensitive: {sens['withheld']}/{sens['expected']} withheld, {sens['sent']} sent.",
-        "Status: " + ", ".join(f"{k} {v}" for k, v in m["status"].items()) + ".",
     ]
+    scored = sum(1 for i in run.items if i.expected_fields and not i.sensitive)
+    if scored:
+        lines.append(
+            f"Fields over {scored} item(s) with gold fields: precision (when answered), "
+            "recall (of gold values), invented (answered where the gold has none):"
+        )
+        for name, f in m["fields"].items():
+            invented = f"{f['invented']}/{f['without_gold']}" if f["without_gold"] else "n/a"
+            lines.append(
+                f"  {name:<14} {_pct(f['precision']):>7} ({f['correct']}/{f['answered']})"
+                f"  {_pct(f['recall']):>7} ({f['correct']}/{f['gold']})  invented {invented}"
+            )
+    lines.append("Status: " + ", ".join(f"{k} {v}" for k, v in m["status"].items()) + ".")
     speed = m["items_per_minute"]
     cost = m["cost_usd"]
     lines.append(
@@ -267,6 +384,12 @@ def compare(base: Run, other: Run, *, changed: int = 20) -> list[str]:
         row("name kept precision", a["name_kept"]["precision"], b["name_kept"]["precision"]),
         row("name kept recall", a["name_kept"]["recall"], b["name_kept"]["recall"]),
         row("sensitive sent", a["sensitive"]["sent"], b["sensitive"]["sent"], pct=False),
+        *(
+            row(f"{name} {measure}", a["fields"][name][measure], b["fields"][name][measure])
+            for name in FIELDS
+            for measure in ("precision", "recall")
+            if a["fields"][name]["gold"] or b["fields"][name]["gold"]
+        ),
         row("items/min", a["items_per_minute"], b["items_per_minute"], pct=False),
         row("cost US$", a["cost_usd"], b["cost_usd"], pct=False),
     ]
