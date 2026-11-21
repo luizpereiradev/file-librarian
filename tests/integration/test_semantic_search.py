@@ -63,7 +63,7 @@ def embedder(url: str, **semantic: Any) -> Embedder:
 
 
 def run(cfg: Config, *names: str, extra: dict[str, bytes] | None = None) -> pipeline.Outcome:
-    downloads = cfg.inputs[0]
+    downloads = cfg.input_paths[0]
     for name in names:
         put(downloads, name, name.encode())
     for name, content in (extra or {}).items():

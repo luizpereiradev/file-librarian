@@ -595,7 +595,7 @@ def test_flib_mcp_serves_the_loaded_config(
     result = CliRunner().invoke(app, ["mcp", "-c", str(path)])
     assert result.exit_code == 0, result.stderr
     [loaded] = served
-    assert loaded.inputs == [downloads]
+    assert loaded.input_paths == [downloads]
 
 
 def test_flib_mcp_without_the_optional_sdk(

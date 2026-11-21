@@ -14,7 +14,9 @@ every row of the index and looks at where the file really is:
     changed, that is a correction by the user and is recorded (RF-29);
   - found in the review folder: status ``review``; one that had no review
     reason gets ``moved_by_hand``;
-  - found back in an input folder: status ``skipped``, so it is left alone;
+  - found back in an input folder: status ``skipped``, so it is left alone.
+    The row keeps the input it was first taken from (``source_input``, #89);
+    where it is now is ``current_path``, whichever input that is;
 - found nowhere: status ``missing``; if it reappears later it is picked up
   again by the same search.
 
@@ -187,7 +189,7 @@ class _Finder:
         dirs: list[Path] = []
         output_root = self._config.output_root
         duplicates = folder_key(self._config.duplicates_folder)
-        for root in [output_root, *self._config.inputs]:
+        for root in [output_root, *self._config.input_paths]:
             if not root.is_dir() or in_cloud_only(root):
                 continue
             deep = is_within(root, output_root)

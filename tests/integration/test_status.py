@@ -187,7 +187,14 @@ def test_status_counts_the_last_runs_unreadable_and_cloud_only_skips(downloads: 
         ],
     )
     state = st.collect(cfg)
-    assert state.skipped == {"unreadable": 2, "cloud_only": 1, "not_where_left": 0, "locked": 0}
+    assert state.skipped == {
+        "unreadable": 2,
+        "cloud_only": 1,
+        "not_where_left": 0,
+        "locked": 0,
+        "too_recent": 0,
+        "input_unreadable": 0,
+    }
     assert "  skipped: 2 unreadable, 1 only in iCloud (see its log)" in st.render(state, cfg)
 
 

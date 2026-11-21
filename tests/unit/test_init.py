@@ -73,7 +73,7 @@ def test_defaults_all_the_way_give_a_working_setup(
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     cfg = load_config(path)
     assert cfg.language == "en"
-    assert cfg.inputs == [downloads]
+    assert cfg.input_paths == [downloads]
     assert cfg.output_root == downloads / "Organized"
     assert cfg.review_folder == "_Review"
     assert "flib status" in result.stdout  # where to look once it runs by itself
@@ -258,7 +258,7 @@ def test_missing_folder_is_asked_again(downloads: Path, tmp_path: Path) -> None:
     result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers)
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "is not a folder" in result.stderr
-    assert load_config(path).inputs == [downloads]
+    assert load_config(path).input_paths == [downloads]
 
 
 def test_invalid_folders_are_asked_again(downloads: Path, tmp_path: Path) -> None:
@@ -352,7 +352,7 @@ def test_rendered_config_is_valid_and_quotes_odd_names(tmp_path: Path) -> None:
     )
     (tmp_path / "in: box").mkdir()
     cfg = onboarding.check_answers(answers)
-    assert cfg.inputs == [tmp_path / "in: box"]
+    assert cfg.input_paths == [tmp_path / "in: box"]
     assert cfg.review_folder == 'To "review"'
     assert cfg.vision.enabled is True
     assert yaml.safe_load(onboarding.render_config(answers))["provider"]["name"] == "anthropic"

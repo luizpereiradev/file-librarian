@@ -23,9 +23,18 @@
   content's index row when it is moved. A copy that ``flib undo`` put back
   is left alone. With ``duplicates: leave``, duplicates are skipped and stay
   where they are.
+- Applies each input's own rules (#89): its ``ignore`` patterns on top of the
+  global ones; with ``only``, leaves alone everything that matches none of
+  its patterns (``ignore`` wins over ``only``); its ``folders`` and
+  ``duplicates`` instead of the global ones; and with ``min_age_days``,
+  leaves alone, as ``too recent``, an item younger than that (``item_age``).
+  Each candidate and duplicate carries the input it came from.
 - Returns at most ``max_files_per_run`` candidates, oldest first. Duplicates
   are not counted: they cost no provider call. A duplicate of an item left
   for a later run waits with it.
+- Skips an input folder that cannot be listed (macOS privacy, deleted,
+  unmounted) as ``input folder could not be read`` and goes on with the
+  others; raises ``ScanError`` only when no input can be read.
 - Keeps why an item was unreadable (the step and the errno) and reads it once
   more after a short pause when the error is plausibly transient.
 - Skips as ``locked`` (not ``unreadable``) a file the system refuses because
@@ -41,6 +50,7 @@ a symlink.
 from __future__ import annotations
 
 import errno
+import math
 import os
 import re
 import stat
@@ -53,7 +63,7 @@ from typing import TypeVar
 from unicodedata import normalize
 
 from file_librarian import hashing, protection
-from file_librarian.config import Config, is_within
+from file_librarian.config import Config, InputConfig, is_within
 from file_librarian.globs import matches_any
 from file_librarian.hashing import file_sha256, unit_manifest
 from file_librarian.lock import lock_path
@@ -61,7 +71,10 @@ from file_librarian.models import FileState, FileStatus
 from file_librarian.reconcile import content_at
 
 # Browsers write in-progress downloads under these names (Safari's are folders).
-IN_PROGRESS_PATTERNS = ("*.crdownload", "*.part", "*.partial", "*.download", "*.opdownload")
+# Office's lock files (``~$report.docx``) only exist while a document is open.
+IN_PROGRESS_PATTERNS = (
+    "*.crdownload", "*.part", "*.partial", "*.download", "*.opdownload", "~$*",
+)  # fmt: skip
 # A final-name placeholder next to one of these is still downloading (Firefox, aria2...).
 PARTIAL_SIBLINGS = (".part", ".crdownload", ".aria2", ".download", ".opdownload")
 
@@ -77,6 +90,10 @@ class SkipReason(StrEnum):
     MANAGED = "managed by flib"
     IN_PROGRESS = "download in progress"
     IGNORED = "matches ignore"
+    NOT_ONLY = "matches none of the input's only patterns"
+    INPUT_UNREADABLE = "input folder could not be read; the other inputs were scanned"
+    TOO_RECENT = "too recent"
+    """Younger than its input's ``min_age_days``; the log adds how many days are left."""
     FOLDER_IGNORED = "folders: ignore"
     UNSTABLE = "still changing"
     KNOWN = "already processed"
@@ -103,6 +120,29 @@ class Candidate:
     """Birth time on macOS, used as the download date."""
     inode: int = 0
     """Checked again before moving, so a replaced file is never moved under the old hash."""
+    input: Path | None = None
+    """The input folder it was found in (``None`` for a file already in the library)."""
+
+
+DAY = 86400.0
+
+
+def item_age(st: os.stat_result, now: float, newest_inside: float | None = None) -> float:
+    """How long ago, in seconds, an item last changed or arrived in its folder.
+
+    The later of its modification time and its status-change time (``ctime``),
+    which macOS sets when an item is moved, copied or renamed into a folder,
+    and when its contents or attributes change; for a folder unit, also the
+    newest modification time of anything inside. An item with a time in the
+    future counts as brand new.
+    """
+    newest = max(st.st_mtime, st.st_ctime, newest_inside or 0.0)
+    return max(0.0, now - newest)
+
+
+def days_left(age: float, min_age_days: int) -> int:
+    """Whole days, rounded up, until an item of ``age`` seconds is old enough."""
+    return max(1, math.ceil((min_age_days * DAY - age) / DAY))
 
 
 # Read errors worth one more try: a lock, an interrupted call, a busy or stale file.
@@ -118,7 +158,7 @@ class SkipDetail:
     """Why an item could not be read: the step and the error, never a path or content."""
 
     step: str
-    """``stat`` or ``read``."""
+    """``stat`` or ``read``; ``list`` for an input folder that could not be listed."""
     errno: int | None
     message: str
 
@@ -156,6 +196,8 @@ class ScanResult:
     skipped: list[tuple[Path, SkipReason]] = field(default_factory=list)
     details: dict[Path, SkipDetail] = field(default_factory=dict)
     """For unreadable items in ``skipped``: what failed."""
+    days_left: dict[Path, int] = field(default_factory=dict)
+    """For items skipped as ``too recent``: whole days until they are old enough."""
     deferred: int = 0
     """Ready candidates left for the next run because of ``max_files_per_run``."""
 
@@ -197,7 +239,9 @@ def _keep_originals(ready: list[Candidate]) -> tuple[list[Candidate], list[Dupli
 _FILED = frozenset({FileStatus.ORGANIZED, FileStatus.REVIEW, FileStatus.MISSING})
 
 
-def _known(candidate: Candidate, state: FileState, config: Config) -> SkipReason | Duplicate | None:
+def _known(
+    candidate: Candidate, state: FileState, config: Config, rules: InputConfig
+) -> SkipReason | Duplicate | None:
     """For content already in the index: why it is skipped, a duplicate, or ``None``
     (new: it goes ahead and, once moved, takes over the content's row).
 
@@ -210,7 +254,7 @@ def _known(candidate: Candidate, state: FileState, config: Config) -> SkipReason
     """
     here = normalize("NFC", str(candidate.path))
     if (
-        config.duplicates != "move"
+        config.duplicates_for(rules) != "move"
         or state.status not in _FILED
         or state.path is None
         or here in state.kept
@@ -258,6 +302,18 @@ def _birth(st: os.stat_result) -> float:
     return float(getattr(st, "st_birthtime", st.st_mtime))
 
 
+def _input_problem(folder: Path, exc: OSError) -> str:
+    if isinstance(exc, PermissionError):
+        return (
+            f"cannot read {folder}: macOS denied access. Give the app running flib "
+            "access in System Settings > Privacy & Security > Files and Folders "
+            "(or Full Disk Access) and try again."
+        )
+    if isinstance(exc, FileNotFoundError):
+        return f"input folder does not exist: {folder}"
+    return f"cannot read {folder}: {exc.strerror or exc}"
+
+
 def _read_twice(read: Callable[[Path], T], path: Path, sleep: Callable[[float], None]) -> T:
     """``read(path)``, once more after a pause if the first error is plausibly transient."""
     try:
@@ -288,17 +344,27 @@ def scan(
             locked_now.append(protection.screen_locked() is True)
         return locked_now[0]
 
-    for folder in config.inputs:
+    failures: list[str] = []
+
+    def too_recent(path: Path, age: float, min_age: int) -> None:
+        # Never pending work: not locked, not deferred, simply not old enough yet.
+        result.skipped.append((path, SkipReason.TOO_RECENT))
+        result.days_left[path] = days_left(age, min_age)
+
+    for rules in config.inputs:
+        folder = rules.path
+        ignore = (*config.ignore, *rules.ignore)
+        folders = config.folders_for(rules)
+        min_age = rules.min_age_days
         try:
             entries = sorted(os.scandir(folder), key=lambda e: e.name)
-        except PermissionError as exc:
-            raise ScanError(
-                f"cannot read {folder}: macOS denied access. Give the app running flib "
-                "access in System Settings > Privacy & Security > Files and Folders "
-                "(or Full Disk Access) and try again."
-            ) from exc
-        except FileNotFoundError as exc:
-            raise ScanError(f"input folder does not exist: {folder}") from exc
+        except OSError as exc:
+            # One folder that cannot be listed (macOS privacy, deleted, unmounted)
+            # does not stop the others; only when none can be read does the run stop.
+            result.skipped.append((folder, SkipReason.INPUT_UNREADABLE))
+            result.details[folder] = SkipDetail.from_error("list", exc)
+            failures.append(_input_problem(folder, exc))
+            continue
 
         names = {e.name.casefold() for e in entries}
         for entry in entries:
@@ -333,8 +399,11 @@ def scan(
             ):
                 skip(SkipReason.IN_PROGRESS)
                 continue
-            if matches_any(entry.name, config.ignore):
+            if matches_any(entry.name, ignore):
                 skip(SkipReason.IGNORED)
+                continue
+            if rules.only is not None and not matches_any(entry.name, rules.only):
+                skip(SkipReason.NOT_ONLY)
                 continue
             # Before anything that opens, lists or hashes it: that would download it.
             if hashing.is_dataless(ident):
@@ -346,12 +415,16 @@ def scan(
                 st = entry.stat(follow_symlinks=False)
                 step = "read"
                 if stat.S_ISDIR(st.st_mode):
-                    if config.folders == "ignore":
+                    if folders == "ignore":
                         skip(SkipReason.FOLDER_IGNORED)
                         continue
                     manifest = _read_twice(unit_manifest, path, sleep)
                     if manifest.dataless:
                         skip(SkipReason.CLOUD_ONLY)
+                        continue
+                    age = item_age(st, now, manifest.newest_mtime)
+                    if age < min_age * DAY:
+                        too_recent(path, age, min_age)
                         continue
                     if now - manifest.newest_mtime < limits.stable_seconds:
                         skip(SkipReason.UNSTABLE)
@@ -368,10 +441,15 @@ def scan(
                         mtime_ns=st.st_mtime_ns,
                         inode=st.st_ino,
                         created=_birth(st),
+                        input=folder,
                     )
                 elif stat.S_ISREG(st.st_mode):
                     if st.st_size == 0:
                         skip(SkipReason.EMPTY)
+                        continue
+                    age = item_age(st, now)
+                    if age < min_age * DAY:
+                        too_recent(path, age, min_age)
                         continue
                     if now - st.st_mtime < limits.stable_seconds:
                         skip(SkipReason.UNSTABLE)
@@ -391,6 +469,7 @@ def scan(
                         mtime_ns=st.st_mtime_ns,
                         inode=st.st_ino,
                         created=_birth(st),
+                        input=folder,
                     )
                 else:
                     skip(SkipReason.SPECIAL)
@@ -409,7 +488,7 @@ def scan(
                 and state.attempts < limits.max_attempts
             )
             if state is not None and not retry:
-                known = _known(candidate, state, config)
+                known = _known(candidate, state, config, rules)
                 if isinstance(known, Duplicate):
                     result.duplicates.append(known)
                     continue
@@ -418,6 +497,8 @@ def scan(
                     continue
             ready.append(candidate)
 
+    if failures and len(failures) == len(config.inputs):
+        raise ScanError("; ".join(failures))
     # The index is keyed by content: of several copies, only the original goes ahead.
     ready, copies = _keep_originals(ready)
     ready.sort(key=lambda c: (c.mtime, str(c.path)))
@@ -426,7 +507,8 @@ def scan(
     going = {c.path for c in result.candidates}
     for copy in copies:
         # The others wait where they are, or with ``duplicates: move`` follow their original.
-        if config.duplicates == "move" and copy.original in going:
+        source = config.input_rules(copy.candidate.input) if copy.candidate.input else None
+        if config.duplicates_for(source) == "move" and copy.original in going:
             result.duplicates.append(copy)
         else:
             result.skipped.append((copy.candidate.path, SkipReason.DUPLICATE))

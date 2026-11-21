@@ -44,6 +44,7 @@ from file_librarian.config import (
     default_config_path,
     inactive_options_set,
     is_loopback_url,
+    is_within,
     load_config,
 )
 from file_librarian.context import build_context_safely
@@ -132,7 +133,9 @@ def check_config(config: ConfigOption = None) -> None:
         raise typer.Exit(EXIT_ERROR) from exc
     typer.echo(f"{path}: OK")
     typer.echo(f"  language: {cfg.language}")
-    typer.echo(f"  inputs: {', '.join(str(p) for p in cfg.inputs)}")
+    typer.echo("  inputs:")
+    for entry in cfg.inputs:
+        typer.echo(f"    {entry.path}: {cfg.input_summary(entry)}")
     typer.echo(f"  output_root: {cfg.output_root}")
     typer.echo(f"  review_folder: {cfg.review_folder}")
     typer.echo(f"  categories: {', '.join(c.name for c in cfg.categories)}")
@@ -148,6 +151,13 @@ def check_config(config: ConfigOption = None) -> None:
             typer.echo(
                 "  api key: none (fine for a server that needs none; otherwise run "
                 f"`flib key set --provider {spec.provider}`, or set {spec.env_var})"
+            )
+    for entry in cfg.inputs:
+        if entry.category is not None and entry.only is None:
+            typer.echo(
+                f"warning: input {entry.path} has a fixed category and no `only`: everything "
+                f"in this folder is filed as {entry.category} without being looked at.",
+                err=True,
             )
     if cfg.provider.name == "claude-code":
         _report_claude(cfg)
@@ -800,7 +810,7 @@ def _cost_line(cost_usd: float, *, known: bool) -> str | None:
 
 
 def _short(path: Path, cfg: Config) -> str:
-    for root in (cfg.output_root, *cfg.inputs):
+    for root in (cfg.output_root, *cfg.input_paths):
         if path.is_relative_to(root):
             return str(path.relative_to(root))
     return str(path)
@@ -815,15 +825,31 @@ def _skipped_lines(scan: ScanResult, cfg: Config) -> list[str]:
     skipped = scan.skipped
     lines = []
     for path, reason in skipped:
-        if reason in _QUIET_SKIPS or reason is SkipReason.KNOWN:
+        if reason in _QUIET_SKIPS or reason in (SkipReason.KNOWN, SkipReason.NOT_ONLY):
             continue
-        detail = scan.details.get(path) if reason is SkipReason.UNREADABLE else None
+        detail = scan.details.get(path) if reason in _DETAILED else None
         why = f"{reason.value}: {detail}" if detail else reason.value
-        lines.append(f"  skip    {_short(path, cfg)}  ({why})")
+        if reason is SkipReason.TOO_RECENT:
+            left = scan.days_left.get(path, 1)
+            why = f"{reason.value} ({left} day{'s' if left != 1 else ''} left)"
+        where = str(path) if reason is SkipReason.INPUT_UNREADABLE else _short(path, cfg)
+        lines.append(f"  skip    {where}  ({why})")
     known = sum(1 for _, reason in skipped if reason is SkipReason.KNOWN)
     if known:
         lines.append(f"  ({known} item(s) already processed earlier were left alone)")
+    outside = sum(1 for _, reason in skipped if reason is SkipReason.NOT_ONLY)
+    if outside:
+        lines.append(f"  ({outside} item(s) matching none of their input's `only` were left alone)")
+    unreadable = sum(1 for _, reason in skipped if reason is SkipReason.INPUT_UNREADABLE)
+    if unreadable:
+        lines.append(
+            f"warning: {unreadable} input folder(s) could not be read and were skipped; the "
+            "others were organized. `flib schedule` checks folder access."
+        )
     return lines
+
+
+_DETAILED = {SkipReason.UNREADABLE, SkipReason.INPUT_UNREADABLE}
 
 
 ACCESS_HINT = (
@@ -1431,7 +1457,9 @@ def _report_access(config_path: Path) -> bool:
             "Privacy & Security > Full Disk Access, click +, press Cmd+Shift+G and add:\n"
             f"  {binary}\n"
             "This is flib's own copy of Python, so the access covers flib only, not your other "
-            "Python projects. Then run `flib schedule` again to re-check.",
+            "Python projects. macOS guards the Desktop, Documents and Downloads one by one; "
+            "Full Disk Access covers them all at once. Then run `flib schedule` again to "
+            "re-check (docs/troubleshooting.md).",
             err=True,
         )
         return False
@@ -1446,7 +1474,7 @@ def check_access(
 ) -> None:
     """Used by `flib schedule`: report whether this process can list the input folders."""
     try:
-        report = scheduler.probe_inputs(load_config(config).inputs)
+        report = scheduler.probe_inputs(load_config(config).input_paths)
     except ConfigError as exc:
         report = {"config": f"error: {exc}"}
     fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
@@ -1611,6 +1639,7 @@ def _ask_answers(ask: _Asker) -> onboarding.Answers:
             if ask.yes:
                 _fatal(str(exc))
             typer.echo(f"error: {exc}\nLet's try the folders again.", err=True)
+    answers = _ask_more_inboxes(ask, answers)
     choice = _ask_provider(ask)
     vision = False
     if choice.provider == "anthropic":
@@ -1626,6 +1655,60 @@ def _ask_answers(ask: _Asker) -> onboarding.Answers:
         model_name=choice.model,
         base_url=choice.base_url,
     )
+
+
+def _with_inbox(
+    answers: onboarding.Answers, candidate: onboarding.Answers, what: str
+) -> onboarding.Answers:
+    """``candidate`` (``answers`` with one more input) if its configuration is valid."""
+    try:
+        onboarding.check_answers(candidate)
+    except ConfigError as exc:
+        typer.echo(f"Not adding {what}: {exc}", err=True)
+        return answers
+    return candidate
+
+
+def _ask_more_inboxes(ask: _Asker, answers: onboarding.Answers) -> onboarding.Answers:
+    """Offer the Desktop and the screenshots folder as more inputs (#89); no by default."""
+    desktop = onboarding.desktop_folder()
+    if desktop is not None and not is_within(desktop, answers.input_folder):
+        typer.echo(
+            f"\nflib can also tidy the Desktop. People keep work in progress there, so it would "
+            f"take only documents and images that have not changed for "
+            f"{onboarding.DESKTOP_MIN_AGE_DAYS} days, and leave folders alone. macOS asks once "
+            "whether flib may read the Desktop."
+        )
+        if ask.confirm("Also tidy the Desktop?", default=False):
+            answers = _with_inbox(
+                answers, dataclasses.replace(answers, desktop=desktop), "the Desktop"
+            )
+    shots = onboarding.screenshot_folder()
+    if shots is None:
+        return answers
+    category = LOCALES[answers.language].screenshots_category
+    where = onboarding.display_path(shots)
+    if onboarding.shared_folder(shots):
+        typer.echo(
+            f"\nScreenshots are saved to {where}, which holds other files too, so flib does not "
+            "offer to file it by a fixed category. To have screenshots filed on their own, "
+            "choose a folder just for them in the Screenshot app (Cmd+Shift+5 > Options > "
+            "Other Location), then run `flib init` again or add it to `inputs` "
+            "(see config.example.yaml)."
+        )
+        return answers
+    found = onboarding.count_matching(shots, onboarding.SCREENSHOT_ONLY)
+    typer.echo(
+        f"\nScreenshots are saved in {where} ({found} item(s) there look like screenshots or "
+        f"screen recordings now). flib can file those into {category}/<year>/<month> without "
+        "asking the AI (no cost), keeping their names; anything else there, and folders, "
+        "are left alone."
+    )
+    if ask.confirm("File screenshots too?", default=False):
+        answers = _with_inbox(
+            answers, dataclasses.replace(answers, screenshots=shots), "the screenshots folder"
+        )
+    return answers
 
 
 def _user_path(raw: str) -> Path:
@@ -1781,7 +1864,7 @@ def _provider_ready(cfg: Config, ask: _Asker) -> bool:
 
 def _trial(cfg: Config, size: int, ask: _Asker) -> None:
     picked = onboarding.pick_sample(cfg, size)
-    where = ", ".join(onboarding.display_path(p) for p in cfg.inputs)
+    where = ", ".join(onboarding.display_path(p) for p in cfg.input_paths)
     if not picked:
         typer.echo(
             f"No files to try it on in {where}: it is empty, or holds only hidden, sensitive "

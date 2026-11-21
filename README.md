@@ -596,7 +596,7 @@ The options you are most likely to change:
 | Option | Default | What it does |
 | --- | --- | --- |
 | `language` | `en` | `en` or `pt-BR`: the language of generated names and descriptions, and of the default folders (`Organized`/`_Review` or `Organizado`/`_Revisar`) and categories |
-| `inputs` | `[~/Downloads]` | The folders to keep organized |
+| `inputs` | `[~/Downloads]` | The folders to keep organized; each can have its own rules ([More than one inbox](#more-than-one-inbox)) |
 | `output_root` | `~/Downloads/Organized` | Where category folders are created |
 | `categories` | 5 in `en`, 15 in `pt-BR` | The closed list the AI chooses from; each `hint` steers it, `rename: false` keeps original names, `layout` files into sub-folders ([Sub-folders](#sub-folders-by-year-or-issuer)) |
 | `never_send` | `*.pem`, `*.key`, `.env*` in the example | Patterns classified from metadata only |
@@ -618,6 +618,33 @@ The options you are most likely to change:
 category name as a Finder tag, so Finder's sidebar and Spotlight
 (`tag:Finance`) find it too. Your own tags are kept, and `flib undo` removes
 only the tag flib added.
+
+### More than one inbox
+
+`inputs` takes plain paths, or a mapping with rules for that folder alone.
+The Desktop holds work in progress, so be conservative there; a screenshots
+folder can go straight to one category with no AI call at all:
+
+```yaml
+inputs:
+  - ~/Downloads                       # everything at its top level, as before
+  - path: ~/Desktop
+    only: ["*.pdf", "*.png", "Screenshot*"]   # everything else is left alone
+    min_age_days: 7                   # only what has not changed for a week
+    folders: ignore
+  - path: ~/Pictures/Screenshots
+    category: Screenshots             # a configured category; no AI, no cost
+    layout: "{year}/{month}"
+```
+
+The options are `only`, `ignore` (added to the global list), `min_age_days`,
+a fixed `category` (with `rename` and `layout`), `folders` and `duplicates`.
+`flib check-config` prints each input with the rules it ends up with. Inputs
+may not overlap or sit inside `output_root`. `flib init` offers the Desktop
+(with the rules above) and your screenshots folder; both default to no.
+Each folder is a separate macOS permission for the daily run, which
+`flib schedule` checks one by one. The details, including how the age is
+counted, are in [the guide](docs/guide.md#more-than-one-inbox).
 
 ### Text in images and scanned PDFs (OCR)
 

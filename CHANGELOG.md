@@ -8,6 +8,25 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- More than one inbox, each with its own rules (#89): an entry of `inputs`
+  may be a mapping with `path` and `only` (name patterns; everything else is
+  left alone), `ignore` (added to the global list, wins over `only`),
+  `min_age_days` (an item is taken only once that many days have passed
+  since it last changed or arrived in the folder; younger ones are skipped
+  as `too recent (N days left)`, never an error and never waited for), a
+  fixed `category` (no AI call, no cost: the name is kept unless
+  `rename: true`, no description is stored, tags are words of the name;
+  sensitive files still stay put) with an optional `layout`, and `folders`
+  and `duplicates` overrides. A plain list keeps working unchanged. Inputs
+  that overlap or sit inside `output_root` are rejected at load, and
+  `flib check-config` prints each input with its effective rules. The index
+  records which input each file came from (migration 0016): `flib status`
+  counts files per input (`<input-N>` in `flib doctor`), and `flib
+  reconcile` records the input a file was dragged back to. `flib reprocess`
+  never asks the AI about files filed by a fixed category. `flib init`
+  offers the Desktop (documents and images only, `min_age_days: 7`, folders
+  left alone) and the folder macOS saves screenshots to (a fixed
+  `Screenshots` category by year and month); both default to no.
 - Amounts, dates and issuers (#88): the answer also carries what a document
   states, and nothing it does not: its `kind` (bill, receipt, invoice,
   statement, contract, payslip, tax, ticket, policy, report, form, letter,

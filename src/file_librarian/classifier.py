@@ -33,6 +33,12 @@ Wraps any ``Provider`` with what the provider itself should not decide:
 
 The provider's answer is only data; the planner decides what it means.
 
+``rule_decisions`` sets apart the files of inputs with a fixed ``category``
+(#89): they get that category with no provider call at all, so no cost, no
+cache entry and no content sent anywhere. Their answer carries no
+description; its tags are words of the file's name. A sensitive file among
+them stays in place like any other.
+
 ``correction_examples`` picks the corrections sent along as examples: the
 most recent ``provider.max_examples`` still in effect, never from a sensitive
 file or one matching ``never_send``.
@@ -42,6 +48,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
@@ -274,6 +281,56 @@ def classify_all(
                 cache.cache_answer(ctx.sha256, key, answer.model_dump_json())
             break
     return result
+
+
+RULE_DESCRIPTION = "filed by its input's fixed category"
+"""The answer's description for a file filed by rule; never stored (``by_rule``)."""
+MAX_NAME_TAGS = 5
+_WORD = re.compile(r"[^\W\d_]{3,}")
+
+
+def name_tags(name: str) -> list[str]:
+    """Up to ``MAX_NAME_TAGS`` words of a file name (letters only, three or more), lower case."""
+    stem = name.rsplit(".", 1)[0] if "." in name.lstrip(".") else name
+    tags: list[str] = []
+    for word in _WORD.findall(stem):
+        tag = word.casefold()[:40]
+        if tag not in tags:
+            tags.append(tag)
+        if len(tags) >= MAX_NAME_TAGS:
+            break
+    return tags
+
+
+def rule_decisions(
+    contexts: Iterable[FileContext], config: Config
+) -> tuple[list[Decision], list[FileContext]]:
+    """The decisions for files of inputs with a fixed category, and the other contexts.
+
+    No provider is involved: the category is the input's, the confidence 1, the
+    name the file's own (``rename`` on the input applies the naming pattern to it).
+    """
+    decided: list[Decision] = []
+    rest: list[FileContext] = []
+    for ctx in contexts:
+        rules = config.input_rules(ctx.input) if ctx.input is not None else None
+        if rules is None or rules.category is None:
+            rest.append(ctx)
+            continue
+        if ctx.sensitive:
+            decided.append(Decision(ctx))  # stays where it is, like any sensitive file
+            continue
+        stem = ctx.path.stem if not ctx.is_unit else ctx.path.name
+        answer = Classification(
+            category=rules.category,
+            suggested_name=(stem.strip() or "unnamed")[:200],
+            description=RULE_DESCRIPTION,
+            tags=name_tags(ctx.path.name),
+            confidence=1.0,
+            name_choice="original",
+        )
+        decided.append(Decision(ctx, answer, by_rule=True))
+    return decided, rest
 
 
 def _bill(result: Classified, provider: Provider) -> None:

@@ -2,7 +2,7 @@
 
 Every test runs with HOME pointed at a temporary directory and with outbound
 connections and DNS lookups disabled, and with a throwaway keychain in place of
-the user's login Keychain and fakes of launchctl, sips, osascript, the OCR helper
+the user's login Keychain and fakes of launchctl, sips, osascript, defaults, the OCR helper
 and claude (and of the screen lock and Data Protection classes), so code that uses
 ``Path.home()`` or ``~`` stays in a temporary folder and nothing reaches a real API. A test that
 hard-codes an absolute path could still escape; reviewers must reject those.
@@ -157,6 +157,22 @@ def fake_osascript(
     monkeypatch.setenv("FAKE_OSASCRIPT_LOG", str(folder / "calls.jsonl"))
     monkeypatch.delenv("FAKE_OSASCRIPT_FAIL", raising=False)
     monkeypatch.setattr("file_librarian.status.OSASCRIPT", str(script))
+    return folder / "calls.jsonl"
+
+
+@pytest.fixture(autouse=True)
+def fake_defaults(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """``flib init`` reads where screenshots go from a fake ``defaults``; returns its call log.
+
+    Unset, screenshots go to the Desktop; a test sets ``FAKE_SCREENSHOT_LOCATION``.
+    """
+    folder = tmp_path_factory.mktemp("defaults")
+    script = _shim(folder, "defaults", "fake_defaults.py")
+    monkeypatch.setenv("FAKE_DEFAULTS_LOG", str(folder / "calls.jsonl"))
+    monkeypatch.delenv("FAKE_SCREENSHOT_LOCATION", raising=False)
+    monkeypatch.setattr("file_librarian.onboarding.DEFAULTS", str(script))
     return folder / "calls.jsonl"
 
 

@@ -211,6 +211,8 @@ class FileContext:
     """The prepared image or pages, set by the classifier only for the provider call."""
     vision_used: bool = False
     """The answer came from a model that saw the image or pages (so renaming is allowed)."""
+    input: Path | None = None
+    """The input folder it was found in; ``None`` for a file already in the library."""
 
 
 class Classification(BaseModel):
@@ -260,6 +262,8 @@ class Decision:
     context: FileContext
     classification: Classification | None = None
     error: str | None = None
+    by_rule: bool = False
+    """The classification is its input's fixed category, made here without any AI (#89)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -346,6 +350,10 @@ class FileRecord:
     """What the document refers to: ``YYYY-MM`` or ``YYYY``."""
     kind: str | None = None
     """One of ``fields.KINDS``."""
+    source_input: Path | None = None
+    """The input folder the file was taken from (#89); an existing row keeps its own."""
+    by_rule: bool = False
+    """Filed by its input's fixed category, with no AI answer (#89)."""
 
 
 @dataclass(frozen=True, slots=True)

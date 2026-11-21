@@ -171,6 +171,24 @@ def file_record(
     ctx = item.context
     # Only files that were classified get a description; only organized ones a category.
     answer = item.classification if status in {FileStatus.ORGANIZED, FileStatus.REVIEW} else None
+    if answer is not None and item.by_rule:
+        # Filed by its input's fixed category: no AI answer to keep, only the
+        # category and the words of its name (#89).
+        return FileRecord(
+            sha256=ctx.sha256,
+            original_path=ctx.path,
+            current_path=ctx.path,
+            status=status,
+            extension=ctx.extension,
+            size_bytes=ctx.size_bytes,
+            is_unit=ctx.is_unit,
+            source_url=ctx.source_urls[0] if ctx.source_urls else None,
+            category=answer.category if status is FileStatus.ORGANIZED else None,
+            tags=tuple(answer.tags),
+            layout_date=item.layout_date.isoformat() if item.layout_date else None,
+            source_input=ctx.input,
+            by_rule=True,
+        )
     return FileRecord(
         sha256=ctx.sha256,
         original_path=ctx.path,
@@ -198,6 +216,7 @@ def file_record(
         if item.layout_date and status is FileStatus.ORGANIZED
         else None,
         **answer_fields(answer),
+        source_input=ctx.input,
     )
 
 
@@ -275,6 +294,7 @@ def _apply_duplicate(item: PlannedItem, config: Config, store: Store, run_id: in
         size_bytes=ctx.size_bytes,
         is_unit=ctx.is_unit,
         duplicate_of=original.id,
+        source_input=ctx.input,
     )
     result = _place(item, record, config, store, run_id)
     result.original = original.current_path

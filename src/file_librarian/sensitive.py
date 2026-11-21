@@ -9,6 +9,12 @@ matched value is never returned, logged or stored. False positives are
 acceptable here: the cost is a file left in place, not a leaked key. Names
 alone are matched conservatively: ``*.key`` is left out because Keynote uses
 it; a real key file is still caught by its PEM header.
+
+Names that say they hold passwords or recovery material (``*password*``,
+``*senha*``, ``*recovery*code*``, ``*backup*code*``, ``*2fa*``,
+``*seed*phrase*``, ``*private*key*``...) are sensitive too, whatever their
+content. That catches some harmless files (a "password reset guide.pdf"); they
+are only left where they are, which is the safe side to err on.
 """
 
 from __future__ import annotations
@@ -23,6 +29,10 @@ SENSITIVE_NAMES = (
     "*.p12", "*.pfx", "*.jks", "*.keystore", "*.kdbx", "*.keychain", "*.keychain-db",
     "*.ovpn", ".env", ".env.*", "*.env", ".netrc", ".pgpass", ".npmrc", ".pypirc",
     "credentials", "credentials.json", "*credentials*.json", "service-account*.json",
+    # Passwords and recovery material, by what the name says (en, pt-BR).
+    "*password*", "*passwd*", "*senha*", "*recovery*code*", "*recovery*key*",
+    "*backup*code*", "*codigo*recupera*", "*código*recupera*", "*2fa*", "*seed*phrase*",
+    "*private*key*", "*chave*privada*",
 )  # fmt: skip
 
 # (kind, pattern) pairs. Public so the diagnostics report (doctor.py) redacts the same

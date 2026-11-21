@@ -29,7 +29,7 @@ def minimal() -> dict[str, Any]:
 
 def test_example_config_is_valid(fake_home: Path) -> None:
     cfg = load_config(REPO_ROOT / "config.example.yaml")
-    assert cfg.inputs == [fake_home / "Downloads"]
+    assert cfg.input_paths == [fake_home / "Downloads"]
     assert cfg.output_root == fake_home / "Downloads" / "Organized"
     assert cfg.category("Installers") is not None
     assert cfg.category("Installers").rename is False  # type: ignore[union-attr]
@@ -39,7 +39,7 @@ def test_example_config_is_valid(fake_home: Path) -> None:
 def test_only_provider_is_required(fake_home: Path) -> None:
     cfg = parse_config({"provider": {"name": "fake", "model": "fixed"}})
     assert cfg.language == "en"
-    assert cfg.inputs == [fake_home / "Downloads"]
+    assert cfg.input_paths == [fake_home / "Downloads"]
     assert cfg.output_root == fake_home / "Downloads" / "Organized"
     assert cfg.review_folder == "_Review"
     assert [c.name for c in cfg.categories][:2] == ["Finance", "Contracts"]

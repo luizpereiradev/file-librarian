@@ -94,14 +94,55 @@ def canonical(path: Path) -> Path:
     Two spellings of the same folder (``~/downloads`` vs ``~/Downloads``, NFD vs
     NFC, through a symlink) give the same result. Use it only to compare paths.
     """
-    real = Path(os.path.realpath(path))
+    real = _without_data_volume(Path(os.path.realpath(path)))
     return Path(*(folder_key(part) for part in real.parts))
 
 
+_DATA_VOLUME = ("/", "system", "volumes", "data")
+
+
+def _without_data_volume(path: Path) -> Path:
+    """``/System/Volumes/Data/Users/x`` is ``/Users/x``: macOS joins the two with a
+    firmlink, which ``realpath`` does not resolve. Stripped when the rest exists."""
+    parts = path.parts
+    if len(parts) > 4 and tuple(folder_key(p) for p in parts[:4]) == _DATA_VOLUME:
+        rest = Path("/", *parts[4:])
+        if os.path.lexists(rest):
+            return rest
+    return path
+
+
+def _identity(path: Path) -> tuple[int, int] | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return st.st_dev, st.st_ino
+
+
+def same_place(a: Path, b: Path) -> bool:
+    """``a`` and ``b`` are the same folder: by path the way macOS compares it, or, when
+    both exist, by device and inode (any other spelling: a firmlink, a hard link)."""
+    if canonical(a) == canonical(b):
+        return True
+    ident = _identity(a)
+    return ident is not None and ident == _identity(b)
+
+
 def is_within(path: Path, folder: Path) -> bool:
-    """``path`` is ``folder`` or inside it, comparing the way macOS does."""
+    """``path`` is ``folder`` or inside it, comparing the way macOS does.
+
+    Paths are compared first; then, when ``folder`` exists, ``path`` and each
+    folder above it by device and inode, so no spelling of ``folder`` escapes.
+    """
     a, b = canonical(path), canonical(folder)
-    return a == b or a.is_relative_to(b)
+    if a == b or a.is_relative_to(b):
+        return True
+    target = _identity(folder)
+    if target is None:
+        return False
+    real = Path(os.path.realpath(path))
+    return any(_identity(p) == target for p in (real, *real.parents))
 
 
 class _Section(BaseModel):
@@ -324,6 +365,69 @@ class Category(_Section):
     ``"{issuer}/{year}"``; ``None`` files everything at its top level."""
 
 
+MAX_MIN_AGE_DAYS = 3650
+
+
+def _glob(value: str) -> str:
+    """A name pattern for ``only``/``ignore``: matched against a name, so never a path."""
+    if not value.strip():
+        raise ValueError("a pattern must not be empty")
+    if "/" in value:
+        raise ValueError(f"{value!r}: patterns match a name, not a path (no '/')")
+    return value
+
+
+Glob = Annotated[str, AfterValidator(_glob)]
+
+
+class InputConfig(_Section):
+    """One input folder and the rules for what flib may take from it (#89).
+
+    A plain path in ``inputs`` is this with every rule at its default: flib
+    takes everything at the folder's top level, as before.
+    """
+
+    path: AbsolutePath
+    only: Annotated[list[Glob], Field(min_length=1)] | None = None
+    """Name patterns; when set, everything that matches none of them is left alone."""
+    ignore: list[Glob] = Field(default_factory=list)
+    """Name patterns left alone in this folder, on top of the global ``ignore``."""
+    min_age_days: Annotated[int, Field(ge=0, le=MAX_MIN_AGE_DAYS)] = 0
+    """Only items that have not changed for this many days (see ``item_age``)."""
+    category: SafeFolderName | None = None
+    """A fixed category: everything taken from here is filed there with no AI call."""
+    rename: bool = False
+    """With ``category``: apply ``naming.pattern`` to the original name (no AI)."""
+    layout: Annotated[str, AfterValidator(_layout)] | None = None
+    """With ``category``: the sub-folders for files from here, instead of the category's."""
+    folders: Literal["as_unit", "ignore"] | None = None
+    """Overrides the global ``folders`` for this folder."""
+    duplicates: Literal["move", "leave"] | None = None
+    """Overrides the global ``duplicates`` for this folder."""
+
+    @model_validator(mode="after")
+    def _needs_a_category(self) -> InputConfig:
+        if self.category is None:
+            for option, used in (("rename", self.rename), ("layout", self.layout is not None)):
+                if used:
+                    raise ValueError(
+                        f"input {self.path}: {option} applies only with a fixed category"
+                    )
+        return self
+
+    @property
+    def has_rules(self) -> bool:
+        """Anything set besides the path."""
+        return bool(self.model_fields_set - {"path"})
+
+
+def _input_entry(value: Any) -> Any:
+    """A plain path in ``inputs`` stands for an input with no rules."""
+    if isinstance(value, str | Path):
+        return {"path": value}
+    return value
+
+
 class FinderTagsConfig(_Section):
     enabled: bool = True
 
@@ -479,7 +583,8 @@ def default_config_path() -> Path:
 
 class Config(_Section):
     language: Language = DEFAULT_LANGUAGE
-    inputs: list[AbsolutePath] = Field(min_length=1)
+    inputs: list[InputConfig] = Field(min_length=1)
+    """Each a plain path or a mapping with ``path`` and per-folder rules (#89)."""
     output_root: AbsolutePath
     review_folder: SafeFolderName
     duplicates: Literal["move", "leave"] = "move"
@@ -547,23 +652,112 @@ class Config(_Section):
             seen[key] = name
         return self
 
+    @field_validator("inputs", mode="before")
+    @classmethod
+    def _plain_paths(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            return [_input_entry(item) for item in value]
+        return value
+
+    @model_validator(mode="after")
+    def _check_input_categories(self) -> Config:
+        for entry in self.inputs:
+            if entry.category is not None and self.category(entry.category) is None:
+                known = ", ".join(c.name for c in self.categories)
+                raise ValueError(
+                    f"input {entry.path}: category {entry.category!r} is not a configured "
+                    f"category (configured: {known})"
+                )
+        return self
+
     @model_validator(mode="after")
     def _check_paths(self) -> Config:
         home = Path.home()
-        for folder in self.inputs:
-            if canonical(folder) in {canonical(Path(folder.anchor)), canonical(home)}:
+        for folder in self.input_paths:
+            if same_place(folder, Path(folder.anchor)) or same_place(folder, home):
                 raise ValueError(f"input {folder} is too broad; pick specific folders")
             if is_within(folder, self.output_root):
-                raise ValueError(f"input {folder} must not be inside output_root")
-        for i, a in enumerate(self.inputs):
-            for b in self.inputs[i + 1 :]:
+                raise ValueError(
+                    f"input {folder} must not be inside output_root ({self.output_root}): "
+                    "flib would pick up the files it has just filed"
+                )
+        paths = self.input_paths
+        for i, a in enumerate(paths):
+            for b in paths[i + 1 :]:
+                if same_place(a, b):
+                    raise ValueError(f"input {a} is listed twice (also as {b})")
                 if is_within(a, b) or is_within(b, a):
-                    raise ValueError(f"inputs must not overlap: {a} and {b}")
+                    inner, outer = (a, b) if is_within(a, b) else (b, a)
+                    raise ValueError(
+                        f"inputs must not overlap: {inner} is inside {outer}; list only one of them"
+                    )
         if is_within(self.database, self.output_root) or any(
-            is_within(self.database, folder) for folder in self.inputs
+            is_within(self.database, folder) for folder in paths
         ):
             raise ValueError("database must be outside the input folders and output_root")
         return self
+
+    @property
+    def input_paths(self) -> list[Path]:
+        """The input folders, in the order configured."""
+        return [entry.path for entry in self.inputs]
+
+    def input_rules(self, folder: Path) -> InputConfig:
+        """The rules of the input ``folder`` (no rules for a folder that is not one)."""
+        for entry in self.inputs:
+            if entry.path == folder:
+                return entry
+        found = (e for e in self.inputs if same_place(e.path, folder))
+        return next(found, InputConfig(path=folder))
+
+    def input_of(self, path: Path) -> InputConfig | None:
+        """The input whose top level holds ``path``, if any (not deeper: flib reads only
+        the top level of an input, and ``output_root`` may sit inside one)."""
+        for entry in self.inputs:
+            if path.parent == entry.path:
+                return entry
+        return next((e for e in self.inputs if same_place(e.path, path.parent)), None)
+
+    def input_summary(self, entry: InputConfig, *, patterns: bool = True) -> str:
+        """``entry``'s effective rules in words, for ``flib check-config`` and ``doctor``.
+
+        ``patterns=False`` gives counts instead of the patterns (they may hold names).
+        """
+
+        def globs(values: list[str]) -> str:
+            if not patterns:
+                return f"{len(values)} pattern(s)"
+            return ", ".join(values)
+
+        parts = []
+        if entry.only is not None:
+            parts.append(f"only {globs(entry.only)}")
+        ignore = [*self.ignore, *entry.ignore]
+        if ignore:
+            extra = f" ({len(entry.ignore)} of them its own)" if entry.ignore else ""
+            parts.append(f"ignore {globs(ignore)}{extra}")
+        if entry.min_age_days:
+            parts.append(f"min_age_days {entry.min_age_days}")
+        parts.append(f"folders: {self.folders_for(entry)}")
+        parts.append(f"duplicates: {self.duplicates_for(entry)}")
+        if entry.category is not None:
+            category = self.category(entry.category)
+            layout = entry.layout or (category.layout if category else None)
+            rule = f"fixed category {entry.category} (no AI)"
+            rule += f", layout {layout}" if layout else ""
+            rule += ", renamed by naming.pattern" if entry.rename else ", name kept"
+            parts.append(rule)
+        else:
+            parts.append("classified by the AI")
+        return "; ".join(parts)
+
+    def folders_for(self, entry: InputConfig) -> Literal["as_unit", "ignore"]:
+        return entry.folders or self.folders
+
+    def duplicates_for(self, entry: InputConfig | None) -> Literal["move", "leave"]:
+        if entry is None or entry.duplicates is None:
+            return self.duplicates
+        return entry.duplicates
 
     def category(self, name: str) -> Category | None:
         return next((c for c in self.categories if c.name == name), None)

@@ -294,6 +294,9 @@ def select(
     for row in store.all_files():
         if not _wanted(row, config, filters, removed):
             continue
+        if removed is None and filed_by_rule(row):
+            selection.left.append((row.current_path, RULE_FILED))
+            continue
         fields = corrected.get(row.id, set())
         keep_category = "category" in fields and removed is None
         nested = placed_by_hand(row, moves.get(row.id, []), config)
@@ -307,6 +310,23 @@ def select(
             continue
         selection.targets.append(Target(row, context, keep_category, keep_name, nested))
     return selection
+
+
+RULE_FILED = "filed by its input's fixed category; no AI is asked about it"
+
+
+def filed_by_rule(row: FileRow) -> bool:
+    """``row`` was filed by its input's fixed category, with no AI (#89): the index
+    marks it so (``files.filed_by_rule``). Reprocessing never asks the AI about it."""
+    return row.filed_by_rule and row.status is FileStatus.ORGANIZED
+
+
+def own_layout(row: FileRow, config: Config) -> str | None:
+    """For a file filed by rule, the layout its input gives files (``None``: the
+    category's). ``--apply-layout`` leaves such a file alone."""
+    if not filed_by_rule(row) or row.source_input is None:
+        return None
+    return config.input_rules(row.source_input).layout
 
 
 def _deep(path: Path, config: Config) -> bool:
@@ -758,6 +778,9 @@ def select_layout(
         if placed_by_hand(row, moves.get(row.id, []), config):
             reason = "you moved or renamed it; it stays (`flib fix` hands it back)"
             selection.left.append((path, reason))
+            continue
+        if own_layout(row, config) is not None:
+            selection.left.append((path, "filed under its input's own layout; it stays"))
             continue
         try:
             st = os.lstat(path)

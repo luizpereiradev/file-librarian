@@ -47,6 +47,7 @@ from file_librarian import __version__, credentials, protection, scheduler
 from file_librarian import status as status_mod
 from file_librarian.config import (
     Config,
+    InputConfig,
     default_config_path,
     default_database_path,
     inactive_options_set,
@@ -259,7 +260,7 @@ def redactor_for(config: Config | None) -> Redactor:
     keep: list[str] = []
     if config is not None:
         roots.append((config.database.parent, "<data>"))
-        roots.extend((path, f"<input-{i}>") for i, path in enumerate(config.inputs, start=1))
+        roots.extend((path, f"<input-{i}>") for i, path in enumerate(config.input_paths, start=1))
         roots.append((config.output_root, "<output>"))
         keep.extend(c.name for c in config.categories)
         keep.append(config.review_folder)
@@ -424,8 +425,12 @@ def _configuration(
     section.lines.append("valid: yes")
     for option, milestone in inactive_options_set(config):
         section.lines.append(f"inactive option set: {option} (planned for {milestone})")
-    for i, folder in enumerate(config.inputs, start=1):
-        section.lines.append(f"input-{i}: {_folder_state(folder)}")
+    for i, entry in enumerate(config.inputs, start=1):
+        section.lines.append(f"input-{i}: {_folder_state(entry.path)}")
+        if entry.has_rules:
+            # Counts of patterns, never the patterns: they may hold names.
+            rules = config.input_summary(entry, patterns=False)
+            section.lines.append(f"input-{i} rules: {r.text(rules)}")
     output = _folder_state(config.output_root)
     section.lines.append(f"output: {output}")
     section.lines.append(f"ocr: {_ocr_state(config, r)}")
@@ -453,7 +458,7 @@ def _folder_state(folder: Path) -> str:
 
 def redacted_config(config: Config, r: Redactor) -> list[str]:
     data: dict[str, Any] = config.model_dump(mode="json")
-    data["inputs"] = [f"<input-{i}>" for i in range(1, len(config.inputs) + 1)]
+    data["inputs"] = [_redacted_input(entry, i) for i, entry in enumerate(config.inputs, start=1)]
     data["output_root"] = "<output>"
     data["database"] = r.path(str(config.database))
     provider = data["provider"]
@@ -477,6 +482,18 @@ def redacted_config(config: Config, r: Redactor) -> list[str]:
     data["naming"]["pattern"] = r.text(data["naming"]["pattern"])
     dumped = yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
     return dumped.rstrip("\n").splitlines()
+
+
+def _redacted_input(entry: InputConfig, index: int) -> str | dict[str, Any]:
+    """``<input-N>``, with the input's own rules when it has any (patterns redacted)."""
+    if not entry.has_rules:
+        return f"<input-{index}>"
+    data: dict[str, Any] = entry.model_dump(mode="json", exclude_unset=True)
+    data["path"] = f"<input-{index}>"
+    for key in ("only", "ignore"):
+        if data.get(key):
+            data[key] = [_pattern(p, i) for i, p in enumerate(data[key], start=1)]
+    return data
 
 
 def _pattern(pattern: str, index: int) -> str:

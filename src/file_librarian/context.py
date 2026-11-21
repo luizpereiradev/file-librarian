@@ -73,6 +73,7 @@ def build_context_safely(
             downloaded=date.fromtimestamp(candidate.created) if candidate.created else None,
             is_unit=candidate.is_unit,
             metadata=FileMetadata(extraction_error=f"{type(exc).__name__}: {exc}"[:200]),
+            input=candidate.input,
         )
 
 
@@ -94,6 +95,7 @@ def build_context(
         downloaded=date.fromtimestamp(candidate.created) if candidate.created else None,
         source_urls=download_origin(path),
         is_unit=candidate.is_unit,
+        input=candidate.input,
     )
     detect = config.sensitive.detect_secrets
 
