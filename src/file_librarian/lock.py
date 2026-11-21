@@ -4,17 +4,24 @@ The scheduled run, a manual run and the MCP write tools must never change
 files or the database at the same time. They all take this lock, an exclusive
 ``flock`` on a file next to the database. The operating system releases it if
 the process dies, so a crash never leaves a stale lock behind.
+
+Runs started by hand fail at once when the lock is held. Automatic runs (the
+daily run, watch mode) ask again every ``LOCK_POLL_SECONDS`` for up to
+``wait`` seconds first, so the daily run is not lost to a watch run that
+happens to be going on. Nothing is ever done to the process holding it.
 """
 
 from __future__ import annotations
 
 import fcntl
 import os
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 LOCK_NAME = "flib.lock"
+LOCK_POLL_SECONDS = 2.0
 REPROCESS_LOCK_NAME = "flib-reprocess.lock"
 
 
@@ -27,11 +34,21 @@ def lock_path(database: Path) -> Path:
 
 
 @contextmanager
-def instance_lock(database: Path) -> Iterator[None]:
-    """Hold the lock for the duration of the block, or fail immediately."""
+def instance_lock(
+    database: Path,
+    *,
+    wait: float = 0.0,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Iterator[None]:
+    """Hold the lock for the duration of the block; if it is held, ask again for up
+    to ``wait`` seconds, then fail."""
     with _flock(
         lock_path(database),
         "another flib process (pid {pid}) is running; try again when it finishes",
+        wait=wait,
+        clock=clock,
+        sleep=sleep,
     ):
         yield
 
@@ -51,15 +68,29 @@ def reprocess_lock(database: Path) -> Iterator[None]:
 
 
 @contextmanager
-def _flock(path: Path, busy: str) -> Iterator[None]:
+def _flock(
+    path: Path,
+    busy: str,
+    *,
+    wait: float = 0.0,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Iterator[None]:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            holder = os.pread(fd, 32, 0).decode(errors="replace").strip() or "unknown"
-            raise AlreadyRunningError(busy.format(pid=holder)) from exc
+        deadline = clock() + wait
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as exc:
+                remaining = deadline - clock()
+                if remaining > 0:
+                    sleep(min(LOCK_POLL_SECONDS, remaining))
+                    continue
+                holder = os.pread(fd, 32, 0).decode(errors="replace").strip() or "unknown"
+                raise AlreadyRunningError(busy.format(pid=holder)) from exc
         os.ftruncate(fd, 0)
         os.pwrite(fd, str(os.getpid()).encode(), 0)
         try:

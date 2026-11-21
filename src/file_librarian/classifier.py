@@ -268,7 +268,10 @@ def classify_all(
             last_call = clock()
             try:
                 answer = clean(provider.classify(sent, rules))
-            except FatalProviderError:
+            except FatalProviderError as exc:
+                # What was billed before it stopped still counts (the daily cap, #90).
+                _bill(result, provider)
+                exc.spent = result.run_cost  # type: ignore[attr-defined]
                 raise
             except ProviderError as exc:
                 _bill(result, provider)

@@ -9,7 +9,16 @@
 - Treats each sub-folder or bundle (``.app``, ``.pkg``...) as one unit, or
   skips it, per ``folders`` (RF-23).
 - Waits until an item has not changed for ``stable_seconds`` and its size and
-  mtime are the same before and after hashing (RF-02).
+  mtime are the same before and after hashing (RF-02). An mtime more than
+  ``FUTURE_SLACK`` seconds ahead of now (a file from an archive, a camera
+  with a wrong clock, a share whose server clock is ahead) cannot tell how
+  long ago it changed: such an item is settled once its size and mtime stayed
+  the same for ``stable_seconds`` across scans (``Settling``, kept between
+  runs), never "still changing" forever. Settled ones are listed in
+  ``future``.
+- Skips as a download in progress an item Finder is still copying in: Finder
+  marks it with the type ``brok`` and creator ``MACS`` and the creation date
+  24 January 1984 until the copy ends.
 - Skips anything already in the database by content hash, except files that
   failed fewer than ``max_attempts`` times (RF-01, RF-30) and files left in
   place as sensitive because of their name alone whose current name no
@@ -32,9 +41,13 @@
   ``duplicates`` instead of the global ones; and with ``min_age_days``,
   leaves alone, as ``too recent``, an item younger than that (``item_age``).
   Each candidate and duplicate carries the input it came from.
-- Returns at most ``max_files_per_run`` candidates, oldest first. Duplicates
-  are not counted: they cost no provider call. A duplicate of an item left
-  for a later run waits with it.
+- Returns at most ``max_files_per_run`` candidates, oldest first (with
+  ``prefer``, the preferred ones first: watch mode puts new arrivals before
+  items an earlier run left behind). The rest are in ``left_over``.
+  Duplicates are not counted: they cost no provider call. A duplicate of an
+  item left for a later run waits with it.
+- With ``hashes``, reuses the digest of a regular file whose device, inode,
+  size and mtime are unchanged since it was hashed (watch mode looks often).
 - Skips an input folder that cannot be listed (macOS privacy, deleted,
   unmounted) as ``input folder could not be read`` and goes on with the
   others; raises ``ScanError`` only when no input can be read.
@@ -53,6 +66,7 @@ a symlink.
 from __future__ import annotations
 
 import errno
+import json
 import math
 import os
 import re
@@ -67,6 +81,7 @@ from unicodedata import normalize
 
 from file_librarian import hashing, protection
 from file_librarian.config import Config, InputConfig, is_within
+from file_librarian.extractors.origin import read_xattr
 from file_librarian.globs import matches_any
 from file_librarian.hashing import file_sha256, unit_manifest
 from file_librarian.lock import lock_path
@@ -81,6 +96,116 @@ IN_PROGRESS_PATTERNS = (
 )  # fmt: skip
 # A final-name placeholder next to one of these is still downloading (Firefox, aria2...).
 PARTIAL_SIBLINGS = (".part", ".crdownload", ".aria2", ".download", ".opdownload")
+
+
+FUTURE_SLACK = 300.0
+"""Seconds an mtime may be ahead of now and still mean "just changed"."""
+FINDER_COPYING = b"brokMACS"
+"""Type and creator Finder gives an item while it copies it in."""
+_FINDER_COPY_DATE = (1984, 1, 24)
+
+
+class HashCache:
+    """Digests of regular files by device, inode, size, mtime, ctime and birth time, and
+    which were used by the last scan (``seen``), so only those need keeping.
+
+    Any write or ``utime`` moves the ctime, so a file rewritten in place with its
+    size and mtime restored still gets a new key. With ``verify_above`` set (a real
+    run), a file larger than that is hashed again even when its digest is cached:
+    the executor re-hashes only smaller files right before a move.
+    """
+
+    def __init__(self, entries: dict[str, str] | None = None) -> None:
+        self.entries = dict(entries or {})
+        self.seen: dict[str, str] = {}
+        self.verify_above: int | None = None
+        self._keys: dict[Path, str] = {}
+
+    @staticmethod
+    def key(st: os.stat_result) -> str:
+        birth = getattr(st, "st_birthtime", 0.0)
+        return f"{st.st_dev}:{st.st_ino}:{st.st_size}:{st.st_mtime_ns}:{st.st_ctime_ns}:{birth}"
+
+    def digest(self, path: Path, st: os.stat_result, read: Callable[[Path], str]) -> str:
+        key = self.key(st)
+        value = self.entries.get(key)
+        if value is None or (self.verify_above is not None and st.st_size > self.verify_above):
+            value = read(path)
+            self.entries[key] = value
+        self.seen[key] = value
+        self._keys[path] = key
+        return value
+
+    def forget(self, path: Path) -> None:
+        """Drop the digest last given for ``path`` (it turned out to be wrong)."""
+        key = self._keys.pop(path, None)
+        if key is not None:
+            self.entries.pop(key, None)
+            self.seen.pop(key, None)
+
+
+class Settling:
+    """Items dated in the future: when their size and mtime were first seen as they are.
+
+    An item is settled once that was ``stable_seconds`` or more ago (by the scan's
+    ``now``). Only the items of the last scan are kept (``seen``).
+    """
+
+    def __init__(self, entries: dict[str, list[float]] | None = None) -> None:
+        self.entries = {k: list(v) for k, v in (entries or {}).items()}
+        self.seen: dict[str, list[float]] = {}
+
+    @staticmethod
+    def key(st: os.stat_result) -> str:
+        return f"{st.st_dev}:{st.st_ino}"
+
+    def settled(self, st: os.stat_result, now: float, quiet: float, *, peek: bool = False) -> bool:
+        key = self.key(st)
+        shape = [float(st.st_size), float(st.st_mtime_ns)]
+        entry = self.entries.get(key)
+        if entry is None or entry[:2] != shape:
+            entry = [*shape, now]
+        if not peek:
+            self.entries[key] = entry
+            self.seen[key] = entry
+        return now - entry[2] >= quiet
+
+    def dumps(self) -> str:
+        return json.dumps(self.seen, sort_keys=True)
+
+    @classmethod
+    def loads(cls, text: str | None) -> Settling:
+        try:
+            value = json.loads(text or "{}")
+        except ValueError:
+            return cls()
+        if not isinstance(value, dict):
+            return cls()
+        return cls({str(k): [float(x) for x in v] for k, v in value.items() if len(v) == 3})
+
+
+SETTLING_KEY = "scan.future_dated"
+"""The ``meta`` key holding ``Settling`` between runs (device and inode, no names)."""
+
+
+@dataclass(slots=True)
+class ScanMemory:
+    """What one process remembers between scans: digests and future-dated items."""
+
+    hashes: HashCache = field(default_factory=HashCache)
+    settling: Settling = field(default_factory=Settling)
+
+
+def finder_copying(path: Path, st: os.stat_result) -> bool:
+    """Finder is still copying this item in (its placeholder type, or creation date)."""
+    birth = time.localtime(_birth(st))
+    if (birth.tm_year, birth.tm_mon, birth.tm_mday) == _FINDER_COPY_DATE:
+        return True
+    try:
+        info = read_xattr(path, "com.apple.FinderInfo")
+    except OSError:
+        return False
+    return info is not None and info[:8] == FINDER_COPYING
 
 
 class ScanError(RuntimeError):
@@ -204,6 +329,10 @@ class ScanResult:
     """For items skipped as ``too recent``: whole days until they are old enough."""
     deferred: int = 0
     """Ready candidates left for the next run because of ``max_files_per_run``."""
+    left_over: list[Candidate] = field(default_factory=list)
+    """Those candidates themselves (``deferred`` of them)."""
+    future: list[Path] = field(default_factory=list)
+    """Items with an mtime in the future, taken as settled."""
 
 
 Lookup = Callable[[str], FileState | None]
@@ -345,6 +474,9 @@ def scan(
     *,
     now: float | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    prefer: Callable[[Candidate], bool] | None = None,
+    hashes: HashCache | None = None,
+    settling: Settling | None = None,
 ) -> ScanResult:
     now = time.time() if now is None else now
     limits = config.limits
@@ -359,6 +491,18 @@ def scan(
         return locked_now[0]
 
     failures: list[str] = []
+
+    future_dated = settling if settling is not None else Settling()
+
+    def changing(path: Path, st: os.stat_result, mtime: float) -> bool:
+        """Changed in the last ``stable_seconds``. An mtime far in the future says
+        nothing about that: unchanged for ``stable_seconds`` across scans is settled."""
+        if mtime - now > FUTURE_SLACK:
+            if not future_dated.settled(st, now, limits.stable_seconds):
+                return True
+            result.future.append(path)
+            return False
+        return now - mtime < limits.stable_seconds
 
     def too_recent(path: Path, age: float, min_age: int) -> None:
         # Never pending work: not locked, not deferred, simply not old enough yet.
@@ -423,6 +567,9 @@ def scan(
             if hashing.is_dataless(ident):
                 skip(SkipReason.CLOUD_ONLY)
                 continue
+            if finder_copying(path, ident):
+                skip(SkipReason.IN_PROGRESS)
+                continue
 
             step = "stat"
             try:
@@ -440,7 +587,7 @@ def scan(
                     if age < min_age * DAY:
                         too_recent(path, age, min_age)
                         continue
-                    if now - manifest.newest_mtime < limits.stable_seconds:
+                    if changing(path, st, manifest.newest_mtime):
                         skip(SkipReason.UNSTABLE)
                         continue
                     if screen_locked() and protection.has_locked_files(path):
@@ -465,10 +612,15 @@ def scan(
                     if age < min_age * DAY:
                         too_recent(path, age, min_age)
                         continue
-                    if now - st.st_mtime < limits.stable_seconds:
+                    if changing(path, st, st.st_mtime):
                         skip(SkipReason.UNSTABLE)
                         continue
-                    digest = _read_twice(file_sha256, path, sleep)
+                    if hashes is not None:
+                        digest = hashes.digest(
+                            path, st, lambda p: _read_twice(file_sha256, p, sleep)
+                        )
+                    else:
+                        digest = _read_twice(file_sha256, path, sleep)
                     step = "stat"
                     after = os.lstat(path)
                     if (after.st_size, after.st_mtime_ns) != (st.st_size, st.st_mtime_ns):
@@ -514,9 +666,13 @@ def scan(
         raise ScanError("; ".join(failures))
     # The index is keyed by content: of several copies, only the original goes ahead.
     ready, copies = _keep_originals(ready)
-    ready.sort(key=lambda c: (c.mtime, str(c.path)))
+    if prefer is not None:
+        ready.sort(key=lambda c: (not prefer(c), c.mtime, str(c.path)))
+    else:
+        ready.sort(key=lambda c: (c.mtime, str(c.path)))
     result.candidates = ready[: limits.max_files_per_run]
-    result.deferred = len(ready) - len(result.candidates)
+    result.left_over = ready[limits.max_files_per_run :]
+    result.deferred = len(result.left_over)
     going = {c.path for c in result.candidates}
     for copy in copies:
         # The others wait where they are, or with ``duplicates: move`` follow their original.

@@ -95,6 +95,11 @@ limits:
   confidence_threshold: 0.7  # below this, the file goes to review_folder
   max_cost_usd_per_run: 1.00 # estimated; files left over wait for the next run (null = no cap)
                              # (cannot stop a provider whose prices are 0 = unknown, see above)
+  # max_cost_usd_per_day: 3.00  # automatic runs (daily and watch) together, since local midnight;
+                             # left out = 3 x max_cost_usd_per_run, null = no cap. Runs by hand
+                             # are not limited by it
+  # max_files_per_day: 1000  # automatic runs with a remote openai-compat server without prices
+                             # (no cost cap can stop it); left out = 5 x max_files_per_run
 
 naming:
   pattern: "{date}_{subject}"   # e.g. 2026-11-16_electricity-invoice.pdf
@@ -171,6 +176,15 @@ schedule:
   wait_for_unlock_hours: 8   # 0-23. Files some apps protect while the Mac is locked: after a scheduled
                              # run skipped them, wait up to this long for an unlock and run once
                              # more (0 = don't wait; the next day's run gets them)
+  mode: daily                # daily | watch (run as files arrive in an input folder, once
+                             # downloads finish) | both (watch, plus the daily run as a safety net)
+  watch_min_interval_minutes: 5  # watch: macOS starts flib at most once every this many minutes
+  watch_quiet_seconds: 300   # watch: take an item once it has not changed for this long (at least
+                             # limits.stable_seconds): slow writers pause for more than a minute
+  watch_settle_minutes: 10   # watch: give up waiting for downloads in progress after this long
+                             # without any change (one that keeps growing: up to 6 h; 0 = don't)
+  watch_fallback_minutes: 30 # watch: also look every this many minutes, for what a change did
+                             # not show (0 = never); a look with nothing new does nothing
 
 summary:                     # RF-40: after a scheduled run, what waits in review or failed (`flib status`)
   notify: true               # one macOS notification, counts only, no file names; false = run log only

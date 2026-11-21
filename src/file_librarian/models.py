@@ -79,6 +79,13 @@ class RunTrigger(StrEnum):
     MCP = "mcp"
     REPROCESS = "reprocess"
     """``flib reprocess``: files already in the library, filed again under new rules."""
+    WATCH = "watch"
+    """Watch mode: launchd started it because something arrived in an input folder."""
+
+    @property
+    def automatic(self) -> bool:
+        """Started by launchd, not by a person: the daily cost cap applies."""
+        return self in (RunTrigger.SCHEDULE, RunTrigger.WATCH)
 
 
 class ReviewReason(StrEnum):

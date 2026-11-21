@@ -495,3 +495,54 @@ def test_a_keychain_failure_is_reported(
     assert "cannot run" in result.stderr
     assert "run `flib key set`" in result.stderr
     assert KEY not in result.stdout + result.stderr
+
+
+def test_init_asks_the_mode_and_keeps_it_in_the_config(
+    downloads: Path, tmp_path: Path, fake_launchd: Path
+) -> None:
+    path = tmp_path / "config.yaml"
+    # Enter for every question, yes to the schedule, then watch mode.
+    answers = "\n" * 5 + "y\n" + "watch\n"
+    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers)
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert "Watch mode organizes files a few minutes after they arrive" in result.stdout
+    assert "Watch mode on" in result.stdout
+    assert "due reminders come only after the daily run" in result.stdout
+    assert load_config(path).schedule.mode == "watch"
+    assert scheduler.plist_path(scheduler.WATCH_LABEL).exists()
+    assert not scheduler.plist_path().exists()
+    again = runner.invoke(app, ["init", "--yes", "-c", str(path), "--sample", "0"])
+    assert "Watch mode is already on" in again.stdout
+
+
+def test_init_under_yes_keeps_the_daily_default(downloads: Path, tmp_path: Path) -> None:
+    path = write_config(tmp_path, downloads)
+    result = runner.invoke(app, ["init", "--yes", "-c", str(path), "--sample", "0"])
+    assert "Run daily, on arrival (watch), or both? (daily, watch, both) [daily]: daily" in (
+        result.stdout
+    )
+    assert scheduler.status().mode == "daily"
+
+
+def test_the_chosen_mode_goes_only_into_a_schedule_section_init_wrote(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text('schedule:\n  time: "12:30"  # the daily run\n\nmcp:\n  read_only: false\n')
+    assert onboarding.set_schedule_mode(path, "both")
+    text = path.read_text(encoding="utf-8")
+    assert yaml.safe_load(text)["schedule"] == {"time": "12:30", "mode": "both"}
+    assert yaml.safe_load(text)["mcp"] == {"read_only": False}
+    assert not onboarding.set_schedule_mode(path, "watch")  # a mode is set already
+    flow = tmp_path / "flow.yaml"
+    flow.write_text("schedule: {time: '9:00'}\n")
+    assert not onboarding.set_schedule_mode(flow, "watch")  # not a shape it edits
+
+
+def test_a_kept_config_without_room_for_the_mode_gets_a_hint(
+    downloads: Path, tmp_path: Path, fake_launchd: Path
+) -> None:
+    path = write_config(tmp_path, downloads, extra="schedule: {time: '12:30'}\n")
+    answers = "n\n" + "y\n" + "both\n"
+    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers)
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert "Set schedule.mode: both" in result.stderr
+    assert scheduler.status().mode == "both"

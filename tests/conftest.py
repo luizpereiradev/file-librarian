@@ -81,6 +81,13 @@ def no_local_ollama(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("file_librarian.onboarding.probe_ollama", lambda: None)
 
 
+@pytest.fixture(autouse=True)
+def no_lock_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Automatic runs give way at once to a held lock unless a test says otherwise; no
+    test sleeps for minutes."""
+    monkeypatch.setattr("file_librarian.cli.LOCK_WAIT_SECONDS", 0.0)
+
+
 def _shim(folder: Path, name: str, script: str) -> Path:
     """An executable ``name`` in ``folder`` that runs ``tests/<script>`` with this Python."""
     target = Path(__file__).with_name(script)

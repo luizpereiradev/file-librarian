@@ -80,9 +80,9 @@ _SAFE_DIRS = frozenset(
 )  # fmt: skip
 # Files flib itself writes; their names are safe and useful.
 _OWN_FILES = re.compile(
-    r"run-\d+\.log|library\.db(?:-wal|-shm)?|schedule\.(?:out|err)\.log"
+    r"(?:watch-)?run-\d+\.log|library\.db(?:-wal|-shm)?|(?:schedule|watch)\.(?:out|err)\.log"
     r"|doctor-[\d-]+\.(?:txt|md)|config\.yaml|flib-python|.*\.plist"
-    r"|flib(?:-reprocess|-waiter)?\.lock"
+    r"|flib(?:-reprocess|-waiter|-watch)?\.lock"
 )
 _ASSIGNMENT = "password or secret assignment"
 _EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,8}")
@@ -536,10 +536,16 @@ def _schedule(section: Section, r: Redactor, config_path: Path) -> None:
     section.lines += [
         "installed: yes",
         f"loaded: {'yes' if state.loaded else 'no'}",
-        f"time: {state.time}",
+        f"mode: {state.mode}",
+        f"time: {state.time or '-'}",
         f"interpreter current: {'yes' if state.interpreter_current else 'no'}",
         f"program: {' '.join(r.path(part) if '/' in part else part for part in state.program)}",
     ]
+    if state.watch_paths:
+        section.lines.append(
+            f"watching: {len(state.watch_paths)} input folder(s), at most once every "
+            f"{state.watch_interval_minutes} min"
+        )
     scheduled = scheduler.scheduled_config()
     if scheduled is not None:
         same = os.path.realpath(scheduled) == os.path.realpath(config_path)
@@ -605,6 +611,7 @@ def _status(section: Section, r: Redactor, config: Config | None) -> None:
     status = status_mod.collect(config)
     lines = status_mod.render(status, config, private=True)
     section.lines += [r.text(line) for line in lines]
+    section.lines += [r.text(line) for line in status_mod.cost_cap_lines(config)]
     _data_protection(section, status)
 
 
@@ -626,11 +633,16 @@ def _logs(section: Section, r: Redactor, config: Config | None, count: int) -> N
     if not folder.is_dir():
         section.lines.append("exists: no")
         return
-    logs = sorted(p for p in folder.glob("run-*.log") if p.is_file() and not p.is_symlink())
+    found = [*folder.glob("run-*.log"), *folder.glob("watch-run-*.log")]
+    # By run id, daily and watch runs together.
+    logs = sorted(
+        (p for p in found if p.is_file() and not p.is_symlink()),
+        key=lambda p: p.name.rsplit("-", 1)[-1],
+    )
     section.lines.append(f"run logs: {len(logs)} (showing the last {min(count, len(logs))})")
     for log in logs[-count:] if count > 0 else []:
         section.blocks.append((log.name, _read_lines(log, r, limit=None)))
-    for name in ("schedule.out.log", "schedule.err.log"):
+    for name in ("schedule.out.log", "schedule.err.log", "watch.out.log", "watch.err.log"):
         path = folder / name
         if path.is_file() and not path.is_symlink():
             lines = _read_lines(path, r, limit=SCHEDULE_LOG_LINES)

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -294,6 +295,22 @@ def check_answers(answers: Answers) -> Config:
     import yaml
 
     return parse_config(yaml.safe_load(render_config(answers)))
+
+
+_SCHEDULE_BLOCK = re.compile(r"^schedule:\n((?:[ \t]+[^\n]*\n|\n)*)", re.MULTILINE)
+
+
+def set_schedule_mode(path: Path, mode: str) -> bool:
+    """Write ``schedule.mode`` into the configuration ``flib init`` wrote, so `flib schedule`
+    keeps the mode chosen. ``False`` (nothing changed) when the file has no ``schedule``
+    section of that shape or already sets a mode."""
+    text = path.read_text(encoding="utf-8")
+    block = _SCHEDULE_BLOCK.search(text)
+    if block is None or re.search(r"^\s+mode:", block.group(1), re.MULTILINE):
+        return False
+    line = f"  mode: {mode}  # daily | watch (as files arrive) | both\n"
+    write_config(path, text[: block.end(1)].rstrip("\n") + "\n" + line + text[block.end(1) :])
+    return True
 
 
 def write_config(path: Path, text: str) -> None:

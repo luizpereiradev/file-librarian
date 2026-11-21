@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from file_librarian.db import Store, normalize
-from file_librarian.db.store import MigrationError, _month_start, load_migrations
+from file_librarian.db.store import MigrationError, _month_start, day_start_utc, load_migrations
 from file_librarian.models import RunMode, RunTrigger
 
 
@@ -325,3 +325,49 @@ def test_migration_0017_adds_settled_and_journals_it(
         assert all(store.revert_index_change(c) for c in reversed(store.index_changes(1)))
         assert store.file_by_id(file_id).settled_at is None
         assert store.conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_migration_0018_keeps_runs_and_accepts_the_watch_trigger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "library.db"
+    before = [m for m in load_migrations() if m.version < 18]
+    with monkeypatch.context() as patch:
+        patch.setattr("file_librarian.db.store.load_migrations", lambda: before)
+        old = Store.open(path)
+    with old:
+        file_id = insert_file(old, "a.pdf", "d")
+        old.conn.execute(
+            "UPDATE runs SET finished_at = 'y', cost_usd = 0.25, files_duplicates = 2 WHERE id = 1"
+        )
+        old.conn.execute(
+            """INSERT INTO operations (run_id, file_id, src_path, dst_path, status, created_at)
+               VALUES (1, ?, '/in/a.pdf', '/out/a.pdf', 'done', 'x')""",
+            (file_id,),
+        )
+        with pytest.raises(sqlite3.IntegrityError):  # not a trigger before 0018
+            old.conn.execute(
+                "INSERT INTO runs (mode, trigger, started_at) VALUES ('run', 'watch', 'x')"
+            )
+    with Store.open(path) as store:
+        assert store.schema_version == len(load_migrations())
+        run = store.conn.execute(
+            "SELECT id, trigger, finished_at, cost_usd, files_duplicates FROM runs"
+        ).fetchone()
+        assert tuple(run) == (1, "manual", "y", 0.25, 2)
+        assert store.conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        watch_run = store.start_run(RunMode.RUN, RunTrigger.WATCH)
+        store.finish_run(watch_run, seen=1, moved=1, review=0, errors=0, cost_usd=0.5)
+        last = store.last_run_by(RunTrigger.WATCH)
+        assert last is not None and last.id == watch_run
+        assert store.last_run_by(RunTrigger.SCHEDULE) is None
+        # Runs by hand never count against the daily cap.
+        assert store.automatic_cost_today(day_start="2000-01-01") == 0.5
+        with pytest.raises(sqlite3.IntegrityError):  # references are still enforced
+            store.conn.execute("DELETE FROM runs WHERE id = 1")
+
+
+def test_the_day_starts_at_local_midnight() -> None:
+    noon = datetime(2026, 11, 20, 12, 0).astimezone()
+    start = datetime.fromisoformat(day_start_utc(noon)).astimezone()
+    assert (start.date(), start.hour, start.minute) == (noon.date(), 0, 0)
