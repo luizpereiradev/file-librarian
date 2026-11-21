@@ -33,6 +33,7 @@ from pydantic import (
 )
 
 from file_librarian.locales import DEFAULT_LANGUAGE, LOCALES, Language
+from file_librarian.models import Kind
 
 APP_NAME = "file-librarian"
 CONFIG_ENV_VAR = "FLIB_CONFIG"
@@ -597,6 +598,37 @@ class SummaryConfig(_Section):
     min_age_days: Annotated[int, Field(ge=0)] = 2
 
 
+def _due_kinds() -> list[Kind]:
+    return ["bill", "invoice", "tax"]
+
+
+class DueConfig(_Section):
+    """What is due (#91): ``flib due``, its line in ``flib status`` and its reminder.
+
+    Only documents of ``kinds`` with a due date the AI read are listed; a due
+    date on another kind shows only with ``flib due --all``. With ``remind``, a
+    scheduled run's summary counts each open document once, when it is due
+    within ``remind_days_before`` days or overdue (counts only, no names).
+    ``done_tag``: a Finder tag that marks a document paid or done, like
+    ``flib fix --done`` (none by default).
+    """
+
+    kinds: list[Kind] = Field(default_factory=_due_kinds)
+    remind: bool = True
+    remind_days_before: Annotated[int, Field(ge=0, le=60)] = 3
+    done_tag: str | None = None
+
+    @field_validator("done_tag")
+    @classmethod
+    def _tag_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value or "\n" in value:
+            raise ValueError("due.done_tag must be a Finder tag name")
+        return value
+
+
 def default_database_path() -> Path:
     """The database lives outside the organized folders so it is never moved by mistake."""
     return Path.home() / "Library" / "Application Support" / APP_NAME / "library.db"
@@ -638,6 +670,7 @@ class Config(_Section):
     mcp: McpConfig = McpConfig()
     schedule: ScheduleConfig = ScheduleConfig()
     summary: SummaryConfig = SummaryConfig()
+    due: DueConfig = DueConfig()
     search: SearchConfig = SearchConfig()
 
     @model_validator(mode="before")

@@ -8,6 +8,21 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- What is due (#91): `flib due` lists the bills, invoices and taxes
+  (`due.kinds`) whose due date the AI read in them, overdue up to 30 days ago
+  and due in the next 7 days (`--within 2w`, `--overdue`, `--issuer`,
+  `--kind`, `--json`), soonest first with the amount, issuer and path, and
+  totals per currency. Read-only, no lock, works before the first run; days
+  are counted in the local time zone. A document without a stated due date
+  is never listed. `flib fix PATH --done` / `--not-done` marks one paid or
+  open again, journaled so `flib undo` reverts it; `--all` also shows done
+  documents and due dates on other kinds; `due.done_tag` lets a Finder tag
+  mark one done. `flib status` adds a "Due:" line (and `due` in `--json`),
+  the periodic summary counts documents due within
+  `due.remind_days_before` days (3) or overdue, each one reminded once
+  (counts only, no names or amounts), and the MCP server has a read-only
+  `list_due` tool. The index records when a document was marked done and
+  which due date was reminded (migration 0017).
 - More than one inbox, each with its own rules (#89): an entry of `inputs`
   may be a mapping with `path` and `only` (name patterns; everything else is
   left alone), `ignore` (added to the global list, wins over `only`),

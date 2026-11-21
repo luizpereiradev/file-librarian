@@ -32,9 +32,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from file_librarian import due as due_mod
 from file_librarian import scheduler
 from file_librarian.config import Config, canonical
-from file_librarian.db.store import BUSY_TIMEOUT_MS, RunRow, Store, WaitingRow, load_migrations
+from file_librarian.db.store import RunRow, Store, WaitingRow, load_migrations
 from file_librarian.models import FileStatus, ReviewReason, explain_review
 from file_librarian.runlog import logs_dir
 from file_librarian.scanner import SkipReason
@@ -143,6 +144,8 @@ class Status:
     by_input: list[InputCount] | None = None
     """Files per input folder, in the configured order; ``None`` with a single input
     or an index from before #89."""
+    due: due_mod.DueCounts | None = None
+    """Open documents due soon or overdue (#91); ``None`` on an index from before it."""
 
     @property
     def review_total(self) -> int:
@@ -166,7 +169,7 @@ def collect(config: Config, *, now: datetime | None = None) -> Status:
     schedule = next_run(now)
     if not config.database.exists():
         return Status(False, [], [], 0, None, None, schedule, 0.0, 0, None)
-    with _open_read_only(config.database) as store:
+    with Store.open_read_only(config.database) as store:
         version = store.schema_version
         if version > len(load_migrations()):
             raise StatusError(
@@ -179,6 +182,9 @@ def collect(config: Config, *, now: datetime | None = None) -> Status:
         last_summary = _last_summary(store)
         notice = duplicates_notice_due(store)
         by_input = input_counts(config, store) if len(config.inputs) > 1 else None
+        due = None
+        if version >= due_mod.MIN_SCHEMA:
+            due = due_mod.counts(store, config, due_mod.local_today(now))
     last = stats.last_run
     return Status(
         database_exists=True,
@@ -194,6 +200,7 @@ def collect(config: Config, *, now: datetime | None = None) -> Status:
         duplicates=stats.by_status.get(FileStatus.DUPLICATE.value, 0),
         duplicates_notice=notice,
         by_input=by_input,
+        due=due,
     )
 
 
@@ -226,7 +233,7 @@ def sensitive_files(config: Config) -> list[tuple[Path, str | None]]:
     """
     if not config.database.exists():
         return []
-    with _open_read_only(config.database) as store:
+    with Store.open_read_only(config.database) as store:
         try:
             return store.sensitive_files()
         except sqlite3.OperationalError:  # an index from before reasons were recorded
@@ -248,14 +255,6 @@ def render_sensitive(found: list[tuple[Path, str | None]]) -> list[str]:
         "when `sensitive.allow_names` lets its name through."
     )
     return lines
-
-
-def _open_read_only(path: Path) -> Store:
-    conn = sqlite3.connect(
-        f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=BUSY_TIMEOUT_MS / 1000
-    )
-    conn.row_factory = sqlite3.Row
-    return Store(conn)
 
 
 def duplicates_notice_due(store: Store) -> bool:
@@ -384,6 +383,8 @@ def render(
     else:
         lines.extend(_review_lines(status, config, now, private=private))
         lines.extend(_failed_lines(status, config, now))
+        if status.due is not None:
+            lines.append(due_mod.status_line(status.due))
         if status.sensitive:
             lines.append(f"Left in place as sensitive: {_files(status.sensitive)}")
         if status.duplicates_notice:
@@ -541,6 +542,13 @@ def to_json(status: Status, config: Config, *, now: datetime | None = None) -> s
             ],
         },
         "sensitive": status.sensitive,
+        "due": None
+        if status.due is None
+        else {
+            "within_days": status.due.within_days,
+            "upcoming": status.due.upcoming,
+            "overdue": status.due.overdue,
+        },
         "by_input": None
         if status.by_input is None
         else [
@@ -605,9 +613,14 @@ def _local(text: str) -> str:
 # --- the periodic summary --------------------------------------------------------------
 
 
-def summary_text(review: int, failed: int, not_where_left: int = 0, locked: int = 0) -> str:
-    """The notification's body: counts only, nothing that names a file."""
+def summary_text(
+    review: int, failed: int, not_where_left: int = 0, locked: int = 0, due: str | None = None
+) -> str:
+    """The notification's body: counts only, nothing that names a file. ``due``: what is
+    due, in counts (``due.Reminder.text``)."""
     parts = []
+    if due:
+        parts.append(due)
     if review:
         parts.append(f"{_files(review)} {'waits' if review == 1 else 'wait'} for review")
     if failed:
@@ -633,6 +646,13 @@ def after_scheduled_run(
     (``schedule.wait_for_unlock_hours: 0``). The time is
     recorded before notifying, so a notification that fails is not retried
     on every run.
+
+    With ``due.remind``, it also counts the open documents due within
+    ``due.remind_days_before`` days or overdue (#91, see ``due``). One that no
+    earlier summary counted makes the summary due on its own, whatever
+    ``every_days``; it is then recorded, so each document is reminded once.
+    Such a reminder alone holds only the due counts and does not restart
+    ``every_days``.
     """
     settings = config.summary
     now = now or datetime.now(UTC)
@@ -640,16 +660,25 @@ def after_scheduled_run(
         waiting = store.waiting()
         cutoff = now - timedelta(days=settings.min_age_days)
         stuck = not_where_left or (locked and config.schedule.wait_for_unlock_hours == 0)
-        if not stuck and not any(_when(row.processed_at) <= cutoff for row in waiting):
-            return []
-        last = store.meta(SUMMARY_KEY)
-        if last is not None:
+        waited = bool(stuck) or any(_when(row.processed_at) <= cutoff for row in waiting)
+        if waited and (last := store.meta(SUMMARY_KEY)) is not None:
             days = (now.astimezone().date() - _when(last).astimezone().date()).days
-            if days < settings.every_days:
-                return []
-        store.set_meta(SUMMARY_KEY, now.astimezone(UTC).isoformat(timespec="seconds"))
+            waited = days >= settings.every_days
+        remind = None
+        if config.due.remind:
+            remind = due_mod.reminder(store, config, due_mod.local_today(now))
+        if not waited and (remind is None or not remind.new):
+            return []
+        with store.transaction():
+            if waited:
+                store.set_meta(SUMMARY_KEY, now.astimezone(UTC).isoformat(timespec="seconds"))
+            if remind is not None:
+                store.set_reminded(remind.new)
+    due_text = None if remind is None else remind.text(config.due.remind_days_before)
+    if not waited:
+        waiting, not_where_left, locked = [], 0, 0
     review = sum(1 for row in waiting if row.status is FileStatus.REVIEW)
-    text = summary_text(review, len(waiting) - review, not_where_left, locked)
+    text = summary_text(review, len(waiting) - review, not_where_left, locked, due_text)
     lines = [f"Summary: {text}"]
     if locked:
         lines.append(locked_advice(locked, config))

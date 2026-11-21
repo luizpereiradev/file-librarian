@@ -337,6 +337,7 @@ and without it the command explains how to enable it:
 | --- | --- |
 | `search_files` | `search.py`, as `flib search`; `semantic` is `--semantic`; the field filters are `--issuer`, `--kind`... |
 | `summarize_amounts` | `search.sum_amounts`, as `flib search --sum`: totals per currency, optionally grouped |
+| `list_due` | `due.find`, as `flib due`: documents with a due date in a window, totals per currency |
 | `get_file` | the index row and its journaled moves, plus the download origin and iCloud-only check `flib inspect` uses (a cloud-only file is never read) |
 | `list_recent` | the index: the newest organized files, optionally in one category |
 | `list_review` | the index: what waits in the review folder and why (`review_reason`) |
@@ -435,6 +436,7 @@ Everything is in `src/file_librarian/`:
 | `lock.py`, `protection.py`, `catchup.py` | the instance and reprocess locks; Data Protection (files readable only while the Mac is unlocked); the wait for an unlock after a scheduled run |
 | `undo.py`, `fix.py`, `reconcile.py`, `reprocess.py` | `flib undo`, `flib fix`, `flib reconcile`, `flib reprocess` |
 | `status.py`, `doctor.py`, `runlog.py` | `flib status` and the periodic summary; the redacted `flib doctor` report; one log file per run |
+| `due.py` | `flib due`, `flib fix --done`, the "Due:" line of `flib status` and the due reminder in the periodic summary (#91) |
 | `onboarding.py` | `flib init`, except its questions |
 | `scheduler/` | the launchd agent behind `flib schedule` |
 | `credentials.py`, `keychain.py` | where an API key comes from; the macOS Keychain through `/usr/bin/security` |

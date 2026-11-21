@@ -27,13 +27,13 @@ pytestmark = pytest.mark.integration
 runner = CliRunner()
 
 # Names a notification or `flib status` must never show.
-NAMES = ("unsure-one", "unsure-two", "odd-recipe", "broken-scan", "id_rsa", "bill")
+NAMES = ("unsure-one", "unsure-two", "odd-recipe", "broken-scan", "id_rsa", "electricity")
 
 
 def populate(downloads: Path, cfg: Config) -> None:
     """Organized, in review (two reasons), failed and sensitive files, filed 10 days ago."""
     answers = {
-        "bill.pdf": answer("Finance", confidence=0.9),
+        "electricity.pdf": answer("Finance", confidence=0.9),
         "unsure-one.pdf": answer("Finance", confidence=0.3),
         "unsure-two.pdf": answer("Finance", confidence=0.4),
         "odd-recipe.pdf": answer("Recipes", confidence=0.9),
@@ -338,8 +338,10 @@ def test_summary_waits_until_a_file_is_old_enough(downloads: Path, fake_osascrip
 
 def test_no_summary_when_nothing_waits(downloads: Path, fake_osascript: Path) -> None:
     cfg = fake_config(downloads)
-    put(downloads, "bill.pdf")
-    pipeline.run(cfg, FakeProvider({"bill.pdf": answer("Finance", confidence=0.9)}), simulate=False)
+    put(downloads, "electricity.pdf")
+    pipeline.run(
+        cfg, FakeProvider({"electricity.pdf": answer("Finance", confidence=0.9)}), simulate=False
+    )
     age(cfg, days=30)
     assert st.after_scheduled_run(cfg) == []
     assert calls(fake_osascript) == []
@@ -381,8 +383,10 @@ def test_files_skipped_while_locked_are_counted_in_the_summary(
     downloads: Path, fake_osascript: Path
 ) -> None:
     cfg = fake_config(downloads)
-    put(downloads, "bill.pdf")
-    pipeline.run(cfg, FakeProvider({"bill.pdf": answer("Finance", confidence=0.9)}), simulate=False)
+    put(downloads, "electricity.pdf")
+    pipeline.run(
+        cfg, FakeProvider({"electricity.pdf": answer("Finance", confidence=0.9)}), simulate=False
+    )
     # The scheduled run waits for the next unlock: that alone is no reason to tell.
     assert st.after_scheduled_run(cfg, locked=2) == []
     no_wait = fake_config(downloads, schedule={"wait_for_unlock_hours": 0})

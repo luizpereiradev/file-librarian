@@ -177,6 +177,12 @@ summary:                     # RF-40: after a scheduled run, what waits in revie
   every_days: 7              # at most once every this many days
   min_age_days: 2            # only once a file has waited in review or failed this long
 
+due:                         # #91: `flib due`, its line in `flib status`, its reminder in the summary
+  kinds: [bill, invoice, tax]  # kinds listed by default; a due date on another kind shows with --all
+  remind: true               # the summary counts each open document once, when it comes due soon
+  remind_days_before: 3      # 0-60: "soon" is this many days ahead, or already overdue
+  done_tag: null             # a Finder tag (e.g. Paid) that marks a document paid, like `flib fix --done`
+
 mcp:                         # `flib mcp`: the local MCP server for AI assistants
   read_only: false           # true hides the write tools, recategorize_file and undo
 
