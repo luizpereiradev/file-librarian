@@ -1,5 +1,7 @@
 # file-librarian
 
+<img src="src/file_librarian/assets/icon-1024.png" alt="file-librarian icon: an orange cat shelved between book spines" width="96">
+
 Keeps your Downloads folder organized. Once a day, `flib` reads each new file,
 gives it a descriptive name, moves it into a category folder and writes a
 searchable description to a local SQLite index.
@@ -192,8 +194,16 @@ most once a week, and never after a `flib run` you started yourself. The
 notification holds counts only, never a file name, because notifications show
 on the lock screen. Change it under `summary:` in the configuration:
 `notify: false` keeps only the log line, `every_days` and `min_age_days` set
-how often and how patient. If you never see the notification, see
-[Troubleshooting](docs/troubleshooting.md#no-notification-appears).
+how often and how patient.
+
+The notification comes from "file-librarian", with its own icon: `flib
+schedule` builds a tiny notifier app for it inside flib's own environment
+(never in /Applications), with tools that ship with macOS, and posts one
+first notification so macOS asks you then whether to allow it. Allow it (or
+later, under System Settings > Notifications > file-librarian). If the app
+cannot be built, notifications still come, shown as Script Editor;
+`flib status` says which one is in use. If you never see the notification,
+see [Troubleshooting](docs/troubleshooting.md#no-notification-appears).
 
 ### Teaching it
 
@@ -1102,4 +1112,5 @@ Report vulnerabilities privately, as [SECURITY.md](SECURITY.md) describes.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). The icon artwork (`src/file_librarian/assets/icon-1024.png`)
+was AI-generated for this project.

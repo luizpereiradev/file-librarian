@@ -60,6 +60,11 @@ jobs:
         env:
           FLIB_TEST_OCR: "1"
         run: uv run pytest -m ocr -p no:cacheprovider
+      - name: Notifier app built with the real macOS tools (no notification posted)
+        if: matrix.python == '3.15'
+        env:
+          FLIB_TEST_NOTIFIER: "1"
+        run: uv run pytest -m notifier -p no:cacheprovider
 
   # The one required check: it passes only when every matrix entry passed, so
   # the branch rules do not depend on which versions ran.

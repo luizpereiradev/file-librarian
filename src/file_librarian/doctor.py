@@ -43,7 +43,7 @@ from typing import Any, Literal
 
 import yaml
 
-from file_librarian import __version__, credentials, locality, protection, scheduler
+from file_librarian import __version__, credentials, locality, notifier, protection, scheduler
 from file_librarian import status as status_mod
 from file_librarian.config import (
     Config,
@@ -540,6 +540,7 @@ def _schedule(section: Section, r: Redactor, config_path: Path) -> None:
         f"mode: {state.mode}",
         f"time: {state.time or '-'}",
         f"interpreter current: {'yes' if state.interpreter_current else 'no'}",
+        _notifier_line(),
         f"program: {' '.join(r.path(part) if '/' in part else part for part in state.program)}",
     ]
     if state.watch_paths:
@@ -551,6 +552,13 @@ def _schedule(section: Section, r: Redactor, config_path: Path) -> None:
     if scheduled is not None:
         same = os.path.realpath(scheduled) == os.path.realpath(config_path)
         section.lines.append(f"uses this configuration: {'yes' if same else 'no'}")
+
+
+def _notifier_line() -> str:
+    choice = notifier.choice()
+    if choice.kind == "app":
+        return "notifier: app (file-librarian)"
+    return f"notifier: osascript fallback ({choice.reason})"
 
 
 def _database(section: Section, r: Redactor, config: Config | None, runs: int) -> None:

@@ -16,9 +16,12 @@ name: notifications show on the lock screen. Whether it shows at all is up to
 macOS (see docs/troubleshooting.md); the log and ``flib status`` are enough on their own,
 and a notification that fails never fails the run.
 
-All ``osascript`` calls go through ``OSASCRIPT`` (tests swap in a fake). The
-text is passed as arguments to an ``on run argv`` handler, never written
-into the script, so nothing in it can run as AppleScript.
+The notification comes from flib's own notifier app when it is built and
+current (``notifier``: it shows as "file-librarian" with flib's icon), and
+otherwise from ``osascript``, which macOS shows as Script Editor. All
+``osascript`` calls go through ``OSASCRIPT`` (tests swap in a fake). Either
+way the text is passed as arguments, never written into a script, so nothing
+in it can run as AppleScript.
 """
 
 from __future__ import annotations
@@ -33,7 +36,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from file_librarian import due as due_mod
-from file_librarian import scheduler
+from file_librarian import notifier, scheduler
 from file_librarian.config import Config, canonical
 from file_librarian.db.store import RunRow, Store, WaitingRow, load_migrations
 from file_librarian.models import FileStatus, ReviewReason, RunTrigger, explain_review
@@ -168,6 +171,8 @@ class Status:
     backlog: tuple[int, str | None] | None = None
     """Ready items the last watch start left in the inputs today, and why."""
     automatic_files_today: int = 0
+    notifier: notifier.Choice | None = None
+    """How a summary would be posted; ``None`` with ``summary.notify`` off."""
 
     @property
     def review_total(self) -> int:
@@ -189,8 +194,9 @@ def collect(config: Config, *, now: datetime | None = None) -> Status:
     """What waits for the user. Read-only and lock-free; raises ``StatusError``."""
     now = now or datetime.now(UTC)
     schedule = next_run(now, config.input_paths)
+    posting = notifier.choice() if config.summary.notify else None
     if not config.database.exists():
-        return Status(False, [], [], 0, None, None, schedule, 0.0, 0, None)
+        return Status(False, [], [], 0, None, None, schedule, 0.0, 0, None, notifier=posting)
     with Store.open_read_only(config.database) as store:
         version = store.schema_version
         if version > len(load_migrations()):
@@ -233,6 +239,7 @@ def collect(config: Config, *, now: datetime | None = None) -> Status:
         automatic_files_today=files_today,
         automatic_cost_today=cost_today,
         day_cap_reached=capped,
+        notifier=posting,
     )
 
 
@@ -452,6 +459,8 @@ def render(
         lines.extend(_input_lines(status, private=private))
         lines.extend(_last_run_lines(status, config))
     lines.extend(_schedule_lines(status.schedule))
+    if status.notifier is not None and status.schedule.installed:
+        lines.append(notifier_line(status.notifier))
     if status.database_exists:
         lines.extend(_watch_lines(status, config))
         month = f"This month: US$ {status.month_cost_usd:.4f}"
@@ -459,6 +468,12 @@ def render(
             month += f" (plus {status.month_unpriced_runs} run(s) without a recorded cost)"
         lines.append(month)
     return lines
+
+
+def notifier_line(choice: notifier.Choice) -> str:
+    if choice.kind == "app":
+        return 'Notifications: from the "file-librarian" app, with its own icon.'
+    return f"Notifications: through osascript, shown as Script Editor ({choice.reason})."
 
 
 def _watch_lines(status: Status, config: Config) -> list[str]:
@@ -784,6 +799,9 @@ def to_json(status: Status, config: Config, *, now: datetime | None = None) -> s
         },
         "summary": {
             "notify": config.summary.notify,
+            "notifier": None
+            if status.notifier is None
+            else {"kind": status.notifier.kind, "reason": status.notifier.reason},
             "every_days": config.summary.every_days,
             "min_age_days": config.summary.min_age_days,
             "last_at": None if status.last_summary is None else status.last_summary.isoformat(),
@@ -890,7 +908,16 @@ def after_scheduled_run(
 
 
 def notify(text: str, title: str = NOTIFICATION_TITLE) -> str | None:
-    """Post a macOS notification; returns why it failed, or ``None``. Never raises."""
+    """Post a macOS notification; returns why it failed, or ``None``. Never raises.
+
+    Through the notifier app when it is ready; through ``osascript`` when it is not, or
+    when launching it failed."""
+    if notifier.state() is None and notifier.post(text, title) is None:
+        return None
+    return _notify_osascript(text, title)
+
+
+def _notify_osascript(text: str, title: str) -> str | None:
     try:
         # A fixed binary and script; the text goes in as arguments (argv), never as code.
         result = subprocess.run(  # noqa: S603

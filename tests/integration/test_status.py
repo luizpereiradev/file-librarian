@@ -125,7 +125,16 @@ def test_status_json(tmp_path: Path, downloads: Path) -> None:
     assert data["sensitive"] == 1
     assert data["last_run"]["trigger"] == "manual" and data["last_run"]["files_review"] == 3
     assert data["month"] == {"cost_usd": 0.0, "runs_with_unknown_cost": 0}
-    assert data["summary"] == {"notify": True, "every_days": 7, "min_age_days": 2, "last_at": None}
+    assert data["summary"] == {
+        "notify": True,
+        "notifier": {
+            "kind": "osascript",
+            "reason": "the notifier app is not built; `flib schedule --refresh` builds it",
+        },
+        "every_days": 7,
+        "min_age_days": 2,
+        "last_at": None,
+    }
     for name in NAMES:
         assert name not in result.stdout
 
@@ -243,12 +252,13 @@ def test_next_run_comes_from_the_installed_agent(
     assert st.next_run(local).at == local.replace(hour=12, minute=30)
     late = local.replace(hour=13)
     assert st.next_run(late).at == (late + timedelta(days=1)).replace(hour=12, minute=30)
-    line = st.render(st.collect(cfg, now=local), cfg)[-1]
-    assert line == "Next run: 2026-03-10 12:30 (daily at 12:30)"
+    lines = st.render(st.collect(cfg, now=local), cfg)
+    assert lines[-2] == "Next run: 2026-03-10 12:30 (daily at 12:30)"
+    assert lines[-1].startswith("Notifications: through osascript, shown as Script Editor")
 
     unloaded = scheduler.Status(True, False, "12:30", [])
     monkeypatch.setattr("file_librarian.scheduler.status", lambda: unloaded)
-    assert "installed but not loaded" in st.render(st.collect(cfg), cfg)[-1]
+    assert "installed but not loaded" in st.render(st.collect(cfg), cfg)[-2]
 
     def broken() -> scheduler.Status:
         raise scheduler.ScheduleError("cannot run launchctl")

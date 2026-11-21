@@ -8,6 +8,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Notifications show as "file-librarian", with flib's own icon, instead of
+  Script Editor. `flib schedule` (and `--refresh`, which
+  `./scripts/install.sh` runs) builds a tiny notifier app inside flib's own
+  environment, next to `flib-python`, with tools that ship with macOS
+  (`osacompile`, `sips`, `iconutil`, `codesign`; no Xcode, no new
+  dependency), and posts one first notification so macOS asks for
+  permission while you are there. The icon (an orange cat shelved between
+  book spines; the artwork was AI-generated for this project, and the README
+  shows it too) comes from one packaged image, `assets/icon-1024.png`; the app is rebuilt when it, the script or the
+  bundle layout change, and `flib schedule --remove` deletes it. The text
+  still reaches the app as arguments only. When the app is not built or
+  cannot be launched, the notification goes through `osascript` as before;
+  `flib status`, `flib status --json` and `flib doctor` say which notifier
+  is in use and why.
 - A measured, fully local setup (#92). `flib init --local` (and the
   provider `local` in plain `flib init`) checks that Ollama is installed and
   running (explaining `brew install ollama` or the app if not; it never
