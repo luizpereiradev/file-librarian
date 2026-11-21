@@ -74,10 +74,12 @@ and the watch agent active. Then look at `watch.out.log` in
   watches only the top level. If you changed `inputs` since installing it,
   the agent still watches the old folders: `flib status` says so, and `flib
   schedule --refresh` fixes it.
-- **"N item(s) were still downloading or changing after 10 min".** The
-  download took longer than `schedule.watch_settle_minutes`. It is filed by
-  the next change in the folder, usually the browser renaming it when it
-  finishes, or by the daily run.
+- **"N item(s) are still downloading or changing (no change for 10 min, or 6
+  h passed)".** The download stalled for longer than
+  `schedule.watch_settle_minutes` (a download that keeps growing is waited
+  for, up to 6 hours). The watch agent's fallback start (every
+  `schedule.watch_fallback_minutes`, 30) picks it up once it is done, as do
+  the next change in the folder and the daily run.
 - **"Not running: another flib process ... is running".** A run (by hand, the
   daily run, `flib reprocess`...) held the lock for more than 10 minutes; it
   or the next change takes care of the file.
@@ -94,7 +96,9 @@ and the watch agent active. Then look at `watch.out.log` in
 It runs at most once every `schedule.watch_min_interval_minutes` (5 by
 default), and takes an item only once it has not changed for
 `schedule.watch_quiet_seconds` (5 minutes), so a file can take about ten
-minutes to be filed. `watch.out.log` is trimmed to about 1 MB; each watch
+minutes to be filed. A file dated in the future (a share whose clock is
+ahead) is taken once it has stayed the same for that long; a daily run
+takes it at its second look. `watch.out.log` is trimmed to about 1 MB; each watch
 run's own log is a `watch-run-*.log` next to it.
 
 ## macOS asks about the Desktop or Documents

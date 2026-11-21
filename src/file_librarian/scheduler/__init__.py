@@ -79,6 +79,8 @@ class Status:
     """``daily``, ``watch`` or ``both``, from the agents installed; ``None`` with none."""
     watch_paths: tuple[str, ...] = ()
     watch_interval_minutes: int | None = None
+    watch_fallback_minutes: int | None = None
+    """The watch agent's ``StartInterval`` in minutes; ``None`` without one."""
 
 
 def agents_dir() -> Path:
@@ -146,9 +148,15 @@ def build_plist(at: str, config_path: Path, logs: Path) -> dict[str, object]:
 
 
 def build_watch_plist(
-    inputs: list[Path], config_path: Path, logs: Path, min_interval_minutes: int
+    inputs: list[Path],
+    config_path: Path,
+    logs: Path,
+    min_interval_minutes: int,
+    fallback_minutes: int = 0,
 ) -> dict[str, object]:
-    return {
+    """``fallback_minutes``: also start every that many minutes (``StartInterval``), for
+    what ``WatchPaths`` cannot see (a change made while flib was running); 0 = never."""
+    data: dict[str, object] = {
         "Label": WATCH_LABEL,
         "ProgramArguments": [*program(), "run", "--trigger", "watch"],
         "EnvironmentVariables": {"FLIB_CONFIG": str(config_path), "PATH": SAFE_PATH},
@@ -160,6 +168,9 @@ def build_watch_plist(
         "LowPriorityIO": True,
         "Nice": 10,
     }
+    if fallback_minutes:
+        data["StartInterval"] = fallback_minutes * 60
+    return data
 
 
 def _launchctl(*args: str) -> subprocess.CompletedProcess[str]:
@@ -198,6 +209,7 @@ def install(
     mode: str = "daily",
     inputs: list[Path] | None = None,
     watch_interval_minutes: int = 5,
+    watch_fallback_minutes: int = 0,
 ) -> list[Path]:
     """Install the agents of ``mode`` and remove the other one; returns their plists."""
     if mode not in MODES:
@@ -216,7 +228,9 @@ def install(
         _remove(LABEL)
     if mode in ("watch", "both"):
         path = plist_path(WATCH_LABEL)
-        data = build_watch_plist(inputs or [], config_path, logs, watch_interval_minutes)
+        data = build_watch_plist(
+            inputs or [], config_path, logs, watch_interval_minutes, watch_fallback_minutes
+        )
         _write_plist(path, data)
         _load(path, WATCH_LABEL)
         installed.append(path)
@@ -253,6 +267,11 @@ def _is_loaded(label: str) -> bool:
     return _launchctl("print", f"{_domain()}/{label}").returncode == 0
 
 
+def daily_agent_loaded() -> bool:
+    """The daily agent is installed and launchd has it loaded."""
+    return plist_path().exists() and _is_loaded(LABEL)
+
+
 def status() -> Status:
     daily, watching = _read(LABEL), _read(WATCH_LABEL)
     if daily is None and watching is None:
@@ -264,10 +283,12 @@ def status() -> Status:
         interval = daily.get("StartCalendarInterval", {})
         at = f"{interval.get('Hour', 0):02d}:{interval.get('Minute', 0):02d}"
     paths: tuple[str, ...] = ()
-    interval_minutes = None
+    interval_minutes = fallback = None
     if watching is not None:
         paths = tuple(str(p) for p in watching.get("WatchPaths", []))
         interval_minutes = int(watching.get("ThrottleInterval", 60)) // 60
+        if watching.get("StartInterval"):
+            fallback = int(watching["StartInterval"]) // 60
     mode = "both" if daily and watching else ("daily" if daily else "watch")
     main = daily if daily is not None else watching or {}
     return Status(
@@ -279,6 +300,7 @@ def status() -> Status:
         mode,
         paths,
         interval_minutes,
+        fallback,
     )
 
 

@@ -41,7 +41,11 @@ All notable changes to this project are documented here. The format follows
   `flib schedule`, `check-config` and `doctor`. Watch runs keep their own run
   logs (`watch-run-*.log`) and `watch.out.log` is trimmed at about 1 MB. A
   stale `WatchPaths` after `inputs` changed is reported everywhere with
-  "run `flib schedule --refresh`".
+  "run `flib schedule --refresh`". The wait for downloads goes on while they
+  keep changing (up to 6 h; `watch_settle_minutes` is how long without any
+  change before it gives up), and the watch agent also starts every
+  `schedule.watch_fallback_minutes` (30; `StartInterval`) for what launchd
+  did not report, including files skipped while the Mac was locked.
 - What is due (#91): `flib due` lists the bills, invoices, statements and taxes
   (`due.kinds`) whose due date the AI read in them, overdue up to 30 days ago
   and due in the next 7 days (`--within 2w`, `--overdue`, `--issuer`,
@@ -326,8 +330,9 @@ All notable changes to this project are documented here. The format follows
 - In every mode (#90): an item Finder is still copying in (type `brok`,
   creator `MACS`, creation date 24 January 1984) is skipped as a download in
   progress; an item whose modification time is more than five minutes in the
-  future is taken as settled instead of "still changing" forever, with a
-  note in the run log; right before a move, a file up to 32 MB is hashed
+  future is taken once its size and mtime stayed the same for the quiet time
+  (a daily run: at its next look) instead of "still changing" forever, with
+  a note in the run log; right before a move, a file up to 32 MB is hashed
   again and left for the next run if its content changed. Today's and this
   month's start no longer shift by an hour on a daylight-saving day.
 

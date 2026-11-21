@@ -181,7 +181,10 @@ schedule:
   watch_min_interval_minutes: 5  # watch: macOS starts flib at most once every this many minutes
   watch_quiet_seconds: 300   # watch: take an item once it has not changed for this long (at least
                              # limits.stable_seconds): slow writers pause for more than a minute
-  watch_settle_minutes: 10   # watch: wait up to this long for downloads in progress (0 = don't)
+  watch_settle_minutes: 10   # watch: give up waiting for downloads in progress after this long
+                             # without any change (one that keeps growing: up to 6 h; 0 = don't)
+  watch_fallback_minutes: 30 # watch: also look every this many minutes, for what a change did
+                             # not show (0 = never); a look with nothing new does nothing
 
 summary:                     # RF-40: after a scheduled run, what waits in review or failed (`flib status`)
   notify: true               # one macOS notification, counts only, no file names; false = run log only

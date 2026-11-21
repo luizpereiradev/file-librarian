@@ -144,11 +144,12 @@ In watch mode macOS starts flib when an input folder changes, at most once
 every `schedule.watch_min_interval_minutes` (5). It takes an item only once
 it has not changed for `schedule.watch_quiet_seconds` (5 minutes, as slow
 copies and torrents pause), waits for downloads in progress (`.crdownload`,
-`.part`, a Finder copy...) up to `schedule.watch_settle_minutes` (10), and
-then runs once for everything that arrived: ten files at once are one run.
+`.part`, a Finder copy...) as long as they keep changing, and then runs
+once for everything that arrived: ten files at once are one run.
 When nothing new is ready (for example right after flib's own moves) it
 exits at once, with no run and no AI call. macOS watches only the top level
-of each input folder, which is all flib organizes anyway. Automatic runs
+of each input folder, which is all flib organizes anyway, and flib also
+looks every `schedule.watch_fallback_minutes` (30) for anything missed. Automatic runs
 (daily and watch) also keep to `limits.max_cost_usd_per_day` (three times
 the per-run cap by default); once today's cost reaches it they send nothing
 more to the AI until midnight, and `flib status` says so. The periodic

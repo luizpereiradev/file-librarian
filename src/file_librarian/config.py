@@ -618,9 +618,13 @@ class ScheduleConfig(_Section):
     watch_min_interval_minutes: Annotated[int, Field(ge=1, le=1440)] = 5
     """In watch mode, launchd starts flib at most once every this many minutes."""
     watch_settle_minutes: Annotated[int, Field(ge=0, le=120)] = 10
-    """In watch mode, how long a run waits for downloads in progress (and files still
-    changing) to settle before it runs; what is still pending then waits for the next
-    trigger. 0 = never waits."""
+    """In watch mode, how long a run goes on waiting for downloads in progress (and files
+    still changing) once they stopped changing at all; while they change it waits, up to
+    6 hours. What is still pending then waits for the next start. 0 = never waits."""
+    watch_fallback_minutes: Annotated[int, Field(ge=0, le=1440)] = 30
+    """In watch mode, the agent also starts every this many minutes (``StartInterval``),
+    for what launchd did not report (changes made while flib was running); a start with
+    nothing new exits silently. 0 = never."""
     watch_quiet_seconds: Annotated[int, Field(ge=0, le=86400)] = 300
     """In watch mode, an item must not have changed for this long (never less than
     ``limits.stable_seconds``) before it is taken: a file written slowly under its final

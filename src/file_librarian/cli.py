@@ -65,7 +65,7 @@ from file_librarian.providers.base import Provider
 from file_librarian.reconcile import in_cloud_only
 from file_librarian.reconcile import reconcile as run_reconcile
 from file_librarian.runlog import append_log, logs_dir, trim, write_log
-from file_librarian.scanner import Candidate, HashCache, ScanError, ScanResult, SkipReason
+from file_librarian.scanner import Candidate, ScanError, ScanMemory, ScanResult, SkipReason
 from file_librarian.scheduler import watch as watch_mod
 from file_librarian.search import (
     SearchError,
@@ -719,7 +719,7 @@ def _pipeline(
     trigger: RunTrigger = RunTrigger.MANUAL,
     catch_up: bool = False,
     wait: bool = True,
-    hashes: HashCache | None = None,
+    memory: ScanMemory | None = None,
 ) -> pipeline.Outcome | None:
     """One run (or simulation). ``catch_up``: the second pass of an automatic run that
     waited for the Mac to be unlocked; it never waits again. ``wait=False``: the caller
@@ -734,7 +734,7 @@ def _pipeline(
     try:
         provider = get_provider(cfg.provider)
         outcome = pipeline.run(
-            cfg, provider, simulate=simulate, trigger=trigger, lock_wait=lock_wait, hashes=hashes
+            cfg, provider, simulate=simulate, trigger=trigger, lock_wait=lock_wait, memory=memory
         )
     except AlreadyRunningError as exc:
         if catch_up:
@@ -754,8 +754,8 @@ def _pipeline(
     locked = _locked(outcome)
     hours = cfg.schedule.wait_for_unlock_hours
     will_wait = scheduled and not catch_up and bool(locked) and hours > 0
-    daily_catches_up = will_wait and trigger is RunTrigger.WATCH and _daily_agent_installed()
-    will_wait = will_wait and not daily_catches_up
+    left_to = _unlock_left_to(cfg) if will_wait and trigger is RunTrigger.WATCH else None
+    will_wait = will_wait and left_to is None
     if simulate:
         _print_plan(outcome.plan, outcome.deferred, cfg, skipped)
         if cost:
@@ -776,12 +776,13 @@ def _pipeline(
         if outcome.scan.future:
             summary.append(
                 f"note: {len(outcome.scan.future)} item(s) have a modification time in the "
-                "future (a wrong clock, an archive); they were taken as settled."
+                "future (a wrong clock, an archive, a share); they were taken once they "
+                "stayed the same for the quiet time."
             )
-        if daily_catches_up:
+        if left_to is not None:
             summary.append(
-                f"{len(locked)} file(s) protected while the Mac is locked were left for the "
-                "daily run, which waits for the unlock (this watch run does not)."
+                f"{len(locked)} file(s) protected while the Mac is locked were left for "
+                f"{left_to} (this watch run does not wait for the unlock)."
             )
         if will_wait:
             summary.append(
@@ -832,9 +833,9 @@ def _watch(config_path: Path | None) -> None:
         trim(logs / name)
     outcomes: list[pipeline.Outcome] = []
 
-    def run_once(hashes: HashCache) -> bool:
+    def run_once(memory: ScanMemory) -> bool:
         outcome = _pipeline(
-            config_path, simulate=False, trigger=RunTrigger.WATCH, wait=False, hashes=hashes
+            config_path, simulate=False, trigger=RunTrigger.WATCH, wait=False, memory=memory
         )
         if outcome is None:
             return False
@@ -849,8 +850,8 @@ def _watch(config_path: Path | None) -> None:
     minutes = cfg.schedule.watch_settle_minutes
     if watched.pending:
         _say(
-            f"{watched.pending} item(s) were still downloading or changing after {minutes} min; "
-            "the next change in the folder (or the daily run) picks them up."
+            f"{watched.pending} item(s) are still downloading or changing (no change for "
+            f"{minutes} min, or 6 h passed); {_who_picks_up(cfg)} picks them up."
         )
     if watched.ended is watch_mod.Ended.STOPPED:
         _say("Stopped while waiting for downloads to finish (SIGTERM).")
@@ -858,14 +859,34 @@ def _watch(config_path: Path | None) -> None:
     if last is None or last.report is None:
         return
     locked = _locked(last)
-    if locked and cfg.schedule.wait_for_unlock_hours > 0 and not _daily_agent_installed():
+    if locked and cfg.schedule.wait_for_unlock_hours > 0 and _unlock_left_to(cfg) is None:
         # Only now, with the watch lock released. Waiting holds this agent (launchd runs one
-        # process per agent), so with a daily agent installed, that one catches up instead.
+        # process per agent), so only when nothing else will catch up.
         _wait_and_catch_up(config_path, cfg, last.report.run_id, locked, RunTrigger.WATCH)
 
 
-def _daily_agent_installed() -> bool:
-    return scheduler.plist_path().exists()
+def _who_picks_up(cfg: Config) -> str:
+    fallback = cfg.schedule.watch_fallback_minutes
+    if fallback:
+        return f"the watch agent's next start (at most {fallback} min later)"
+    return "the next change in the folder (or the daily run)"
+
+
+def _unlock_left_to(cfg: Config) -> str | None:
+    """Who files what a watch run skipped while the Mac was locked, when not the watch
+    run itself (which would hold the watch agent while it waits): ``None`` if nobody."""
+    try:
+        state = scheduler.status()
+    except scheduler.ScheduleError:
+        return None
+    fallback = state.watch_fallback_minutes
+    if state.watch_paths and fallback:
+        return (
+            f"the watch agent's next start once the Mac is unlocked (at most {fallback} min later)"
+        )
+    if state.time is not None and scheduler.daily_agent_loaded():
+        return "the daily run, which waits for the unlock"
+    return None
 
 
 def _note_backlog(cfg: Config, watched: watch_mod.Watched, last: pipeline.Outcome | None) -> None:
@@ -1641,6 +1662,7 @@ def _install_schedule(
         mode=mode,
         inputs=cfg.input_paths,
         watch_interval_minutes=cfg.schedule.watch_min_interval_minutes,
+        watch_fallback_minutes=cfg.schedule.watch_fallback_minutes,
     )
     if mode in ("daily", "both"):
         typer.echo(f"Daily run scheduled at {when} ({installed[0]}).")
@@ -1655,6 +1677,9 @@ def _install_schedule(
             "macOS watches the top level of each input folder only, which is all flib "
             "organizes anyway."
         )
+        fallback = cfg.schedule.watch_fallback_minutes
+        if fallback:
+            typer.echo(f"It also looks every {fallback} min, for anything a change did not show.")
         if mode == "watch":
             typer.echo(WATCH_ONLY_NOTE)
         for line in status_mod.cost_cap_lines(cfg):
@@ -1682,9 +1707,14 @@ def _print_schedule_status() -> None:
     if state.time is not None:
         typer.echo(f"Daily run at {state.time}: {loaded}")
     if state.watch_paths:
+        fallback = (
+            f", and every {state.watch_fallback_minutes} min"
+            if state.watch_fallback_minutes
+            else ""
+        )
         typer.echo(
             f"Watch: {loaded}; at most once every {state.watch_interval_minutes} min, "
-            "when one of these changes (top level only):"
+            f"when one of these changes (top level only){fallback}:"
         )
         for folder in state.watch_paths:
             typer.echo(f"  {folder}")

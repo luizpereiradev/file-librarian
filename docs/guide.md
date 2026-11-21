@@ -335,7 +335,8 @@ schedule:
   mode: watch                     # daily (the default) | watch | both
   watch_min_interval_minutes: 5   # at most one start every 5 minutes (1 or more)
   watch_quiet_seconds: 300        # an item must not have changed for this long
-  watch_settle_minutes: 10        # how long to wait for downloads to finish (0 = don't)
+  watch_settle_minutes: 10        # give up on a download after this long without change
+  watch_fallback_minutes: 30      # also look every 30 minutes (0 = never)
 limits:
   max_cost_usd_per_day: 3.00      # automatic runs only; left out: 3 x max_cost_usd_per_run
   max_files_per_day: 1000         # only for a provider with unknown prices; left out: 5 x max_files_per_run
@@ -358,21 +359,28 @@ folders changes. What happens then:
   minutes, never less than `limits.stable_seconds`), because a file written
   slowly under its final name (a torrent, `curl -o`, `scp`, a copy from a
   slow disk or share, a screen recording) often pauses for longer than a
-  minute. A run that sees such items waits for them, checking every 15
-  seconds and only looking at those items, for up to `watch_settle_minutes`,
-  then runs once for everything ready. macOS does not start flib when a file
-  merely stops changing, so this wait is what files a download a few minutes
-  after it ends; what is still not done then waits for the next change in
-  the folder (a browser renaming the finished download is one) or the daily
-  run. Right before a move flib checks once more that the item has the same
-  size, modification time and inode, and for a file up to 32 MB the same
-  content; otherwise it is left for the next run. What flib cannot see: a
+  minute. A run that sees such items waits for them, looking only at those
+  items (every 15 seconds, every minute after the first five), and then runs
+  once for everything ready. It goes on waiting while they keep changing, up
+  to 6 hours, and gives up only after `watch_settle_minutes` without any
+  change (a stalled download). macOS does not start flib when a file merely
+  stops changing, nor for changes made while flib runs, so this wait is what
+  files a long download a few minutes after it ends. Anything still missed
+  is picked up by the agent's fallback start every `watch_fallback_minutes`
+  (30; `0` turns it off), which, like any start with nothing new, does
+  nothing at all. Right before a move flib checks once more that the item
+  has the same size, modification time and inode, and for a file up to 32 MB
+  the same content; a larger file whose digest came from flib's memory is
+  hashed again by the run itself. Otherwise it is left for the next run. What flib cannot see: a
   writer that pauses for longer than `watch_quiet_seconds` and then goes on,
   or one that keeps a large file's size and modification time while changing
   it. Whether another app still has a file open for writing cannot be told
   cheaply and reliably, so flib does not try. A file whose modification time
-  is more than five minutes in the future (a wrong clock, some archives) is
-  taken as settled, and the run log says so.
+  is more than five minutes in the future (a wrong clock, some archives, a
+  share whose server clock is ahead) says nothing about when it changed: it
+  is taken once its size and modification time stayed the same for the
+  quiet time (a daily run takes it at its next run), and the run log says
+  so.
 - **Nothing to do costs nothing.** A start that finds nothing new exits at
   once: no run, no entry in the run history, no AI call, no log. flib's own
   moves out of an input change that folder, so macOS starts flib once more a
@@ -384,19 +392,20 @@ folders changes. What happens then:
   many wait and why ("daily cap reached", "provider failing"). Items too
   recent for their input's `min_age_days` are not waited for either. Each
   item is hashed once, not at every look: digests are kept by device, inode,
-  size and modification time (in the index for the items that stay, without
-  names).
+  size, modification, change and creation times (in the index for the items
+  that stay, without names), so any rewrite gives a new key.
 - **Never two at once.** A second watch start while one is going on exits at
   once. A watch run that finds another flib run going on waits up to 10
   minutes for it to end, and then gives way quietly; the daily run waits the
   same way, so a watch run never costs you the day's run, its summary or its
   reminders. Runs by hand still stop at once with "another flib process is
-  running". Files protected while the Mac is locked are left to the daily
-  run's unlock catch-up when the daily agent is installed
-  ([troubleshooting](troubleshooting.md#a-file-is-skipped-as-locked)); in
-  watch-only mode the watch run waits for the unlock itself, and no new
-  watch run starts until it ends. Only one process ever waits for the
-  unlock.
+  running". Files protected while the Mac is locked are left to the watch
+  agent's fallback start, which files them within `watch_fallback_minutes`
+  of the unlock; with the fallback off, to the daily run's unlock catch-up
+  when the daily agent is loaded
+  ([troubleshooting](troubleshooting.md#a-file-is-skipped-as-locked));
+  otherwise the watch run waits for the unlock itself, and no new watch run
+  starts until it ends. Only one process ever waits for the unlock.
 - **A cost cap per day.** The per-run cap still applies to each run. On top,
   the day's automatic runs (daily and watch together, by the cost recorded
   for each run since local midnight, even a run the provider stopped) stop

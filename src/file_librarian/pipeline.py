@@ -46,12 +46,19 @@ from file_librarian.config import Config
 from file_librarian.context import build_context_safely
 from file_librarian.db.store import Store
 from file_librarian.embeddings import RefreshReport, refresh
-from file_librarian.executor import RunReport, execute, recover
+from file_librarian.executor import RECHECK_HASH_MAX_BYTES, RunReport, execute, recover
 from file_librarian.lock import instance_lock
 from file_librarian.models import CategoryRule, FileStatus, Rules, RunMode, RunTrigger
 from file_librarian.planner import Plan, plan
 from file_librarian.providers.base import FatalProviderError, Provider
-from file_librarian.scanner import Candidate, HashCache, ScanResult, scan
+from file_librarian.scanner import (
+    SETTLING_KEY,
+    Candidate,
+    ScanMemory,
+    ScanResult,
+    Settling,
+    scan,
+)
 from file_librarian.scheduler import watch as watch_mod
 from file_librarian.status import DUPLICATES_MOVED
 
@@ -99,18 +106,19 @@ def run(
     trigger: RunTrigger = RunTrigger.MANUAL,
     now: float | None = None,
     lock_wait: float = 0.0,
-    hashes: HashCache | None = None,
+    memory: ScanMemory | None = None,
 ) -> Outcome:
+    """``memory``: digests and future-dated items a watch process already knows."""
     if trigger is RunTrigger.WATCH:
         config = config.for_watch()
     if simulate:
         with Store.open(config.database) as store:
             return _run(
-                config, provider, store, simulate=True, trigger=trigger, now=now, hashes=hashes
+                config, provider, store, simulate=True, trigger=trigger, now=now, memory=memory
             )
     with instance_lock(config.database, wait=lock_wait), Store.open(config.database) as store:
         return _run(
-            config, provider, store, simulate=False, trigger=trigger, now=now, hashes=hashes
+            config, provider, store, simulate=False, trigger=trigger, now=now, memory=memory
         )
 
 
@@ -122,12 +130,31 @@ def _run(
     simulate: bool,
     trigger: RunTrigger,
     now: float | None,
-    hashes: HashCache | None = None,
+    memory: ScanMemory | None = None,
 ) -> Outcome:
     recovered = 0 if simulate else recover(store, config)
     store.prune_cache(max_age_days=CACHE_DAYS)
     config, files_left = _files_capped(config, store, trigger, simulate=simulate)
-    found = scan(config, store.file_state, now=now, prefer=_prefer(store, trigger), hashes=hashes)
+    hashes = memory.hashes if memory is not None else None
+    settling = memory.settling if memory is not None else Settling.loads(store.meta(SETTLING_KEY))
+    if hashes is not None:
+        # The executor re-hashes only small files before moving: never trust the cache
+        # for the larger ones.
+        hashes.verify_above = RECHECK_HASH_MAX_BYTES
+    try:
+        found = scan(
+            config,
+            store.file_state,
+            now=now,
+            prefer=_prefer(store, trigger),
+            hashes=hashes,
+            settling=settling,
+        )
+    finally:
+        if hashes is not None:
+            hashes.verify_above = None
+    if not simulate:
+        store.set_meta(SETTLING_KEY, settling.dumps())
     contexts = [build_context_safely(c, config) for c in found.candidates]
     # Files of inputs with a fixed category are never sent: no provider call, no cost (#89).
     ruled, contexts = rule_decisions(contexts, config)
@@ -135,8 +162,10 @@ def _run(
     try:
         classified = classify_all(contexts, provider, rules_for(config, store), capped, cache=store)
     except FatalProviderError as exc:
-        spent = getattr(exc, "spent", None)
-        if not simulate and spent:
+        # What was billed counts toward the daily cap; with unknown prices (``None``) the
+        # files seen count toward limits.max_files_per_day.
+        spent = getattr(exc, "spent", 0.0)
+        if not simulate and (spent is None or spent > 0):
             run_id = store.start_run(RunMode.RUN, trigger)
             store.finish_run(
                 run_id, seen=len(found.candidates), moved=0, review=0, errors=0, cost_usd=spent
@@ -175,6 +204,10 @@ def _run(
         deferred=deferred,
         cost_usd=classified.run_cost,
     )
+    if hashes is not None:
+        for item in report.items:
+            if item.status is FileStatus.SKIPPED and item.note.startswith("changed since"):
+                hashes.forget(item.source)  # the re-hash disagreed: never reuse that digest
     if report.count(FileStatus.DUPLICATE, moved=True) and store.meta(DUPLICATES_MOVED) is None:
         # Remembered so the one-time note about duplicates is shown (``status.py``).
         store.set_meta(DUPLICATES_MOVED, datetime.now(UTC).isoformat(timespec="seconds"))
