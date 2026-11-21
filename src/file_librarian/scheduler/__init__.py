@@ -1,10 +1,21 @@
-"""Daily run as a launchd agent (RF-19).
+"""Daily run and watch mode as launchd agents (RF-19, #90).
 
 ``install`` writes ``~/Library/LaunchAgents/<LABEL>.plist`` and loads it. The
 agent runs ``<python> -m file_librarian run --trigger schedule`` once a day at
 ``schedule.time`` with ``FLIB_CONFIG`` pinned to the configuration in use. If
 the Mac is asleep at that time, launchd runs it once on wake; if it was off,
 the next day's run picks up everything still unprocessed.
+
+Watch mode (``schedule.mode: watch`` or ``both``) is a second agent,
+``<WATCH_LABEL>.plist``: launchd starts ``run --trigger watch`` when an input
+folder changes (``WatchPaths``, the folder's own entries only: launchd does
+not watch sub-folders), at most once every
+``schedule.watch_min_interval_minutes`` (``ThrottleInterval``). Two agents
+rather than one with both keys, so a daily run waiting hours for an unlock
+never holds back the watch agent (launchd runs one process per agent), and
+each shows and goes away on its own. ``install`` puts in place the agents of
+the mode and removes the other; ``remove`` removes both. What a watch run
+does is in ``scheduler.watch``.
 
 ``check_access`` answers the question users cannot easily see: can a
 *scheduled* process read the input folders? macOS privacy settings (TCC)
@@ -36,9 +47,12 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 LABEL = "io.github.luizpereiradev.file-librarian"
 CHECK_LABEL = f"{LABEL}.check"
+WATCH_LABEL = f"{LABEL}.watch"
+MODES = ("daily", "watch", "both")
 LAUNCHCTL = "/bin/launchctl"
 SAFE_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 INTERPRETER_NAME = "flib-python"
@@ -53,11 +67,18 @@ class ScheduleError(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class Status:
     installed: bool
+    """Any of flib's agents is installed."""
     loaded: bool
+    """Every installed agent is loaded."""
     time: str | None
+    """The daily run's time; ``None`` without the daily agent."""
     program: list[str]
     interpreter_current: bool = True
     """False when the copy no longer matches the interpreter flib runs on."""
+    mode: str | None = "daily"
+    """``daily``, ``watch`` or ``both``, from the agents installed; ``None`` with none."""
+    watch_paths: tuple[str, ...] = ()
+    watch_interval_minutes: int | None = None
 
 
 def agents_dir() -> Path:
@@ -124,6 +145,23 @@ def build_plist(at: str, config_path: Path, logs: Path) -> dict[str, object]:
     }
 
 
+def build_watch_plist(
+    inputs: list[Path], config_path: Path, logs: Path, min_interval_minutes: int
+) -> dict[str, object]:
+    return {
+        "Label": WATCH_LABEL,
+        "ProgramArguments": [*program(), "run", "--trigger", "watch"],
+        "EnvironmentVariables": {"FLIB_CONFIG": str(config_path), "PATH": SAFE_PATH},
+        "WatchPaths": [str(folder) for folder in inputs],
+        "ThrottleInterval": min_interval_minutes * 60,
+        "StandardOutPath": str(logs / "watch.out.log"),
+        "StandardErrorPath": str(logs / "watch.err.log"),
+        "ProcessType": "Background",
+        "LowPriorityIO": True,
+        "Nice": 10,
+    }
+
+
 def _launchctl(*args: str) -> subprocess.CompletedProcess[str]:
     try:
         # Fixed binary; arguments are flib's own label and paths.
@@ -152,44 +190,104 @@ def _write_plist(path: Path, data: dict[str, object]) -> None:
     tmp.replace(path)
 
 
-def install(at: str, config_path: Path, logs: Path) -> Path:
+def install(
+    at: str,
+    config_path: Path,
+    logs: Path,
+    *,
+    mode: str = "daily",
+    inputs: list[Path] | None = None,
+    watch_interval_minutes: int = 5,
+) -> list[Path]:
+    """Install the agents of ``mode`` and remove the other one; returns their plists."""
+    if mode not in MODES:
+        raise ScheduleError(f"unknown schedule mode {mode!r}; use daily, watch or both")
+    if mode != "daily" and not inputs:
+        raise ScheduleError("watch mode needs at least one input folder")
     logs.mkdir(parents=True, exist_ok=True, mode=0o700)
     prepare_interpreter()
-    path = plist_path()
-    _write_plist(path, build_plist(at, config_path, logs))
-    _load(path, LABEL)
-    return path
+    installed = []
+    if mode in ("daily", "both"):
+        path = plist_path()
+        _write_plist(path, build_plist(at, config_path, logs))
+        _load(path, LABEL)
+        installed.append(path)
+    else:
+        _remove(LABEL)
+    if mode in ("watch", "both"):
+        path = plist_path(WATCH_LABEL)
+        data = build_watch_plist(inputs or [], config_path, logs, watch_interval_minutes)
+        _write_plist(path, data)
+        _load(path, WATCH_LABEL)
+        installed.append(path)
+    else:
+        _remove(WATCH_LABEL)
+    return installed
 
 
 def remove() -> bool:
-    """Unload and delete the agent. ``False`` if it was not installed."""
-    path = plist_path()
-    _launchctl("bootout", f"{_domain()}/{LABEL}")
+    """Unload and delete every agent. ``False`` if none was installed."""
+    daily = _remove(LABEL)
+    watching = _remove(WATCH_LABEL)
+    return daily or watching
+
+
+def _remove(label: str) -> bool:
+    path = plist_path(label)
+    _launchctl("bootout", f"{_domain()}/{label}")  # not loaded is fine
     if not path.exists():
         return False
     path.unlink()
     return True
 
 
-def status() -> Status:
-    path = plist_path()
+def _read(label: str) -> dict[str, Any] | None:
+    path = plist_path(label)
     if not path.exists():
-        return Status(False, False, None, [])
-    data = plistlib.loads(path.read_bytes())
-    interval = data.get("StartCalendarInterval", {})
-    at = f"{interval.get('Hour', 0):02d}:{interval.get('Minute', 0):02d}"
-    loaded = _launchctl("print", f"{_domain()}/{LABEL}").returncode == 0
+        return None
+    data: dict[str, Any] = plistlib.loads(path.read_bytes())
+    return data
+
+
+def _is_loaded(label: str) -> bool:
+    return _launchctl("print", f"{_domain()}/{label}").returncode == 0
+
+
+def status() -> Status:
+    daily, watching = _read(LABEL), _read(WATCH_LABEL)
+    if daily is None and watching is None:
+        return Status(False, False, None, [], mode=None)
+    agents = [(LABEL, daily), (WATCH_LABEL, watching)]
+    loaded = all(_is_loaded(label) for label, data in agents if data is not None)
+    at = None
+    if daily is not None:
+        interval = daily.get("StartCalendarInterval", {})
+        at = f"{interval.get('Hour', 0):02d}:{interval.get('Minute', 0):02d}"
+    paths: tuple[str, ...] = ()
+    interval_minutes = None
+    if watching is not None:
+        paths = tuple(str(p) for p in watching.get("WatchPaths", []))
+        interval_minutes = int(watching.get("ThrottleInterval", 60)) // 60
+    mode = "both" if daily and watching else ("daily" if daily else "watch")
+    main = daily if daily is not None else watching or {}
     return Status(
-        True, loaded, at, list(data.get("ProgramArguments", [])), interpreter_is_current()
+        True,
+        loaded,
+        at,
+        list(main.get("ProgramArguments", [])),
+        interpreter_is_current(),
+        mode,
+        paths,
+        interval_minutes,
     )
 
 
 def scheduled_config() -> Path | None:
-    """The configuration path the installed agent uses, if any."""
-    path = plist_path()
-    if not path.exists():
+    """The configuration path the installed agents use, if any."""
+    data = _read(LABEL) or _read(WATCH_LABEL)
+    if data is None:
         return None
-    value = plistlib.loads(path.read_bytes()).get("EnvironmentVariables", {}).get("FLIB_CONFIG")
+    value = data.get("EnvironmentVariables", {}).get("FLIB_CONFIG")
     return Path(value) if value else None
 
 

@@ -283,6 +283,10 @@ class ProviderConfig(_Section):
         return value
 
 
+DAY_CAP_RUNS = 3
+"""Without ``limits.max_cost_usd_per_day``: how many per-run caps automatic runs get a day."""
+
+
 class LimitsConfig(_Section):
     max_files_per_run: PositiveInt = 200
     stable_seconds: Annotated[int, Field(ge=0)] = 60
@@ -290,6 +294,18 @@ class LimitsConfig(_Section):
     confidence_threshold: Fraction = 0.7
     max_cost_usd_per_run: Annotated[float, Field(gt=0)] | None = 1.0
     """Stop sending files once the estimated provider cost reaches this; ``None`` = no cap."""
+    max_cost_usd_per_day: Annotated[float, Field(gt=0)] | None = None
+    """Automatic runs (daily and watch) stop sending files once their cost today, local
+    time, reaches this. Left out: ``DAY_CAP_RUNS`` times ``max_cost_usd_per_run``; set to
+    ``null``: no daily cap. See ``cost_cap_per_day``."""
+
+    @property
+    def cost_cap_per_day(self) -> float | None:
+        """The daily cap for automatic runs, or ``None`` for none."""
+        if "max_cost_usd_per_day" in self.model_fields_set:
+            return self.max_cost_usd_per_day
+        per_run = self.max_cost_usd_per_run
+        return None if per_run is None else per_run * DAY_CAP_RUNS
 
 
 class NamingConfig(_Section):
@@ -573,6 +589,24 @@ class ScheduleConfig(_Section):
     wait_for_unlock_hours: Annotated[int, Field(ge=0, le=23)] = 8
     """After a scheduled run that skipped files readable only while the Mac is
     unlocked, how long it waits for an unlock to run once more; 0 = never waits."""
+    mode: Literal["daily", "watch", "both"] = "daily"
+    """``daily``: once a day at ``time``. ``watch``: whenever something arrives in an
+    input folder (launchd ``WatchPaths``). ``both``: watch, with the daily run as a
+    safety net. Applied by ``flib schedule``."""
+    watch_min_interval_minutes: Annotated[int, Field(ge=1, le=1440)] = 5
+    """In watch mode, launchd starts flib at most once every this many minutes."""
+    watch_settle_minutes: Annotated[int, Field(ge=0, le=120)] = 10
+    """In watch mode, how long a run waits for downloads in progress (and files still
+    changing) to settle before it runs; what is still pending then waits for the next
+    trigger. 0 = never waits."""
+
+    @property
+    def watches(self) -> bool:
+        return self.mode in ("watch", "both")
+
+    @property
+    def daily(self) -> bool:
+        return self.mode in ("daily", "both")
 
     @field_validator("time")
     @classmethod

@@ -328,6 +328,68 @@ moves it to the top of the new category, and `--apply-layout` then files it.
 Search, `--category` filters, Finder tags, duplicates, `flib status` and the
 MCP tools work the same at any depth.
 
+## Watch mode: organizing files as they arrive
+
+```yaml
+schedule:
+  mode: watch                     # daily (the default) | watch | both
+  watch_min_interval_minutes: 5   # at most one start every 5 minutes (1 or more)
+  watch_settle_minutes: 10        # how long to wait for downloads to finish (0 = don't)
+limits:
+  max_cost_usd_per_day: 3.00      # automatic runs only; left out: 3 x max_cost_usd_per_run
+```
+
+`flib schedule` (or `flib schedule --mode watch`) installs a second launchd
+agent next to the daily one: macOS starts flib whenever one of the input
+folders changes. What happens then:
+
+- **Only the top level is watched.** macOS reports a change in the folder
+  itself (something added, removed or renamed in it), not inside its
+  sub-folders. flib only organizes the top level anyway.
+- **Bursts are one run.** macOS starts flib at most once every
+  `watch_min_interval_minutes`; changes in between are folded into the next
+  start. Ten files arriving together are one run.
+- **Downloads finish first.** Items whose name says they are still
+  downloading (`.crdownload`, `.part`, `.download`...) and files changed in
+  the last `limits.stable_seconds` are left alone, as in any run. A watch
+  run that sees some waits for them, checking every 15 seconds, for up to
+  `watch_settle_minutes`, and then runs once for everything that is ready.
+  macOS does not start flib when a file merely stops changing, so this wait
+  is what files a download a minute after it ends. What is still not done
+  then waits for the next change in the folder (a browser renaming the
+  finished download is one) or the daily run.
+- **Nothing to do costs nothing.** A start that finds nothing new exits at
+  once: no run, no entry in the run history, no AI call, no log. flib's own
+  moves out of an input change that folder, so macOS starts flib once more a
+  few minutes after each run; that start finds nothing new and ends. Files
+  that a run left where they were (a failure to retry, files over a cost cap)
+  are not "new": the next arrival or the daily run takes them. Items too
+  recent for their input's `min_age_days` are not waited for either.
+- **Never two at once.** A watch run that finds another flib run going on
+  exits quietly; that run, or the next change, takes care of the new files.
+  A second watch start while one is waiting for downloads exits at once.
+  Files protected while the Mac is locked are left for the same unlock
+  catch-up as the daily run's ([troubleshooting](troubleshooting.md#a-file-is-skipped-as-locked)),
+  and only one process ever waits for the unlock.
+- **A cost cap per day.** The per-run cap still applies to each run. On top,
+  the day's automatic runs (daily and watch together, by the cost recorded
+  for each run since local midnight) stop at `limits.max_cost_usd_per_day`:
+  once it is reached they send nothing more to the AI until midnight. Files
+  of inputs with a fixed category, answers already in the cache and
+  duplicates still go ahead, as they cost nothing. The first run that
+  reaches the cap says so in its log, and `flib status` shows it for the rest
+  of the day, with what automatic runs cost today. `flib run` by hand is
+  never held back by it. A provider whose prices are unknown records no
+  cost, so the daily cap cannot stop it either.
+
+`mode: both` keeps the daily run as a safety net; the periodic summary and the due reminders come only after the daily run, never after a watch run. `flib schedule --status`
+shows the mode, the folders watched and the interval; `flib status` and
+`flib doctor` show the mode, the last watch run and today's automatic cost.
+Watch runs are recorded with the trigger `watch` and write their output to
+`watch.out.log` in flib's logs folder, never into a watched folder.
+`flib schedule --refresh` keeps the mode installed; `--mode` changes it (the
+agent of the other mode is removed); `flib schedule --remove` stops both.
+
 ## Correcting files
 
 ```sh

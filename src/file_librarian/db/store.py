@@ -1269,6 +1269,25 @@ class Store:
             month_unpriced_runs=int(month[1]),
         )
 
+    def automatic_cost_today(self, *, day_start: str | None = None) -> float:
+        """What automatic runs (daily and watch) cost since ``day_start`` (UTC ISO text;
+        by default midnight today, local time). Runs without a recorded cost add nothing."""
+        row = self.conn.execute(
+            """SELECT COALESCE(SUM(cost_usd), 0) FROM runs
+               WHERE trigger IN ('schedule', 'watch') AND started_at >= ?""",
+            (day_start or day_start_utc(),),
+        ).fetchone()
+        return float(row[0])
+
+    def last_run_by(self, trigger: RunTrigger) -> RunRow | None:
+        """The newest finished run with this trigger."""
+        row = self.conn.execute(
+            """SELECT * FROM runs WHERE trigger = ? AND finished_at IS NOT NULL
+               ORDER BY id DESC LIMIT 1""",
+            (trigger.value,),
+        ).fetchone()
+        return None if row is None else RunRow.from_row(row)
+
     def waiting(self) -> list[WaitingRow]:
         """Files in review or failed, oldest first. No names: only why, and since when.
 
@@ -1585,6 +1604,13 @@ def _month_start() -> str:
     """Midnight on the first day of the current month, local time, as UTC ISO text."""
     local = datetime.now().astimezone()
     start = local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return start.astimezone(UTC).isoformat(timespec="seconds")
+
+
+def day_start_utc(now: datetime | None = None) -> str:
+    """Midnight today, local time, as UTC ISO text (the day of the daily cost cap)."""
+    local = (now or datetime.now()).astimezone()
+    start = local.replace(hour=0, minute=0, second=0, microsecond=0)
     return start.astimezone(UTC).isoformat(timespec="seconds")
 
 

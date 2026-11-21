@@ -72,9 +72,9 @@ def test_remove_and_status(config_file: Path, fake_launchd: Path) -> None:
     keychain.write(KEY)
     runner.invoke(app, ["schedule", "-c", str(config_file), "--no-check"])
     removed = runner.invoke(app, ["schedule", "--remove"])
-    assert "Daily run removed" in removed.stdout
+    assert "Schedule removed" in removed.stdout
     assert not scheduler.plist_path().exists() and loaded(fake_launchd) == {}
-    assert "No daily run was scheduled" in runner.invoke(app, ["schedule", "--remove"]).stdout
+    assert "Nothing was scheduled" in runner.invoke(app, ["schedule", "--remove"]).stdout
 
 
 def test_key_only_in_environment_is_offered_to_the_keychain(
@@ -223,3 +223,99 @@ def test_install_script_refreshes_an_existing_schedule() -> None:
     script = (REPO_ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
     assert "schedule --refresh" in script
     assert scheduler.LABEL in script
+
+
+# --- Watch mode (#90) ----------------------------------------------------------------
+
+
+def test_watch_mode_installs_a_watch_agent_only(
+    config_file: Path, downloads: Path, fake_launchd: Path
+) -> None:
+    keychain.write(KEY)
+    result = runner.invoke(app, ["schedule", "-c", str(config_file), "--mode", "watch"])
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert "Watch mode on" in result.stdout and "top level" in result.stdout
+    assert "Daily run scheduled" not in result.stdout
+    assert not scheduler.plist_path().exists()
+    data = plistlib.loads(scheduler.plist_path(scheduler.WATCH_LABEL).read_bytes())
+    assert data["WatchPaths"] == [str(downloads)]
+    assert data["ThrottleInterval"] == 300  # schedule.watch_min_interval_minutes: 5
+    assert data["ProgramArguments"][-3:] == ["run", "--trigger", "watch"]
+    assert data["EnvironmentVariables"]["FLIB_CONFIG"] == str(config_file.resolve())
+    assert "StartCalendarInterval" not in data and "RunAtLoad" not in data
+    # Its output goes to flib's logs folder, never into a watched folder.
+    assert not Path(str(data["StandardOutPath"])).is_relative_to(downloads)
+    assert Path(str(data["StandardOutPath"])).name == "watch.out.log"
+    assert list(loaded(fake_launchd)) == [scheduler.WATCH_LABEL]
+    assert "Access OK" in result.stdout
+
+
+def test_both_installs_two_agents_and_status_shows_them(
+    tmp_path: Path, downloads: Path, fake_launchd: Path
+) -> None:
+    extra = "schedule: {mode: both, time: '8:00', watch_min_interval_minutes: 2}\n"
+    config = write_config(tmp_path, downloads, extra=extra)
+    result = runner.invoke(app, ["schedule", "-c", str(config), "--no-check"])
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert "Daily run scheduled at 08:00" in result.stdout and "Watch mode on" in result.stdout
+    assert sorted(loaded(fake_launchd)) == [scheduler.LABEL, scheduler.WATCH_LABEL]
+    watch = plistlib.loads(scheduler.plist_path(scheduler.WATCH_LABEL).read_bytes())
+    assert watch["ThrottleInterval"] == 120
+    shown = runner.invoke(app, ["schedule", "--status"]).stdout
+    assert "Mode: both" in shown and "Daily run at 08:00: active" in shown
+    assert "at most once every 2 min" in shown and str(downloads) in shown
+    state = scheduler.status()
+    assert (state.mode, state.watch_paths, state.watch_interval_minutes) == (
+        "both", (str(downloads),), 2
+    )  # fmt: skip
+    assert scheduler.scheduled_config() == config.resolve()
+
+
+def test_switching_modes_removes_the_other_agent(config_file: Path, fake_launchd: Path) -> None:
+    keychain.write(KEY)
+    runner.invoke(app, ["schedule", "-c", str(config_file), "--mode", "both", "--no-check"])
+    runner.invoke(app, ["schedule", "-c", str(config_file), "--mode", "daily", "--no-check"])
+    assert list(loaded(fake_launchd)) == [scheduler.LABEL]
+    assert not scheduler.plist_path(scheduler.WATCH_LABEL).exists()
+    runner.invoke(app, ["schedule", "-c", str(config_file), "--mode", "watch", "--no-check"])
+    assert list(loaded(fake_launchd)) == [scheduler.WATCH_LABEL]
+    assert not scheduler.plist_path().exists()
+    assert scheduler.scheduled_config() == config_file.resolve()
+
+
+def test_remove_takes_away_both_agents(config_file: Path, fake_launchd: Path) -> None:
+    keychain.write(KEY)
+    runner.invoke(app, ["schedule", "-c", str(config_file), "--mode", "both", "--no-check"])
+    removed = runner.invoke(app, ["schedule", "--remove"])
+    assert "Schedule removed" in removed.stdout
+    assert loaded(fake_launchd) == {}
+    assert not scheduler.plist_path().exists()
+    assert not scheduler.plist_path(scheduler.WATCH_LABEL).exists()
+    assert not scheduler.status().installed
+
+
+def test_refresh_keeps_the_mode(config_file: Path, fake_launchd: Path) -> None:
+    keychain.write(KEY)
+    runner.invoke(app, ["schedule", "-c", str(config_file), "--mode", "watch", "--no-check"])
+    scheduler.dedicated_interpreter().unlink()
+    refreshed = runner.invoke(app, ["schedule", "--refresh"])
+    assert refreshed.exit_code == 0, refreshed.stderr
+    assert "Watch mode on" in refreshed.stdout  # the config says daily; the installed mode wins
+    assert list(loaded(fake_launchd)) == [scheduler.WATCH_LABEL]
+    assert scheduler.interpreter_is_current()
+
+
+def test_an_unknown_mode_is_rejected(config_file: Path) -> None:
+    result = runner.invoke(app, ["schedule", "-c", str(config_file), "--mode", "hourly"])
+    assert result.exit_code == 1 and "--mode must be daily, watch or both" in result.stderr
+    with pytest.raises(scheduler.ScheduleError, match="unknown schedule mode"):
+        scheduler.install("12:30", config_file, config_file.parent, mode="hourly")
+    with pytest.raises(scheduler.ScheduleError, match="at least one input"):
+        scheduler.install("12:30", config_file, config_file.parent, mode="watch", inputs=[])
+
+
+def test_watch_settings_are_validated(tmp_path: Path, downloads: Path) -> None:
+    for bad in ("{mode: hourly}", "{watch_min_interval_minutes: 0}", "{watch_settle_minutes: -1}"):
+        config = write_config(tmp_path, downloads, extra=f"schedule: {bad}\n")
+        result = runner.invoke(app, ["check-config", "-c", str(config)])
+        assert result.exit_code == 1, bad

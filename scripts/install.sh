@@ -67,9 +67,10 @@ else
 fi
 
 # Reinstalling recreates flib's environment, including its dedicated
-# interpreter: re-install an existing daily run so it keeps working.
+# interpreter: re-install an existing daily run or watch mode so it keeps working.
 flib_bin="$(uv tool dir --bin)/flib"
-if [ -f "$HOME/Library/LaunchAgents/io.github.luizpereiradev.file-librarian.plist" ]; then
+agents="$HOME/Library/LaunchAgents/io.github.luizpereiradev.file-librarian"
+if [ -f "$agents.plist" ] || [ -f "$agents.watch.plist" ]; then
   "$flib_bin" schedule --refresh
 fi
 echo

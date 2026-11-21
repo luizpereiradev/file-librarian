@@ -225,7 +225,7 @@ def test_a_second_start_with_a_live_waiter_neither_waits_nor_signals(
         assert held
         stdout = scheduled(config)
     assert LOCKED_LINE in stdout.splitlines()  # its own run went ahead as usual
-    assert "Not waiting for an unlock: an earlier scheduled run is waiting already" in stdout
+    assert "Not waiting for an unlock: an earlier run is waiting already" in stdout
     assert wait.calls == 0
     [log] = run_logs(cfg)
     assert log[-1].startswith("Not waiting for an unlock")

@@ -7,6 +7,12 @@ classifications it paid for in the cache, so the ``flib run`` that follows
 reuses them. A real run holds the instance lock from the first read of the
 index to the last write.
 
+An automatic run (the daily run, or watch mode) also keeps to
+``limits.max_cost_usd_per_day``: what automatic runs cost today, local time,
+counts against it (``runs.cost_usd``), and the run's own cap is lowered to
+what is left. Once nothing is left, it sends no file to the provider; files of
+inputs with a fixed category, cached answers and duplicates still go ahead.
+
 With ``search.semantic.enabled``, a real run ends by embedding the rows that
 are new or changed (``embeddings.refresh``). That step never fails the run: a
 problem is reported in ``Outcome.embedding`` and retried by the next run.
@@ -54,6 +60,8 @@ class Outcome:
     """False when the provider's prices are unknown; the run then records no cost."""
     embedding: RefreshReport | None = None
     """Semantic search's vectors made after the run; ``None`` when it is off or simulated."""
+    day_cap_reached: bool = False
+    """An automatic run that left files for later because of ``limits.max_cost_usd_per_day``."""
 
 
 log = logging.getLogger(__name__)
@@ -100,7 +108,9 @@ def _run(
     contexts = [build_context_safely(c, config) for c in found.candidates]
     # Files of inputs with a fixed category are never sent: no provider call, no cost (#89).
     ruled, contexts = rule_decisions(contexts, config)
-    classified = classify_all(contexts, provider, rules_for(config, store), config, cache=store)
+    capped, left_today = _day_capped(config, store, trigger, simulate=simulate)
+    classified = classify_all(contexts, provider, rules_for(config, store), capped, cache=store)
+    day_cap_reached = left_today is not None and (left_today <= 0 or bool(classified.deferred))
     # Duplicates are never classified: no provider call, no cost (RF-21).
     planned = plan(
         [*ruled, *classified.decisions],
@@ -144,7 +154,24 @@ def _run(
         classified.cached,
         classified.cost_known,
         embed_after_run(config, store),
+        day_cap_reached,
     )
+
+
+def _day_capped(
+    config: Config, store: Store, trigger: RunTrigger, *, simulate: bool
+) -> tuple[Config, float | None]:
+    """The configuration to classify with, and what the daily cap leaves today when that
+    is less than the run's own cap (``None`` when the daily cap does not bind)."""
+    cap = config.limits.cost_cap_per_day
+    if simulate or cap is None or not trigger.automatic:
+        return config, None
+    left = cap - store.automatic_cost_today()
+    per_run = config.limits.max_cost_usd_per_run
+    if per_run is not None and per_run <= left:
+        return config, None
+    limits = config.limits.model_copy(update={"max_cost_usd_per_run": max(left, 0.0)})
+    return config.model_copy(update={"limits": limits}), left
 
 
 def embed_after_run(config: Config, store: Store) -> RefreshReport | None:

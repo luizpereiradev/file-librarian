@@ -66,6 +66,7 @@ from file_librarian.reconcile import in_cloud_only
 from file_librarian.reconcile import reconcile as run_reconcile
 from file_librarian.runlog import append_log, logs_dir, write_log
 from file_librarian.scanner import Candidate, ScanError, ScanResult, SkipReason
+from file_librarian.scheduler import watch as watch_mod
 from file_librarian.search import (
     SearchError,
     SearchFilters,
@@ -650,6 +651,9 @@ def run(
     ] = RunTrigger.MANUAL,
 ) -> None:
     """Organize the input folders now: classify, rename, move and index new files."""
+    if trigger is RunTrigger.WATCH:
+        _watch(config)
+        return
     _pipeline(config, simulate=False, trigger=trigger)
 
 
@@ -693,18 +697,26 @@ def _pipeline(
     simulate: bool,
     trigger: RunTrigger = RunTrigger.MANUAL,
     catch_up: bool = False,
-) -> None:
-    """One run (or simulation). ``catch_up``: the second pass of a scheduled run that
-    waited for the Mac to be unlocked; it never waits again."""
+    wait: bool = True,
+) -> pipeline.Outcome | None:
+    """One run (or simulation). ``catch_up``: the second pass of an automatic run that
+    waited for the Mac to be unlocked; it never waits again. ``wait=False``: the caller
+    waits for the unlock itself (watch mode, once it released its own lock).
+
+    ``None`` when another run held the instance lock and this one gave way quietly
+    (a catch-up, or a watch run); otherwise that is an error."""
     cfg = _load(config_path)
-    scheduled = trigger is RunTrigger.SCHEDULE and not simulate
+    scheduled = trigger.automatic and not simulate
     try:
         provider = get_provider(cfg.provider)
         outcome = pipeline.run(cfg, provider, simulate=simulate, trigger=trigger)
     except AlreadyRunningError as exc:
         if catch_up:
             _say(f"Not running again after the unlock: {exc}. That run takes care of them.")
-            return
+            return None
+        if trigger is RunTrigger.WATCH:
+            _say(f"Not running: {exc}. That run or the next change takes care of the new files.")
+            return None
         _fatal(str(exc))
     except (ProviderError, ScanError) as exc:
         _fatal(str(exc))
@@ -712,22 +724,28 @@ def _pipeline(
         typer.echo(f"Recovered {outcome.recovered} move(s) interrupted by an earlier crash.")
     skipped = _skipped_lines(outcome.scan, cfg)
     cost = _cost_line(outcome.cost_usd, known=outcome.cost_known)
-    hint = _access_hint(outcome.scan) if trigger is RunTrigger.SCHEDULE else None
-    locked = [path for path, reason in outcome.scan.skipped if reason is SkipReason.LOCKED]
+    hint = _access_hint(outcome.scan) if trigger.automatic else None
+    locked = _locked(outcome)
     hours = cfg.schedule.wait_for_unlock_hours
-    wait = scheduled and not catch_up and bool(locked) and hours > 0
+    will_wait = scheduled and not catch_up and bool(locked) and hours > 0
     if simulate:
         _print_plan(outcome.plan, outcome.deferred, cfg, skipped)
         if cost:
             typer.echo(cost)
     elif outcome.report is not None:
+        # The periodic summary (and its reminders) stays with the daily run: watch runs
+        # are many and short, and a reminder after a download would be noise.
         summary = _periodic_summary(cfg, outcome.scan) if trigger is RunTrigger.SCHEDULE else []
         notice = _duplicates_notice(cfg, trigger)
         if notice:
             summary.insert(0, notice)
         if catch_up:
             summary.insert(0, "Catch-up run, after the Mac was unlocked.")
-        if wait:
+        if trigger is RunTrigger.WATCH and not catch_up:
+            summary.insert(0, "Watch run: something arrived in an input folder.")
+        if outcome.day_cap_reached:
+            summary.extend(_day_cap_notice(cfg))
+        if will_wait:
             summary.append(
                 f"Waiting up to {hours} h for the Mac to be unlocked to read "
                 f"{len(locked)} file(s) protected while it is locked; then it runs once more."
@@ -741,8 +759,62 @@ def _pipeline(
             "are retried on the next run (or `flib search --reindex`).",
             err=True,
         )
-    if wait and outcome.report is not None:
-        _wait_and_catch_up(config_path, cfg, outcome.report.run_id, locked)
+    if will_wait and wait and outcome.report is not None:
+        _wait_and_catch_up(config_path, cfg, outcome.report.run_id, locked, trigger)
+    return outcome
+
+
+def _locked(outcome: pipeline.Outcome) -> list[Path]:
+    return [path for path, reason in outcome.scan.skipped if reason is SkipReason.LOCKED]
+
+
+def _day_cap_notice(cfg: Config) -> list[str]:
+    """The line about the daily cost cap, in the log of the first run that reached it today."""
+    today = datetime.now().astimezone().date().isoformat()
+    try:
+        with Store.open(cfg.database) as store:
+            if store.meta(status_mod.DAY_CAP_KEY) == today:
+                return []
+            store.set_meta(status_mod.DAY_CAP_KEY, today)
+    except (sqlite3.Error, OSError):
+        pass
+    return [status_mod.day_cap_line(cfg)]
+
+
+def _watch(config_path: Path | None) -> None:
+    """``run --trigger watch``: what launchd starts when an input folder changes.
+
+    Exits at once, with no run, when nothing new is ready (see ``scheduler.watch``).
+    """
+    cfg = _load(config_path, warn_orphans=False)
+    outcomes: list[pipeline.Outcome] = []
+
+    def run_once() -> bool:
+        outcome = _pipeline(config_path, simulate=False, trigger=RunTrigger.WATCH, wait=False)
+        if outcome is None:
+            return False
+        outcomes.append(outcome)
+        return True
+
+    try:
+        watched = watch_mod.watch(cfg, run_once)
+    except (ScanError, sqlite3.Error, MigrationError) as exc:
+        _fatal(str(exc))
+    minutes = cfg.schedule.watch_settle_minutes
+    if watched.pending:
+        _say(
+            f"{watched.pending} item(s) were still downloading or changing after {minutes} min; "
+            "the next change in the folder (or the daily run) picks them up."
+        )
+    if watched.ended is watch_mod.Ended.STOPPED:
+        _say("Stopped while waiting for downloads to finish (SIGTERM).")
+    last = outcomes[-1] if outcomes else None
+    if last is None or last.report is None:
+        return
+    locked = _locked(last)
+    if locked and cfg.schedule.wait_for_unlock_hours > 0:
+        # Only now, with the watch lock released: a wait of hours never holds it.
+        _wait_and_catch_up(config_path, cfg, last.report.run_id, locked, RunTrigger.WATCH)
 
 
 def _say(line: str) -> None:
@@ -751,10 +823,15 @@ def _say(line: str) -> None:
 
 
 def _wait_and_catch_up(
-    config_path: Path | None, cfg: Config, run_id: int | None, locked: list[Path]
+    config_path: Path | None,
+    cfg: Config,
+    run_id: int | None,
+    locked: list[Path],
+    trigger: RunTrigger = RunTrigger.SCHEDULE,
 ) -> None:
-    """After a scheduled run that skipped files protected while the Mac is locked:
-    wait for an unlock (holding no instance lock) and run once more (see ``catchup``)."""
+    """After an automatic run that skipped files protected while the Mac is locked:
+    wait for an unlock (holding no instance lock) and run once more (see ``catchup``).
+    One waiter at a time, whether the daily run or a watch run started it."""
     hours = cfg.schedule.wait_for_unlock_hours
 
     def note(line: str) -> None:
@@ -766,7 +843,7 @@ def _wait_and_catch_up(
     with catchup.waiter(cfg.database) as held:
         if not held:
             note(
-                "Not waiting for an unlock: an earlier scheduled run is waiting already "
+                "Not waiting for an unlock: an earlier run is waiting already "
                 "and runs once more after it."
             )
             return
@@ -781,7 +858,7 @@ def _wait_and_catch_up(
         note("Stopped while waiting for an unlock (SIGTERM); the next run gets those files.")
     else:
         note("The Mac was unlocked; running once more for the files skipped while it was locked.")
-        _pipeline(config_path, simulate=False, trigger=RunTrigger.SCHEDULE, catch_up=True)
+        _pipeline(config_path, simulate=False, trigger=trigger, catch_up=True)
 
 
 def _periodic_summary(cfg: Config, scan: ScanResult) -> list[str]:
@@ -809,7 +886,7 @@ def _duplicates_notice(cfg: Config, trigger: RunTrigger) -> str | None:
         with Store.open(cfg.database) as store:
             if not status_mod.duplicates_notice_due(store):
                 return None
-            if trigger is not RunTrigger.SCHEDULE and _interactive():
+            if not trigger.automatic and _interactive():
                 status_mod.acknowledge_duplicates_notice(store)
     except (sqlite3.Error, OSError):
         return None
@@ -1408,8 +1485,17 @@ def schedule(
     at: Annotated[
         str | None, typer.Option("--at", help="Time of day, HH:MM (default: schedule.time).")
     ] = None,
+    mode: Annotated[
+        str | None,
+        typer.Option(
+            "--mode",
+            help="daily, watch (run when something arrives) or both (default: schedule.mode).",
+        ),
+    ] = None,
     show: Annotated[bool, typer.Option("--status", help="Show the schedule and exit.")] = False,
-    remove: Annotated[bool, typer.Option("--remove", help="Stop the daily run.")] = False,
+    remove: Annotated[
+        bool, typer.Option("--remove", help="Stop the daily run and watch mode.")
+    ] = False,
     refresh: Annotated[
         bool,
         typer.Option(
@@ -1427,10 +1513,13 @@ def schedule(
         bool, typer.Option("--check/--no-check", help="Test folder access as launchd will.")
     ] = True,
 ) -> None:
-    """Run flib every day at a fixed time (a launchd agent), and check it can work."""
+    """Run flib every day at a fixed time, or as files arrive (launchd agents), and check
+    it can work."""
+    if mode is not None and mode not in scheduler.MODES:
+        _fatal("--mode must be daily, watch or both")
     if remove:
         removed = scheduler.remove()
-        typer.echo("Daily run removed." if removed else "No daily run was scheduled.")
+        typer.echo("Schedule removed." if removed else "Nothing was scheduled.")
         return
     if show:
         _print_schedule_status()
@@ -1442,6 +1531,7 @@ def schedule(
             return
         config = config or scheduler.scheduled_config()
         at = at or current.time
+        mode = mode or current.mode
         save_key, check = False, False
     path = config or default_config_path()
     cfg = _load(path)
@@ -1450,15 +1540,18 @@ def schedule(
     except ValueError:
         _fatal("--at must be a 24-hour time like 12:30")
     try:
-        _install_schedule(path, cfg, when, save_key)
+        _install_schedule(path, cfg, when, save_key, mode or cfg.schedule.mode)
     except scheduler.ScheduleError as exc:
         _fatal(str(exc))
     if check and not _report_access(path.resolve()):
         raise typer.Exit(EXIT_ERROR)
 
 
-def _install_schedule(path: Path, cfg: Config, when: str, save_key: bool | None) -> None:
-    """Install the daily agent for the configuration at ``path``; raises ``ScheduleError``."""
+def _install_schedule(
+    path: Path, cfg: Config, when: str, save_key: bool | None, mode: str = "daily"
+) -> None:
+    """Install the agents of ``mode`` for the configuration at ``path``; raises
+    ``ScheduleError``."""
     if not scheduler.is_installed_tool():
         typer.echo(
             "warning: flib is running from a development environment; the schedule will "
@@ -1468,9 +1561,28 @@ def _install_schedule(path: Path, cfg: Config, when: str, save_key: bool | None)
         )
     _ensure_key_for_schedule(cfg, save_key)
     _ensure_claude_for_schedule(cfg)
-    installed = scheduler.install(when, path.resolve(), logs_dir(cfg.database))
-    typer.echo(f"Daily run scheduled at {when} ({installed}).")
-    typer.echo("If the Mac is asleep then, it runs on wake. `flib schedule --remove` stops it.")
+    installed = scheduler.install(
+        when,
+        path.resolve(),
+        logs_dir(cfg.database),
+        mode=mode,
+        inputs=cfg.input_paths,
+        watch_interval_minutes=cfg.schedule.watch_min_interval_minutes,
+    )
+    if mode in ("daily", "both"):
+        typer.echo(f"Daily run scheduled at {when} ({installed[0]}).")
+        typer.echo("If the Mac is asleep then, it runs on wake.")
+    if mode in ("watch", "both"):
+        typer.echo(
+            f"Watch mode on ({installed[-1]}): flib runs when something arrives in "
+            f"{len(cfg.input_paths)} input folder(s), at most once every "
+            f"{cfg.schedule.watch_min_interval_minutes} min, once downloads finish."
+        )
+        typer.echo(
+            "macOS watches the top level of each input folder only, which is all flib "
+            "organizes anyway."
+        )
+    typer.echo("`flib schedule --remove` stops it.")
 
 
 def _print_schedule_status() -> None:
@@ -1482,7 +1594,16 @@ def _print_schedule_status() -> None:
         typer.echo("No daily run is scheduled. Run `flib schedule` to set one up.")
         return
     loaded = "active" if state.loaded else "installed but not loaded (run `flib schedule` again)"
-    typer.echo(f"Daily run at {state.time}: {loaded}")
+    typer.echo(f"Mode: {state.mode}")
+    if state.time is not None:
+        typer.echo(f"Daily run at {state.time}: {loaded}")
+    if state.watch_paths:
+        typer.echo(
+            f"Watch: {loaded}; at most once every {state.watch_interval_minutes} min, "
+            "when one of these changes (top level only):"
+        )
+        for folder in state.watch_paths:
+            typer.echo(f"  {folder}")
     typer.echo(f"  runs: {' '.join(state.program)}")
     if not state.interpreter_current:
         typer.echo(
@@ -2042,14 +2163,32 @@ def _offer_schedule(path: Path, cfg: Config, ask: _Asker) -> None:
         typer.echo(f"warning: cannot read the schedule: {exc}", err=True)
         return
     if state.installed:
-        typer.echo(f"A daily run is already scheduled at {state.time}; `flib schedule` changes it.")
+        what = f"A daily run is already scheduled at {state.time}"
+        if state.mode == "watch":
+            what = "Watch mode is already on"
+        elif state.mode == "both":
+            what += ", with watch mode"
+        typer.echo(f"{what}; `flib schedule` changes it.")
         return
     question = f"Organize new files automatically every day at {cfg.schedule.time}?"
     if not ask.confirm(question, default=True):
         typer.echo("You can schedule it later with `flib schedule` (--at HH:MM for another time).")
         return
+    typer.echo(
+        "Watch mode organizes files a few minutes after they arrive (once downloads "
+        "finish) instead of once a day; both keeps the daily run as a safety net."
+    )
+    mode = ask.choice(
+        "Run daily, on arrival (watch), or both?", list(scheduler.MODES), cfg.schedule.mode
+    )
+    if mode != cfg.schedule.mode and not onboarding.set_schedule_mode(path, mode):
+        typer.echo(
+            f"Set schedule.mode: {mode} in {path} so `flib schedule` keeps this choice.", err=True
+        )
     try:
-        _install_schedule(path, cfg, cfg.schedule.time, save_key=True if ask.yes else None)
+        _install_schedule(
+            path, cfg, cfg.schedule.time, save_key=True if ask.yes else None, mode=mode
+        )
     except scheduler.ScheduleError as exc:
         typer.echo(f"warning: could not schedule the daily run: {exc}", err=True)
         return

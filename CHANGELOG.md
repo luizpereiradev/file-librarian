@@ -8,6 +8,27 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Watch mode: organize files as they arrive (#90). `schedule.mode: watch`
+  (or `flib schedule --mode watch`) installs a second launchd agent that
+  starts flib when an input folder changes (`WatchPaths`; the top level
+  only, as macOS does not watch sub-folders), at most once every
+  `schedule.watch_min_interval_minutes` (5); `both` keeps the daily run as
+  a safety net, and `daily` stays the default. A watch run waits, holding
+  no lock, for downloads in progress and files still changing to settle (up
+  to `schedule.watch_settle_minutes`, 10), then runs once for everything
+  ready: a burst is one run. A start that finds nothing new, such as the
+  one flib's own moves cause, exits at once with no run, no AI call and no
+  log line; a run going on, another watch run waiting, or an unlock waiter
+  alive make it give way quietly (only `flock`s, no process is signalled).
+  New per-day cost cap for automatic runs, `limits.max_cost_usd_per_day`
+  (three per-run caps by default; `null` turns it off), summed from the
+  recorded cost of today's daily and watch runs: once reached they send
+  nothing more to the AI until midnight, saying so once in the run log and
+  in `flib status`. Runs record the new trigger `watch` (migration 0018).
+  `flib schedule --status`, `flib status` and `flib doctor` show the mode,
+  the last watch run and today's automatic cost; `flib init` asks the mode
+  after offering the schedule; `--refresh` keeps the mode and `--remove`
+  removes both agents.
 - What is due (#91): `flib due` lists the bills, invoices, statements and taxes
   (`due.kinds`) whose due date the AI read in them, overdue up to 30 days ago
   and due in the next 7 days (`--within 2w`, `--overdue`, `--issuer`,

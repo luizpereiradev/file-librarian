@@ -55,7 +55,7 @@ class Waited(StrEnum):
     STOPPED = "stopped"
 
 
-class _Stopped(Exception):
+class Stopped(Exception):
     """Raised by the ``SIGTERM`` handler to end a wait."""
 
 
@@ -70,7 +70,16 @@ def waiter(database: Path) -> Iterator[bool]:
     ``False`` means a waiter is alive already; nothing is done to it. The
     file's contents are never read or acted upon: only the ``flock`` counts.
     """
-    path = waiter_lock_path(database)
+    with try_flock(waiter_lock_path(database)) as held:
+        yield held
+
+
+@contextlib.contextmanager
+def try_flock(path: Path) -> Iterator[bool]:
+    """Hold an exclusive ``flock`` on ``path`` for the block, if it is free: ``True`` if
+    held, ``False`` if another process holds it (nothing is done to that process). The
+    operating system releases it when the holder dies; the file's contents never count.
+    Also used by watch mode for its own lock (``scheduler.watch``)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
@@ -120,7 +129,7 @@ def wait_for_unlock(
     is restored afterwards.
     """
     deadline = clock() + hours * 3600
-    with _stop_on_sigterm():
+    with stop_on_sigterm():
         try:
             while True:
                 if ready():
@@ -129,18 +138,18 @@ def wait_for_unlock(
                 if remaining <= 0:
                     return Waited.TIMED_OUT
                 sleep(min(POLL_SECONDS, remaining))
-        except _Stopped:
+        except Stopped:
             return Waited.STOPPED
 
 
 @contextlib.contextmanager
-def _stop_on_sigterm() -> Iterator[None]:
+def stop_on_sigterm() -> Iterator[None]:
     if threading.current_thread() is not threading.main_thread():
         yield  # signal handlers can only be set from the main thread
         return
 
     def handler(_signum: int, _frame: FrameType | None) -> None:
-        raise _Stopped
+        raise Stopped
 
     previous = signal.signal(signal.SIGTERM, handler)
     try:

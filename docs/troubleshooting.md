@@ -60,6 +60,35 @@ treat such a file they cannot read while the Mac is locked as "cannot tell
 now" (never changed, never missing) and ask you to try again once it is
 unlocked.
 
+## Watch mode does not file a download
+
+First check `flib schedule --status`: the mode must be `watch` or `both`
+and the watch agent active. Then look at `watch.out.log` in
+`~/Library/Application Support/file-librarian/logs`:
+
+- **Nothing at all.** A start that finds nothing new writes nothing, by
+  design. The file may still be downloading or changing (it is filed once it
+  settles), too recent for its input's `min_age_days`, ignored, sensitive, or
+  a file flib tried already: `flib simulate` shows why it is skipped. A file
+  placed in a *sub-folder* of an input does not start flib, because macOS
+  watches only the top level.
+- **"N item(s) were still downloading or changing after 10 min".** The
+  download took longer than `schedule.watch_settle_minutes`. It is filed by
+  the next change in the folder, usually the browser renaming it when it
+  finishes, or by the daily run.
+- **"Not running: another flib process ... is running".** A run (by hand, the
+  daily run, `flib reprocess`...) held the lock; it or the next change takes
+  care of the file.
+- **"Automatic runs reached today's cost cap".** `limits.max_cost_usd_per_day`
+  was reached; files wait for tomorrow, or run `flib run` now. Raise the cap
+  or set it to `null` to turn it off.
+- **Access denied.** The watch agent runs as `flib-python`, like the daily run:
+  `flib schedule` checks folder access for it.
+
+It runs at most once every `schedule.watch_min_interval_minutes` (5 by
+default), so a file can take that long, plus `limits.stable_seconds`, to be
+filed.
+
 ## macOS asks about the Desktop or Documents
 
 The Desktop, Documents and Downloads are each guarded by their own macOS

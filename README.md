@@ -82,7 +82,8 @@ default, so pressing Enter all the way gives a working setup (`flib init
   the estimated cost. Nothing in your folders moves, and your real index is
   not touched; the copies are deleted afterwards. Hidden, sensitive,
   `never_send`, iCloud-only and large (over 20 MB) items are left out.
-- **Daily run:** it offers to schedule it, as `flib schedule` does.
+- **Daily run:** it offers to schedule it, as `flib schedule` does, and asks
+  whether to run daily (the default), as files arrive (watch mode) or both.
 
 To set it up by hand instead:
 
@@ -131,6 +132,27 @@ unlock, it waits for the unlock and runs once more
 ([details](docs/troubleshooting.md#a-file-is-skipped-as-locked)). Each run
 writes a log to `~/Library/Application Support/file-librarian/logs`, ending
 with its estimated provider cost.
+
+### Or as files arrive (watch mode)
+
+```sh
+flib schedule --mode watch    # run a few minutes after something arrives in an input folder
+flib schedule --mode both     # watch, with the daily run as a safety net
+```
+
+In watch mode macOS starts flib when an input folder changes, at most once
+every `schedule.watch_min_interval_minutes` (5). It waits for downloads in
+progress (`.crdownload`, `.part`...) and files still being written to
+settle, up to `schedule.watch_settle_minutes` (10), and then runs once for
+everything that arrived: ten files at once are one run. When nothing new is
+ready (for example right after flib's own moves) it exits at once, with no
+run and no AI call. macOS watches only the top level of each input folder,
+which is all flib organizes anyway. Automatic runs (daily and watch) also
+keep to `limits.max_cost_usd_per_day` (three times the per-run cap by
+default); once today's cost reaches it they send nothing more to the AI
+until midnight, and `flib status` says so. Set `schedule.mode` in the
+configuration to make the mode the default for `flib schedule`; `--refresh`
+keeps the mode installed and `--remove` stops both.
 
 ### Staying on top of it
 
@@ -286,7 +308,7 @@ Every command takes `--config PATH` (`-c`); without it, flib reads
 | `flib due [--within 7d\|2w\|1m] [--overdue] [--all] [--issuer NAME] [--kind KIND] [--json]` | Bills, invoices and taxes with a due date: overdue, then the next 7 days, soonest first, with totals per currency ([What is due](#what-is-due)) |
 | `flib reconcile` | Update the index after you move, rename or delete files by hand; files only in iCloud are left unchecked |
 | `flib reprocess [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--rename] [--override-corrections] [--simulate] [--yes]` | Reclassify organized files after the rules change; `--rename-category OLD NEW` and `--remove-category OLD [--to-review]` migrate a category ([guide](docs/guide.md#changing-your-rules)); `--apply-layout [--category NAME] [--ask-issuer]` moves organized files into their category's layout ([Sub-folders](#sub-folders-by-year-or-issuer)); `--scrub-descriptions` removes identifiers from stored descriptions, no AI ([Privacy](#privacy)); `--fill-fields` asks only for the amount, dates, issuer, period and kind of files filed before flib kept them ([Amounts and dates](#amounts-dates-and-issuers)) |
-| `flib schedule [--at HH:MM \| --status \| --remove \| --refresh] [--no-save-key] [--no-check]` | Run every day via launchd, with an access check ([Run it every day](#run-it-every-day)) |
+| `flib schedule [--at HH:MM] [--mode daily\|watch\|both] [--status \| --remove \| --refresh] [--no-save-key] [--no-check]` | Run every day, or as files arrive, via launchd, with an access check ([Run it every day](#run-it-every-day)) |
 | `flib inspect FILE... [--json]` | Show hash, size and download origin (no hash for a file only in iCloud), and for an indexed file its status, category, why it is in review, the name choice and what the AI read in it (kind, issuer, amount, dates, period) |
 | `flib mcp` | Local MCP server for AI assistants ([Use it from Claude](#use-it-from-claude)) |
 | `flib eval [--provider NAME] [--model M] [--language en\|pt-BR] [--limit N] [--json] [--out FILE] [--compare FILE]` | Measure classification quality on a built-in synthetic corpus, never touching your files ([Measuring quality](#measuring-quality)) |
@@ -632,6 +654,7 @@ The options you are most likely to change:
 | `never_send` | `*.pem`, `*.key`, `.env*` in the example | Patterns classified from metadata only |
 | `limits.confidence_threshold` | `0.7` | Below this, a file goes to review |
 | `limits.max_cost_usd_per_run` | `1.00` | Estimated cost cap per run; the rest waits for the next run (`null` = no cap) |
+| `limits.max_cost_usd_per_day` | 3 × the per-run cap | Cost cap for the day's automatic runs (daily and watch); runs by hand are not limited by it (`null` = no cap) |
 | `limits.max_files_per_run` | `200` | Files sent per run |
 | `naming.pattern` | `{date}_{subject}` | New names; see [Names](#names) |
 | `duplicates` | `move` | `leave` keeps copies where they are ([Duplicates](#duplicates)) |
@@ -639,6 +662,7 @@ The options you are most likely to change:
 | `ocr.enabled` | `true` | Read the text in images and scanned PDFs on your Mac ([OCR](#text-in-images-and-scanned-pdfs-ocr)) |
 | `vision.enabled` | `false` | Let the model look at images and scanned PDFs |
 | `schedule.time` | `12:30` | When the daily run starts (applied by `flib schedule`) |
+| `schedule.mode` | `daily` | `watch` runs as files arrive, `both` does both ([Watch mode](#or-as-files-arrive-watch-mode)) |
 | `summary.notify` | `true` | The periodic notification about files waiting for you |
 | `search.semantic.enabled` | `false` | [Semantic search](#semantic-search-optional) |
 | `mcp.read_only` | `false` | Offer only the read tools in `flib mcp` |
