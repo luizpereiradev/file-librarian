@@ -20,6 +20,7 @@ uv run flib eval --provider ollama --model qwen3:4b
 uv run flib eval --provider claude-code --limit 30  # a fixed sample of 30 items
 uv run flib eval --provider fake                    # offline, free: checks the harness only
 uv run flib eval --case image-text --vision         # only the six images with text, shown to the model
+uv run flib eval --provider ollama --model gemma4:e4b --language pt-BR   # nothing leaves the Mac
 ```
 
 | Option | What it does |
@@ -30,7 +31,7 @@ uv run flib eval --case image-text --vision         # only the six images with t
 | `--language en\|pt-BR` | Which locale's default categories and naming language to use (default `en`) |
 | `--limit N` | A fixed sample of N items (it always keeps some of the sensitive ones) |
 | `--max-cost USD` | Stop sending once this much is spent (default 1.00); the rest is reported as deferred |
-| `--vision` | Show images and scanned PDFs to the model (`vision.enabled`; off by default, as in flib) |
+| `--vision` | Show images and scanned PDFs to the model (`vision.enabled`, and `provider.vision` for `ollama` and `openai-compat`; off by default, as in flib) |
 | `--no-ocr` | Leave out the text recognised in images (`ocr.enabled: false`) |
 | `--case TAG` | Only the items with this hard-case tag (`image-text`, `generic-name`, `review`...); repeatable |
 | `--json` / `--out FILE` | Print / save the full result: metrics, usage and every item's outcome |
@@ -168,7 +169,7 @@ reported apart below.
 | `anthropic` / `claude-haiku-5-5` | `pt-BR` | 8 | 100.0% (144/144) | 12 sent, 9/9 expected | 96.2% / 98.7% | 0 | 29.5 | 550,806 / 36,687 | US$ 0.073 |
 | `anthropic` / `claude-haiku-5-5` | `pt-BR` | 7 | 100.0% (144/144) | 11 sent, 9/9 expected | 100.0% / 88.5% | 0 | 29.6 | 486,227 / 36,843 | US$ 0.067 |
 | `anthropic` / `claude-haiku-5-5` | `pt-BR` | 5 | 100.0% (144/144) | 13 sent, 9/9 expected | 100.0% / 75.0% | 0 | 29.9 | 332,147 / 32,141 | US$ 0.049 |
-| `ollama` (a local model) | | | not measured | | | | | | |
+| `ollama` (local models) | | 8 | see [Local models](#local-models-92) | | | 0 | | | US$ 0 |
 
 The prompt version 8 runs are the ones saved in [`docs/quality/`](quality/)
 (`anthropic-claude-haiku-5-5-en.json`, `anthropic-claude-haiku-5-5-pt-BR.json`).
@@ -309,8 +310,136 @@ date rather than a period.
   `wedding-invitation.pdf`).
   Every item the gold expects in review went there, in both languages.
 
-The Ollama row waits for issue #92 (a measured, fully local setup); no chat
-model was installed on the machine that measured these.
+## Local models (#92)
+
+Four models from Ollama's library, picked to fit a 16 GB Mac and to cover
+sizes, in two families known for multilingual answers, measured on the whole
+corpus in both languages with prompt version 8, corpus version 2, on
+2026-11-21, with `flib eval --provider ollama --model <tag> --language <lang>`.
+The Mac: an Apple M3 Pro (12 cores) with 18 GB of memory, Ollama 0.40.16,
+other applications open (macOS was swapping during the `qwen3.5:9b` English
+run, which is why it is slower than its Portuguese run). Each tag is what
+`ollama pull` gave on that day; on Apple silicon those are MLX builds
+(`nvfp4`, "safetensors"):
+
+| Tag | Parameters | Download | Digest |
+| --- | --- | --- | --- |
+| `qwen3.5:4b` | 4.5 B | 4.0 GB | `7f3251fa6878` |
+| `gemma4:e4b` | 8.1 B (4 B effective) | 9.5 GB | `eb2177adf764` |
+| `qwen3.5:9b` | 9 B | 7.6 GB | `d63f830f28d5` |
+| `gemma4:12b` | 12 B | 7.7 GB | `c7597fc90b86` |
+
+Unlike the baselines above, these numbers are over the **whole run** (150
+items sent, the six images with text included, as text); the Haiku rows here
+are the same prompt 8 runs, counted the same way.
+
+| Model | Language | Category accuracy | Review (expected caught) | Name kept precision / recall | Failed | Items/min | Memory (loaded / peak) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `claude-haiku-5-5` (hosted) | `en` | 98.7% (148/150) | 12 sent, 9/9 | 97.4% / 95.0% | 0 | 29.7 | n/a |
+| `qwen3.5:4b` | `en` | 85.3% (128/150) | 3 sent, 2/9 | 91.1% / 63.7% | 0 | 8.6 | 4.0 / 12.7 GB |
+| **`gemma4:e4b`** | `en` | 92.0% (138/150) | 7 sent, 7/9 | 87.8% / 90.0% | 0 | 20.6 | 9.4 / 17.1 GB |
+| `qwen3.5:9b` | `en` | 93.3% (140/150) | 1 sent, 1/9 | 94.9% / 92.5% | 0 | 3.8 | 7.7 / 16.4 GB |
+| `gemma4:12b` | `en` | 93.3% (140/150) | 7 sent, 6/9 | 100.0% / 67.5% | 0 | 8.5 | 7.7 / 16.2 GB |
+| `claude-haiku-5-5` (hosted) | `pt-BR` | 100.0% (150/150) | 12 sent, 9/9 | 96.2% / 98.7% | 0 | 29.5 | n/a |
+| `qwen3.5:4b` | `pt-BR` | 96.0% (144/150) | 9 sent, 9/9 | 94.7% / 88.8% | 0 | 8.5 | 4.0 / 12.7 GB |
+| **`gemma4:e4b`** | `pt-BR` | 97.3% (146/150) | 7 sent, 7/9 | 87.9% / 100.0% | 0 | 23.8 | 9.4 / 17.1 GB |
+| `qwen3.5:9b` | `pt-BR` | 96.7% (145/150) | 0 sent, 0/9 | 97.8% / 55.0% | 0 | 8.1 | 7.6 / 16.4 GB |
+| `gemma4:12b` | `pt-BR` | 98.0% (147/150) | 6 sent, 6/9 | 100.0% / 82.5% | 0 | 8.0 | 7.7 / 16.2 GB |
+
+No sensitive item was sent in any run (10 of 10 withheld), and no answer
+failed: every model answered all 150 items in a usable shape (after the
+repairs below). Tokens per run: about 290,000 in and 30,000 out in English,
+350,000 in and 31,000 out in Portuguese; the cost is US$ 0.
+
+Fields, recall of the gold values (`en` / `pt-BR`):
+
+| Model | `kind` (58) | `issuer` (40) | `amount` (26) | `document_date` (29) | `due_date` (15) | `period` (26) |
+| --- | --- | --- | --- | --- | --- | --- |
+| `claude-haiku-5-5` | 58 / 56 | 36 / 37 | 26 / 26 | 23 / 23 | 15 / 15 | 26 / 26 |
+| `qwen3.5:4b` | 56 / 56 | 36 / 34 | 26 / 26 | 22 / 21 | 15 / 15 | 26 / 26 |
+| `gemma4:e4b` | 56 / 58 | 36 / 37 | 26 / 26 | 21 / 17 | 15 / 15 | 25 / 24 |
+| `qwen3.5:9b` | 56 / 52 | 36 / 37 | 26 / 26 | 23 / 21 | 15 / 15 | 26 / 26 |
+| `gemma4:12b` | 57 / 57 | 34 / 38 | 26 / 26 | 24 / 24 | 15 / 15 | 25 / 24 |
+
+Precision is where the local models give up most: an issuer is wrong in 5 to
+11% of the answers that name one (Haiku: 3%), a document date in 8 to 32%
+(Haiku: none). Amounts, currencies and due dates are as good as Haiku's.
+
+**The recommendation is `gemma4:e4b`** (what `flib init --local` sets up):
+
+- It is the only local model that is both quick and careful: 21-24 items a
+  minute, more than twice the others, and it sends 7 of the 9 doubtful items
+  to review in both languages, where `qwen3.5:9b` sends 1 and 0 and
+  `qwen3.5:4b` 2 in English.
+- It keeps descriptive names best (recall 90% and 100%); `gemma4:12b` never
+  keeps a generic name but replaces a third of the good ones in English.
+- Its category accuracy is 1.3 points (English) and 0.7 points (Portuguese)
+  below the best local model, `gemma4:12b`, which is 2.5 to 3 times slower.
+
+**The gap to the hosted default**, in one sentence: on this corpus
+`gemma4:e4b` files 92% (English) and 97% (Portuguese) of items in an
+acceptable category against 99% and 100% for Claude Haiku, catches 7 of the 9
+items that need a person against 9 of 9, and is a little slower (21-24
+against about 30 items a minute) with no cost.
+
+What the local models get wrong is mostly the same thing: they will not
+choose the catch-all category. In English, `gemma4:e4b` filed recordings and
+scans known by name only (`screen-recording.mov`, `voice memo.m4a`,
+`passport-scan.pdf`) under `Images` with confidence 0.9, and the two items
+with nothing to go on (`untitled.txt`, `download.bin`) were filed instead of
+sent to review; `qwen3.5:4b` sent travel bookings and a spreadsheet of hours
+to `Finance` at 0.95. Their confidence is not calibrated (almost always 0.9 or
+0.95), so `limits.confidence_threshold` catches less than with Claude.
+Portuguese scores higher for every model because its 15 categories are more
+specific and the gold accepts two where two are defensible.
+
+**Memory.** "Loaded" is what `ollama ps` reports just after the first
+request; "peak" the most it reported during the run, sampled every 5
+seconds. With these MLX builds the figure grows steadily over a run of 150
+different prompts and stays there until the model is unloaded (`keep_alive`,
+10 minutes after the last file): the runner keeps a cache. On this 18 GB Mac
+nothing failed, but at 17 GB it competes with everything else: on a 16 GB
+Mac expect macOS to swap during a long first run. Later daily runs are a
+handful of files.
+
+**Images.** All four read images; the two Gemma models were measured with
+`--case image-text --vision` (the six images with text, sent as the picture
+plus its recognised text; one run per language):
+
+| Model | `en` right | `pt-BR` right | Items/min | Without vision (text only, full runs) |
+| --- | --- | --- | --- | --- |
+| `gemma4:e4b` | 5/6 | 6/6 | 12 | 5/6 and 5/6 |
+| `gemma4:12b` | 6/6 | 6/6 | 3-4 | not measured apart |
+
+The one item `gemma4:e4b` misses is the photographed till receipt
+(`IMG_5531.png`), filed as a picture: with vision it got it right in
+Portuguese and still missed it in English, at half the speed. One item in
+twelve is inside the noise, so the
+local setup leaves vision off (as flib does by default) and relies on macOS's
+text recognition. Set `provider.vision: true` and `vision.enabled: true` to
+try it. Scanned PDFs are never sent to Ollama.
+
+**What #92 changed for these models** (`providers/ollama.py`; the hosted
+providers' requests are unchanged):
+
+- The four default tags are MLX builds that answer HTTP 501 "structured
+  output is unavailable" to a JSON schema (`format`, or `response_format` on
+  the OpenAI-compatible endpoint). Before #92 every request failed:
+  `qwen3.5:4b` scored 0% on a 10-item sample with all 9 sent items
+  `failed`. Now the schema goes into the instructions for the rest of the run
+  (`unstructured 150` in each run's `answers`).
+- Without the schema, models wrap the JSON in a code fence or add a comma
+  too many: `repaired` counts the answers cut down to the object (130 of 150
+  for `qwen3.5:4b` in English, every answer for `gemma4:12b`, 12 to 46 for
+  `gemma4:e4b`). One `gemma4:12b` answer (an image, `pt-BR`) needed the
+  corrective retry and then succeeded.
+- `think: false` (the Qwen 3.5 and Gemma 4 builds think by default, which
+  would multiply the time per file), `temperature: 0`, a context of 8192
+  tokens or more (Ollama's default 4096 would cut the start of a long
+  Portuguese prompt with an excerpt), and a 300-second timeout.
+
+The saved runs of the recommended model are in [`docs/quality/`](quality/)
+(`ollama-gemma4-e4b-en.json`, `ollama-gemma4-e4b-pt-BR.json`).
 
 ## In CI
 

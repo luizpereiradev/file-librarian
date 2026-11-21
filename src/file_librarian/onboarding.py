@@ -15,7 +15,11 @@ them:
   a trial: not hidden, not in progress or ignored, not sensitive or
   ``never_send``, not only in iCloud, and not big;
 - ``run_trial``: copies that sample into a temporary folder and runs a
-  *simulation* over the copies with a throwaway database.
+  *simulation* over the copies with a throwaway database;
+- ``local_state`` and ``pull_model``: the fully local setup (``flib init
+  --local``, #92): whether Ollama is installed and running, which of
+  ``LOCAL_MODELS`` it lacks, and downloading them through Ollama's own API
+  (only after the user said yes; Ollama itself is never installed).
 
 **The trial never touches a real file or the real database.** It reads the
 originals only to copy them; the configuration it runs with points
@@ -33,12 +37,21 @@ import stat
 import subprocess
 import tempfile
 import time
-from collections.abc import Mapping
+import urllib.error
+import urllib.request
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from file_librarian import hashing, pipeline
-from file_librarian.config import Config, InputConfig, is_within, parse_config, same_place
+from file_librarian.config import (
+    DEFAULT_EMBEDDING_MODEL,
+    Config,
+    InputConfig,
+    is_within,
+    parse_config,
+    same_place,
+)
 from file_librarian.globs import matches_any
 from file_librarian.locales import DEFAULT_LANGUAGE, LOCALES, Language
 from file_librarian.models import FileStatus
@@ -59,6 +72,24 @@ DEFAULT_MODELS = {
 OPENAI_COMPAT_URL = "https://api.openai.com/v1"
 """What ``init`` suggests for ``openai-compat``; any compatible server works."""
 OLLAMA_PROBE_SECONDS = 1.0
+LOCAL_MODEL = "gemma4:e4b"
+"""The classification model ``flib init --local`` sets up (docs/quality.md, "Local models")."""
+LOCAL_EMBEDDING_MODEL = DEFAULT_EMBEDDING_MODEL
+LOCAL_MODELS = {LOCAL_MODEL: 9.5, LOCAL_EMBEDDING_MODEL: 0.6}
+"""The local setup's models and their download sizes in GB, as ``ollama list`` shows them."""
+LOCAL_VISION = False
+"""Whether the local setup turns vision on. ``gemma4:e4b`` reads images, but on the
+corpus's six images with text it gained one item in twelve at half the speed
+(docs/quality.md, "Local models"), so it stays off, as flib's default."""
+LOCAL_QUALITY = (
+    f"What to expect, measured on flib's test corpus (docs/quality.md): {LOCAL_MODEL} files "
+    "92% (English) and 97% (Portuguese) of items in a right category against 99% and 100% "
+    "for the hosted default, and sends 7 of 9 doubtful items to review against 9 of 9, so "
+    "check the review folder and `flib simulate` more often at first."
+)
+"""One honest sentence about the measured gap, from docs/quality.md."""
+PULL_TIMEOUT = 600.0
+"""Seconds without a word from Ollama before a download is given up."""
 DEFAULTS = "/usr/bin/defaults"
 """Reads where macOS saves screenshots; tests swap in a fake (``tests/fake_defaults.py``)."""
 DESKTOP_MIN_AGE_DAYS = 7
@@ -108,6 +139,75 @@ def probe_ollama() -> list[str] | None:
         return None
 
 
+@dataclass(frozen=True, slots=True)
+class LocalState:
+    """Where this Mac stands for the fully local setup."""
+
+    command: str | None
+    """The ``ollama`` executable, if installed."""
+    models: list[str] | None
+    """The models Ollama has pulled; ``None`` when it does not answer (not running)."""
+
+    @property
+    def missing(self) -> list[str]:
+        from file_librarian.providers.ollama import has_model
+
+        return [m for m in LOCAL_MODELS if not has_model(self.models or [], m)]
+
+
+def local_state() -> LocalState:
+    from file_librarian.providers import ollama
+
+    return LocalState(ollama.ollama_command(), probe_ollama())
+
+
+def pull_model(model: str, progress: Callable[[str], None]) -> None:
+    """Download ``model`` into the Ollama on this Mac (``POST /api/pull``), reporting
+    each step and the download in steps of 10%. Raises ``ProviderError`` if it fails."""
+    from file_librarian import config as config_module
+    from file_librarian.providers.base import ProviderError
+    from file_librarian.providers.http import build_opener
+    from file_librarian.providers.ollama import native_root
+
+    root = native_root(config_module.OLLAMA_BASE_URL)
+    request = urllib.request.Request(  # noqa: S310 - http(s) only, checked by config
+        root + "/api/pull",
+        data=json.dumps({"model": model, "stream": True}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    shown: set[str] = set()
+    try:
+        with build_opener(root).open(request, timeout=PULL_TIMEOUT) as response:
+            for raw in response:
+                event = _pull_event(raw)
+                if event.get("error"):
+                    raise ProviderError(f"Ollama could not pull {model}: {event['error']}")
+                status = str(event.get("status", ""))
+                if status == "success":
+                    progress(f"{model}: done")
+                    return
+                total, done = event.get("total"), event.get("completed")
+                if isinstance(total, int) and isinstance(done, int) and total > 0:
+                    status = f"downloading {done * 10 // total * 10}%"
+                if status and status not in shown:
+                    shown.add(status)
+                    progress(f"{model}: {status}")
+    except urllib.error.HTTPError as exc:
+        raise ProviderError(f"Ollama could not pull {model}: HTTP {exc.code}") from None
+    except (urllib.error.URLError, OSError) as exc:
+        raise ProviderError(f"cannot reach Ollama to pull {model}: {exc}") from None
+    raise ProviderError(f"the download of {model} stopped before it finished")
+
+
+def _pull_event(raw: bytes) -> dict[str, object]:
+    try:
+        event = json.loads(raw)
+    except ValueError:
+        return {}
+    return event if isinstance(event, dict) else {}
+
+
 def detect_language(environ: Mapping[str, str] | None = None) -> Language:
     """``pt-BR`` when the shell's locale is Portuguese, else the default (``en``)."""
     env = os.environ if environ is None else environ
@@ -151,6 +251,8 @@ class Answers:
     """The Desktop, added with conservative rules (``DESKTOP_ONLY``...)."""
     screenshots: Path | None = None
     """A screenshots folder, added with a fixed category and a year/month layout."""
+    semantic: bool = False
+    """Turn on semantic search with ``LOCAL_EMBEDDING_MODEL`` in Ollama (the local setup)."""
 
     @property
     def model(self) -> str:
@@ -233,6 +335,19 @@ def _categories_block(answers: Answers) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _search_block(answers: Answers) -> str:
+    if not answers.semantic:
+        return ""
+    return f"""
+search:
+  semantic:
+    # Find files by meaning, with embeddings from Ollama on this Mac. Only what the
+    # index holds (names, tags, descriptions) is embedded, never file content.
+    enabled: true
+    model: {_q(LOCAL_EMBEDDING_MODEL)}
+"""
+
+
 def render_config(answers: Answers) -> str:
     """The configuration ``init`` writes: the answers, with a comment on each."""
     command = (
@@ -242,6 +357,8 @@ def render_config(answers: Answers) -> str:
     )
     if answers.base_url is not None:
         command += f"\n  base_url: {_q(answers.base_url)}"
+    if answers.provider == "ollama" and answers.vision:
+        command += "\n  vision: true  # the model reads images (measured: docs/quality.md)"
     if answers.provider == "openai-compat":
         command += (
             "\n  # US$ per million tokens; while both are 0 the cost cap below cannot stop a run"
@@ -284,7 +401,7 @@ vision:
   # Has no effect with claude-code; ollama and openai-compat also need
   # provider.vision: true, and read images only.
   enabled: {"true" if answers.vision else "false"}
-{_categories_block(answers)}
+{_categories_block(answers)}{_search_block(answers)}
 schedule:
   time: "12:30"  # the daily run, 24-hour local time; applied by `flib schedule`
 """

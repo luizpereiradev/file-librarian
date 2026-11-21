@@ -5,7 +5,7 @@
 | anthropic     | M1        | ANTHROPIC_API_KEY                                 |
 | claude-code   | M2        | the logged-in ``claude`` CLI                      |
 | openai-compat | M3        | ``provider.base_url`` + optional key              |
-| ollama        | M3        | none, local model (preset of ``openai-compat``)   |
+| ollama        | M3        | none, local model (Ollama's own API, #92)         |
 """
 
 from __future__ import annotations

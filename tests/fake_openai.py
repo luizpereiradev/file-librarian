@@ -6,6 +6,11 @@ and JSON body. ``GET /v1/models`` lists ``models``, or sends ``models_reply``.
 ``POST /v1/embeddings`` answers with ``embedding`` of each input (a bag of words
 over ``SYNONYMS``, so a synonym lands on the same direction), or sends
 ``embeddings_reply``. Tests that use it also need the ``loopback_network`` fixture.
+
+``POST /api/chat`` (Ollama's own API, which the ``ollama`` provider classifies
+through) takes the same script: a Chat Completions reply is sent in Ollama's
+shape (``message``, ``done_reason``, ``prompt_eval_count``, ``eval_count``),
+and error replies as Ollama sends them (``{"error": "..."}``).
 """
 
 from __future__ import annotations
@@ -55,6 +60,30 @@ def completion(content: Any, *, tokens: tuple[int, int] = (100, 20), **choice: A
             "usage": {"prompt_tokens": tokens[0], "completion_tokens": tokens[1]},
         }
     )
+
+
+def ollama_shape(reply: Reply) -> Reply:
+    """A Chat Completions reply as Ollama's ``/api/chat`` would send it."""
+    body = reply.body
+    if not isinstance(body, dict):
+        return reply
+    error = body.get("error")
+    if isinstance(error, dict):
+        return Reply(reply.status, {"error": error.get("message")}, reply.headers, reply.delay)
+    choices = body.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return reply
+    choice = choices[0]
+    usage = body.get("usage") or {}
+    native = {
+        "model": body.get("model"),
+        "message": choice.get("message"),
+        "done": True,
+        "done_reason": choice.get("finish_reason"),
+        "prompt_eval_count": usage.get("prompt_tokens"),
+        "eval_count": usage.get("completion_tokens"),
+    }
+    return Reply(reply.status, native, reply.headers, reply.delay)
 
 
 EMBEDDING_DIMENSIONS = 64
@@ -125,6 +154,8 @@ class FakeOpenAI:
         else:
             reply = self._next()
         reply = reply or Reply(500, {"error": {"message": "no reply scripted"}})
+        if handler.path == "/api/chat":
+            reply = ollama_shape(reply)
         if reply.delay:
             time.sleep(reply.delay)
         data = reply.body if isinstance(reply.body, bytes) else json.dumps(reply.body).encode()

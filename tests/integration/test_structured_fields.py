@@ -223,6 +223,25 @@ def test_sum_output_and_words(filed: Path) -> None:
     assert "--sum matches the words only" in result.stderr
 
 
+def test_sum_alone_adds_up_everything(filed: Path) -> None:
+    everything = summed(filed, "--by", "kind")
+    assert everything["totals"] == [
+        {"group": None, "currency": "USD", "total": "371.38", "files": 3},
+        {"group": None, "currency": "BRL", "total": "256.36", "files": 2},
+    ]
+    assert [(g["group"], g["currency"]) for g in everything["groups"]][:1] == [("bill", "USD")]
+    assert summed(filed)["totals"] == everything["totals"]
+    assert summed(filed, "...")["totals"] == []  # words with nothing to search: no match
+
+
+def test_nothing_to_search_lists_every_filter(filed: Path) -> None:
+    result = runner.invoke(cli.app, ["search", "-c", str(filed)])
+    assert result.exit_code == 1
+    for flag in ("--category", "--issuer", "--kind", "--min-amount", "--max-amount",
+                 "--currency", "--due-before", "--due-after", "--period", "--sum"):  # fmt: skip
+        assert flag in result.stderr
+
+
 def test_duplicates_are_never_counted(downloads: Path, cfg: Config, filed: Path) -> None:
     put(downloads, "power-sep copy.txt", b"power, september")
     pipeline.run(cfg, FakeProvider({}), simulate=False)

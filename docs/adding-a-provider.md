@@ -5,7 +5,8 @@ it never reads, moves or names files. The reference implementations, all in
 `src/file_librarian/providers/`: `anthropic.py` (an SDK), `claude_code.py` (a
 CLI), `openai_compat.py` (plain HTTP with the standard library, through the
 shared client in `http.py`) and
-`ollama.py` (a preset: a subclass that changes defaults and messages).
+`ollama.py` (a subclass that lists models like `openai-compat` but classifies
+through Ollama's own API, with the handling small local models need).
 
 ## What you will touch
 
@@ -137,7 +138,15 @@ Rules for every provider:
   with the schema in the instructions, as `openai_compat.py` does, and
   validate just as strictly. Send sampling parameters (`temperature`, `top_p`,
   `top_k`) only where the API documents them as supported: current Claude
-  models reject non-default values with HTTP 400.
+  models reject non-default values with HTTP 400. (`ollama` sends
+  `temperature: 0`: Ollama documents it, and small local models need it.)
+- **Repair and retry in your provider, not in the shared prompt.** If a
+  model needs help to answer in shape (as small local models do), do it where
+  only that provider sees it, like `ollama.py`: cut near-valid JSON down to
+  the object, match a category that differs only in case or accents, and ask
+  once more with a short correction. The shared prompt and schema are pinned
+  byte for byte by `tests/unit/test_prompt_payload.py`, so a change there
+  reaches the hosted providers and needs their `flib eval` numbers.
 - **Over HTTP, send only to the configured URL.** Refuse redirects instead of
   following them, reject credentials in the URL, never log or echo the key,
   and keep loopback traffic away from proxies. `JsonClient` and
@@ -171,6 +180,18 @@ documents (the `anthropic` provider sends base64 `image` and `document`
 blocks before the text); `user_message(context)` already says an attachment
 follows, and for an image with words in it also carries the text OCR found
 in it (`context.text`), so send both. Make sure the image tokens are in the usage you report, so the cost cap holds.
+
+### What the built-in providers send
+
+All of them send `system_prompt(rules)`, `user_message(context)` and
+`response_schema(rules)` from `providers/prompt.py`; only the envelope differs.
+
+| Provider | Request | Answer shape | Sampling and limits |
+| --- | --- | --- | --- |
+| `anthropic` | `beta.messages.create`: `system`, one user message (image or PDF blocks first, then the text), `output_config.format` `json_schema` | enforced by the API | `max_tokens` 4096, `output_config.effort`; no sampling parameters |
+| `claude-code` | `claude --print --output-format json --json-schema <schema> --system-prompt <prompt> --tools "" ...`, the user message on stdin | enforced by the CLI | `--effort`; no sampling parameters |
+| `openai-compat` | `POST {base_url}/chat/completions`: system and user messages (`image_url` data URL first), `response_format` `json_schema` (strict); on HTTP 400/422 once `json_object` with the schema appended to the system prompt, for the rest of the run | strict validation | none sent |
+| `ollama` | `POST {root}/api/chat` (`root` is `base_url` without `/v1`): system and user messages (images as base64 in `images`), `format` = the schema, `think: false`, `stream: false`, `keep_alive` | the schema, else (HTTP 501 "structured output is unavailable", as the MLX builds answer) the schema in the system prompt for the rest of the run; then JSON repair, category matching and one corrective retry | `options.temperature` 0, `options.num_ctx` sized to the request (8192 to 32768 tokens, the excerpt cut to fit), `options.num_predict` 1024; `timeout_seconds` 300 unless set |
 
 ## 2. Register it
 
