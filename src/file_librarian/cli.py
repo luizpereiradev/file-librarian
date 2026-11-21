@@ -31,6 +31,7 @@ from file_librarian import (
     embeddings,
     keychain,
     locality,
+    notifier,
     onboarding,
     pipeline,
     scheduler,
@@ -1616,6 +1617,7 @@ def schedule(
         _fatal("--mode must be daily, watch or both")
     if remove:
         removed = scheduler.remove()
+        notifier.remove()
         typer.echo("Schedule removed." if removed else "Nothing was scheduled.")
         return
     if show:
@@ -1695,7 +1697,26 @@ def _install_schedule(
             typer.echo(WATCH_ONLY_NOTE)
         for line in status_mod.cost_cap_lines(cfg):
             typer.echo(line, err=line.startswith("warning"))
+    _prepare_notifier(cfg)
     typer.echo("`flib schedule --remove` stops it.")
+
+
+def _prepare_notifier(cfg: Config) -> None:
+    """Build or refresh flib's notifier app; never fails the schedule (``notifier``)."""
+    problem = notifier.ensure()
+    if problem is not None:
+        typer.echo(
+            f"note: notifications will show as Script Editor ({problem}); "
+            "`flib schedule --refresh` tries again.",
+            err=True,
+        )
+        return
+    logs = logs_dir(cfg.database)
+    if cfg.summary.notify and not notifier.introduced(logs) and notifier.introduce(logs) is None:
+        typer.echo(
+            'Notifications come from "file-librarian": if macOS asks, allow them '
+            "(System Settings > Notifications)."
+        )
 
 
 WATCH_ONLY_NOTE = (

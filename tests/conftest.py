@@ -2,8 +2,9 @@
 
 Every test runs with HOME pointed at a temporary directory and with outbound
 connections and DNS lookups disabled, and with a throwaway keychain in place of
-the user's login Keychain and fakes of launchctl, sips, osascript, defaults, the OCR helper
-and claude (and of the screen lock and Data Protection classes), so code that uses
+the user's login Keychain and fakes of launchctl, sips, osascript, defaults, the OCR helper,
+the tools that build and launch the notifier app, and claude (and of the screen lock and
+Data Protection classes), so code that uses
 ``Path.home()`` or ``~`` stays in a temporary folder and nothing reaches a real API. A test that
 hard-codes an absolute path could still escape; reviewers must reject those.
 
@@ -164,6 +165,35 @@ def fake_osascript(
     monkeypatch.setenv("FAKE_OSASCRIPT_LOG", str(folder / "calls.jsonl"))
     monkeypatch.delenv("FAKE_OSASCRIPT_FAIL", raising=False)
     monkeypatch.setattr("file_librarian.status.OSASCRIPT", str(script))
+    return folder / "calls.jsonl"
+
+
+NOTIFIER_TOOLS = {
+    "osacompile": "OSACOMPILE",
+    "codesign": "CODESIGN",
+    "sips": "SIPS",
+    "iconutil": "ICONUTIL",
+    "open": "OPEN",
+    "lsregister": "LSREGISTER",
+}
+
+
+@pytest.fixture(autouse=True)
+def fake_notifier_tools(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """The notifier app is built and launched with fakes (tests/fake_notifier_tools.py);
+    returns the log of their calls. It goes into the throwaway environment of
+    ``fake_launchd``, never into the developer's."""
+    folder = tmp_path_factory.mktemp("notifier")
+    target = Path(__file__).with_name("fake_notifier_tools.py")
+    for tool, constant in NOTIFIER_TOOLS.items():
+        shim = folder / tool
+        shim.write_text(f'#!/bin/sh\nexec {sys.executable} {target} {tool} "$@"\n', "utf-8")
+        shim.chmod(0o755)
+        monkeypatch.setattr(f"file_librarian.notifier.{constant}", str(shim))
+    monkeypatch.setenv("FAKE_NOTIFIER_LOG", str(folder / "calls.jsonl"))
+    monkeypatch.delenv("FAKE_NOTIFIER_FAIL", raising=False)
     return folder / "calls.jsonl"
 
 

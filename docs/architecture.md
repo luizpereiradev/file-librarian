@@ -406,14 +406,25 @@ for the periodic summary. It is due when some file has been in review or
 failed for `summary.min_age_days` and the last summary (`meta`,
 `summary.last_at`) is `summary.every_days` or more calendar days old. Then one
 line goes to the run log and, with `summary.notify`, one notification is
-posted through `/usr/bin/osascript` (`status.OSASCRIPT`, swapped for a fake in
-every test). The text holds counts only and reaches AppleScript as arguments
-of an `on run argv` handler, never as script source. The time is recorded
-before notifying, so a failure is not retried on every run, and nothing in the
-summary can fail the run: errors become a warning line in the log. macOS can
-drop such a notification without telling (it is attributed to Script Editor,
-whose notifications may be off, and Focus modes hide it); the log line and
-`flib status` do not depend on it.
+posted. It comes from flib's notifier app (`notifier.py`) when that is built
+and current, else through `/usr/bin/osascript` (`status.OSASCRIPT`), which
+macOS attributes to Script Editor. The app is an AppleScript applet that
+`osacompile` makes, with flib's name, bundle identifier
+(`io.github.luizpereiradev.file-librarian.notifier`), `LSUIElement` and an
+icon that `sips` and `iconutil` derive from `assets/icon-1024.png`, re-signed
+ad hoc with `codesign`; a stamp in the bundle holds the hashes of the script
+and the icon and a layout version, and a mismatch means a rebuild.
+`flib schedule` (and `--refresh`) builds it next to `flib-python` and
+`--remove` deletes it. It is launched with `open -g -n -W <app> --args text
+title`, so Launch Services gives it its app identity (run directly, it has
+none), and reads the arguments from `NSProcessInfo`.
+Every tool is a module constant swapped for a fake in every test. Either way
+the text holds counts only and reaches AppleScript as arguments, never as
+script source. The time is recorded before notifying, so a failure is not
+retried on every run, and nothing in the summary can fail the run: errors
+become a warning line in the log. macOS can drop a notification without
+telling (notifications not allowed, a Focus mode); the log line and `flib
+status` do not depend on it.
 
 ## Modules
 
@@ -439,6 +450,7 @@ Everything is in `src/file_librarian/`:
 | `due.py` | `flib due`, `flib fix --done`, the "Due:" line of `flib status` and the due reminder in the periodic summary (#91) |
 | `onboarding.py` | `flib init`, except its questions |
 | `scheduler/` | the launchd agent behind `flib schedule` |
+| `notifier.py`, `assets/` | the notifier app that posts notifications as "file-librarian", and its icon |
 | `credentials.py`, `keychain.py` | where an API key comes from; the macOS Keychain through `/usr/bin/security` |
 | `mcp_server.py` | `flib mcp` (optional `mcp` extra) |
 | `evals/` | `flib eval`: the synthetic corpus and its gold labels, the isolated simulate-mode harness and the scoring ([quality.md](quality.md)) |

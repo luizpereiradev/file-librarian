@@ -155,13 +155,34 @@ up classified from its name alone:
 
 ## No notification appears
 
-The periodic summary's notification is posted with `osascript`, so macOS
-shows it as coming from Script Editor, and it can be hidden: macOS may only
-list Script Editor under System Settings > Notifications after its first
-notification, with alerts off, and a Focus mode or "Do Not Disturb" silences
-it. A notification macOS drops cannot be detected, so it is not retried. If
-you never see one, allow notifications for Script Editor there, or rely on
-the run log and `flib status`, which always have the same summary.
+The periodic summary's notification comes from flib's notifier app,
+"file-librarian", which `flib schedule` builds in flib's own environment.
+The first time it notifies, macOS asks whether to allow it (`flib schedule`
+posts one notification right away for that, "Summaries will show here");
+until you choose Allow, notifications go quietly to Notification Center. To
+change your answer, open System Settings > Notifications > file-librarian and
+turn on Allow notifications, with the Banners or Alerts style. A Focus mode
+or "Do Not Disturb" silences it like any app, unless you allow file-librarian
+in that Focus.
+
+`flib status` (and `flib doctor`) say which notifier is in use:
+
+- `Notifications: from the "file-librarian" app`: the app is built and
+  current.
+- `Notifications: through osascript, shown as Script Editor (...)`: the
+  fallback, with the reason. The app is not built yet, is out of date after
+  an update (a new icon or script), or a tool needed to build it
+  (`osacompile`, `codesign`, `sips`, `iconutil`, all part of macOS) is
+  missing or failed; `flib schedule --refresh` builds it again. Launching the
+  app failing also falls back to `osascript` for that notification. Script
+  Editor's notifications are allowed separately, under its own name in the
+  same settings.
+
+macOS does not trust apps for notifications when they sit in a temporary
+folder (`/tmp`, `~/Library/Caches`); flib's environment from
+`./scripts/install.sh` is in neither. A notification macOS drops cannot be
+detected, so it is not retried. Whatever happens to it, the run log and
+`flib status` always have the same summary.
 
 The notification is also skipped on purpose: it follows only a *scheduled*
 run, only when a file has waited `summary.min_age_days` (2 by default), and
