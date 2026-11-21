@@ -27,7 +27,7 @@ from tests._helpers import gold_answer
 
 pytestmark = pytest.mark.integration
 
-DUE_KINDS = {"bill", "invoice", "tax"}
+DUE_KINDS = {"bill", "invoice", "statement", "tax"}
 
 
 def expected(items: list[corpus.Item], start: date, end: date, *, every_kind: bool) -> set[str]:
@@ -101,5 +101,6 @@ def test_the_corpus_has_due_dates_on_both_sides_of_the_windows() -> None:
         )
         >= 3
     )
-    every = expected(items, date.min, date.max, every_kind=True)
-    assert every - expected(items, date.min, date.max, every_kind=False)  # other kinds exist
+    # Every gold due date in the corpus is on a default kind (statements included), so
+    # "another kind only shows with --all" is covered by tests/integration/test_due.py instead.
+    assert expected(items, date.min, date.max, every_kind=True)

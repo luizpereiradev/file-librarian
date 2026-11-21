@@ -130,7 +130,7 @@ def test_today_comes_from_the_clock(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_due_config_defaults_and_checks() -> None:
     cfg = parse_config({"provider": {"name": "fake", "model": "x"}})
-    assert cfg.due.kinds == ["bill", "invoice", "tax"]
+    assert cfg.due.kinds == ["bill", "invoice", "statement", "tax"]
     assert cfg.due.remind and cfg.due.remind_days_before == 3 and cfg.due.done_tag is None
     cfg = parse_config(
         {"provider": {"name": "fake", "model": "x"}, "due": {"done_tag": " Paid ", "kinds": []}}

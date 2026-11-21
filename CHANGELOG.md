@@ -8,7 +8,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- What is due (#91): `flib due` lists the bills, invoices and taxes
+- What is due (#91): `flib due` lists the bills, invoices, statements and taxes
   (`due.kinds`) whose due date the AI read in them, overdue up to 30 days ago
   and due in the next 7 days (`--within 2w`, `--overdue`, `--issuer`,
   `--kind`, `--json`), soonest first with the amount, issuer and path, and

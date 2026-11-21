@@ -185,7 +185,8 @@ SUMMARIZE_AMOUNTS = (
 )
 LIST_DUE = (
     "List the bills and other documents whose due date the AI read in them, soonest "
-    "first: by default the bills, invoices and taxes (due.kinds) overdue up to 30 days ago "
+    "first: by default the bills, invoices, statements and taxes (due.kinds) overdue up to "
+    "30 days ago "
     "and due within the next 7 days, not marked paid or done. Each with its due date, "
     "days from today (negative when overdue), amount, issuer and kind; totals per currency "
     "over the open ones. Nothing is guessed: a document without a stated due date is never "
