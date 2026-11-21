@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+from difflib import SequenceMatcher
 from pathlib import Path
 
 import pytest
@@ -99,12 +100,17 @@ def test_an_unreadable_file_fails_cleanly(tmp_path: Path) -> None:
 )
 def test_the_corpus_pictures_read_as_recorded(tmp_path: Path, item: corpus.Item) -> None:
     """What this Mac finds in the evaluation corpus's pictures is what ``ocr.json`` holds,
-    near enough: the same size, about the same lines, most of the words, the same verdict."""
+    near enough: the same size, about the same lines and letters, the same verdict."""
     target = tmp_path / item.path
     item.write(target)
     found = ocr.recognize(target, OcrConfig(languages=list(corpus.OCR_LANGUAGES)), 100_000)
     expected = corpus.recorded_ocr()[hashlib.sha256(target.read_bytes()).hexdigest()]
     assert (found.width, found.height) == (expected.width, expected.height)
     assert abs(found.lines - expected.lines) <= 3
-    assert len(words(expected.text) & words(found.text)) >= 0.8 * len(words(expected.text))
+
+    # Letters, not words: another macOS version may split or join stylised words.
+    def letters(text: str) -> str:
+        return "".join(ch for ch in text.lower() if ch.isalnum())
+
+    assert SequenceMatcher(None, letters(expected.text), letters(found.text)).ratio() >= 0.7
     assert ocr.looks_like_document(found) is ocr.looks_like_document(expected)
