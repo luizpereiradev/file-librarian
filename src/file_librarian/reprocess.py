@@ -65,7 +65,7 @@ question, and keeps only those fields of each answer (``plan_fields``): kind,
 issuer, amount and currency, document and due dates, period, each written
 only where the index has none. Category, name, description and place stay;
 nothing moves. The values are journaled with one ``reprocess`` run that
-``flib undo`` reverts.
+``flib undo`` reverts. Files filed by an input's fixed category are left out.
 
 ``--scrub-descriptions`` is different: no provider call and no move. It runs
 ``privacy.scrub`` over what the index already stores (descriptions, tags and
@@ -992,11 +992,16 @@ def select_fields(
     """The library files (organized or in review) the index has no structured fields for
     (no ``kind``: filed before #88, or the answer gave none), checked like ``select``.
 
-    Sensitive files and duplicates are never selected. Nothing is sent here.
+    Sensitive files and duplicates are never selected, and neither are files filed
+    by an input's fixed category (#89): no AI is ever asked about them. Nothing is
+    sent here.
     """
     selection = Selection()
     for row in store.all_files():
         if not _wanted(row, config, filters, None) or row.kind is not None:
+            continue
+        if filed_by_rule(row):
+            selection.left.append((row.current_path, RULE_FILED))
             continue
         context, problem = _check(row, config)
         if context is None:

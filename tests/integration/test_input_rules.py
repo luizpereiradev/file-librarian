@@ -405,8 +405,22 @@ def test_reprocess_leaves_files_filed_by_rule_alone(downloads: Path, desktop: Pa
     with Store.open(cfg.database) as store:
         selection = rp.select(cfg, store)
         layout = rp.select_layout(cfg, store)
+        fields = rp.select_fields(cfg, store)
 
     assert [t.row.original_name for t in selection.targets] == ["photo.jpg"]
     assert [(p.name, why) for p, why in selection.left] == [("shot.png", rp.RULE_FILED)]
     assert [p.row.original_name for p in layout.ready] == ["photo.jpg"]
     assert [p.name for p, _ in layout.left] == ["shot.png"]
+    # --fill-fields asks no AI about it either; the AI-filed photo has no kind yet.
+    assert [t.row.original_name for t in fields.targets] == ["photo.jpg"]
+    assert [(p.name, why) for p, why in fields.left] == [("shot.png", rp.RULE_FILED)]
+    shot = row_for(cfg, "shot.png")
+    assert (shot.kind, shot.amount_minor, shot.currency, shot.due_date, shot.period) == (
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    (raw,) = rows(cfg, "SELECT issuer, document_date FROM files WHERE original_name = 'shot.png'")
+    assert tuple(raw) == (None, None)

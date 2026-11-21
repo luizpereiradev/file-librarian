@@ -76,8 +76,11 @@ Folders). When you add one of them to `inputs`:
   (the path is printed; Full Disk Access covers the Desktop, Documents and
   Downloads at once), then run `flib schedule` again until each line says
   `ok`.
-- A folder the daily run cannot list stops that run with
-  `cannot read ...: macOS denied access`, before anything moves.
+- A folder the run cannot list (denied, deleted, an unmounted disk) is
+  skipped: the run organizes the other inputs, prints
+  `skip    <folder>  (input folder could not be read...: EPERM ..., on list)`
+  and a warning, and `flib status` counts it. Only when no input can be read
+  does the run stop with an error.
 
 A file on the Desktop that is skipped as `too recent (N days left)` is not
 a permission problem: its input has `min_age_days`, and the file has not

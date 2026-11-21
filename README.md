@@ -632,16 +632,24 @@ inputs:
     only: ["*.pdf", "*.png", "Screenshot*"]   # everything else is left alone
     min_age_days: 7                   # only what has not changed for a week
     folders: ignore
-  - path: ~/Pictures/Screenshots
+  - path: ~/Pictures/Screenshots     # a folder just for screenshots
     category: Screenshots             # a configured category; no AI, no cost
     layout: "{year}/{month}"
+    only: ["Screenshot*.png", "Screen Recording*.mov"]
+    folders: ignore
 ```
+
+A fixed category files everything it takes without looking at it, so give
+it an `only` (`flib check-config` warns when there is none).
 
 The options are `only`, `ignore` (added to the global list), `min_age_days`,
 a fixed `category` (with `rename` and `layout`), `folders` and `duplicates`.
 `flib check-config` prints each input with the rules it ends up with. Inputs
 may not overlap or sit inside `output_root`. `flib init` offers the Desktop
-(with the rules above) and your screenshots folder; both default to no.
+(documents and images untouched for a week, folders left alone) and your
+screenshots folder when it holds nothing else; both default to no. An input
+folder that cannot be read is skipped with a warning; the others are still
+organized.
 Each folder is a separate macOS permission for the daily run, which
 `flib schedule` checks one by one. The details, including how the age is
 counted, are in [the guide](docs/guide.md#more-than-one-inbox).
@@ -819,7 +827,11 @@ Two kinds of files are treated differently, with every provider:
   content. Add `"*.eml"` to keep e-mail messages to their metadata.
 - **Credential names (`id_rsa`, `*.pem`…) or secrets found in the content:**
   nothing at all is sent, the file stays where it is, and the index records
-  only that it is sensitive.
+  only that it is sensitive. Names that say they hold passwords or recovery
+  material count too (`*password*`, `*senha*`, `*recovery*code*`,
+  `*backup*code*`, `*2fa*`, `*seed*phrase*`, `*private*key*`…, any case):
+  a harmless "password reset guide.pdf" is left in place as well, which is
+  the safe side to err on.
 
 **Where it goes, by provider:**
 
