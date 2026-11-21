@@ -64,8 +64,8 @@ from file_librarian.providers import PLANNED, ProviderError, get_provider, is_im
 from file_librarian.providers.base import Provider
 from file_librarian.reconcile import in_cloud_only
 from file_librarian.reconcile import reconcile as run_reconcile
-from file_librarian.runlog import append_log, logs_dir, write_log
-from file_librarian.scanner import Candidate, ScanError, ScanResult, SkipReason
+from file_librarian.runlog import append_log, logs_dir, trim, write_log
+from file_librarian.scanner import Candidate, HashCache, ScanError, ScanResult, SkipReason
 from file_librarian.scheduler import watch as watch_mod
 from file_librarian.search import (
     SearchError,
@@ -83,6 +83,8 @@ from file_librarian.search import to_json as search_json
 from file_librarian.undo import NothingToUndoError, undo_file, undo_run
 
 EXIT_ERROR = 1
+LOCK_WAIT_SECONDS = 600.0
+"""How long an automatic run (daily or watch) waits for another run to finish."""
 
 app = typer.Typer(
     name="flib",
@@ -179,6 +181,11 @@ def check_config(config: ConfigOption = None) -> None:
         )
     _report_ocr(cfg)
     _report_semantic(cfg)
+    for line in status_mod.cost_cap_lines(cfg):
+        typer.echo(
+            line if line.startswith("warning") else f"  {line}", err=line.startswith("warning")
+        )
+    _report_watch(cfg, path)
     _warn_orphan_categories(cfg)
     for option, milestone in inactive_options_set(cfg):
         typer.echo(
@@ -186,6 +193,20 @@ def check_config(config: ConfigOption = None) -> None:
             "your value is accepted but ignored.",
             err=True,
         )
+
+
+def _report_watch(cfg: Config, path: Path) -> None:
+    """When the installed watch agent was made for other inputs than these."""
+    try:
+        state = scheduler.status()
+        scheduled = scheduler.scheduled_config()
+    except (scheduler.ScheduleError, OSError, ValueError):
+        return
+    if scheduled is None or os.path.realpath(scheduled) != os.path.realpath(path):
+        return
+    stale = scheduler.stale_watch_message(state, cfg.input_paths)
+    if stale:
+        typer.echo(f"warning: {stale}", err=True)
 
 
 COMPAT_PROVIDERS = ("openai-compat", "ollama")
@@ -698,18 +719,23 @@ def _pipeline(
     trigger: RunTrigger = RunTrigger.MANUAL,
     catch_up: bool = False,
     wait: bool = True,
+    hashes: HashCache | None = None,
 ) -> pipeline.Outcome | None:
     """One run (or simulation). ``catch_up``: the second pass of an automatic run that
     waited for the Mac to be unlocked; it never waits again. ``wait=False``: the caller
     waits for the unlock itself (watch mode, once it released its own lock).
 
-    ``None`` when another run held the instance lock and this one gave way quietly
-    (a catch-up, or a watch run); otherwise that is an error."""
+    An automatic run first waits up to ``LOCK_WAIT_SECONDS`` for another run to end.
+    ``None`` when another run still held the instance lock and this one gave way
+    quietly (a catch-up, or a watch run); otherwise that is an error."""
     cfg = _load(config_path)
     scheduled = trigger.automatic and not simulate
+    lock_wait = LOCK_WAIT_SECONDS if scheduled and not catch_up else 0.0
     try:
         provider = get_provider(cfg.provider)
-        outcome = pipeline.run(cfg, provider, simulate=simulate, trigger=trigger)
+        outcome = pipeline.run(
+            cfg, provider, simulate=simulate, trigger=trigger, lock_wait=lock_wait, hashes=hashes
+        )
     except AlreadyRunningError as exc:
         if catch_up:
             _say(f"Not running again after the unlock: {exc}. That run takes care of them.")
@@ -728,6 +754,8 @@ def _pipeline(
     locked = _locked(outcome)
     hours = cfg.schedule.wait_for_unlock_hours
     will_wait = scheduled and not catch_up and bool(locked) and hours > 0
+    daily_catches_up = will_wait and trigger is RunTrigger.WATCH and _daily_agent_installed()
+    will_wait = will_wait and not daily_catches_up
     if simulate:
         _print_plan(outcome.plan, outcome.deferred, cfg, skipped)
         if cost:
@@ -745,12 +773,24 @@ def _pipeline(
             summary.insert(0, "Watch run: something arrived in an input folder.")
         if outcome.day_cap_reached:
             summary.extend(_day_cap_notice(cfg))
+        if outcome.scan.future:
+            summary.append(
+                f"note: {len(outcome.scan.future)} item(s) have a modification time in the "
+                "future (a wrong clock, an archive); they were taken as settled."
+            )
+        if daily_catches_up:
+            summary.append(
+                f"{len(locked)} file(s) protected while the Mac is locked were left for the "
+                "daily run, which waits for the unlock (this watch run does not)."
+            )
         if will_wait:
             summary.append(
                 f"Waiting up to {hours} h for the Mac to be unlocked to read "
                 f"{len(locked)} file(s) protected while it is locked; then it runs once more."
             )
-        _print_report(outcome.report, cfg, skipped, cost, hint, summary)
+        _print_report(
+            outcome.report, cfg, skipped, cost, hint, summary, watch=trigger is RunTrigger.WATCH
+        )
     if outcome.cached:
         typer.echo(f"{outcome.cached} classification(s) reused from the cache at no cost.")
     if outcome.embedding is not None and outcome.embedding.error:
@@ -787,10 +827,15 @@ def _watch(config_path: Path | None) -> None:
     Exits at once, with no run, when nothing new is ready (see ``scheduler.watch``).
     """
     cfg = _load(config_path, warn_orphans=False)
+    logs = logs_dir(cfg.database)
+    for name in ("watch.out.log", "watch.err.log"):  # names of files: never let them pile up
+        trim(logs / name)
     outcomes: list[pipeline.Outcome] = []
 
-    def run_once() -> bool:
-        outcome = _pipeline(config_path, simulate=False, trigger=RunTrigger.WATCH, wait=False)
+    def run_once(hashes: HashCache) -> bool:
+        outcome = _pipeline(
+            config_path, simulate=False, trigger=RunTrigger.WATCH, wait=False, hashes=hashes
+        )
         if outcome is None:
             return False
         outcomes.append(outcome)
@@ -800,6 +845,7 @@ def _watch(config_path: Path | None) -> None:
         watched = watch_mod.watch(cfg, run_once)
     except (ScanError, sqlite3.Error, MigrationError) as exc:
         _fatal(str(exc))
+    _note_backlog(cfg, watched, outcomes[-1] if outcomes else None)
     minutes = cfg.schedule.watch_settle_minutes
     if watched.pending:
         _say(
@@ -812,9 +858,26 @@ def _watch(config_path: Path | None) -> None:
     if last is None or last.report is None:
         return
     locked = _locked(last)
-    if locked and cfg.schedule.wait_for_unlock_hours > 0:
-        # Only now, with the watch lock released: a wait of hours never holds it.
+    if locked and cfg.schedule.wait_for_unlock_hours > 0 and not _daily_agent_installed():
+        # Only now, with the watch lock released. Waiting holds this agent (launchd runs one
+        # process per agent), so with a daily agent installed, that one catches up instead.
         _wait_and_catch_up(config_path, cfg, last.report.run_id, locked, RunTrigger.WATCH)
+
+
+def _daily_agent_installed() -> bool:
+    return scheduler.plist_path().exists()
+
+
+def _note_backlog(cfg: Config, watched: watch_mod.Watched, last: pipeline.Outcome | None) -> None:
+    """Remember how many ready items a watch start left in the inputs, and why, for
+    ``flib status``; it never fails the run."""
+    if watched.ended in (watch_mod.Ended.WATCHING, watch_mod.Ended.BUSY, watch_mod.Ended.STOPPED):
+        return
+    try:
+        with Store.open(cfg.database) as store:
+            status_mod.note_backlog(store, watched.left, status_mod.backlog_reason(last))
+    except (sqlite3.Error, OSError):
+        pass
 
 
 def _say(line: str) -> None:
@@ -1010,6 +1073,8 @@ def _print_report(
     cost: str | None = None,
     hint: str | None = None,
     summary: list[str] | None = None,
+    *,
+    watch: bool = False,
 ) -> None:
     lines = []
     for item in report.items:
@@ -1039,7 +1104,7 @@ def _print_report(
         typer.echo(line)
     if report.run_id is not None:
         try:
-            log = write_log(cfg.database, report.run_id, lines)
+            log = write_log(cfg.database, report.run_id, lines, watch=watch)
             typer.echo(f"Log: {log}")
         except OSError as exc:
             typer.echo(f"warning: could not write the run log: {exc}", err=True)
@@ -1524,10 +1589,13 @@ def schedule(
     if show:
         _print_schedule_status()
         return
-    current = scheduler.status() if refresh else None
+    try:
+        current = scheduler.status()
+    except scheduler.ScheduleError as exc:
+        _fatal(str(exc))
     if refresh:
-        if current is None or not current.installed:
-            typer.echo("No daily run is scheduled; nothing to refresh.")
+        if not current.installed:
+            typer.echo("Nothing is scheduled; nothing to refresh.")
             return
         config = config or scheduler.scheduled_config()
         at = at or current.time
@@ -1535,12 +1603,17 @@ def schedule(
         save_key, check = False, False
     path = config or default_config_path()
     cfg = _load(path)
+    if mode is None:
+        # The installed mode stays unless the configuration sets one (`--at` alone never
+        # turns watch mode off).
+        explicit = "mode" in cfg.schedule.model_fields_set
+        mode = cfg.schedule.mode if explicit or not current.installed else current.mode
     try:
         when = ScheduleConfig(time=at).time if at else cfg.schedule.time
     except ValueError:
         _fatal("--at must be a 24-hour time like 12:30")
     try:
-        _install_schedule(path, cfg, when, save_key, mode or cfg.schedule.mode)
+        _install_schedule(path, cfg, when, save_key, mode or "daily")
     except scheduler.ScheduleError as exc:
         _fatal(str(exc))
     if check and not _report_access(path.resolve()):
@@ -1582,7 +1655,17 @@ def _install_schedule(
             "macOS watches the top level of each input folder only, which is all flib "
             "organizes anyway."
         )
+        if mode == "watch":
+            typer.echo(WATCH_ONLY_NOTE)
+        for line in status_mod.cost_cap_lines(cfg):
+            typer.echo(line, err=line.startswith("warning"))
     typer.echo("`flib schedule --remove` stops it.")
+
+
+WATCH_ONLY_NOTE = (
+    "Note: the periodic summary and the due reminders come only after the daily run; "
+    "`flib schedule --mode both` keeps both."
+)
 
 
 def _print_schedule_status() -> None:
@@ -1593,6 +1676,7 @@ def _print_schedule_status() -> None:
     if not state.installed:
         typer.echo("No daily run is scheduled. Run `flib schedule` to set one up.")
         return
+    stale = _stale_watch_note(state)
     loaded = "active" if state.loaded else "installed but not loaded (run `flib schedule` again)"
     typer.echo(f"Mode: {state.mode}")
     if state.time is not None:
@@ -1605,12 +1689,26 @@ def _print_schedule_status() -> None:
         for folder in state.watch_paths:
             typer.echo(f"  {folder}")
     typer.echo(f"  runs: {' '.join(state.program)}")
+    if stale:
+        typer.echo(f"warning: {stale}", err=True)
     if not state.interpreter_current:
         typer.echo(
             "warning: flib's interpreter copy is missing or out of date (Python or flib was "
             "updated). Run `flib schedule --refresh`; macOS may ask for access again.",
             err=True,
         )
+
+
+def _stale_watch_note(state: scheduler.Status) -> str | None:
+    """When the watch agent watches other folders than its configuration's inputs."""
+    path = scheduler.scheduled_config()
+    if not state.watch_paths or path is None:
+        return None
+    try:
+        inputs = load_config(path).input_paths
+    except ConfigError:
+        return None
+    return scheduler.stale_watch_message(state, inputs)
 
 
 def _ensure_key_for_schedule(cfg: Config, save_key: bool | None) -> None:
@@ -1698,7 +1796,7 @@ def _report_access(config_path: Path) -> bool:
             err=True,
         )
         return False
-    typer.echo("Access OK: the daily run can read every input folder.")
+    typer.echo("Access OK: the scheduled runs can read every input folder.")
     return True
 
 
@@ -2181,6 +2279,8 @@ def _offer_schedule(path: Path, cfg: Config, ask: _Asker) -> None:
     mode = ask.choice(
         "Run daily, on arrival (watch), or both?", list(scheduler.MODES), cfg.schedule.mode
     )
+    if mode == "watch":
+        typer.echo(WATCH_ONLY_NOTE)
     if mode != cfg.schedule.mode and not onboarding.set_schedule_mode(path, mode):
         typer.echo(
             f"Set schedule.mode: {mode} in {path} so `flib schedule` keeps this choice.", err=True

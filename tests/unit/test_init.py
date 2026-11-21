@@ -507,6 +507,7 @@ def test_init_asks_the_mode_and_keeps_it_in_the_config(
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "Watch mode organizes files a few minutes after they arrive" in result.stdout
     assert "Watch mode on" in result.stdout
+    assert "due reminders come only after the daily run" in result.stdout
     assert load_config(path).schedule.mode == "watch"
     assert scheduler.plist_path(scheduler.WATCH_LABEL).exists()
     assert not scheduler.plist_path().exists()

@@ -37,7 +37,7 @@ from file_librarian import scheduler
 from file_librarian.config import Config, canonical
 from file_librarian.db.store import RunRow, Store, WaitingRow, load_migrations
 from file_librarian.models import FileStatus, ReviewReason, RunTrigger, explain_review
-from file_librarian.runlog import logs_dir
+from file_librarian.runlog import log_path
 from file_librarian.scanner import SkipReason
 
 OSASCRIPT = "/usr/bin/osascript"
@@ -48,6 +48,8 @@ DUPLICATES_NOTICE_SEEN = "duplicates.notice_seen_at"
 """The ``meta`` key holding when the note about it was shown at a terminal (UTC)."""
 SUMMARY_KEY = "summary.last_at"
 """The ``meta`` key holding when the last periodic summary was written (UTC)."""
+BACKLOG_KEY = "watch.backlog"
+"""The ``meta`` key holding what the last watch start left in the inputs (a count)."""
 DAY_CAP_KEY = "limits.day_cap_reached_on"
 """The ``meta`` key holding the local date automatic runs last reached the daily cost cap."""
 
@@ -130,6 +132,8 @@ class NextRun:
     watched: int = 0
     """Input folders the watch agent watches."""
     watch_interval_minutes: int | None = None
+    stale_watch: str | None = None
+    """The watch agent watches other folders than the inputs: what to do about it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +165,9 @@ class Status:
     """What automatic runs (daily and watch) cost today, local time."""
     day_cap_reached: bool = False
     """Automatic runs reached ``limits.max_cost_usd_per_day`` today."""
+    backlog: tuple[int, str | None] | None = None
+    """Ready items the last watch start left in the inputs today, and why."""
+    automatic_files_today: int = 0
 
     @property
     def review_total(self) -> int:
@@ -181,7 +188,7 @@ class Status:
 def collect(config: Config, *, now: datetime | None = None) -> Status:
     """What waits for the user. Read-only and lock-free; raises ``StatusError``."""
     now = now or datetime.now(UTC)
-    schedule = next_run(now)
+    schedule = next_run(now, config.input_paths)
     if not config.database.exists():
         return Status(False, [], [], 0, None, None, schedule, 0.0, 0, None)
     with Store.open_read_only(config.database) as store:
@@ -201,6 +208,8 @@ def collect(config: Config, *, now: datetime | None = None) -> Status:
         if version >= due_mod.MIN_SCHEMA:
             due = due_mod.counts(store, config, due_mod.local_today(now))
         last_watch = store.last_run_by(RunTrigger.WATCH)
+        backlog = _backlog(store) if version >= _META_SCHEMA else None
+        files_today = store.automatic_files_today()
         cost_today = store.automatic_cost_today()
         capped = version >= _META_SCHEMA and store.meta(DAY_CAP_KEY) == _today()
     last = stats.last_run
@@ -220,6 +229,8 @@ def collect(config: Config, *, now: datetime | None = None) -> Status:
         by_input=by_input,
         due=due,
         last_watch=last_watch,
+        backlog=backlog,
+        automatic_files_today=files_today,
         automatic_cost_today=cost_today,
         day_cap_reached=capped,
     )
@@ -366,7 +377,7 @@ def error_kind(error: str | None) -> str:
 
 def logged_skips(database: Path, run_id: int) -> dict[str, int] | None:
     """How many items the run skipped as unreadable or only in iCloud, from its log."""
-    log = logs_dir(database) / f"run-{run_id:06d}.log"
+    log = log_path(database, run_id)
     try:
         lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
@@ -382,7 +393,7 @@ def logged_skips(database: Path, run_id: int) -> dict[str, int] | None:
     return counts
 
 
-def next_run(now: datetime) -> NextRun:
+def next_run(now: datetime, inputs: list[Path] | None = None) -> NextRun:
     """The daily run's next start, from the installed agent (``None`` if not active)."""
     try:
         state = scheduler.status()
@@ -403,6 +414,7 @@ def next_run(now: datetime) -> NextRun:
         mode=state.mode,
         watched=len(state.watch_paths),
         watch_interval_minutes=state.watch_interval_minutes,
+        stale_watch=None if inputs is None else scheduler.stale_watch_message(state, inputs),
     )
 
 
@@ -462,11 +474,89 @@ def _watch_lines(status: Status, config: Config) -> list[str]:
     elif watching:
         lines.append("Last watch run: none yet.")
     if watching or status.schedule.installed or status.automatic_cost_today:
-        cap = config.limits.cost_cap_per_day
-        of = "" if cap is None else f" of US$ {cap:.2f}"
-        lines.append(f"Automatic runs today: US$ {status.automatic_cost_today:.4f}{of}")
+        if config.provider.cost_unknown:
+            files = config.limits.files_cap_per_day
+            of = "" if files is None else f" of {files}"
+            lines.append(
+                f"Automatic runs today: cost unknown (no prices for {config.provider.name}); "
+                f"{status.automatic_files_today}{of} files seen"
+            )
+        else:
+            cap = config.limits.cost_cap_per_day
+            of = "" if cap is None else f" of US$ {cap:.2f}"
+            lines.append(f"Automatic runs today: US$ {status.automatic_cost_today:.4f}{of}")
     if status.day_cap_reached:
         lines.append(day_cap_line(config))
+    if status.backlog is not None:
+        count, reason = status.backlog
+        why = f" ({reason})" if reason else ""
+        lines.append(
+            f"Watch: {_files(count)} wait in the inputs{why}; a new arrival or the daily run "
+            "tries them again, or run `flib run` now."
+        )
+    return lines
+
+
+def note_backlog(store: Store, count: int, reason: str | None) -> None:
+    """What the last watch start left (``scheduler.watch``); ``reason`` kept from before
+    when this start ran nothing."""
+    if count <= 0:
+        store.set_meta(BACKLOG_KEY, "{}")
+        return
+    try:
+        old = json.loads(store.meta(BACKLOG_KEY) or "{}")
+    except ValueError:
+        old = {}
+    reason = reason or (old.get("reason") if isinstance(old, dict) else None)
+    value = {"count": count, "reason": reason, "day": _today()}
+    store.set_meta(BACKLOG_KEY, json.dumps(value))
+
+
+def backlog_reason(outcome: object) -> str | None:
+    """Why a watch run left ready items behind, from its outcome."""
+    if outcome is None:
+        return None
+    report = getattr(outcome, "report", None)
+    if getattr(outcome, "day_cap_reached", False):
+        return "daily cap reached"
+    if report is not None and report.errors:
+        return "provider failing"
+    if getattr(outcome, "deferred", 0):
+        return "over max_files_per_run or the per-run cost cap"
+    return None
+
+
+def _backlog(store: Store) -> tuple[int, str | None] | None:
+    try:
+        value = json.loads(store.meta(BACKLOG_KEY) or "{}")
+    except ValueError:
+        return None
+    if not isinstance(value, dict) or value.get("day") != _today() or not value.get("count"):
+        return None
+    reason = value.get("reason")
+    return int(value["count"]), str(reason) if reason else None
+
+
+def cost_cap_lines(config: Config) -> list[str]:
+    """The caps on what automatic runs spend, for ``check-config``, ``doctor`` and
+    ``flib schedule``; a line starting with ``warning`` when no cost cap can work."""
+    cap = config.limits.cost_cap_per_day
+    lines = [
+        "daily cost cap for automatic runs: "
+        + ("none" if cap is None else f"US$ {cap:.2f} (limits.max_cost_usd_per_day)")
+    ]
+    if config.provider.cost_unknown:
+        files = config.limits.files_cap_per_day
+        limit = (
+            "nothing limits them"
+            if files is None
+            else f"automatic runs see at most {files} files a day (limits.max_files_per_day)"
+        )
+        lines.append(
+            f"warning: {config.provider.name} at a remote server has no prices "
+            "(provider.price_input_per_mtok, price_output_per_mtok), so no cost cap can stop "
+            f"it; {limit}."
+        )
     return lines
 
 
@@ -578,6 +668,8 @@ def _schedule_lines(schedule: NextRun) -> list[str]:
             f"{_folders(schedule.watched)}, at most once every "
             f"{schedule.watch_interval_minutes} min"
         )
+        if schedule.stale_watch:
+            lines.append(f"warning: {schedule.stale_watch}")
     if schedule.mode == "watch":
         return lines
     if schedule.at is None:

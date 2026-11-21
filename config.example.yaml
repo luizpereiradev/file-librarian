@@ -98,6 +98,8 @@ limits:
   # max_cost_usd_per_day: 3.00  # automatic runs (daily and watch) together, since local midnight;
                              # left out = 3 x max_cost_usd_per_run, null = no cap. Runs by hand
                              # are not limited by it
+  # max_files_per_day: 1000  # automatic runs with a remote openai-compat server without prices
+                             # (no cost cap can stop it); left out = 5 x max_files_per_run
 
 naming:
   pattern: "{date}_{subject}"   # e.g. 2026-11-16_electricity-invoice.pdf
@@ -177,6 +179,8 @@ schedule:
   mode: daily                # daily | watch (run as files arrive in an input folder, once
                              # downloads finish) | both (watch, plus the daily run as a safety net)
   watch_min_interval_minutes: 5  # watch: macOS starts flib at most once every this many minutes
+  watch_quiet_seconds: 300   # watch: take an item once it has not changed for this long (at least
+                             # limits.stable_seconds): slow writers pause for more than a minute
   watch_settle_minutes: 10   # watch: wait up to this long for downloads in progress (0 = don't)
 
 summary:                     # RF-40: after a scheduled run, what waits in review or failed (`flib status`)

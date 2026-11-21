@@ -251,6 +251,15 @@ class ProviderConfig(_Section):
     """``openai-compat`` and ``ollama``: the model reads images, so with ``vision.enabled``
     they are sent to it. Scanned PDFs are never sent to these providers."""
 
+    @property
+    def cost_unknown(self) -> bool:
+        """A remote ``openai-compat`` server with no prices configured: its calls cost
+        something, but nothing can tell how much, so no cost cap can stop it."""
+        if self.name != "openai-compat" or self.base_url is None:
+            return False
+        priced = self.price_input_per_mtok > 0 or self.price_output_per_mtok > 0
+        return not priced and not is_loopback_url(self.base_url)
+
     @model_validator(mode="before")
     @classmethod
     def _ollama_default_url(cls, data: Any) -> Any:
@@ -284,6 +293,8 @@ class ProviderConfig(_Section):
 
 
 DAY_CAP_RUNS = 3
+DAY_FILES_RUNS = 5
+"""Without ``limits.max_files_per_day``: how many ``max_files_per_run`` a day."""
 """Without ``limits.max_cost_usd_per_day``: how many per-run caps automatic runs get a day."""
 
 
@@ -306,6 +317,17 @@ class LimitsConfig(_Section):
             return self.max_cost_usd_per_day
         per_run = self.max_cost_usd_per_run
         return None if per_run is None else per_run * DAY_CAP_RUNS
+
+    max_files_per_day: PositiveInt | None = None
+    """Automatic runs with a provider whose cost is unknown (``cost_unknown``) stop
+    sending files once today's runs saw this many. Left out: ``DAY_FILES_RUNS`` times
+    ``max_files_per_run``; ``null``: no limit."""
+
+    @property
+    def files_cap_per_day(self) -> int | None:
+        if "max_files_per_day" in self.model_fields_set:
+            return self.max_files_per_day
+        return self.max_files_per_run * DAY_FILES_RUNS
 
 
 class NamingConfig(_Section):
@@ -599,6 +621,11 @@ class ScheduleConfig(_Section):
     """In watch mode, how long a run waits for downloads in progress (and files still
     changing) to settle before it runs; what is still pending then waits for the next
     trigger. 0 = never waits."""
+    watch_quiet_seconds: Annotated[int, Field(ge=0, le=86400)] = 300
+    """In watch mode, an item must not have changed for this long (never less than
+    ``limits.stable_seconds``) before it is taken: a file written slowly under its final
+    name (a torrent, ``curl -o``, a copy from a slow disk) often pauses for longer than a
+    minute."""
 
     @property
     def watches(self) -> bool:
@@ -791,6 +818,15 @@ class Config(_Section):
         ):
             raise ValueError("database must be outside the input folders and output_root")
         return self
+
+    def for_watch(self) -> Config:
+        """This configuration as a watch run uses it: items must have been quiet for
+        ``schedule.watch_quiet_seconds`` (at least ``limits.stable_seconds``)."""
+        quiet = max(self.schedule.watch_quiet_seconds, self.limits.stable_seconds)
+        if quiet == self.limits.stable_seconds:
+            return self
+        limits = self.limits.model_copy(update={"stable_seconds": quiet})
+        return self.model_copy(update={"limits": limits})
 
     @property
     def input_paths(self) -> list[Path]:

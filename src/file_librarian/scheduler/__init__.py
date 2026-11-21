@@ -282,6 +282,17 @@ def status() -> Status:
     )
 
 
+def stale_watch_message(state: Status, inputs: list[Path]) -> str | None:
+    """launchd's ``WatchPaths`` are fixed when the agent is installed: after the inputs
+    change, it watches the old ones until ``flib schedule --refresh``."""
+    if not state.watch_paths or set(state.watch_paths) == {str(p) for p in inputs}:
+        return None
+    return (
+        "the watch agent watches other folders than the configuration's inputs; "
+        "run `flib schedule --refresh`"
+    )
+
+
 def scheduled_config() -> Path | None:
     """The configuration path the installed agents use, if any."""
     data = _read(LABEL) or _read(WATCH_LABEL)

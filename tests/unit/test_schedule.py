@@ -243,6 +243,8 @@ def test_watch_mode_installs_a_watch_agent_only(
     assert data["ProgramArguments"][-3:] == ["run", "--trigger", "watch"]
     assert data["EnvironmentVariables"]["FLIB_CONFIG"] == str(config_file.resolve())
     assert "StartCalendarInterval" not in data and "RunAtLoad" not in data
+    # Like the daily run: in the background, never in the way.
+    assert (data["ProcessType"], data["LowPriorityIO"], data["Nice"]) == ("Background", True, 10)
     # Its output goes to flib's logs folder, never into a watched folder.
     assert not Path(str(data["StandardOutPath"])).is_relative_to(downloads)
     assert Path(str(data["StandardOutPath"])).name == "watch.out.log"

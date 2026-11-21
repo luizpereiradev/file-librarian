@@ -141,18 +141,22 @@ flib schedule --mode both     # watch, with the daily run as a safety net
 ```
 
 In watch mode macOS starts flib when an input folder changes, at most once
-every `schedule.watch_min_interval_minutes` (5). It waits for downloads in
-progress (`.crdownload`, `.part`...) and files still being written to
-settle, up to `schedule.watch_settle_minutes` (10), and then runs once for
-everything that arrived: ten files at once are one run. When nothing new is
-ready (for example right after flib's own moves) it exits at once, with no
-run and no AI call. macOS watches only the top level of each input folder,
-which is all flib organizes anyway. Automatic runs (daily and watch) also
-keep to `limits.max_cost_usd_per_day` (three times the per-run cap by
-default); once today's cost reaches it they send nothing more to the AI
-until midnight, and `flib status` says so. Set `schedule.mode` in the
-configuration to make the mode the default for `flib schedule`; `--refresh`
-keeps the mode installed and `--remove` stops both.
+every `schedule.watch_min_interval_minutes` (5). It takes an item only once
+it has not changed for `schedule.watch_quiet_seconds` (5 minutes, as slow
+copies and torrents pause), waits for downloads in progress (`.crdownload`,
+`.part`, a Finder copy...) up to `schedule.watch_settle_minutes` (10), and
+then runs once for everything that arrived: ten files at once are one run.
+When nothing new is ready (for example right after flib's own moves) it
+exits at once, with no run and no AI call. macOS watches only the top level
+of each input folder, which is all flib organizes anyway. Automatic runs
+(daily and watch) also keep to `limits.max_cost_usd_per_day` (three times
+the per-run cap by default); once today's cost reaches it they send nothing
+more to the AI until midnight, and `flib status` says so. The periodic
+summary and the due reminders come only after the daily run, so `both` is
+the mode to pick if you want them. Set `schedule.mode` in the configuration
+to make the mode the default for `flib schedule`; `--refresh` and `--at`
+keep the mode installed and `--remove` stops both. Details, and what flib
+cannot detect: [the guide](docs/guide.md#watch-mode-organizing-files-as-they-arrive).
 
 ### Staying on top of it
 
@@ -655,6 +659,7 @@ The options you are most likely to change:
 | `limits.confidence_threshold` | `0.7` | Below this, a file goes to review |
 | `limits.max_cost_usd_per_run` | `1.00` | Estimated cost cap per run; the rest waits for the next run (`null` = no cap) |
 | `limits.max_cost_usd_per_day` | 3 × the per-run cap | Cost cap for the day's automatic runs (daily and watch); runs by hand are not limited by it (`null` = no cap) |
+| `limits.max_files_per_day` | 5 × `max_files_per_run` | For a remote provider without prices only: items the day's automatic runs may see (`null` = no limit) |
 | `limits.max_files_per_run` | `200` | Files sent per run |
 | `naming.pattern` | `{date}_{subject}` | New names; see [Names](#names) |
 | `duplicates` | `move` | `leave` keeps copies where they are ([Duplicates](#duplicates)) |

@@ -334,9 +334,11 @@ MCP tools work the same at any depth.
 schedule:
   mode: watch                     # daily (the default) | watch | both
   watch_min_interval_minutes: 5   # at most one start every 5 minutes (1 or more)
+  watch_quiet_seconds: 300        # an item must not have changed for this long
   watch_settle_minutes: 10        # how long to wait for downloads to finish (0 = don't)
 limits:
   max_cost_usd_per_day: 3.00      # automatic runs only; left out: 3 x max_cost_usd_per_run
+  max_files_per_day: 1000         # only for a provider with unknown prices; left out: 5 x max_files_per_run
 ```
 
 `flib schedule` (or `flib schedule --mode watch`) installs a second launchd
@@ -344,51 +346,86 @@ agent next to the daily one: macOS starts flib whenever one of the input
 folders changes. What happens then:
 
 - **Only the top level is watched.** macOS reports a change in the folder
-  itself (something added, removed or renamed in it), not inside its
-  sub-folders. flib only organizes the top level anyway.
+  itself (something added, removed or renamed in it, or written to), not
+  inside its sub-folders. flib only organizes the top level anyway.
 - **Bursts are one run.** macOS starts flib at most once every
   `watch_min_interval_minutes`; changes in between are folded into the next
   start. Ten files arriving together are one run.
-- **Downloads finish first.** Items whose name says they are still
-  downloading (`.crdownload`, `.part`, `.download`...) and files changed in
-  the last `limits.stable_seconds` are left alone, as in any run. A watch
-  run that sees some waits for them, checking every 15 seconds, for up to
-  `watch_settle_minutes`, and then runs once for everything that is ready.
-  macOS does not start flib when a file merely stops changing, so this wait
-  is what files a download a minute after it ends. What is still not done
-  then waits for the next change in the folder (a browser renaming the
-  finished download is one) or the daily run.
+- **Files are taken only once they are done.** Items whose name says they
+  are still downloading (`.crdownload`, `.part`, `.download`...) and items
+  Finder is still copying in are left alone in every mode. A watch run also
+  takes only items that have not changed for `watch_quiet_seconds` (5
+  minutes, never less than `limits.stable_seconds`), because a file written
+  slowly under its final name (a torrent, `curl -o`, `scp`, a copy from a
+  slow disk or share, a screen recording) often pauses for longer than a
+  minute. A run that sees such items waits for them, checking every 15
+  seconds and only looking at those items, for up to `watch_settle_minutes`,
+  then runs once for everything ready. macOS does not start flib when a file
+  merely stops changing, so this wait is what files a download a few minutes
+  after it ends; what is still not done then waits for the next change in
+  the folder (a browser renaming the finished download is one) or the daily
+  run. Right before a move flib checks once more that the item has the same
+  size, modification time and inode, and for a file up to 32 MB the same
+  content; otherwise it is left for the next run. What flib cannot see: a
+  writer that pauses for longer than `watch_quiet_seconds` and then goes on,
+  or one that keeps a large file's size and modification time while changing
+  it. Whether another app still has a file open for writing cannot be told
+  cheaply and reliably, so flib does not try. A file whose modification time
+  is more than five minutes in the future (a wrong clock, some archives) is
+  taken as settled, and the run log says so.
 - **Nothing to do costs nothing.** A start that finds nothing new exits at
   once: no run, no entry in the run history, no AI call, no log. flib's own
   moves out of an input change that folder, so macOS starts flib once more a
-  few minutes after each run; that start finds nothing new and ends. Files
-  that a run left where they were (a failure to retry, files over a cost cap)
-  are not "new": the next arrival or the daily run takes them. Items too
-  recent for their input's `min_age_days` are not waited for either.
-- **Never two at once.** A watch run that finds another flib run going on
-  exits quietly; that run, or the next change, takes care of the new files.
-  A second watch start while one is waiting for downloads exits at once.
-  Files protected while the Mac is locked are left for the same unlock
-  catch-up as the daily run's ([troubleshooting](troubleshooting.md#a-file-is-skipped-as-locked)),
-  and only one process ever waits for the unlock.
+  few minutes after each run; that start finds nothing new and ends. Files a
+  watch run left where they were (a failure to retry, files over a cost cap)
+  are not new again until the next day, when one watch run tries them once
+  more; a new arrival, or the daily run, takes them earlier. A new arrival
+  always goes ahead of them, however many are left. `flib status` says how
+  many wait and why ("daily cap reached", "provider failing"). Items too
+  recent for their input's `min_age_days` are not waited for either. Each
+  item is hashed once, not at every look: digests are kept by device, inode,
+  size and modification time (in the index for the items that stay, without
+  names).
+- **Never two at once.** A second watch start while one is going on exits at
+  once. A watch run that finds another flib run going on waits up to 10
+  minutes for it to end, and then gives way quietly; the daily run waits the
+  same way, so a watch run never costs you the day's run, its summary or its
+  reminders. Runs by hand still stop at once with "another flib process is
+  running". Files protected while the Mac is locked are left to the daily
+  run's unlock catch-up when the daily agent is installed
+  ([troubleshooting](troubleshooting.md#a-file-is-skipped-as-locked)); in
+  watch-only mode the watch run waits for the unlock itself, and no new
+  watch run starts until it ends. Only one process ever waits for the
+  unlock.
 - **A cost cap per day.** The per-run cap still applies to each run. On top,
   the day's automatic runs (daily and watch together, by the cost recorded
-  for each run since local midnight) stop at `limits.max_cost_usd_per_day`:
-  once it is reached they send nothing more to the AI until midnight. Files
-  of inputs with a fixed category, answers already in the cache and
-  duplicates still go ahead, as they cost nothing. The first run that
-  reaches the cap says so in its log, and `flib status` shows it for the rest
-  of the day, with what automatic runs cost today. `flib run` by hand is
-  never held back by it. A provider whose prices are unknown records no
-  cost, so the daily cap cannot stop it either.
+  for each run since local midnight, even a run the provider stopped) stop
+  at `limits.max_cost_usd_per_day`: once it is reached they send nothing
+  more to the AI until midnight. Files of inputs with a fixed category,
+  answers already in the cache and duplicates still go ahead, as they cost
+  nothing. The first run that reaches the cap says so in its log, and `flib
+  status` shows it for the rest of the day, with what automatic runs cost
+  today. `flib run` by hand is never held back by it. A remote
+  `openai-compat` server with no prices configured records no cost, so no
+  cost cap can stop it: `flib schedule`, `flib check-config` and `flib
+  doctor` warn about it, `flib status` says "cost unknown", and automatic
+  runs then see at most `limits.max_files_per_day` items a day instead.
 
-`mode: both` keeps the daily run as a safety net; the periodic summary and the due reminders come only after the daily run, never after a watch run. `flib schedule --status`
-shows the mode, the folders watched and the interval; `flib status` and
-`flib doctor` show the mode, the last watch run and today's automatic cost.
-Watch runs are recorded with the trigger `watch` and write their output to
-`watch.out.log` in flib's logs folder, never into a watched folder.
-`flib schedule --refresh` keeps the mode installed; `--mode` changes it (the
-agent of the other mode is removed); `flib schedule --remove` stops both.
+`mode: both` keeps the daily run as a safety net; the periodic summary and
+the due reminders come only after the daily run, never after a watch run,
+which is why `flib schedule` and `flib init` suggest `both`. `flib schedule
+--status` shows the mode, the folders watched and the interval; `flib
+status` and `flib doctor` show the mode, the last watch run and today's
+automatic cost. The folders to watch are fixed when the agent is installed:
+after you change `inputs`, `flib schedule --status`, `flib status`, `flib
+check-config` and `flib doctor` ask you to run `flib schedule --refresh`.
+Watch runs are recorded with the trigger `watch` and keep their own run logs
+(`watch-run-*.log`, the newest 100, so they never push out the daily runs'
+logs); `watch.out.log` in flib's logs folder is trimmed once it passes about
+1 MB. Nothing is ever written into a watched folder. `flib schedule
+--refresh` and `flib schedule --at` keep the mode installed (unless the
+configuration sets `schedule.mode`); `--mode` changes it (the agent of the
+other mode is removed); `flib schedule --remove` stops both.
 
 ## Correcting files
 

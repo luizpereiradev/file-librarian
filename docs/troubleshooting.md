@@ -71,23 +71,31 @@ and the watch agent active. Then look at `watch.out.log` in
   settles), too recent for its input's `min_age_days`, ignored, sensitive, or
   a file flib tried already: `flib simulate` shows why it is skipped. A file
   placed in a *sub-folder* of an input does not start flib, because macOS
-  watches only the top level.
+  watches only the top level. If you changed `inputs` since installing it,
+  the agent still watches the old folders: `flib status` says so, and `flib
+  schedule --refresh` fixes it.
 - **"N item(s) were still downloading or changing after 10 min".** The
   download took longer than `schedule.watch_settle_minutes`. It is filed by
   the next change in the folder, usually the browser renaming it when it
   finishes, or by the daily run.
 - **"Not running: another flib process ... is running".** A run (by hand, the
-  daily run, `flib reprocess`...) held the lock; it or the next change takes
-  care of the file.
+  daily run, `flib reprocess`...) held the lock for more than 10 minutes; it
+  or the next change takes care of the file.
 - **"Automatic runs reached today's cost cap".** `limits.max_cost_usd_per_day`
-  was reached; files wait for tomorrow, or run `flib run` now. Raise the cap
-  or set it to `null` to turn it off.
+  (or, for a provider with unknown prices, `limits.max_files_per_day`) was
+  reached; files wait for tomorrow, or run `flib run` now. Raise the cap or
+  set it to `null` to turn it off. `flib status` shows how many items wait
+  and why ("Watch: N files wait in the inputs (daily cap reached)" or
+  "(provider failing)"); items left behind are tried by a watch run once
+  more the next day, and a new arrival always goes ahead of them.
 - **Access denied.** The watch agent runs as `flib-python`, like the daily run:
   `flib schedule` checks folder access for it.
 
 It runs at most once every `schedule.watch_min_interval_minutes` (5 by
-default), so a file can take that long, plus `limits.stable_seconds`, to be
-filed.
+default), and takes an item only once it has not changed for
+`schedule.watch_quiet_seconds` (5 minutes), so a file can take about ten
+minutes to be filed. `watch.out.log` is trimmed to about 1 MB; each watch
+run's own log is a `watch-run-*.log` next to it.
 
 ## macOS asks about the Desktop or Documents
 

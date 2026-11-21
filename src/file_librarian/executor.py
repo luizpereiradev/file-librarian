@@ -620,7 +620,15 @@ def _unchanged(ctx: FileContext) -> tuple[int, int] | None:
             return None
     else:
         same = st.st_size == ctx.size_bytes
+        if same and st.st_size <= RECHECK_HASH_MAX_BYTES:
+            # Cheap enough to be sure: a writer that keeps size and mtime is rare, not
+            # impossible (#90). A larger file relies on size, mtime and inode.
+            same = check_content(ctx.path, ctx.sha256) is True
     return (st.st_dev, st.st_ino) if same else None
+
+
+RECHECK_HASH_MAX_BYTES = 32 * 1024 * 1024
+"""Right before a move, a regular file up to this size is hashed again (#90)."""
 
 
 def _move(src: Path, dst: Path, store: Store, op_id: int, expected: str) -> tuple[Path, str | None]:

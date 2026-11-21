@@ -28,7 +28,20 @@ All notable changes to this project are documented here. The format follows
   `flib schedule --status`, `flib status` and `flib doctor` show the mode,
   the last watch run and today's automatic cost; `flib init` asks the mode
   after offering the schedule; `--refresh` keeps the mode and `--remove`
-  removes both agents.
+  removes both agents. A watch run takes an item only once it has been quiet
+  for `schedule.watch_quiet_seconds` (300; slow writers pause for more than
+  a minute), counts what is new over every ready item and puts new arrivals
+  ahead of items left behind (which are tried again the next day), and
+  hashes each item once (digests kept by inode, size and mtime, without
+  names). Automatic runs wait up to 10 minutes for a run in progress
+  instead of failing; a watch run leaves the unlock wait to the daily agent
+  when it is installed. `flib status` shows how many items wait and why. For
+  a remote provider with unknown prices, `limits.max_files_per_day` (five
+  `max_files_per_run`) limits automatic runs instead, with a warning in
+  `flib schedule`, `check-config` and `doctor`. Watch runs keep their own run
+  logs (`watch-run-*.log`) and `watch.out.log` is trimmed at about 1 MB. A
+  stale `WatchPaths` after `inputs` changed is reported everywhere with
+  "run `flib schedule --refresh`".
 - What is due (#91): `flib due` lists the bills, invoices, statements and taxes
   (`due.kinds`) whose due date the AI read in them, overdue up to 30 days ago
   and due in the next 7 days (`--within 2w`, `--overdue`, `--issuer`,
@@ -307,6 +320,16 @@ All notable changes to this project are documented here. The format follows
 - macOS CI on Python 3.11–3.15 (ruff, mypy, 93% branch coverage); real-volume
   tests with `FLIB_TEST_VOLUMES=1 uv run pytest -m volumes`; guides for adding
   an extractor or a provider, CONTRIBUTING.md and ADRs.
+
+### Fixed
+
+- In every mode (#90): an item Finder is still copying in (type `brok`,
+  creator `MACS`, creation date 24 January 1984) is skipped as a download in
+  progress; an item whose modification time is more than five minutes in the
+  future is taken as settled instead of "still changing" forever, with a
+  note in the run log; right before a move, a file up to 32 MB is hashed
+  again and left for the next run if its content changed. Today's and this
+  month's start no longer shift by an hour on a daylight-saving day.
 
 ### Security
 

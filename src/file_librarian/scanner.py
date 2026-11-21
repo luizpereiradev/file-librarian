@@ -9,7 +9,13 @@
 - Treats each sub-folder or bundle (``.app``, ``.pkg``...) as one unit, or
   skips it, per ``folders`` (RF-23).
 - Waits until an item has not changed for ``stable_seconds`` and its size and
-  mtime are the same before and after hashing (RF-02).
+  mtime are the same before and after hashing (RF-02). An mtime more than
+  ``FUTURE_SLACK`` seconds ahead of now (a file from an archive or a camera
+  with a wrong clock) counts as settled, never as "still changing" forever;
+  such items are listed in ``future``.
+- Skips as a download in progress an item Finder is still copying in: Finder
+  marks it with the type ``brok`` and creator ``MACS`` and the creation date
+  24 January 1984 until the copy ends.
 - Skips anything already in the database by content hash, except files that
   failed fewer than ``max_attempts`` times (RF-01, RF-30) and files left in
   place as sensitive because of their name alone whose current name no
@@ -32,9 +38,13 @@
   ``duplicates`` instead of the global ones; and with ``min_age_days``,
   leaves alone, as ``too recent``, an item younger than that (``item_age``).
   Each candidate and duplicate carries the input it came from.
-- Returns at most ``max_files_per_run`` candidates, oldest first. Duplicates
-  are not counted: they cost no provider call. A duplicate of an item left
-  for a later run waits with it.
+- Returns at most ``max_files_per_run`` candidates, oldest first (with
+  ``prefer``, the preferred ones first: watch mode puts new arrivals before
+  items an earlier run left behind). The rest are in ``left_over``.
+  Duplicates are not counted: they cost no provider call. A duplicate of an
+  item left for a later run waits with it.
+- With ``hashes``, reuses the digest of a regular file whose device, inode,
+  size and mtime are unchanged since it was hashed (watch mode looks often).
 - Skips an input folder that cannot be listed (macOS privacy, deleted,
   unmounted) as ``input folder could not be read`` and goes on with the
   others; raises ``ScanError`` only when no input can be read.
@@ -67,6 +77,7 @@ from unicodedata import normalize
 
 from file_librarian import hashing, protection
 from file_librarian.config import Config, InputConfig, is_within
+from file_librarian.extractors.origin import read_xattr
 from file_librarian.globs import matches_any
 from file_librarian.hashing import file_sha256, unit_manifest
 from file_librarian.lock import lock_path
@@ -81,6 +92,47 @@ IN_PROGRESS_PATTERNS = (
 )  # fmt: skip
 # A final-name placeholder next to one of these is still downloading (Firefox, aria2...).
 PARTIAL_SIBLINGS = (".part", ".crdownload", ".aria2", ".download", ".opdownload")
+
+
+FUTURE_SLACK = 300.0
+"""Seconds an mtime may be ahead of now and still mean "just changed"."""
+FINDER_COPYING = b"brokMACS"
+"""Type and creator Finder gives an item while it copies it in."""
+_FINDER_COPY_DATE = (1984, 1, 24)
+
+
+class HashCache:
+    """Digests of regular files by (device, inode, size, mtime_ns), and which were used
+    by the last scan (``seen``), so only those need keeping."""
+
+    def __init__(self, entries: dict[str, str] | None = None) -> None:
+        self.entries = dict(entries or {})
+        self.seen: dict[str, str] = {}
+
+    @staticmethod
+    def key(st: os.stat_result) -> str:
+        return f"{st.st_dev}:{st.st_ino}:{st.st_size}:{st.st_mtime_ns}"
+
+    def digest(self, path: Path, st: os.stat_result, read: Callable[[Path], str]) -> str:
+        key = self.key(st)
+        value = self.entries.get(key)
+        if value is None:
+            value = read(path)
+            self.entries[key] = value
+        self.seen[key] = value
+        return value
+
+
+def finder_copying(path: Path, st: os.stat_result) -> bool:
+    """Finder is still copying this item in (its placeholder type, or creation date)."""
+    birth = time.localtime(_birth(st))
+    if (birth.tm_year, birth.tm_mon, birth.tm_mday) == _FINDER_COPY_DATE:
+        return True
+    try:
+        info = read_xattr(path, "com.apple.FinderInfo")
+    except OSError:
+        return False
+    return info is not None and info[:8] == FINDER_COPYING
 
 
 class ScanError(RuntimeError):
@@ -204,6 +256,10 @@ class ScanResult:
     """For items skipped as ``too recent``: whole days until they are old enough."""
     deferred: int = 0
     """Ready candidates left for the next run because of ``max_files_per_run``."""
+    left_over: list[Candidate] = field(default_factory=list)
+    """Those candidates themselves (``deferred`` of them)."""
+    future: list[Path] = field(default_factory=list)
+    """Items with an mtime in the future, taken as settled."""
 
 
 Lookup = Callable[[str], FileState | None]
@@ -345,6 +401,8 @@ def scan(
     *,
     now: float | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    prefer: Callable[[Candidate], bool] | None = None,
+    hashes: HashCache | None = None,
 ) -> ScanResult:
     now = time.time() if now is None else now
     limits = config.limits
@@ -359,6 +417,13 @@ def scan(
         return locked_now[0]
 
     failures: list[str] = []
+
+    def changing(path: Path, mtime: float) -> bool:
+        """Changed in the last ``stable_seconds``; an mtime far in the future is settled."""
+        if mtime - now > FUTURE_SLACK:
+            result.future.append(path)
+            return False
+        return now - mtime < limits.stable_seconds
 
     def too_recent(path: Path, age: float, min_age: int) -> None:
         # Never pending work: not locked, not deferred, simply not old enough yet.
@@ -423,6 +488,9 @@ def scan(
             if hashing.is_dataless(ident):
                 skip(SkipReason.CLOUD_ONLY)
                 continue
+            if finder_copying(path, ident):
+                skip(SkipReason.IN_PROGRESS)
+                continue
 
             step = "stat"
             try:
@@ -440,7 +508,7 @@ def scan(
                     if age < min_age * DAY:
                         too_recent(path, age, min_age)
                         continue
-                    if now - manifest.newest_mtime < limits.stable_seconds:
+                    if changing(path, manifest.newest_mtime):
                         skip(SkipReason.UNSTABLE)
                         continue
                     if screen_locked() and protection.has_locked_files(path):
@@ -465,10 +533,15 @@ def scan(
                     if age < min_age * DAY:
                         too_recent(path, age, min_age)
                         continue
-                    if now - st.st_mtime < limits.stable_seconds:
+                    if changing(path, st.st_mtime):
                         skip(SkipReason.UNSTABLE)
                         continue
-                    digest = _read_twice(file_sha256, path, sleep)
+                    if hashes is not None:
+                        digest = hashes.digest(
+                            path, st, lambda p: _read_twice(file_sha256, p, sleep)
+                        )
+                    else:
+                        digest = _read_twice(file_sha256, path, sleep)
                     step = "stat"
                     after = os.lstat(path)
                     if (after.st_size, after.st_mtime_ns) != (st.st_size, st.st_mtime_ns):
@@ -514,9 +587,13 @@ def scan(
         raise ScanError("; ".join(failures))
     # The index is keyed by content: of several copies, only the original goes ahead.
     ready, copies = _keep_originals(ready)
-    ready.sort(key=lambda c: (c.mtime, str(c.path)))
+    if prefer is not None:
+        ready.sort(key=lambda c: (not prefer(c), c.mtime, str(c.path)))
+    else:
+        ready.sort(key=lambda c: (c.mtime, str(c.path)))
     result.candidates = ready[: limits.max_files_per_run]
-    result.deferred = len(ready) - len(result.candidates)
+    result.left_over = ready[limits.max_files_per_run :]
+    result.deferred = len(result.left_over)
     going = {c.path for c in result.candidates}
     for copy in copies:
         # The others wait where they are, or with ``duplicates: move`` follow their original.
