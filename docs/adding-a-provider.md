@@ -165,10 +165,12 @@ be sent to the model. Declare what your provider reads in `attachments`:
 
 The classifier attaches one only when its media type is in `attachments`, so
 a provider that leaves the set empty never sees one it cannot read: those
-files are classified from their metadata, exactly as with vision off. Send
-`attachment.data` the way your API takes images or documents (the `anthropic`
-provider sends base64 `image` and `document` blocks before the text);
-`user_message(context)` already says an attachment follows. Make sure the image tokens are in the usage you report, so the cost cap holds.
+files are classified from their recognised text or their metadata, exactly
+as with vision off. Send `attachment.data` the way your API takes images or
+documents (the `anthropic` provider sends base64 `image` and `document`
+blocks before the text); `user_message(context)` already says an attachment
+follows, and for an image with words in it also carries the text OCR found
+in it (`context.text`), so send both. Make sure the image tokens are in the usage you report, so the cost cap holds.
 
 ## 2. Register it
 

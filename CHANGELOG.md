@@ -111,12 +111,20 @@ All notable changes to this project are documented here. The format follows
   secret scan sees it (a screenshot of a key makes the file sensitive),
   `never_send` and `max_chars_per_file` apply, every provider gets it and
   the file can be renamed. Photos with less than `ocr.min_chars` (40) go to
-  vision when it is on, else are classified from metadata. `ocr.enabled`
+  vision when it is on, else are classified from metadata. A scanned PDF,
+  or an image that is clearly a document (at least 10 lines and 300 letters
+  and digits covering a fifth of it, from the helper's line boxes), sends its
+  text only; with vision on, any other image with words in it (a flyer, a
+  meme, a chat screenshot, a photo with a caption) sends the image and its
+  text, so pictures that contain words are no longer sent to review for
+  lack of context (#100). With vision off, or a provider that reads no
+  images, the model is told the text was found in a picture, with its size,
+  lines and how much of it is text (prompt version 8). `ocr.enabled`
   (on), `ocr.languages` (from `language`); `flib check-config` and `flib
   doctor` say whether OCR works, `flib inspect` whether a file's text came
   from it.
 - `flib eval` measures classification quality on a public, synthetic corpus of
-  154 downloads (formats flib reads, English and Portuguese, both locales'
+  160 downloads (formats flib reads, English and Portuguese, both locales'
   categories, generic and descriptive names, near-identical bills, items for
   review, credential files) with gold labels in
   `src/file_librarian/evals/gold.json`. It runs the real pipeline in simulate
@@ -126,6 +134,11 @@ All notable changes to this project are documented here. The format follows
   sensitive items withheld (it fails if one is ever sent), items per minute,
   tokens and cost. It asks before spending with a paid provider and honours
   `--max-cost`; `--json`, `--out` and `--compare` save and compare runs.
+  Six images with text in them, drawn by code (a flyer, a chat screenshot, a
+  meme, a photo with a caption, a photographed receipt, a scanned page),
+  come with the text macOS recognised in them, recorded, so a run scores the
+  same everywhere; `--vision`, `--no-ocr` and `--case image-text` measure
+  them, and the report counts how many went to review and how each was sent.
   Baselines for `claude-haiku-5-5` are in [docs/quality.md](docs/quality.md).
 
 **Setup and scheduling**
@@ -177,7 +190,11 @@ All notable changes to this project are documented here. The format follows
   get `-N` on collisions. Files are renamed only when the model read their
   content; folder units and `rename: false` categories keep their names. A
   descriptive original name is kept (rebuilt with flib's rules) rather than
-  replaced by a vaguer one; `flib simulate` marks "original name kept".
+  replaced by a vaguer one; `flib simulate` marks "original name kept". It
+  is kept whatever its language and never translated, informal or
+  abbreviated names count as descriptive, and only generic names or names
+  the content contradicts are replaced; the proposed subject no longer
+  appends the issuer or other fields to a good name (#97, prompt version 8).
 
 **Duplicates**
 

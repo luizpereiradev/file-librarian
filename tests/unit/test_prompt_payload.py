@@ -206,7 +206,7 @@ def test_answer_schema_is_pinned() -> None:
         ],
         "additionalProperties": False,
     }
-    assert PROMPT_VERSION == "7"
+    assert PROMPT_VERSION == "8"
 
 
 def test_field_instructions_are_pinned() -> None:
@@ -241,22 +241,42 @@ def test_issuer_instructions_are_pinned() -> None:
 
 
 def test_name_choice_instructions_are_pinned() -> None:
+    # Prompt 8 (#97): a descriptive name is kept whatever its language, never translated;
+    # only generic names or names the content contradicts are replaced, and the proposed
+    # subject does not pile the issuer or other fields onto a good name.
     assert (
-        "- name_choice_reason: one short sentence in English comparing the file's\n"
-        "  current name (file_name, ignoring its extension and any date in it) with\n"
-        "  your suggested_name.\n"
-        '- name_choice: which of the two describes the file better. "original" when the\n'
-        "  current name already says what this specific file is, with the details that\n"
-        "  tell it apart from similar files (a title, a subject, a number or a\n"
-        '  version), even if it is in another language. "proposed" when it is generic\n'
-        "  or meaningless (scan001, document (3), IMG_2041, download, untitled) or\n"
-        "  does not match the content. A shorter or vaguer name never wins: when both\n"
-        '  are good, choose "original". flib adds the date and formatting either way.\n'
-        # Prompt 7 (#88): with the issuer and kind asked for, the model put them in its
-        # subjects and stopped keeping good names; this brought "kept" recall back.
-        "  A name such as statement-2025-05, payslip_june or notes.sql already says\n"
-        '  what the file is: choose "original" for it, even when your subject adds\n'
-        "  the issuer, more detail or a translation.\n"
+        "- suggested_name: a short subject for the file name, 2 to 6 words, in English,\n"
+        "  without the date or the extension. Say what the file is; add the issuer, an\n"
+        "  amount or other details only when they are what tells it apart.\n"
+        "- name_choice_reason: one short sentence in English answering, about the\n"
+        "  current name alone (file_name, ignoring its extension and any date in it),\n"
+        "  not against your suggested_name: does it say what this file is, more than\n"
+        "  one bare word for a kind of document?\n"
+        '- name_choice: "original" when it does, in any language and however short,\n'
+        "  informal or abbreviated (statement-2025-05, payslip_june, cv_v3_final,\n"
+        "  notes.sql, hotel-booking, Rechnung-Maerz, fatura-luz). It need not name the\n"
+        "  issuer, the month or other details: those go in the description and the\n"
+        '  other fields. "proposed" only when the name is meaningless (scan001,\n'
+        "  document (3), IMG_2041, download, untitled, file_final), is one bare word\n"
+        "  for a kind of document, alone or with only a number (recibo,\n"
+        "  invoice_4821, ticket), or names something the content contradicts\n"
+        "  (another kind of document, subject, organisation or month). Never\n"
+        "  translate a name: a good name in a language other than English stays as\n"
+        "  it is. A more detailed, more formal or translated subject is never a\n"
+        '  reason for "proposed". flib adds the date and formatting either way.\n'
+    ) in system_prompt(RULES)
+
+
+def test_picture_instructions_are_pinned() -> None:
+    """#100: text recognised in an image is judged with what the image is."""
+    assert (
+        "Text recognised in an image (OCR) comes with the image's size and how much of\n"
+        'it is text ("picture" in the metadata). A few lines on a large image make it a\n'
+        "picture that contains words (a flyer, a poster, a meme, a screenshot, a photo\n"
+        "with a caption): classify it as that picture, not as a broken document. Text\n"
+        "that fills much of it is a scanned or photographed document. When the image\n"
+        "itself is attached, its recognised text comes along to help read small print:\n"
+        "classify from what the image shows.\n"
     ) in system_prompt(RULES)
 
 

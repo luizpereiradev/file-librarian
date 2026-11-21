@@ -5,10 +5,16 @@
 // script source:
 //
 //   ocr.js recognize FILE MAX_PAGES MAX_PX LANGUAGE...
-//       Prints the text found in FILE (an image, or the first MAX_PAGES pages
-//       of a PDF rendered with PDFKit) as UTF-8 on stdout. Each picture is
-//       decoded or rendered at most MAX_PX pixels on its longer side, which
-//       bounds memory, and is drawn on white so transparent text shows.
+//       Prints what it found in FILE (an image, or the first MAX_PAGES pages
+//       of a PDF rendered with PDFKit) as one line of JSON (UTF-8) on stdout:
+//         {"v": 2, "pages": [{"width": W, "height": H,
+//                             "lines": [{"text": T, "box": [X, Y, BW, BH]}]}]}
+//       WIDTH and HEIGHT are the picture's own size in pixels (an image's as
+//       stored, a page's as rendered); each box is where Vision found that
+//       line, as fractions of the picture (0 to 1, origin bottom left). Each
+//       picture is decoded or rendered at most MAX_PX pixels on its longer
+//       side, which bounds memory, and is drawn on white so transparent text
+//       shows.
 //   ocr.js probe
 //       Prints the recognition languages Vision supports, one per line.
 //
@@ -61,6 +67,10 @@ function flatten(image, maxPx) {
   return $.CGBitmapContextCreateImage(ctx);
 }
 
+function round4(x) {
+  return Math.round(x * 10000) / 10000;
+}
+
 function recognize(image, languages) {
   var req = request(languages);
   var handler = $.VNImageRequestHandler.alloc.initWithCGImageOptions(image, $.NSDictionary.dictionary);
@@ -70,10 +80,16 @@ function recognize(image, languages) {
   var lines = [];
   var results = req.results;
   for (var i = 0; results && i < results.count; i++) {
-    var candidates = results.objectAtIndex(i).topCandidates(1);
-    if (candidates.count > 0) lines.push(candidates.objectAtIndex(0).string.js);
+    var observation = results.objectAtIndex(i);
+    var candidates = observation.topCandidates(1);
+    if (candidates.count < 1) continue;
+    var b = observation.boundingBox;
+    lines.push({
+      text: candidates.objectAtIndex(0).string.js,
+      box: [round4(b.origin.x), round4(b.origin.y), round4(b.size.width), round4(b.size.height)],
+    });
   }
-  return lines.join('\n');
+  return lines;
 }
 
 function pdfPages(url, maxPages, maxPx) {
@@ -91,7 +107,7 @@ function pdfPages(url, maxPages, maxPx) {
     var size = $.NSMakeSize(Math.round(box.size.width * scale), Math.round(box.size.height * scale));
     var picture = page.thumbnailOfSizeForBox(size, $.kPDFDisplayBoxMediaBox);
     var image = picture.CGImageForProposedRectContextHints(null, $(), $.NSDictionary.dictionary);
-    if (image) images.push(flatten(image, maxPx));
+    if (image) images.push({ image: flatten(image, maxPx), width: size.width, height: size.height });
   }
   return images;
 }
@@ -110,7 +126,21 @@ function imageFile(url, maxPx) {
   );
   var image = $.CGImageSourceCreateThumbnailAtIndex(source, 0, options);
   if (!image) fail(2, 'not a readable image');
-  return [flatten(image, maxPx)];
+  var size = storedSize(source, image, maxPx);
+  return [{ image: flatten(image, maxPx), width: size[0], height: size[1] }];
+}
+
+// The image's size as stored, upright like the thumbnail. The thumbnail is
+// never enlarged, so only a reduced one needs the stored longer side.
+function storedSize(source, thumbnail, maxPx) {
+  var tw = $.CGImageGetWidth(thumbnail), th = $.CGImageGetHeight(thumbnail);
+  if (Math.max(tw, th) < maxPx) return [tw, th];
+  var props = ObjC.castRefToObject($.CGImageSourceCopyPropertiesAtIndex(source, 0, $()));
+  var w = props.isNil() ? null : props.objectForKey('PixelWidth');
+  var h = props.isNil() ? null : props.objectForKey('PixelHeight');
+  if (!w || !h || w.isNil() || h.isNil()) return [tw, th];
+  var scale = Math.max(w.intValue, h.intValue) / Math.max(tw, th);
+  return [Math.round(tw * scale), Math.round(th * scale)];
 }
 
 function run(argv) {
@@ -127,10 +157,13 @@ function run(argv) {
   var languages = argv.slice(4).filter(function (l) { return available.indexOf(l) >= 0; });
   var url = $.NSURL.fileURLWithPath(path);
   var images = /\.pdf$/i.test(path) ? pdfPages(url, maxPages, maxPx) : imageFile(url, maxPx);
-  var texts = [];
+  var pages = [];
   for (var i = 0; i < images.length; i++) {
-    var text = recognize(images[i], languages);
-    if (text) texts.push(text);
+    pages.push({
+      width: Math.round(images[i].width),
+      height: Math.round(images[i].height),
+      lines: recognize(images[i].image, languages),
+    });
   }
-  write($.NSFileHandle.fileHandleWithStandardOutput, texts.join('\n\n'));
+  write($.NSFileHandle.fileHandleWithStandardOutput, JSON.stringify({ v: 2, pages: pages }));
 }

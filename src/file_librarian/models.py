@@ -169,6 +169,20 @@ class BundleInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class PictureText:
+    """How text recognised in an image file sits in it (#100): the model is told, so a
+    flyer with a few words is judged as a picture and not as a broken document."""
+
+    width: int | None
+    height: int | None
+    """The image's size in pixels, when the helper could tell."""
+    lines: int
+    """Lines of text found."""
+    coverage: float
+    """The share of the image's area inside those lines' boxes, 0 to 1."""
+
+
+@dataclass(frozen=True, slots=True)
 class FileMetadata:
     """What the extractor stage learned about a file besides its text.
 
@@ -193,6 +207,8 @@ class FileMetadata:
     """``"ocr"`` when the text was recognised in the image or scanned pages (RF-26)."""
     ocr_error: str | None = None
     """Why text recognition failed; the file was then handled as with OCR off."""
+    picture: PictureText | None = None
+    """For an image whose text came from OCR: its size and how much of it is text."""
 
 
 @dataclass(frozen=True, slots=True)

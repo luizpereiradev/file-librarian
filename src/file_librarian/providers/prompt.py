@@ -13,7 +13,7 @@ import json
 from typing import Any
 
 from file_librarian.fields import KINDS, clean_amount, clean_date, clean_kind, clean_period
-from file_librarian.models import Attachment, Correction, FileContext, Rules
+from file_librarian.models import Attachment, Correction, FileContext, PictureText, Rules
 from file_librarian.privacy import scrub
 
 LANGUAGE_NAMES = {"en": "English", "pt-BR": "Brazilian Portuguese"}
@@ -99,20 +99,24 @@ Categories (pick exactly one):
 Answer fields:
 - category: the best category from the list.
 - suggested_name: a short subject for the file name, 2 to 6 words, in {language},
-  without the date or the extension.
-- name_choice_reason: one short sentence in {language} comparing the file's
-  current name (file_name, ignoring its extension and any date in it) with
-  your suggested_name.
-- name_choice: which of the two describes the file better. "original" when the
-  current name already says what this specific file is, with the details that
-  tell it apart from similar files (a title, a subject, a number or a
-  version), even if it is in another language. "proposed" when it is generic
-  or meaningless (scan001, document (3), IMG_2041, download, untitled) or
-  does not match the content. A shorter or vaguer name never wins: when both
-  are good, choose "original". flib adds the date and formatting either way.
-  A name such as statement-2025-05, payslip_june or notes.sql already says
-  what the file is: choose "original" for it, even when your subject adds
-  the issuer, more detail or a translation.
+  without the date or the extension. Say what the file is; add the issuer, an
+  amount or other details only when they are what tells it apart.
+- name_choice_reason: one short sentence in {language} answering, about the
+  current name alone (file_name, ignoring its extension and any date in it),
+  not against your suggested_name: does it say what this file is, more than
+  one bare word for a kind of document?
+- name_choice: "original" when it does, in any language and however short,
+  informal or abbreviated (statement-2025-05, payslip_june, cv_v3_final,
+  notes.sql, hotel-booking, Rechnung-Maerz, fatura-luz). It need not name the
+  issuer, the month or other details: those go in the description and the
+  other fields. "proposed" only when the name is meaningless (scan001,
+  document (3), IMG_2041, download, untitled, file_final), is one bare word
+  for a kind of document, alone or with only a number (recibo,
+  invoice_4821, ticket), or names something the content contradicts
+  (another kind of document, subject, organisation or month). Never
+  translate a name: a good name in a language other than {language} stays as
+  it is. A more detailed, more formal or translated subject is never a
+  reason for "proposed". flib adds the date and formatting either way.
 - description: 1 to 3 sentences in {language} saying what the file is, with the
   names of organisations and products, amounts and dates someone would search
   for.
@@ -154,6 +158,14 @@ Answer fields:
 Leave document_date, issuer, amount, currency, due_date and period null rather
 than guess: give only what the document itself states.
 
+Text recognised in an image (OCR) comes with the image's size and how much of
+it is text ("picture" in the metadata). A few lines on a large image make it a
+picture that contains words (a flyer, a poster, a meme, a screenshot, a photo
+with a caption): classify it as that picture, not as a broken document. Text
+that fills much of it is a scanned or photographed document. When the image
+itself is attached, its recognised text comes along to help read small print:
+classify from what the image shows.
+
 Describe what the file is without copying personal identifiers from it into
 suggested_name, name_choice_reason, description or tags: no phone numbers,
 e-mail addresses, document, ID or tax numbers, bank account or card numbers,
@@ -181,16 +193,33 @@ def user_message(context: FileContext) -> str:
     # "no readable text" is moot when the content is attached.
     if context.metadata.content is not None and context.attachment is None:
         meta["content"] = context.metadata.content
-    if context.metadata.text_source == "ocr" and context.attachment is None:
-        meta["text_source"] = "recognised from the image or scanned pages (OCR; may have typos)"
+    picture = context.metadata.picture
+    if context.metadata.text_source == "ocr":
+        meta["text_source"] = (
+            "recognised inside this image file (OCR; may have typos)"
+            if picture is not None
+            else "recognised from the scanned pages (OCR; may have typos)"
+        )
+    if picture is not None:
+        meta["picture"] = picture_entry(picture)
     body = f"File metadata:\n{json.dumps(meta, ensure_ascii=False, indent=2)}\n"
     if context.attachment is not None:
         body += f"\n{attachment_note(context.attachment)}\n"
-    elif context.text:
+    if context.text:
         body += f"\n<file_excerpt>\n{context.text}\n</file_excerpt>\n"
-    else:
+    elif context.attachment is None:
         body += "\nNo text content is available; classify from the metadata.\n"
     return body
+
+
+def picture_entry(picture: PictureText) -> dict[str, object]:
+    """What the model is told about an image its text was recognised in (#100)."""
+    entry: dict[str, object] = {}
+    if picture.width is not None and picture.height is not None:
+        entry["size_px"] = f"{picture.width} x {picture.height}"
+    entry["text_lines"] = picture.lines
+    entry["text_covers"] = f"{round(picture.coverage * 100)}% of the image"
+    return entry
 
 
 def attachment_note(attachment: Attachment) -> str:

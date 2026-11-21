@@ -706,9 +706,23 @@ ocr:
 
 An image with less text than `min_chars` (a photo) is handled as before:
 with [vision](#images-and-scanned-pdfs-vision) on the model sees it,
-otherwise it is classified from its name and metadata. When OCR finds enough
-text, the text is sent instead of the image, even with vision on: it is
-cheaper and went through the secret scan. Recognition takes about a quarter
+otherwise it is classified from its name and metadata. What happens to an
+image with enough text depends on whether it is a document:
+
+- a scanned PDF, or an image that is clearly a document (at least 10 lines
+  and 300 letters and digits, covering at least a fifth of the picture: a
+  scanned or photographed page), sends its text only, even with vision on:
+  it is cheaper and went through the secret scan;
+- any other image with words in it (a flyer, a poster, a meme, a chat
+  screenshot, a photo with a caption, a till receipt on a table) sends the
+  image *and* its text when vision is on: the image tells the model what the
+  file is, the text helps it read small print. With vision off, or a
+  provider that reads no images, the text goes alone, but the model is told
+  it was found in a picture, with the picture's size, how many lines and how
+  much of it is text, so a flyer is judged as a flyer and not as a broken
+  document.
+
+Recognition takes about a quarter
 of a second per image or page; the first one on a Mac can take half a minute
 while macOS prepares its model. `flib check-config` says whether OCR works
 here, and `flib inspect FILE` whether a file's text came from OCR.
@@ -732,9 +746,11 @@ their metadata (EXIF, GPS position, camera details) is removed before sending.
 A PDF whose pages have no text gets its first `max_pdf_pages` pages cut into a
 new PDF, which is sent as a document. Because the model then sees the content,
 these files can be renamed like any document (`IMG_4512.HEIC` becomes, say,
-`2026-11-02_beach-at-sunset.HEIC`). If an image cannot be converted, or the
-provider cannot read images, the file is classified from its metadata as with
-vision off.
+`2026-11-02_beach-at-sunset.HEIC`). An image with words in it goes with the
+text [OCR](#text-in-images-and-scanned-pdfs-ocr) found in it, unless it is
+clearly a document, which goes as text only. If an image cannot be
+converted, or the provider cannot read images, the file is classified from
+its recognised text, if any, or its metadata, as with vision off.
 
 Which provider reads what: `anthropic` reads images and scanned PDFs;
 `ollama` and `openai-compat` read images only, and only with
@@ -841,12 +857,14 @@ leaves it depends on the provider and on two optional features.
   [OCR](#text-in-images-and-scanned-pdfs-ocr) recognised in it, like any
   document's text. The recognition runs on your Mac; its text is scanned for
   secrets before anything is sent;
-- only with `vision.enabled` (off by default) and when OCR found little or no
-  text: for an image, the image itself, shrunk to `vision.max_image_px` and
-  stripped of its metadata; for a PDF with no text layer, its first
-  `vision.max_pdf_pages` pages. Secret detection reads text, not pixels, so
-  what OCR could not read goes as it is. Keep such files out with
-  `never_send`;
+- for an image whose text was recognised, its size in pixels, how many lines
+  of text it has and how much of it they cover;
+- only with `vision.enabled` (off by default): for an image, the image
+  itself, shrunk to `vision.max_image_px` and stripped of its metadata,
+  unless OCR found it to be a page of text (then the text alone goes); for a
+  PDF with no text layer, its first `vision.max_pdf_pages` pages, when OCR
+  found little or no text. Secret detection reads text, not pixels, so what
+  OCR could not read goes as it is. Keep such files out with `never_send`;
 - your most recent corrections (at most `provider.max_examples`): for each,
   the corrected file's extension, the description the provider wrote for it
   earlier, and the category or name before and after. Never file content,

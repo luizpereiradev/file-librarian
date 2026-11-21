@@ -7,6 +7,7 @@ recognition; tests/integration/test_ocr_real.py does, when asked to.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import date
 from pathlib import Path
@@ -20,7 +21,14 @@ from file_librarian.classifier import answer_key, classify_all, ocr_key, rules_k
 from file_librarian.cli import app
 from file_librarian.config import Config, ConfigError
 from file_librarian.extractors import ocr
-from file_librarian.models import CategoryRule, Classification, FileContext, FileMetadata, Rules
+from file_librarian.models import (
+    CategoryRule,
+    Classification,
+    FileContext,
+    FileMetadata,
+    PictureText,
+    Rules,
+)
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.providers.prompt import user_message
 from tests._helpers import (
@@ -100,7 +108,7 @@ def test_recognize_passes_everything_as_arguments(
     scan = make_scan(tmp_path / "scan.png", RECEIPT)
     monkeypatch.chdir(tmp_path)
     settings = fake_config(ocr={"languages": ["pt-BR", "en-US"], "max_pages": 2}).ocr
-    assert ocr.recognize(Path("scan.png"), settings, 1000) == RECEIPT
+    assert ocr.recognize(Path("scan.png"), settings, 1000).text == RECEIPT
     [call] = calls(fake_ocr)
     assert call == [
         "-l", "JavaScript", str(ocr.HELPER), "recognize",
@@ -119,16 +127,136 @@ def test_recognize_caps_and_cleans_the_output(
 ) -> None:
     scan = make_scan(tmp_path / "scan.png", RECEIPT)
     settings = fake_config().ocr
-    assert ocr.recognize(scan, settings, 10) == RECEIPT[:10]
+    assert ocr.recognize(scan, settings, 10).text == RECEIPT[:10]
     monkeypatch.setenv("FAKE_OCR_MODE", "garbage")
-    text = ocr.recognize(scan, settings, 1000)
+    text = ocr.recognize(scan, settings, 1000).text
     assert RECEIPT in text
     assert not any(ch in text for ch in "\x00\x07\x1b")
 
 
+def test_recognize_reports_the_layout(tmp_path: Path) -> None:
+    found = ocr.recognize(
+        make_scan(tmp_path / "flyer.png", "BIG SALE\nSaturday 10am", width=900, height=1200),
+        fake_config().ocr,
+        1000,
+    )
+    assert found.text == "BIG SALE\nSaturday 10am"
+    assert (found.lines, found.width, found.height) == (2, 900, 1200)
+    assert 0 < found.coverage < 0.05
+    assert found.picture() == PictureText(900, 1200, 2, found.coverage)
+
+
 def test_a_photo_has_no_text(tmp_path: Path) -> None:
     photo = make_image(tmp_path / "IMG_0001.jpg", 4000, 3000)
-    assert ocr.recognize(photo, fake_config().ocr, 1000) == ""
+    found = ocr.recognize(photo, fake_config().ocr, 1000)
+    assert (found.text, found.lines, found.coverage) == ("", 0, 0.0)
+
+
+def test_unreadable_helper_output_raises_ocr_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scan = make_scan(tmp_path / "scan.png", RECEIPT)
+    monkeypatch.setenv("FAKE_OCR_MODE", "broken")
+    with pytest.raises(ocr.OcrError, match="unreadable"):
+        ocr.recognize(scan, fake_config().ocr, 1000)
+    monkeypatch.delenv("FAKE_OCR_MODE")
+    monkeypatch.setattr(ocr, "MAX_OUTPUT_BYTES", 10)
+    with pytest.raises(ocr.OcrError, match="too much"):
+        ocr.recognize(scan, fake_config().ocr, 1000)
+
+
+def line(text: str, w: float = 0.5, h: float = 0.1) -> dict[str, Any]:
+    return {"text": text, "box": [0.1, 0.1, w, h]}
+
+
+def test_parse_joins_pages_and_measures_the_first() -> None:
+    output = json.dumps(
+        {
+            "v": 2,
+            "pages": [
+                {"width": 800, "height": 600, "lines": [line("one"), line("two", 0.8, 0.5)]},
+                {"width": 800, "height": 600, "lines": [line("three", 1, 1)]},
+            ],
+        }
+    )
+    found = ocr.parse(output, 1000)
+    assert found == ocr.Recognized("one\ntwo\n\nthree", 3, 0.45, 800, 600)
+    assert ocr.parse(output, 5).text == "one\nt"
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        {"width": "wide", "height": -1, "lines": [line("x", 3, 3)]},
+        {"lines": [line("x", 3, 3), line("   ")]},
+    ],
+)
+def test_parse_tolerates_odd_sizes_and_clamps_coverage(page: dict[str, Any]) -> None:
+    found = ocr.parse(json.dumps({"v": 2, "pages": [page]}), 1000)
+    assert (found.text, found.lines, found.coverage, found.width, found.height) == (
+        "x",
+        1,
+        1.0,
+        None,
+        None,
+    )
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "plain text from version 1",
+        json.dumps({"v": 1, "pages": []}),
+        json.dumps({"v": 2, "pages": [{"lines": [{"text": "x", "box": [0, 0, 1]}]}]}),
+        json.dumps({"v": 2, "pages": [{"lines": [{"text": "x", "box": [0, 0, "1", 1]}]}]}),
+        json.dumps({"v": 2, "pages": [{"lines": [{"text": "x", "box": [0, 0, True, 1]}]}]}),
+        json.dumps({"v": 2, "pages": [{"nolines": []}]}),
+        json.dumps([]),
+    ],
+)
+def test_parse_rejects_anything_else(output: str) -> None:
+    with pytest.raises(ocr.OcrError, match="unreadable"):
+        ocr.parse(output, 1000)
+
+
+def test_parse_with_no_pages_is_empty() -> None:
+    assert ocr.parse(json.dumps({"v": 2, "pages": []}), 1000) == ocr.Recognized("")
+
+
+DENSE = "x" * 40
+
+
+@pytest.mark.parametrize(
+    ("lines", "chars", "coverage", "document"),
+    [
+        (26, 988, 0.317, True),  # the corpus's scanned page
+        (23, 210, 0.126, False),  # its chat screenshot
+        (19, 145, 0.066, False),  # its photographed receipt
+        (6, 88, 0.122, False),  # its flyer
+        (9, 900, 0.5, False),  # too few lines: a poster
+        (30, 299, 0.5, False),  # too few characters
+        (30, 900, 0.19, False),  # too little of the picture
+        (10, 300, 0.2, True),  # the thresholds themselves
+    ],
+)
+def test_looks_like_document(lines: int, chars: int, coverage: float, document: bool) -> None:
+    found = ocr.Recognized("a" * chars, lines, coverage)
+    assert ocr.looks_like_document(found) is document
+
+
+def test_replay_returns_recorded_results_without_the_helper(tmp_path: Path, fake_ocr: Path) -> None:
+    scan = make_scan(tmp_path / "scan.png", RECEIPT)
+    photo = make_image(tmp_path / "photo.jpg", 10, 10)
+    recorded = ocr.Recognized("recorded text", 1, 0.1, 10, 20)
+    digest = hashlib.sha256(scan.read_bytes()).hexdigest()
+    with ocr.replay({digest: recorded}):
+        assert ocr.recognize(scan, fake_config().ocr, 1000) == recorded
+        assert ocr.recognize(scan, fake_config().ocr, 8).text == "recorded"
+        assert ocr.recognize(photo, fake_config().ocr, 1000) == ocr.Recognized("")
+        with pytest.raises(ocr.OcrError, match="unreadable"):
+            ocr.recognize(tmp_path / "gone.png", fake_config().ocr, 1000)
+    assert calls(fake_ocr) == []
+    assert ocr.recognize(scan, fake_config().ocr, 1000).text == RECEIPT
 
 
 @pytest.mark.parametrize("mode", ["fail", "unavailable"])
@@ -208,15 +336,45 @@ def test_availability_reports_why_not(tmp_path: Path, monkeypatch: pytest.Monkey
 def test_scanned_documents_are_read_as_text(tmp_path: Path, name: str) -> None:
     ctx = context_for(make_scan(tmp_path / name, BILL))
     assert ctx.text == BILL
-    assert ctx.metadata == FileMetadata(text_source="ocr")
+    assert ctx.metadata.text_source == "ocr"
     assert ctx.visual is None
+    # An image's text goes with how it sits in the picture; a PDF's does not.
+    picture = ctx.metadata.picture
+    if name.endswith(".pdf"):
+        assert picture is None
+    else:
+        assert picture is not None and (picture.width, picture.height, picture.lines) == (
+            1200,
+            1600,
+            1,
+        )
 
 
-def test_text_wins_over_vision_for_a_document(tmp_path: Path) -> None:
+# A page of long lines: what the fake helper reports looks like a scanned document.
+PAGE = "\n".join(f"{BILL[:45]} line {i}" for i in range(12))
+
+
+def test_with_vision_a_picture_with_words_sends_the_image_and_its_text(tmp_path: Path) -> None:
     cfg = fake_config(vision={"enabled": True})
-    for name in ("receipt.jpg", "scan.pdf"):
+    for name in ("flyer.jpg", "Screenshot 2026-03-14.png"):
         ctx = context_for(make_scan(tmp_path / name, RECEIPT), cfg)
-        assert ctx.text == RECEIPT and ctx.visual is None
+        assert ctx.text == RECEIPT and ctx.visual == "image"
+        assert ctx.metadata.text_source == "ocr" and ctx.metadata.picture is not None
+
+
+def test_with_vision_a_document_sends_its_text_only(tmp_path: Path) -> None:
+    cfg = fake_config(vision={"enabled": True})
+    page = context_for(make_scan(tmp_path / "IMG_2041.jpg", PAGE), cfg)
+    assert page.text == PAGE and page.visual is None
+    assert page.metadata.picture is not None and page.metadata.picture.lines == 12
+    # A scanned PDF with text is always a document, however little text it has.
+    scan = context_for(make_scan(tmp_path / "scan.pdf", RECEIPT), cfg)
+    assert scan.text == RECEIPT and scan.visual is None and scan.metadata.picture is None
+
+
+def test_without_vision_a_picture_with_words_sends_its_text(tmp_path: Path) -> None:
+    ctx = context_for(make_scan(tmp_path / "flyer.jpg", RECEIPT))
+    assert ctx.text == RECEIPT and ctx.visual is None and ctx.metadata.picture is not None
 
 
 def test_a_photo_falls_back_to_vision_or_metadata(tmp_path: Path, fake_ocr: Path) -> None:
@@ -303,8 +461,22 @@ def test_settings_reach_the_helper(tmp_path: Path, fake_ocr: Path) -> None:
 def test_the_prompt_says_the_text_came_from_ocr(tmp_path: Path) -> None:
     ctx = context_for(make_scan(tmp_path / "scan.pdf", BILL))
     message = user_message(ctx)
-    assert BILL in message and "OCR" in message
+    assert BILL in message and "OCR" in message and "scanned pages" in message
+    assert '"picture"' not in message
     assert "OCR" not in user_message(context_for(make_pdf(tmp_path / "bill.pdf", BILL)))
+
+
+def test_the_prompt_says_an_images_text_was_found_in_a_picture(tmp_path: Path) -> None:
+    flyer = make_scan(tmp_path / "flyer.png", "BIG SALE\nSaturday 10am to 4pm at the old town hall")
+    message = user_message(context_for(flyer))
+    meta = json.loads(message.split("File metadata:\n", 1)[1].split("\n\n", 1)[0])
+    assert meta["text_source"] == "recognised inside this image file (OCR; may have typos)"
+    assert meta["picture"] == {
+        "size_px": "1200 x 1600",
+        "text_lines": 2,
+        "text_covers": "3% of the image",
+    }
+    assert "<file_excerpt>\nBIG SALE" in message
 
 
 # --- Classification cache ---------------------------------------------------------
@@ -334,7 +506,9 @@ def test_ocr_answers_have_their_own_cache_key() -> None:
     assert len({text_key, key, vision_key(text_key, cfg)}) == 3
     assert answer_key(read_ctx(), text_key, cfg, vision=False) == key
     assert answer_key(read_ctx(None), text_key, cfg, vision=False) == text_key
-    assert answer_key(read_ctx(), text_key, cfg, vision=True) == vision_key(text_key, cfg)
+    # An image sent with its recognised text depends on the OCR and the vision settings.
+    assert answer_key(read_ctx(), text_key, cfg, vision=True) == vision_key(key, cfg)
+    assert answer_key(read_ctx(None), text_key, cfg, vision=True) == vision_key(text_key, cfg)
 
 
 @pytest.mark.parametrize(

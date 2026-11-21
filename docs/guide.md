@@ -11,13 +11,21 @@ allows renaming (`rename: false` keeps original names), and the model is at
 least `naming.rename_confidence_threshold` sure (0.8 by default). Videos,
 installers, archives, folders and photos with vision off keep their name.
 
-The model also compares the file's current name with the subject it proposes
-and says which describes the file better. A generic name (`scan001.pdf`,
-`document (3).pdf`, `IMG_2041.jpg`) is replaced; a descriptive one keeps its
-words, so two similar files stay told apart:
+The model also says whether the file's current name already says what the
+file is. Only a generic name (`scan001.pdf`, `document (3).pdf`,
+`IMG_2041.jpg`) or one the content contradicts is replaced; a descriptive one
+keeps its words, so two similar files stay told apart. A descriptive name is
+kept whatever its language and is never translated (`boarding-pass.pdf`
+stays `boarding-pass` with `language: pt-BR`), and informal or abbreviated
+names count as descriptive (`extrato_out_2026.pdf`, `resume_final_v2.docx`).
+The proposed subject does not pile the issuer or other fields onto a name:
+those are kept as
+[structured fields](../README.md#amounts-dates-and-issuers) and can file the
+document into a folder by issuer instead.
 
 ```text
 Study guide - 11 tweaks for coding agents.pdf  ->  2026-11-16_study-guide-11-tweaks-for-coding-agents.pdf
+boarding-pass.pdf                              ->  2026-10-12_boarding-pass.pdf
 scan001.pdf                                    ->  2026-10-05_electricity-bill.pdf
 ```
 
@@ -541,7 +549,8 @@ width × height / 750 input tokens:
 | Scanned PDF, 3 pages | ~1,600-2,500 per page | ~US$0.001 |
 
 "Whole request" adds about 1,000 tokens of instructions and metadata and a
-few hundred output tokens. These are estimates from the published formula,
+few hundred output tokens; an image with words in it also carries its
+recognised text (a few dozen to a few hundred tokens). These are estimates from the published formula,
 not measurements; what counts toward `limits.max_cost_usd_per_run` is the
 usage the API actually bills, so the cap holds either way. Roughly 2,000
 photos fit in the default US$1 cap. Lowering `vision.max_image_px` lowers the

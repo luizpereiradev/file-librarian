@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import struct
+import zlib
 from datetime import date
 from pathlib import Path
 
@@ -11,6 +13,7 @@ import pytest
 
 from file_librarian.evals import corpus
 from file_librarian.evals.documents import make_blank_pdf, make_eml, make_png
+from file_librarian.extractors import ocr
 from file_librarian.locales import LOCALES
 from file_librarian.sensitive import find_secrets
 from tests._helpers import candidate, context_for, fake_config
@@ -163,6 +166,68 @@ def test_documents_are_reproducible(tmp_path: Path) -> None:
         assert (tmp_path / f"0.{ext}").read_bytes() == (tmp_path / f"1.{ext}").read_bytes()
     assert b"flib-synthetic-boundary" in (tmp_path / "0.eml").read_bytes()
     assert (tmp_path / "0.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+IMAGE_TEXT = [i for i in corpus.items() if "image-text" in i.gold.cases]
+
+
+def test_images_with_text_are_drawn_the_same_every_time(tmp_path: Path) -> None:
+    assert len(IMAGE_TEXT) == 6
+    for item in IMAGE_TEXT:
+        first, second = tmp_path / "a.png", tmp_path / "b.png"
+        item.write(first)
+        item.write(second)
+        data = first.read_bytes()
+        assert data == second.read_bytes(), item.path
+        assert data.startswith(b"\x89PNG\r\n\x1a\n") and data[12:16] == b"IHDR"
+        # Decodable: the pixel rows inflate to exactly height x (1 + width x 3) bytes.
+        width, height = struct.unpack(">II", data[16:24])
+        start = data.index(b"IDAT") + 4
+        length = struct.unpack(">I", data[start - 8 : start - 4])[0]
+        assert len(zlib.decompress(data[start : start + length])) == height * (1 + width * 3)
+
+
+def test_every_image_with_text_has_its_recorded_text(tmp_path: Path) -> None:
+    """``ocr.json`` must follow the pictures: after changing one, record it again."""
+    data = json.loads(corpus.OCR_PATH.read_text(encoding="utf-8"))
+    assert data["helper"] == ocr.HELPER_VERSION
+    assert sorted(data["items"]) == sorted(i.path for i in IMAGE_TEXT)
+    recorded = corpus.recorded_ocr()
+    for item in IMAGE_TEXT:
+        target = tmp_path / item.path
+        item.write(target)
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        assert data["items"][item.path]["sha256"] == digest, f"record {item.path} again"
+        assert recorded[digest].text
+
+
+def test_the_recorded_layouts_tell_documents_from_pictures() -> None:
+    """The rule in ``ocr.looks_like_document``, against what macOS found in each picture."""
+    data = json.loads(corpus.OCR_PATH.read_text(encoding="utf-8"))["items"]
+    verdicts = {
+        path: ocr.looks_like_document(
+            ocr.Recognized(e["text"], e["lines"], e["coverage"], e["width"], e["height"])
+        )
+        for path, e in data.items()
+    }
+    assert {path for path, document in verdicts.items() if document} == {"scan_0007.png"}
+    pictures = {i.path for i in IMAGE_TEXT if "picture" in i.gold.cases}
+    assert len(pictures) == 4 and not any(verdicts[p] for p in pictures)
+
+
+def test_the_font_draws_every_letter_it_knows(tmp_path: Path) -> None:
+    from file_librarian.evals import raster
+
+    known = "".join(raster._GLYPHS) + "áàâãéêíóôõúÁÀÂÃÉÊÍÓÔÕÚçÇ"
+    for char in known:
+        rows = raster._glyph(char)
+        assert len(rows) == raster.CELL_H and all(len(r) == 5 for r in rows), char
+        assert char == " " or any("#" in r for r in rows), char
+    assert raster._glyph("€") == raster._glyph("?")
+    canvas = raster.Canvas(40, 20, (0, 0, 0))
+    canvas.rect(-5, -5, 3, 3, (255, 0, 0))  # clipped away entirely
+    assert set(canvas.pixels) == {0}
+    assert canvas.text(0, 0, "Hi", 1, (255, 255, 255)) == raster.text_width("Hi", 1) == 11
 
 
 def test_pdf_text_keeps_lines_and_accents(tmp_path: Path) -> None:
