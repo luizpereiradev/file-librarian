@@ -23,18 +23,37 @@ at most ``MAX_PX`` pixels on its longer side (which bounds the helper's
 memory, about 200 MB); the helper is killed after ``TIMEOUT`` seconds; its
 output is decoded as UTF-8 with errors replaced and capped at ``max_chars``.
 
+The helper reports each line it found with where it is in the picture, and
+the picture's size; ``recognize`` returns the text with that summary
+(``Recognized``). ``looks_like_document`` tells a scanned or photographed
+document (many lines, most of the picture text) from a picture that happens
+to contain words (a flyer, a meme, a chat screenshot); see ``context.py`` for
+what each is sent as (#100).
+
 Anything that goes wrong raises ``OcrError``; the file is then handled as it
 was before OCR existed (vision when on, else metadata).
+
+``replay`` makes ``recognize`` return recorded results instead of running the
+helper: ``flib eval`` uses it so that its corpus scores the same everywhere,
+with or without macOS's text recognition.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
+import math
 import subprocess
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
+from typing import Any
 
 from file_librarian.config import OcrConfig
+from file_librarian.models import PictureText
 
 OSASCRIPT = "/usr/bin/osascript"
 HELPER = Path(__file__).with_name("ocr.js")
@@ -47,12 +66,52 @@ MAX_SOURCE_BYTES = 200 * 1024 * 1024
 """Larger files are not read at all."""
 MAX_OUTPUT_BYTES = 4 * 1024 * 1024
 
-HELPER_VERSION = "1"
-"""Part of the classification cache key: bump when ocr.js changes the text it returns."""
+HELPER_VERSION = "2"
+"""Part of the classification cache key: bump when ocr.js changes what it returns.
+2: JSON with each line's box and the picture's size, instead of plain text."""
+
+DOCUMENT_MIN_LINES = 10
+DOCUMENT_MIN_CHARS = 300
+DOCUMENT_MIN_COVERAGE = 0.20
+"""An image is a document when it has at least this many lines, letters and digits, and
+share of its area under text. Measured on the evaluation corpus's pictures (#100,
+``docs/quality.md``): a scanned page has 26 lines, 988 characters and 32% of its area
+under text; a chat screenshot 23 lines but 210 characters and 13%; a photographed
+receipt 19 lines, 145 characters and 7%; a flyer, a meme or a caption at most 6 lines."""
 
 
 class OcrError(Exception):
     """The text could not be recognised; handle the file as if OCR were off."""
+
+
+@dataclass(frozen=True, slots=True)
+class Recognized:
+    """What the helper found: the text, and how it sits in the (first) picture."""
+
+    text: str
+    lines: int = 0
+    coverage: float = 0.0
+    """The share of the first picture's area inside the boxes of its lines, 0 to 1."""
+    width: int | None = None
+    height: int | None = None
+    """The first picture's size in pixels: an image's as stored, a page's as rendered."""
+
+    def picture(self) -> PictureText:
+        return PictureText(self.width, self.height, self.lines, self.coverage)
+
+
+_replayed: ContextVar[Mapping[str, Recognized] | None] = ContextVar("replayed", default=None)
+
+
+@contextmanager
+def replay(recorded: Mapping[str, Recognized]) -> Iterator[None]:
+    """Within the block, ``recognize`` runs nothing: it returns what ``recorded`` holds
+    for the file's SHA-256, and no text for any other file."""
+    token = _replayed.set(recorded)
+    try:
+        yield
+    finally:
+        _replayed.reset(token)
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,12 +144,22 @@ def _message(result: subprocess.CompletedProcess[bytes]) -> str:
     return (lines[-1] if lines else f"exit code {result.returncode}")[:200]
 
 
-def recognize(path: Path, settings: OcrConfig, max_chars: int) -> str:
-    """The text Vision finds in ``path`` (an image, or a PDF's first pages); may be empty.
+def recognize(path: Path, settings: OcrConfig, max_chars: int) -> Recognized:
+    """What Vision finds in ``path`` (an image, or a PDF's first pages); the text may be empty.
 
     Raises ``OcrError``.
     """
     path = path.absolute()
+    recorded = _replayed.get()
+    if recorded is not None:
+        try:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise OcrError(f"unreadable: {exc.strerror or exc}") from exc
+        found = recorded.get(digest, Recognized(""))
+        return Recognized(
+            found.text[:max_chars], found.lines, found.coverage, found.width, found.height
+        )
     try:
         if path.stat().st_size > MAX_SOURCE_BYTES:
             raise OcrError("file too large for text recognition")
@@ -102,10 +171,59 @@ def recognize(path: Path, settings: OcrConfig, max_chars: int) -> str:
     )
     if result.returncode != 0:
         raise OcrError(f"text recognition failed: {_message(result)}")
-    text = result.stdout[:MAX_OUTPUT_BYTES].decode("utf-8", errors="replace")
+    if len(result.stdout) > MAX_OUTPUT_BYTES:
+        raise OcrError("text recognition returned too much")
+    return parse(result.stdout.decode("utf-8", errors="replace"), max_chars)
+
+
+def _clean(text: str) -> str:
     # Control characters other than line breaks and tabs are never text on a page.
-    cleaned = "".join(ch for ch in text if ch.isprintable() or ch in "\n\t")
-    return cleaned.strip()[:max_chars]
+    return "".join(ch for ch in text if ch.isprintable() or ch in "\n\t").strip()
+
+
+def _number(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        raise ValueError("not a number")
+    return float(value)
+
+
+def _size(value: Any) -> int | None:
+    try:
+        size = _number(value)
+    except ValueError:
+        return None
+    return int(size) if 0 < size < 1_000_000 else None
+
+
+def parse(output: str, max_chars: int) -> Recognized:
+    """Read the helper's JSON (``ocr.js``, version 2). Raises ``OcrError``."""
+    try:
+        data = json.loads(output)
+        if not isinstance(data, dict) or data.get("v") != 2 or not isinstance(data["pages"], list):
+            raise ValueError("unexpected format")
+        texts: list[str] = []
+        lines = 0
+        first: tuple[float, int | None, int | None] | None = None
+        for page in data["pages"]:
+            covered = 0.0
+            found: list[str] = []
+            for line in page["lines"]:
+                text = _clean(str(line["text"]))
+                box = [_number(v) for v in line["box"]]
+                if len(box) != 4:
+                    raise ValueError("a box has four numbers")
+                covered += min(max(box[2], 0.0), 1.0) * min(max(box[3], 0.0), 1.0)
+                if text:
+                    found.append(text)
+            lines += len(found)
+            if found:
+                texts.append("\n".join(found))
+            if first is None:
+                first = (min(covered, 1.0), _size(page.get("width")), _size(page.get("height")))
+    except (ValueError, KeyError, TypeError) as exc:
+        raise OcrError(f"text recognition returned something unreadable ({exc})") from exc
+    coverage, width, height = first or (0.0, None, None)
+    return Recognized("\n\n".join(texts)[:max_chars], lines, round(coverage, 4), width, height)
 
 
 @cache
@@ -129,5 +247,19 @@ def availability() -> Availability:
 
 
 def enough_text(text: str, settings: OcrConfig) -> bool:
-    """``text`` reads like a document: at least ``min_chars`` letters and digits."""
-    return sum(ch.isalnum() for ch in text) >= settings.min_chars
+    """``text`` is worth sending: at least ``min_chars`` letters and digits."""
+    return letters(text) >= settings.min_chars
+
+
+def letters(text: str) -> int:
+    return sum(ch.isalnum() for ch in text)
+
+
+def looks_like_document(found: Recognized) -> bool:
+    """Many lines of text covering much of the picture: a scanned or photographed page,
+    not a picture that happens to contain words (``DOCUMENT_MIN_*``)."""
+    return (
+        found.lines >= DOCUMENT_MIN_LINES
+        and letters(found.text) >= DOCUMENT_MIN_CHARS
+        and found.coverage >= DOCUMENT_MIN_COVERAGE
+    )

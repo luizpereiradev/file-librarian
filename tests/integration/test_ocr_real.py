@@ -11,12 +11,16 @@ can take half a minute while Vision prepares its model.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
+from difflib import SequenceMatcher
 from pathlib import Path
 
 import pytest
 
+from file_librarian.config import OcrConfig
+from file_librarian.evals import corpus
 from file_librarian.extractors import ocr
 from tests._helpers import context_for, fake_config, make_pdf
 
@@ -67,7 +71,7 @@ def test_text_is_recognised_in_an_image_and_a_scanned_pdf(tmp_path: Path) -> Non
     png, scan = documents(tmp_path, LINE)
     settings = fake_config(language="pt-BR").ocr
     for path in (png, scan):
-        text = ocr.recognize(path, settings, 10_000)
+        text = ocr.recognize(path, settings, 10_000).text
         assert words(LINE) - words(text) <= {"123.45"}, text  # a figure may come out spaced
         assert "electricity" in text.lower() and "october" in text.lower()
 
@@ -89,3 +93,24 @@ def test_an_unreadable_file_fails_cleanly(tmp_path: Path) -> None:
     broken.write_bytes(b"not an image")
     with pytest.raises(ocr.OcrError, match="not a readable image"):
         ocr.recognize(broken, fake_config().ocr, 1000)
+
+
+@pytest.mark.parametrize(
+    "item", [i for i in corpus.items() if "image-text" in i.gold.cases], ids=lambda i: i.path
+)
+def test_the_corpus_pictures_read_as_recorded(tmp_path: Path, item: corpus.Item) -> None:
+    """What this Mac finds in the evaluation corpus's pictures is what ``ocr.json`` holds,
+    near enough: the same size, about the same lines and letters, the same verdict."""
+    target = tmp_path / item.path
+    item.write(target)
+    found = ocr.recognize(target, OcrConfig(languages=list(corpus.OCR_LANGUAGES)), 100_000)
+    expected = corpus.recorded_ocr()[hashlib.sha256(target.read_bytes()).hexdigest()]
+    assert (found.width, found.height) == (expected.width, expected.height)
+    assert abs(found.lines - expected.lines) <= 3
+
+    # Letters, not words: another macOS version may split or join stylised words.
+    def letters(text: str) -> str:
+        return "".join(ch for ch in text.lower() if ch.isalnum())
+
+    assert SequenceMatcher(None, letters(expected.text), letters(found.text)).ratio() >= 0.7
+    assert ocr.looks_like_document(found) is ocr.looks_like_document(expected)

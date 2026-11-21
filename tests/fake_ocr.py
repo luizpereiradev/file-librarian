@@ -6,11 +6,18 @@ See conftest.py: no test runs macOS's text recognition unless it opts in
 ``FAKEOCR:<base64>`` marker); any other readable file has no text, like a
 photo. Every call is appended as a JSON line (its argv) to FAKE_OCR_LOG.
 
+It answers like ``ocr.js`` version 2: JSON with one box per line of text.
+Each box is as wide as its line (a 50-character line spans 90% of the
+picture) and 3.5% of its height, so a page of long lines looks like a
+document and a line or two like a picture with words. The picture's size is
+the one ``make_image`` wrote (1000 x 1000 for anything else).
+
 FAKE_OCR_MODE changes what it does:
 
 - ``fail``: exit 3 with a message on stderr, like a recognition error;
 - ``hang``: sleep far longer than any test's timeout;
-- ``garbage``: print invalid UTF-8 and control characters around the text;
+- ``garbage``: put control characters around the text;
+- ``broken``: print JSON that is not what the helper writes;
 - ``unavailable``: every call fails as on a Mac without Vision.
 """
 
@@ -26,6 +33,21 @@ from pathlib import Path
 
 LANGUAGES = ("en-US", "fr-FR", "de-DE", "pt-BR")
 _MARKER = re.compile(rb"FAKEOCR:([A-Za-z0-9+/=]+)")
+_SIZE = re.compile(rb"^FAKEIMG (\d+) (\d+)\n")
+LINE_HEIGHT = 0.035
+
+
+def answer(text: str, data: bytes) -> str:
+    """The helper's JSON for ``text`` found in ``data``."""
+    size = _SIZE.match(data)
+    width, height = (int(size.group(1)), int(size.group(2))) if size else (1000, 1000)
+    rows = [line for line in text.splitlines() if line.strip()]
+    lines = [
+        {"text": line, "box": [0.05, 0.9 - i * 0.04, min(0.9, len(line) / 50 * 0.9), LINE_HEIGHT]}
+        for i, line in enumerate(rows)
+    ]
+    page = {"width": width, "height": height, "lines": lines}
+    return json.dumps({"v": 2, "pages": [page]}, ensure_ascii=False)
 
 
 def main(argv: list[str]) -> int:
@@ -54,10 +76,13 @@ def main(argv: list[str]) -> int:
         print("not a readable image", file=sys.stderr)
         return 2
     found = _MARKER.search(data)
-    text = base64.b64decode(found.group(1)) if found else b""
+    text = base64.b64decode(found.group(1)).decode("utf-8") if found else ""
+    if mode == "broken":
+        sys.stdout.write('{"v": 2, "pages": "not a list"}')
+        return 0
     if mode == "garbage":
-        text = b"\xff\xfe\x00\x07" + text + b"\x1b[31m\xc3"
-    sys.stdout.buffer.write(text)
+        text = "\x00\x07" + text + "\x1b[31m"  # control characters inside the JSON strings
+    sys.stdout.buffer.write(answer(text, data).encode("utf-8"))
     return 0
 
 

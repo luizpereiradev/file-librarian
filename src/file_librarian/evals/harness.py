@@ -11,6 +11,11 @@ afterwards.
 The provider is wrapped in a ``Recorder`` that notes every context it is
 given and adds up the tokens billed, so the report can prove that no
 sensitive item was sent.
+
+Text recognition is replayed, not run: the corpus's images with text come
+with the text macOS recognised in them, recorded once (``evals/ocr.json``),
+so a run scores the same on every Mac, in CI and wherever macOS's text
+recognition is missing; every other file has no text, as a photo would.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ from file_librarian.context import build_context_safely
 from file_librarian.db.store import Store
 from file_librarian.evals import corpus
 from file_librarian.evals.score import ItemResult, Run, Usage
+from file_librarian.extractors import ocr
 from file_librarian.locales import Language
 from file_librarian.models import Classification, FileContext, FileStatus, Rules
 from file_librarian.providers.base import Provider
@@ -54,6 +60,12 @@ class Settings:
     max_cost_usd: float = 1.0
     base_url: str | None = None
     seed: int = corpus.DEFAULT_SEED
+    vision: bool = False
+    """Send images and scanned PDFs to the model (``vision.enabled``)."""
+    ocr: bool = True
+    """Use the recorded text of the images with text (``ocr.enabled``)."""
+    cases: tuple[str, ...] = ()
+    """Only the items with one of these hard-case tags (``image-text``...)."""
 
     @property
     def model_name(self) -> str | None:
@@ -86,6 +98,8 @@ def eval_config(root: Path, settings: Settings, files: int) -> Config:
                     "max_cost_usd_per_run": settings.max_cost_usd,
                 },
                 "search": {"semantic": {"enabled": False}},
+                "vision": {"enabled": settings.vision},
+                "ocr": {"enabled": settings.ocr},
             }
         )
     except ConfigError as exc:
@@ -106,6 +120,10 @@ class Prepared:
 def prepared(settings: Settings) -> Iterator[Prepared]:
     """Write the corpus into a new temporary folder; delete the folder afterwards."""
     chosen = corpus.select(corpus.items(settings.seed), settings.limit, settings.seed)
+    if settings.cases:
+        chosen = [i for i in chosen if set(i.gold.cases) & set(settings.cases)]
+        if not chosen:
+            raise SettingsError(f"no corpus item has the tag {', '.join(settings.cases)}")
     with TemporaryDirectory(prefix="flib-eval-") as tmp:
         root = Path(tmp).resolve()
         cfg = eval_config(root, settings, len(chosen))
@@ -127,7 +145,8 @@ def estimate(prep: Prepared, provider: Provider) -> Estimate:
     rules = pipeline.rules_for(prep.config)
     with Store.open(prep.config.database) as store:
         found = scan(prep.config, store.file_state)
-    contexts = [build_context_safely(c, prep.config) for c in found.candidates]
+    with ocr.replay(corpus.recorded_ocr()):
+        contexts = [build_context_safely(c, prep.config) for c in found.candidates]
     to_send = [c for c in contexts if not c.sensitive]
     cost = sum(
         provider.cost_usd(
@@ -176,10 +195,11 @@ def run(prep: Prepared, provider: Provider, *, clock: Callable[[], float] = time
     """Simulate a run over the prepared corpus and score every item."""
     recorder = Recorder(provider)
     started = clock()
-    outcome = pipeline.run(prep.config, recorder, simulate=True)
+    with ocr.replay(corpus.recorded_ocr()):
+        outcome = pipeline.run(prep.config, recorder, simulate=True)
     elapsed = clock() - started
     planned = {item.context.path.name: item for item in outcome.plan.items}
-    sent = {ctx.path.name for ctx in recorder.sent}
+    sent = {ctx.path.name: sent_as(ctx) for ctx in recorder.sent}
     results = []
     lang = prep.settings.language
     for item in prep.items:
@@ -207,6 +227,8 @@ def run(prep: Prepared, provider: Provider, *, clock: Callable[[], float] = time
                 sent=item.path in sent,
                 fields=answer_fields(answer),
                 expected_fields=dict(gold.fields),
+                cases=gold.cases,
+                sent_as=sent.get(item.path),
             )
         )
     usage = Usage(
@@ -218,6 +240,15 @@ def run(prep: Prepared, provider: Provider, *, clock: Callable[[], float] = time
         cost_known=outcome.cost_known,
     )
     return Run(meta(prep), results, usage)
+
+
+def sent_as(ctx: FileContext) -> str:
+    """What the provider got for ``ctx``: ``image+text``, ``image``, ``pdf``, ``text``
+    or ``metadata``."""
+    if ctx.attachment is not None:
+        shown = "pdf" if ctx.attachment.media_type == "application/pdf" else "image"
+        return f"{shown}+text" if ctx.text else shown
+    return "text" if ctx.text else "metadata"
 
 
 def answer_fields(answer: Classification | None) -> dict[str, str | None]:
@@ -248,4 +279,7 @@ def meta(prep: Prepared) -> dict[str, Any]:
         "seed": s.seed,
         "limit": s.limit,
         "max_cost_usd": s.max_cost_usd,
+        "vision": s.vision,
+        "ocr": s.ocr,
+        "cases": list(s.cases),
     }

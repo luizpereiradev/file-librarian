@@ -1,0 +1,57 @@
+{
+ "helper": "2",
+ "languages": [
+  "pt-BR",
+  "en-US"
+ ],
+ "items": {
+  "WhatsApp Image 2026-11-02 at 09.14.55.png": {
+   "sha256": "12ca23fd7c017f142fb597abb7e6af924835cdc684feb36cd34f2bf11bdb954e",
+   "text": "FEIRA DE TROCAS\nlivros, discos e plantas\nsábado, 15 de novembro\n9h às 13h\nPraça das Acácias\nentrada gratuita",
+   "lines": 6,
+   "coverage": 0.122,
+   "width": 900,
+   "height": 1200
+  },
+  "Screenshot 2026-11-05 at 21.40.12.png": {
+   "sha256": "27fc256e75bdba93b9db4d55b2bc1ca86c22fe5698551abda5239662b5c6ad51",
+   "text": "Vizinhos\n12 participantes\nBloco\nB\nBom dia! Vai faltar àgua\namanha?\n08:12\nO aviso diz das 8h às\n12h\n08:13\nObrigado pelo aviso!\n08:20\nAlguém sabe se a garagem\ntambém fica sem?\n08:31\nAcho que só a torre A\n08:33\nVou encher uns baldes\nhoje então\n08:40\nBoa ideia\n08:41\nMensagem",
+   "lines": 23,
+   "coverage": 0.1258,
+   "width": 750,
+   "height": 1334
+  },
+  "image (3).png": {
+   "sha256": "b28f27b74012a33eb5428da2723e3eeee6c3b76385ddaedc8652f17d4794a7ed",
+   "text": "WHEN THE BUILD PASSES\nON THE FIRST TRY\nAND NOBODY KHOWS WHY",
+   "lines": 3,
+   "coverage": 0.1325,
+   "width": 800,
+   "height": 800
+  },
+  "IMG_8802.png": {
+   "sha256": "f35f539f6543b8d84c1888174080bbd30b1e9a10787cfb58d0ebeb5e6e8fba66",
+   "text": "pico\ndos\nMarins, Serra da Mantiqueira\njulho de 2026",
+   "lines": 4,
+   "coverage": 0.0123,
+   "width": 1200,
+   "height": 900
+  },
+  "IMG_5531.png": {
+   "sha256": "1659a59b9c2706ce3599c89cb4f473440e5185057a2d0f4648986d378cbff622",
+   "text": "PADARIA BELA VISTA\nCUPOM 004512\n12/11/2026\n08:41\n2 PÃO FRANCES\n1 CAFE COM LEITE\n1 BOLO DE FUBA\n1\nSUCO DE LARANJA\nTOTAL\nR‡\nCARTAO DEBITO\n1,60\n6, 50\n7,90\n8,00\n24,00\n24,00\nOBRIGADO, VOLTE SEMPRE!",
+   "lines": 19,
+   "coverage": 0.0658,
+   "width": 1000,
+   "height": 1300
+  },
+  "scan_0007.png": {
+   "sha256": "568f23bb380cfe75c4cf63a19a628ae24a2fddf8e07b03cf3aa51fe7daace6e4",
+   "text": "Companhia de Saneamento Rio Claro\nCentral de atendimento: agência virtual e lojas\nDECLARAÇÃO ANUAL DE QUITAÇÃO DE DÉBITOS\nA Companhia de Saneamento Rio Claro declara, para os\ndevidos fins, que o imóvel abaixo identificado não\npossui débitos referentes aos serviços de abastecimento\nde água e de coleta de esgoto relativos ao ano de 2025,\nconforme as faturas pagas e registradas em nosso sistema\naté a data de emissão desta declaração. Esta declaração\nsubstitui, para comprovação junto a terceiros, as\nquitações mensais das faturas do periodo de janeiro a\ndezembro de 2025. Caso existam faturas em discussão\njudicial ou administrativa, elas não estão incluidas\nnesta declaração, A emissão segue a lei que obriga as\nprestadoras de serviços públicos a enviar a declaração\nanual de quitação aos seus clientes, Matricula do imôvel\ne dados de consumo estão disponiveis na agência virtual.\nDúvidas podem ser esclarecidas na central de atendimento\nou em qualquer loja da companhia, Guarde este documento:\nele dispensa a apresentação das contas mensais do ano a\nque se refere.\nAno de referência: 2025\nData de emissão: 20/05/2026\nSituação: quitado\nDocumento emitido eletronicamente; dispensa\nassinatura.",
+   "lines": 26,
+   "coverage": 0.3166,
+   "width": 1240,
+   "height": 1754
+  }
+ }
+}

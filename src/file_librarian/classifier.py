@@ -19,11 +19,12 @@ Wraps any ``Provider`` with what the provider itself should not decide:
 - a ``visual`` context (``vision.enabled``: an image or a scanned PDF) gets
   its image or first pages attached only when the provider lists that media
   type in ``attachments``, and only right before the call; otherwise, or when
-  preparing it fails, it is classified from metadata as with vision off.
-  Answers that saw an attachment are cached under their own key, which also
-  covers the vision limits, so turning vision on or off never reuses an
-  answer given with the other setting. Answers given from text recognised by
-  OCR are cached under a key that also covers the OCR settings that shape
+  preparing it fails, it is classified from its text (an image's recognised
+  text, #100) or its metadata, as with vision off. Answers that saw an
+  attachment are cached under their own key, which also covers the vision
+  limits, so turning vision on or off never reuses an answer given with the
+  other setting. Answers given from text recognised by OCR, alone or with the
+  image, are cached under a key that also covers the OCR settings that shape
   that text (languages, pages, the helper's version);
 - under ``privacy.descriptions: redact`` (the default) every answer, from the
   provider or the cache, has its description, tags, proposed name and reason
@@ -74,7 +75,7 @@ from file_librarian.providers.base import FatalProviderError, Provider, Provider
 from file_librarian.sensitive import sensitive_name, withheld_by_config
 
 CACHE_DAYS = 7
-PROMPT_VERSION = "7"  # bump when the prompt or answer schema changes, to invalidate the cache
+PROMPT_VERSION = "8"  # bump when the prompt or answer schema changes, to invalidate the cache
 EXAMPLE_DESCRIPTION_CHARS = 200
 
 
@@ -138,12 +139,15 @@ def ocr_key(text_key: str, config: Config) -> str:
 
 
 def answer_key(ctx: FileContext, text_key: str, config: Config, *, vision: bool) -> str:
-    """The cache key ``ctx``'s answer is kept under: with an attachment, from OCR text, or not."""
-    if vision:
-        return vision_key(text_key, config)
+    """The cache key ``ctx``'s answer is kept under: the rules, plus what shapes OCR text
+    when it came from OCR, plus the vision limits when an attachment went along (an image
+    sent with its recognised text depends on both)."""
+    key = text_key
     if ctx.metadata.text_source == "ocr":
-        return ocr_key(text_key, config)
-    return text_key
+        key = ocr_key(key, config)
+    if vision:
+        key = vision_key(key, config)
+    return key
 
 
 def wants_attachment(ctx: FileContext, provider: Provider, config: Config) -> bool:

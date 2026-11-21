@@ -70,6 +70,10 @@ class ItemResult:
     """The structured fields of the model's answer (#88), as ``FIELDS`` names them."""
     expected_fields: dict[str, str] = field(default_factory=dict)
     """Gold: the fields the document states; a field it does not state is absent."""
+    cases: tuple[str, ...] = ()
+    """Gold: the item's hard-case tags (``image-text``...)."""
+    sent_as: str | None = None
+    """What the provider got: ``image+text``, ``image``, ``pdf``, ``text`` or ``metadata``."""
 
     @property
     def correct(self) -> bool | None:
@@ -149,6 +153,7 @@ GOLD_KINDS: dict[str, tuple[str, ...]] = {
     "birth certificate": ("other", "form"),
     "diploma": ("other", "form"),
     "course certificate": ("other", "form"),
+    "debt clearance letter": ("letter", "statement", "other"),
 }
 
 
@@ -193,6 +198,22 @@ def field_metrics(items: list[ItemResult]) -> dict[str, dict[str, Any]]:
             "invented_rate": _ratio(invented, len(without)),
         }
     return result
+
+
+IMAGE_TEXT = "image-text"
+"""The tag of the corpus's images with text in them (#100)."""
+
+
+def case_metrics(items: list[ItemResult], case: str) -> dict[str, Any]:
+    """Over the items tagged ``case``: how many, how many were right and went to review,
+    and what the provider got for them."""
+    tagged = [i for i in items if case in i.cases]
+    return {
+        "items": len(tagged),
+        "correct": sum(1 for i in tagged if i.correct),
+        "reviewed": sum(1 for i in tagged if i.reviewed),
+        "sent_as": dict(sorted(Counter(i.sent_as or "nothing" for i in tagged).items())),
+    }
 
 
 def _ratio(part: int, whole: int) -> float | None:
@@ -251,6 +272,7 @@ def metrics(run: Run) -> dict[str, Any]:
             "sent": len(run.leaked),
         },
         "fields": field_metrics(items),
+        "image_text": case_metrics(items, IMAGE_TEXT),
         "status": dict(sorted(Counter(i.status for i in items).items())),
         "sent": sent,
         "items_per_minute": round(sent / minutes, 1) if minutes > 0 else None,
@@ -281,7 +303,10 @@ def load(path: Path) -> Run:
         if data.get("format") != FORMAT_VERSION:
             raise ResultError(f"{path}: not a flib eval result (format {data.get('format')!r})")
         items = [
-            ItemResult(**(raw | {"expected": tuple(raw["expected"])})) for raw in data["items"]
+            ItemResult(
+                **(raw | {"expected": tuple(raw["expected"]), "cases": tuple(raw.get("cases", ()))})
+            )
+            for raw in data["items"]
         ]
         return Run(dict(data["meta"]), items, Usage(**data["usage"]))
     except ResultError:
@@ -340,6 +365,14 @@ def report_lines(run: Run, *, worst: int = 8) -> list[str]:
                 f"  {name:<14} {_pct(f['precision']):>7} ({f['correct']}/{f['answered']})"
                 f"  {_pct(f['recall']):>7} ({f['correct']}/{f['gold']})  invented {invented}"
             )
+    pictures = m["image_text"]
+    if pictures["items"]:
+        lines.append(
+            f"Images with text: {pictures['correct']}/{pictures['items']} right, "
+            f"{pictures['reviewed']} sent to review; sent as "
+            + ", ".join(f"{k} {v}" for k, v in pictures["sent_as"].items())
+            + "."
+        )
     lines.append("Status: " + ", ".join(f"{k} {v}" for k, v in m["status"].items()) + ".")
     speed = m["items_per_minute"]
     cost = m["cost_usd"]
@@ -389,6 +422,18 @@ def compare(base: Run, other: Run, *, changed: int = 20) -> list[str]:
             for name in FIELDS
             for measure in ("precision", "recall")
             if a["fields"][name]["gold"] or b["fields"][name]["gold"]
+        ),
+        *(
+            [
+                row(
+                    "images with text reviewed",
+                    a["image_text"]["reviewed"],
+                    b["image_text"]["reviewed"],
+                    pct=False,
+                )
+            ]
+            if a["image_text"]["items"] or b["image_text"]["items"]
+            else []
         ),
         row("items/min", a["items_per_minute"], b["items_per_minute"], pct=False),
         row("cost US$", a["cost_usd"], b["cost_usd"], pct=False),

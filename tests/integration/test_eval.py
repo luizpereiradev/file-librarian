@@ -91,6 +91,7 @@ def test_full_corpus_through_the_fake_provider(scratch: Path) -> None:
         "date": "-", "flib": "-", "provider": "fake", "model": "offline", "language": "en",
         "prompt": data["meta"]["prompt"], "corpus": corpus.CORPUS_VERSION,
         "seed": corpus.DEFAULT_SEED, "limit": None, "max_cost_usd": 1.0,
+        "vision": False, "ocr": True, "cases": [],
     }  # fmt: skip
     assert result.stderr == ""  # a local provider: no question asked
     assert list(scratch.iterdir()) == []  # the temporary folder is gone
@@ -110,11 +111,59 @@ def test_an_oracle_scores_full_marks(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "Name kept: precision 100.0%" in result.stdout
     assert "tokens" in result.stdout
     # The structured fields (#88): every gold value given, nothing invented.
-    assert "Fields over 56 item(s) with gold fields" in result.stdout
+    assert "Fields over 58 item(s) with gold fields" in result.stdout
     for name in ("kind", "issuer", "amount", "currency", "document_date", "due_date", "period"):
         [line] = [line for line in result.stdout.splitlines() if line.startswith(f"  {name} ")]
         assert line.count("100.0%") == 2, line
         assert "invented 0/" in line or "invented n/a" in line, line
+
+
+IMAGE_TEXT = [i.path for i in corpus.items() if "image-text" in i.gold.cases]
+# By the recorded layout, only the scanned page is text alone; the receipt photo, with
+# few short lines on a large photo, goes with its image like the pictures.
+TEXT_ONLY = {"scan_0007.png"}
+
+
+def test_images_with_text_are_read_from_the_recorded_text(fake_ocr: Path) -> None:
+    result = runner.invoke(
+        cli.app, ["eval", "--provider", "fake", "--case", "image-text", "--json"]
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    assert data["metrics"]["items"] == len(IMAGE_TEXT) == 6
+    assert data["metrics"]["image_text"]["sent_as"] == {"text": 6}
+    assert data["meta"]["cases"] == ["image-text"]
+    assert not fake_ocr.exists()  # replayed: the helper never ran
+
+
+def test_with_vision_pictures_go_with_their_text_and_documents_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    oracle = Oracle("pt-BR")
+    oracle.attachments = frozenset({"image/jpeg", "application/pdf"})
+    use(monkeypatch, oracle)
+    args = ["eval", "--provider", "fake", "--language", "pt-BR", "--case", "image-text"]
+    result = runner.invoke(cli.app, [*args, "--vision"])
+    assert result.exit_code == 0, result.output
+    assert "Images with text: 6/6 right, 0 sent to review; sent as image+text 5, text 1." in (
+        result.stdout
+    )
+    sent = {c.path.name: c for c in oracle.calls}
+    for name in IMAGE_TEXT:
+        assert (sent[name].attachment is None) is (name in TEXT_ONLY), name
+        assert sent[name].text
+
+    oracle.calls.clear()
+    result = runner.invoke(cli.app, [*args, "--vision", "--no-ocr"])
+    assert result.exit_code == 0, result.output
+    assert "sent as image 6." in result.stdout
+    assert all(c.text is None for c in oracle.calls)
+
+
+def test_a_case_no_item_has_is_reported() -> None:
+    result = runner.invoke(cli.app, ["eval", "--provider", "fake", "--case", "nope"])
+    assert result.exit_code == 1
+    assert "no corpus item has the tag nope" in result.stderr
 
 
 def test_a_sensitive_item_that_reaches_the_provider_fails_the_run(

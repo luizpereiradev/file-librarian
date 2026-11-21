@@ -50,12 +50,18 @@ from pathlib import Path
 from typing import Any
 
 from file_librarian.evals import documents as doc
+from file_librarian.evals import pictures
+from file_librarian.extractors import ocr
 from file_librarian.locales import LOCALES, Language
 
 DEFAULT_SEED = 87
-CORPUS_VERSION = "1"
-"""Bump when items or gold labels change, so saved results say which corpus they scored."""
+CORPUS_VERSION = "2"
+"""Bump when items or gold labels change, so saved results say which corpus they scored.
+2: six images with text in them (#100)."""
 GOLD_PATH = Path(__file__).with_name("gold.json")
+OCR_PATH = Path(__file__).with_name("ocr.json")
+"""The text macOS recognised in the images with text, recorded (see ``record_ocr``)."""
+OCR_LANGUAGES = ("pt-BR", "en-US")
 MTIME = 1_790_000_000  # 2026-09-21: fixed, so the corpus looks the same on every run
 FIELD_NAMES = ("amount", "currency", "document_date", "due_date", "issuer", "period", "kind")
 LANGUAGES: tuple[Language, ...] = ("en", "pt-BR")
@@ -1587,6 +1593,60 @@ def _images(c: _Corpus) -> None:
     )
 
 
+def _pictures(c: _Corpus) -> None:
+    """Images with text in them (#100): pictures that happen to contain words, then
+    documents that happen to be images. Text recognition reads them (``ocr.json``)."""
+    picture = ("image-text", "picture")
+    c.add(
+        "WhatsApp Image 2026-11-02 at 09.14.55.png",
+        pictures.flyer,
+        f"{IMG}|{OTH}",
+        f"{IM}|{OU}",
+        lang="pt-BR",
+        cases=picture,
+    )
+    c.add(
+        "Screenshot 2026-11-05 at 21.40.12.png",
+        pictures.chat,
+        f"{IMG}|{OTH}",
+        f"{IM}|{OU}|{CV}",
+        lang="pt-BR",
+        cases=picture,
+    )
+    c.add("image (3).png", pictures.meme, f"{IMG}|{OTH}", f"{IM}|{OU}", lang="en", cases=picture)
+    c.add("IMG_8802.png", pictures.captioned_photo, IMG, f"{IM}|{VI}", lang="pt-BR", cases=picture)
+    document = ("image-text", "document-image")
+    c.add(
+        "IMG_5531.png",
+        pictures.receipt_photo,
+        FIN,
+        f"{FI}|{CO}",
+        lang="pt-BR",
+        fields={
+            "amount": "24.00",
+            "currency": "BRL",
+            "document_date": "2026-11-12",
+            "issuer": "Padaria Bela Vista",
+            "kind": "receipt",
+        },
+        cases=document,
+    )
+    c.add(
+        "scan_0007.png",
+        pictures.scanned_page,
+        FIN,
+        f"{FI}|{CV}",
+        lang="pt-BR",
+        fields={
+            "document_date": "2026-05-20",
+            "issuer": "Companhia de Saneamento Rio Claro",
+            "period": "2025",
+            "kind": "debt clearance letter",
+        },
+        cases=document,
+    )
+
+
 def _media(c: _Corpus) -> None:
     for name in (
         "gravacao-reuniao-2026-10-14.mp4",
@@ -1893,6 +1953,7 @@ GROUPS: tuple[Callable[[_Corpus], None], ...] = (
     _shopping,
     _home,
     _images,
+    _pictures,
     _media,
     _installers,
     _code,
@@ -1953,6 +2014,54 @@ def gold_json(seed: int = DEFAULT_SEED) -> str:
     return json.dumps(gold_document(seed), ensure_ascii=False, indent=1) + "\n"
 
 
+def recorded_ocr(path: Path = OCR_PATH) -> dict[str, ocr.Recognized]:
+    """The recorded text of the images with text, by the SHA-256 of each image."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return {
+        entry["sha256"]: ocr.Recognized(
+            entry["text"], entry["lines"], entry["coverage"], entry["width"], entry["height"]
+        )
+        for entry in data["items"].values()
+    }
+
+
+def record_ocr(path: Path = OCR_PATH) -> None:  # pragma: no cover - maintainer tool, macOS only
+    """Run macOS's text recognition on each image with text and record what it finds.
+
+    Run it after changing a picture (``evals/pictures.py``) or ``ocr.js``:
+    ``uv run python -m file_librarian.evals.corpus --record-ocr``.
+    """
+    import hashlib
+    import tempfile
+
+    from file_librarian.config import OcrConfig
+
+    settings = OcrConfig(languages=list(OCR_LANGUAGES))
+    recorded: dict[str, Any] = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        for item in items():
+            if "image-text" not in item.gold.cases:
+                continue
+            target = Path(tmp) / item.path
+            item.write(target)
+            found = ocr.recognize(target, settings, 100_000)
+            recorded[item.path] = {
+                "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+                "text": found.text,
+                "lines": found.lines,
+                "coverage": found.coverage,
+                "width": found.width,
+                "height": found.height,
+            }
+    document = {"helper": ocr.HELPER_VERSION, "languages": list(OCR_LANGUAGES), "items": recorded}
+    path.write_text(json.dumps(document, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+
+
 if __name__ == "__main__":  # pragma: no cover - maintainer tool
+    import sys
+
+    if "--record-ocr" in sys.argv[1:]:
+        record_ocr()
+        print(f"wrote {OCR_PATH}")
     GOLD_PATH.write_text(gold_json(), encoding="utf-8")
     print(f"wrote {GOLD_PATH}")

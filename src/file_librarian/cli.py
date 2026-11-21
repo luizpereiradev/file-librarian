@@ -2716,6 +2716,17 @@ def eval_command(
         float,
         typer.Option("--max-cost", min=0.0001, help="Stop sending once this much (US$) is spent."),
     ] = 1.0,
+    vision: Annotated[
+        bool, typer.Option("--vision", help="Send images and scanned PDFs to the model.")
+    ] = False,
+    ocr_on: Annotated[
+        bool,
+        typer.Option("--ocr/--no-ocr", help="Use the text recognised in images (recorded)."),
+    ] = True,
+    case: Annotated[
+        list[str] | None,
+        typer.Option("--case", help="Only the items with this hard-case tag (e.g. image-text)."),
+    ] = None,
     as_json: Annotated[bool, typer.Option("--json", help="Print the result as JSON.")] = False,
     out: Annotated[
         Path | None,
@@ -2769,6 +2780,9 @@ def eval_command(
         limit=limit,
         max_cost_usd=max_cost,
         base_url=base_url,
+        vision=vision,
+        ocr=ocr_on,
+        cases=tuple(case or ()),
     )
     try:
         with harness.prepared(settings) as prep:

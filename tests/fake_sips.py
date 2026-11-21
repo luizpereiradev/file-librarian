@@ -1,7 +1,8 @@
 """A stand-in for /usr/bin/sips used by every test (see conftest.py).
 
 It only "reads" synthetic images written by ``tests._helpers.make_image``: a
-file starting with ``FAKEIMG <width> <height>``. Supports the two calls
+file starting with ``FAKEIMG <width> <height>``, and PNG files (the size from
+their header, as the evaluation corpus writes them). Supports the two calls
 ``extractors/visual.py`` makes:
 
 - ``-g pixelWidth -g pixelHeight FILE`` prints the size like the real tool;
@@ -33,6 +34,8 @@ def _size(path: Path) -> tuple[int, int] | None:
         head = path.read_bytes()[:64]
     except OSError:
         return None
+    if head[:8] == b"\x89PNG\r\n\x1a\n" and head[12:16] == b"IHDR":
+        return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
     parts = head.split(b"\n", 1)[0].split()
     if len(parts) != 3 or parts[0] != b"FAKEIMG":
         return None
