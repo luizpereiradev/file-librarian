@@ -269,6 +269,6 @@ def test_a_base_url_reaches_the_provider_settings(tmp_path: Path) -> None:
     settings = harness.Settings(provider="ollama", model="small", base_url="http://127.0.0.1:9/v1")
     cfg = harness.eval_config(tmp_path, settings, 3)
     assert cfg.provider.base_url == "http://127.0.0.1:9/v1"
-    assert cfg.inputs == [tmp_path / "inbox"]
+    assert cfg.input_paths == [tmp_path / "inbox"]
     assert cfg.database.is_relative_to(tmp_path)
     assert cfg.output_root.is_relative_to(tmp_path)

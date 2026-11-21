@@ -59,7 +59,9 @@ def test_secret_in_document_marks_sensitive_and_sends_nothing(tmp_path: Path) ->
     ctx = context_for(path)
     assert ctx.sensitive is True
     assert ctx.text is None
-    assert ctx.metadata == FileMetadata(sensitive="AWS access key")
+    assert ctx.metadata == FileMetadata(
+        sensitive="content: looks like AWS access key", sensitive_by="content"
+    )
     assert FAKE["AWS access key"] not in repr(ctx)
 
 
@@ -68,7 +70,9 @@ def test_secret_in_an_email_body_marks_it_sensitive(tmp_path: Path, kind: str) -
     path = make_eml(tmp_path / "message.eml", f"Access for the new server:\n{FAKE[kind]}\n")
     ctx = context_for(path)
     assert ctx.sensitive is True
-    assert ctx.metadata == FileMetadata(sensitive=kind)
+    assert ctx.metadata == FileMetadata(
+        sensitive=f"content: looks like {kind}", sensitive_by="content"
+    )
 
 
 def test_email_is_sent_without_full_addresses(tmp_path: Path) -> None:
@@ -100,7 +104,9 @@ def test_key_without_extractor_is_sniffed_but_never_sent(tmp_path: Path) -> None
 def test_sensitive_name_needs_no_reading(tmp_path: Path) -> None:
     path = tmp_path / "id_rsa"
     path.write_text("whatever", encoding="utf-8")
-    assert context_for(path).metadata == FileMetadata(sensitive="credential file name")
+    assert context_for(path).metadata == FileMetadata(
+        sensitive="name looks like a credential file", sensitive_by="name"
+    )
 
 
 def test_detection_can_be_turned_off(tmp_path: Path) -> None:

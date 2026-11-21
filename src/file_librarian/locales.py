@@ -38,6 +38,8 @@ class Locale:
     duplicates_folder: str = "_Duplicates"
     ocr_languages: tuple[str, ...] = ("en-US",)
     """Text recognition languages (``ocr.languages``), most likely first."""
+    screenshots_category: str = "Screenshots"
+    """The fixed category ``flib init`` adds for a screenshots folder (#89)."""
 
 
 LOCALES: dict[Language, Locale] = {
@@ -63,6 +65,7 @@ LOCALES: dict[Language, Locale] = {
         review_folder="_Revisar",
         duplicates_folder="_Duplicados",
         ocr_languages=("pt-BR", "en-US"),
+        screenshots_category="Capturas de tela",
         categories=(
             DefaultCategory(
                 "Financeiro",

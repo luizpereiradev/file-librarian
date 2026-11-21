@@ -48,7 +48,7 @@ CLEAN = "Bakery flyer, contact [phone] (First Last), [email], CPF [id number], c
 
 
 def _run(cfg: Config) -> None:
-    put(cfg.inputs[0], "flyer.txt", b"A flyer.")
+    put(cfg.input_paths[0], "flyer.txt", b"A flyer.")
     pipeline.run(cfg, FakeProvider({"flyer.txt": RAW}), simulate=False)
 
 

@@ -52,6 +52,12 @@ its original is filed. A copy of an item of this run follows that item: if
 the original stays where it is (sensitive, failed, left for later), so does
 the copy, and nothing is recorded about it.
 
+Inputs with a fixed ``category`` (#89): their files arrive with that
+category and no AI answer (``Decision.by_rule``). They are filed there,
+never sent to review, keeping their name unless the input has
+``rename: true`` (the naming pattern applied to the original name), under
+the input's ``layout`` when it has one, else the category's.
+
 ``flib simulate`` stops after this stage.
 """
 
@@ -109,6 +115,8 @@ class PlannedItem:
     layout_date: date | None = None
     """For an organized item, the date its category layout's ``{year}``/``{month}``
     come from; the index keeps it so the file never changes folders on its own."""
+    by_rule: bool = False
+    """Filed into its input's fixed category, with no AI (#89)."""
 
     @property
     def review_category(self) -> str | None:
@@ -463,6 +471,7 @@ def duplicate_context(candidate: Candidate) -> FileContext:
         mtime_ns=candidate.mtime_ns,
         inode=candidate.inode,
         is_unit=candidate.is_unit,
+        input=candidate.input,
     )
 
 
@@ -527,6 +536,9 @@ def _plan_one(
         reason = f"confidence {answer.confidence:.2f} < {limits.confidence_threshold:.2f}"
         return _to_review(ctx, answer, config, names, reason, ReviewReason.LOW_CONFIDENCE)
 
+    if decision.by_rule:
+        return _plan_by_rule(ctx, answer, category, config, placement, today, keep_name, fixed)
+
     original = ctx.path.name
     new_name = None
     choice: NameChoice | None = None
@@ -565,6 +577,46 @@ def _plan_one(
         renamed=destination.name != original,
         name_choice=choice,
         layout_date=layout_date,
+    )
+
+
+def _plan_by_rule(
+    ctx: FileContext,
+    answer: Classification,
+    category: Category,
+    config: Config,
+    placement: Placement,
+    today: date,
+    keep_name: bool,
+    fixed: date | None,
+) -> PlannedItem:
+    """A file of an input with a fixed category (#89): no AI was asked.
+
+    It keeps its name unless the input says ``rename: true``, which applies
+    ``naming.pattern`` to the original name with the download date; the
+    input's ``layout``, when set, replaces the category's.
+    """
+    rules = config.input_rules(ctx.input) if ctx.input is not None else None
+    if rules is not None and rules.layout is not None:
+        category = category.model_copy(update={"layout": rules.layout})
+    original = ctx.path.name
+    when = fixed or ctx.downloaded or today
+    chosen = original
+    if rules is not None and rules.rename and not keep_name and not ctx.is_unit:
+        chosen = build_name(original, original_subject(original), when, config.naming) or original
+    destination, note = placement.in_category(config, category, chosen, ctx, when=when, issuer=None)
+    reason = f"category {category.name} (input rule, no AI)"
+    if note:
+        reason += f"; {note}"
+    return PlannedItem(
+        ctx,
+        FileStatus.ORGANIZED,
+        destination,
+        reason,
+        answer,
+        renamed=destination.name != original,
+        layout_date=when,
+        by_rule=True,
     )
 
 

@@ -279,7 +279,7 @@ Every command takes `--config PATH` (`-c`); without it, flib reads
 | `flib run` | Classify, rename, move and index new files |
 | `flib undo [--run ID \| --file PATH]` | Revert the last run, a given run, or the last operation on one file |
 | `flib search [QUERY] [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--issuer NAME] [--kind KIND] [--min-amount N] [--max-amount N] [--currency CODE] [--due-before DATE] [--due-after DATE] [--period YYYY[-MM]] [--sum [--by GROUP]] [--semantic \| --no-semantic] [--reindex] [--duplicates] [--limit N] [--json]` | Search names, descriptions and tags, narrowed by category, period, extension or what the document states (issuer, kind, amount, due date); add up amounts with `--sum`; optionally by meaning ([Searching](#searching)) |
-| `flib status [--json]` | What waits for you: files in review and why, failures, files left in place as sensitive, the last and next run, this month's cost ([Staying on top of it](#staying-on-top-of-it)) |
+| `flib status [--json] [--sensitive]` | What waits for you: files in review and why, failures, files left in place as sensitive, the last and next run, this month's cost ([Staying on top of it](#staying-on-top-of-it)); `--sensitive` lists each file left in place as sensitive and why |
 | `flib fix FILE [--category NAME] [--name NAME]` | Correct one file's category or name; flib learns from it ([Teaching it](#teaching-it)) |
 | `flib reconcile` | Update the index after you move, rename or delete files by hand; files only in iCloud are left unchecked |
 | `flib reprocess [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--rename] [--override-corrections] [--simulate] [--yes]` | Reclassify organized files after the rules change; `--rename-category OLD NEW` and `--remove-category OLD [--to-review]` migrate a category ([guide](docs/guide.md#changing-your-rules)); `--apply-layout [--category NAME] [--ask-issuer]` moves organized files into their category's layout ([Sub-folders](#sub-folders-by-year-or-issuer)); `--scrub-descriptions` removes identifiers from stored descriptions, no AI ([Privacy](#privacy)); `--fill-fields` asks only for the amount, dates, issuer, period and kind of files filed before flib kept them ([Amounts and dates](#amounts-dates-and-issuers)) |
@@ -596,7 +596,7 @@ The options you are most likely to change:
 | Option | Default | What it does |
 | --- | --- | --- |
 | `language` | `en` | `en` or `pt-BR`: the language of generated names and descriptions, and of the default folders (`Organized`/`_Review` or `Organizado`/`_Revisar`) and categories |
-| `inputs` | `[~/Downloads]` | The folders to keep organized |
+| `inputs` | `[~/Downloads]` | The folders to keep organized; each can have its own rules ([More than one inbox](#more-than-one-inbox)) |
 | `output_root` | `~/Downloads/Organized` | Where category folders are created |
 | `categories` | 5 in `en`, 15 in `pt-BR` | The closed list the AI chooses from; each `hint` steers it, `rename: false` keeps original names, `layout` files into sub-folders ([Sub-folders](#sub-folders-by-year-or-issuer)) |
 | `never_send` | `*.pem`, `*.key`, `.env*` in the example | Patterns classified from metadata only |
@@ -618,6 +618,41 @@ The options you are most likely to change:
 category name as a Finder tag, so Finder's sidebar and Spotlight
 (`tag:Finance`) find it too. Your own tags are kept, and `flib undo` removes
 only the tag flib added.
+
+### More than one inbox
+
+`inputs` takes plain paths, or a mapping with rules for that folder alone.
+The Desktop holds work in progress, so be conservative there; a screenshots
+folder can go straight to one category with no AI call at all:
+
+```yaml
+inputs:
+  - ~/Downloads                       # everything at its top level, as before
+  - path: ~/Desktop
+    only: ["*.pdf", "*.png", "Screenshot*"]   # everything else is left alone
+    min_age_days: 7                   # only what has not changed for a week
+    folders: ignore
+  - path: ~/Pictures/Screenshots     # a folder just for screenshots
+    category: Screenshots             # a configured category; no AI, no cost
+    layout: "{year}/{month}"
+    only: ["Screenshot*.png", "Screen Recording*.mov"]
+    folders: ignore
+```
+
+A fixed category files everything it takes without looking at it, so give
+it an `only` (`flib check-config` warns when there is none).
+
+The options are `only`, `ignore` (added to the global list), `min_age_days`,
+a fixed `category` (with `rename` and `layout`), `folders` and `duplicates`.
+`flib check-config` prints each input with the rules it ends up with. Inputs
+may not overlap or sit inside `output_root`. `flib init` offers the Desktop
+(documents and images untouched for a week, folders left alone) and your
+screenshots folder when it holds nothing else; both default to no. An input
+folder that cannot be read is skipped with a warning; the others are still
+organized.
+Each folder is a separate macOS permission for the daily run, which
+`flib schedule` checks one by one. The details, including how the age is
+counted, are in [the guide](docs/guide.md#more-than-one-inbox).
 
 ### Text in images and scanned PDFs (OCR)
 
@@ -792,7 +827,19 @@ Two kinds of files are treated differently, with every provider:
   content. Add `"*.eml"` to keep e-mail messages to their metadata.
 - **Credential names (`id_rsa`, `*.pem`…) or secrets found in the content:**
   nothing at all is sent, the file stays where it is, and the index records
-  only that it is sensitive.
+  only that it is sensitive, and why. Names that say they hold passwords or
+  recovery material count too, matched as whole words in any case:
+  `password(s)`, `passwd`, `2fa`, `senha(s)`, `contraseña(s)`,
+  `mot(s) de passe`, `Passwort`/`Passwörter`, `recovery code(s)`,
+  `backup code(s)`, `seed phrase`, `private key`, `recovery key`,
+  `bitwarden export`, `logins.csv`. `1Password-8.10.dmg` or a hexadecimal
+  name with `2fa` inside is not caught, and installers (`.dmg`, `.pkg`,
+  `.app`…) never are by name alone. A harmless "password reset guide.pdf" is
+  still left in place: rename it, or list it in `sensitive.allow_names`, and
+  the next run looks at it like any file (a file whose content holds a
+  secret stays sensitive whatever its name). `flib status --sensitive` lists
+  every file left in place and why, in your terminal only (never in `flib
+  doctor`, a notification or the MCP server).
 
 **Where it goes, by provider:**
 

@@ -33,7 +33,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from file_librarian import scheduler
-from file_librarian.config import Config
+from file_librarian.config import Config, canonical
 from file_librarian.db.store import BUSY_TIMEOUT_MS, RunRow, Store, WaitingRow, load_migrations
 from file_librarian.models import FileStatus, ReviewReason, explain_review
 from file_librarian.runlog import logs_dir
@@ -56,6 +56,8 @@ _LOGGED_SKIPS = {
     "cloud_only": SkipReason.CLOUD_ONLY,
     "not_where_left": SkipReason.NOT_WHERE_LEFT,
     "locked": SkipReason.LOCKED,
+    "too_recent": SkipReason.TOO_RECENT,
+    "input_unreadable": SkipReason.INPUT_UNREADABLE,
 }
 _SKIP_LINE = re.compile(r"  skip    .*  \((.*)\)")
 _SCRIPT = (
@@ -98,6 +100,19 @@ class FailedGroup:
 
 
 @dataclass(frozen=True, slots=True)
+class InputCount:
+    """How many files flib took from one input folder, and where they are now."""
+
+    index: int
+    """1-based, in the configured order (``<input-N>`` in ``flib doctor``)."""
+    folder: Path
+    filed: int
+    """Organized or in review."""
+    left: int
+    """Left in place: sensitive, skipped, failed, missing."""
+
+
+@dataclass(frozen=True, slots=True)
 class NextRun:
     installed: bool
     loaded: bool
@@ -125,6 +140,9 @@ class Status:
     """The one-time note about duplicates set aside was not seen at a terminal yet."""
     duplicates: int = 0
     """Copies set aside in the duplicates folder (RF-21)."""
+    by_input: list[InputCount] | None = None
+    """Files per input folder, in the configured order; ``None`` with a single input
+    or an index from before #89."""
 
     @property
     def review_total(self) -> int:
@@ -160,6 +178,7 @@ def collect(config: Config, *, now: datetime | None = None) -> Status:
         stats = store.stats()
         last_summary = _last_summary(store)
         notice = duplicates_notice_due(store)
+        by_input = input_counts(config, store) if len(config.inputs) > 1 else None
     last = stats.last_run
     return Status(
         database_exists=True,
@@ -174,7 +193,61 @@ def collect(config: Config, *, now: datetime | None = None) -> Status:
         last_summary=last_summary,
         duplicates=stats.by_status.get(FileStatus.DUPLICATE.value, 0),
         duplicates_notice=notice,
+        by_input=by_input,
     )
+
+
+def input_counts(config: Config, store: Store) -> list[InputCount] | None:
+    """Files per configured input (#89); ``None`` on an index from before it."""
+    try:
+        counts = store.count_by_input()
+    except sqlite3.OperationalError:  # no source_input column until the next run
+        return None
+    found = []
+    for i, entry in enumerate(config.inputs, start=1):
+        key = canonical(entry.path)
+        by_status: dict[str, int] = {}
+        for folder, statuses in counts.items():
+            if canonical(Path(folder)) == key:
+                for status, n in statuses.items():
+                    by_status[status] = by_status.get(status, 0) + n
+        filed = by_status.get(FileStatus.ORGANIZED.value, 0) + by_status.get(
+            FileStatus.REVIEW.value, 0
+        )
+        found.append(InputCount(i, entry.path, filed, sum(by_status.values()) - filed))
+    return found
+
+
+def sensitive_files(config: Config) -> list[tuple[Path, str | None]]:
+    """Every file left in place as sensitive, with why (``flib status --sensitive``).
+
+    Names and paths: for the terminal on this Mac only, never for ``flib doctor``,
+    notifications or the MCP server. Read-only, like ``collect``.
+    """
+    if not config.database.exists():
+        return []
+    with _open_read_only(config.database) as store:
+        try:
+            return store.sensitive_files()
+        except sqlite3.OperationalError:  # an index from before reasons were recorded
+            rows = store.conn.execute(
+                "SELECT current_path FROM files WHERE status = 'sensitive' ORDER BY current_path"
+            )
+            return [(Path(r[0]), None) for r in rows]
+
+
+def render_sensitive(found: list[tuple[Path, str | None]]) -> list[str]:
+    if not found:
+        return ["No file is left in place as sensitive."]
+    lines = [f"Left in place as sensitive: {_files(len(found))}"]
+    for path, reason in found:
+        why = reason or "reason not recorded (left in place by an earlier version)"
+        lines.append(f"  {path}  ({why})")
+    lines.append(
+        "A file sensitive only because of its name is looked at again once renamed, or "
+        "when `sensitive.allow_names` lets its name through."
+    )
+    return lines
 
 
 def _open_read_only(path: Path) -> Store:
@@ -320,6 +393,7 @@ def render(
                 f"Duplicates set aside in {config.duplicates_folder}: "
                 f"{_files(status.duplicates)} (nothing is deleted; review them when you like)"
             )
+        lines.extend(_input_lines(status, private=private))
         lines.extend(_last_run_lines(status, config))
     lines.append(_schedule_line(status.schedule))
     if status.database_exists:
@@ -345,6 +419,17 @@ def _review_lines(status: Status, config: Config, now: datetime, *, private: boo
             suggested = "<other>"
         why = explain_review(group.reason, suggested, None)
         lines.append(f"  {group.count:>3}  {why}")
+    return lines
+
+
+def _input_lines(status: Status, *, private: bool) -> list[str]:
+    """Files per input folder; ``private`` names them ``<input-N>`` (``flib doctor``)."""
+    if not status.by_input:
+        return []
+    lines = ["By input:"]
+    for count in status.by_input:
+        name = f"<input-{count.index}>" if private else str(count.folder)
+        lines.append(f"  {name}: {_files(count.filed)} filed, {count.left} left in place")
     return lines
 
 
@@ -390,6 +475,10 @@ def _last_run_lines(status: Status, config: Config) -> list[str]:
         )
     if skipped.get("locked"):
         parts.append(f"{skipped['locked']} protected while the Mac was locked")
+    if skipped.get("input_unreadable"):
+        parts.append(f"{skipped['input_unreadable']} input folder(s) that could not be read")
+    if skipped.get("too_recent"):
+        parts.append(f"{skipped['too_recent']} too recent for their input's min_age_days")
     if parts:
         lines.append(f"  skipped: {', '.join(parts)} (see its log)")
     if skipped.get("locked"):
@@ -452,6 +541,12 @@ def to_json(status: Status, config: Config, *, now: datetime | None = None) -> s
             ],
         },
         "sensitive": status.sensitive,
+        "by_input": None
+        if status.by_input is None
+        else [
+            {"input": str(c.folder), "filed": c.filed, "left_in_place": c.left}
+            for c in status.by_input
+        ],
         "duplicates": {
             "folder": config.duplicates_folder,
             "total": status.duplicates,

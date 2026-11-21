@@ -12,9 +12,35 @@
 #            Casa e veículos, Imagens, Vídeos e áudio, Instaladores, Código e dados, Outros
 language: en
 
-# Folders to keep organized.
+# Folders to keep organized. Only their top level is read. Each is a plain path,
+# or a mapping with `path` and rules for that folder alone (all optional):
+#   only: [globs]        take only names matching one of these; leave the rest alone
+#   ignore: [globs]      leave these alone too (added to `ignore` below; wins over only)
+#                        Patterns match names ignoring case and accents' Unicode form.
+#   min_age_days: 7      take an item only once it has not changed for this many days
+#                        (counted from its last change or arrival in the folder, not
+#                        from when it was last opened; for a folder, the newest item
+#                        inside). Younger ones are skipped as "too recent (N days
+#                        left)". Default 0.
+#   category: Name       a fixed, configured category: no AI call, no cost; the name is
+#                        kept, no description is stored, tags are words of the name
+#   rename: true         with category: apply naming.pattern to the original name
+#   layout: "{year}"     with category: its sub-folders, instead of the category's layout
+#   folders: ignore      as_unit | ignore, instead of the global `folders`
+#   duplicates: leave    move | leave, instead of the global `duplicates`
+# Inputs must not overlap (one inside another), nor sit inside output_root.
 inputs:
   - ~/Downloads
+  # - path: ~/Desktop                 # work in progress lives here: be conservative
+  #   only: ["*.pdf", "*.docx", "*.xlsx", "*.png", "*.jpg", "*.heic"]
+  #   min_age_days: 7
+  #   folders: ignore
+  # - path: ~/Pictures/Screenshots    # a folder just for screenshots: macOS
+  #                                   # Cmd+Shift+5 > Options > Other Location
+  #   category: Screenshots           # must be in `categories` below
+  #   layout: "{year}/{month}"
+  #   only: ["Screenshot*.png", "Screen Recording*.mov"]   # a fixed category files
+  #   folders: ignore                 # everything it takes unseen: always give `only`
 
 # Where category folders are created. Default depends on language.
 # output_root: ~/Downloads/Organized
@@ -129,6 +155,10 @@ vision:                      # RF-05, RF-26: let the model look at images and sc
 
 sensitive:
   detect_secrets: true       # private keys, tokens, credentials found in content
+  # Names that say "password", "recovery codes", "seed phrase"... (whole words) keep a
+  # file in place too. Patterns here are never sensitive by their name alone (a secret
+  # in the content still is); `flib status --sensitive` lists what was left and why.
+  allow_names: []            # e.g. ["password reset guide*"]
 
 privacy:
   descriptions: redact       # redact: phone numbers, e-mails, document/card/account numbers in the

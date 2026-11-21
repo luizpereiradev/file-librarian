@@ -8,6 +8,41 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- More than one inbox, each with its own rules (#89): an entry of `inputs`
+  may be a mapping with `path` and `only` (name patterns; everything else is
+  left alone), `ignore` (added to the global list, wins over `only`),
+  `min_age_days` (an item is taken only once that many days have passed
+  since it last changed or arrived in the folder, not since it was last
+  opened; younger ones are skipped as `too recent (N days left)`, never an
+  error and never waited for), a fixed `category` (no AI call, no cost: the
+  name is kept unless `rename: true`, no description or structured fields
+  are stored, tags are words of the name; sensitive files still stay put)
+  with an optional `layout`, and `folders` and `duplicates` overrides. A
+  plain list keeps working unchanged. Inputs that overlap (also through a
+  symlink or the `/System/Volumes/Data` spelling), the home folder itself
+  and inputs inside `output_root` are rejected at load; `flib check-config`
+  prints each input with its effective rules and warns about a fixed
+  category without `only`. The index records the input each file was taken
+  from and whether a rule filed it (migration 0016): `flib status` counts
+  files per input (`<input-N>` in `flib doctor`), and `flib reprocess`
+  (`--fill-fields` too) never asks the AI about files filed by rule. One
+  input folder that cannot be read is skipped with a warning (and counted
+  by `flib status`) instead of stopping the run. `flib init` offers the
+  Desktop (documents and images only, `min_age_days: 7`, folders left alone)
+  and a screenshots folder used for nothing else (a fixed `Screenshots`
+  category by year and month, taking only what macOS names as screenshots
+  or screen recordings); both default to no.
+- Patterns (`ignore`, `never_send`, `only`) now ignore the Unicode form of a
+  name as well as its case, so a decomposed `Relatório.pdf` matches
+  `Relatório*`. Office lock files (`~$*`) are always skipped, and names that
+  say they hold passwords or recovery material, matched as whole words
+  (`password`, `senha`, `contraseña`, `mot de passe`, `Passwort`, `2fa`,
+  `recovery codes`, `backup codes`, `seed phrase`, `private key`,
+  `bitwarden export`, `logins.csv`...; never an installer), are sensitive:
+  never sent, left in place. The index records why a file is sensitive
+  (its name or its content); one sensitive by its name alone is looked at
+  again once renamed or allowed by the new `sensitive.allow_names`, and
+  `flib status --sensitive` lists each file left in place and why.
 - Amounts, dates and issuers (#88): the answer also carries what a document
   states, and nothing it does not: its `kind` (bill, receipt, invoice,
   statement, contract, payslip, tax, ticket, policy, report, form, letter,

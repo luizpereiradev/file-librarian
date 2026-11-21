@@ -60,6 +60,32 @@ treat such a file they cannot read while the Mac is locked as "cannot tell
 now" (never changed, never missing) and ask you to try again once it is
 unlocked.
 
+## macOS asks about the Desktop or Documents
+
+The Desktop, Documents and Downloads are each guarded by their own macOS
+privacy permission (System Settings > Privacy & Security > Files and
+Folders). When you add one of them to `inputs`:
+
+- **By hand in Terminal**, the first `flib run` or `flib simulate` that reads
+  it makes macOS ask whether *Terminal* (or your terminal app) may access
+  that folder. Allow it; that answer covers the terminal only.
+- **The daily run** is not your terminal: it runs flib's own copy of Python
+  (`flib-python`), which never shows a prompt. `flib schedule` checks every
+  input as the daily run sees it and prints one line per folder, `ok` or
+  `denied by macOS privacy settings`. Give `flib-python` Full Disk Access
+  (the path is printed; Full Disk Access covers the Desktop, Documents and
+  Downloads at once), then run `flib schedule` again until each line says
+  `ok`.
+- A folder the run cannot list (denied, deleted, an unmounted disk) is
+  skipped: the run organizes the other inputs, prints
+  `skip    <folder>  (input folder could not be read...: EPERM ..., on list)`
+  and a warning, and `flib status` counts it. Only when no input can be read
+  does the run stop with an error.
+
+A file on the Desktop that is skipped as `too recent (N days left)` is not
+a permission problem: its input has `min_age_days`, and the file has not
+been there that long yet ([More than one inbox](guide.md#more-than-one-inbox)).
+
 ## Images and scanned PDFs are classified from their name only
 
 flib reads the text in screenshots, photographed documents and scanned PDFs

@@ -18,7 +18,12 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
-from file_librarian.classifier import CACHE_DAYS, classify_all, correction_examples
+from file_librarian.classifier import (
+    CACHE_DAYS,
+    classify_all,
+    correction_examples,
+    rule_decisions,
+)
 from file_librarian.config import Config
 from file_librarian.context import build_context_safely
 from file_librarian.db.store import Store
@@ -93,10 +98,12 @@ def _run(
     store.prune_cache(max_age_days=CACHE_DAYS)
     found = scan(config, store.file_state, now=now)
     contexts = [build_context_safely(c, config) for c in found.candidates]
+    # Files of inputs with a fixed category are never sent: no provider call, no cost (#89).
+    ruled, contexts = rule_decisions(contexts, config)
     classified = classify_all(contexts, provider, rules_for(config, store), config, cache=store)
     # Duplicates are never classified: no provider call, no cost (RF-21).
     planned = plan(
-        classified.decisions,
+        [*ruled, *classified.decisions],
         config,
         today=date.fromtimestamp(now) if now is not None else None,
         duplicates=found.duplicates,

@@ -5,6 +5,12 @@ them:
 
 - ``detect_language`` and ``Answers``/``render_config``/``write_config``: the
   configuration ``init`` writes, short and commented, mode 600;
+- ``desktop_folder`` and ``screenshot_folder``: the extra inputs ``init``
+  offers (#89). The Desktop gets conservative rules (``DESKTOP_ONLY``,
+  ``DESKTOP_MIN_AGE_DAYS``, folders left alone) because people keep work in
+  progress there; a screenshots folder gets a fixed category, so no AI is
+  asked about it. Where macOS saves screenshots is read with ``defaults``
+  (``DEFAULTS``; tests swap in a fake);
 - ``pick_sample``: the most recent items in the input folders that are worth
   a trial: not hidden, not in progress or ignored, not sensitive or
   ``never_send``, not only in iCloud, and not big;
@@ -23,18 +29,20 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import tempfile
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from file_librarian import hashing, pipeline
-from file_librarian.config import Config, is_within, parse_config
+from file_librarian.config import Config, InputConfig, is_within, parse_config, same_place
 from file_librarian.globs import matches_any
 from file_librarian.locales import DEFAULT_LANGUAGE, LOCALES, Language
 from file_librarian.models import FileStatus
 from file_librarian.providers.base import Provider
-from file_librarian.scanner import IN_PROGRESS_PATTERNS
+from file_librarian.scanner import DAY, IN_PROGRESS_PATTERNS, item_age
 from file_librarian.sensitive import sensitive_name, withheld_by_config
 
 DEFAULT_SAMPLE = 30
@@ -50,6 +58,39 @@ DEFAULT_MODELS = {
 OPENAI_COMPAT_URL = "https://api.openai.com/v1"
 """What ``init`` suggests for ``openai-compat``; any compatible server works."""
 OLLAMA_PROBE_SECONDS = 1.0
+DEFAULTS = "/usr/bin/defaults"
+"""Reads where macOS saves screenshots; tests swap in a fake (``tests/fake_defaults.py``)."""
+DESKTOP_MIN_AGE_DAYS = 7
+DESKTOP_ONLY = (
+    "*.pdf", "*.doc", "*.docx", "*.odt", "*.rtf", "*.pages",
+    "*.xls", "*.xlsx", "*.ods", "*.numbers", "*.ppt", "*.pptx", "*.odp", "*.key",
+    "*.png", "*.jpg", "*.jpeg", "*.heic", "*.gif", "*.webp", "*.tif", "*.tiff",
+)  # fmt: skip
+"""Documents and images: all ``flib init`` lets flib take from the Desktop. Plain text,
+Markdown and CSV are left out: scratch notes and exports live there."""
+SCREENSHOT_LAYOUT = "{year}/{month}"
+SCREENSHOT_NAMES = (
+    "Screenshot*", "Screen Shot*", "Screen Recording*",  # English
+    "Captura de Tela*", "Gravação de Tela*",  # Portuguese
+    "Captura de pantalla*", "Grabación de pantalla*",  # Spanish
+    # French
+    "Capture d\u2019écran*", "Capture d'écran*", "Enregistrement de l\u2019écran*",
+    "Enregistrement de l'écran*", "Enregistrement d\u2019écran*", "Enregistrement d'écran*",
+    "Bildschirmfoto*", "Bildschirmaufnahme*",  # German
+    "Schermata*", "Registrazione schermo*",  # Italian
+    "スクリーンショット*", "画面収録*",  # Japanese
+)  # fmt: skip
+"""How macOS names screenshots and screen recordings in the languages it is most used in."""
+SCREENSHOT_EXTENSIONS = (".png", ".jpg", ".jpeg", ".heic", ".tif", ".tiff", ".gif", ".mov", ".mp4")
+SCREENSHOT_ONLY = tuple(
+    f"{name}{ext}" for name in SCREENSHOT_NAMES for ext in SCREENSHOT_EXTENSIONS
+)
+"""The screenshots input's ``only``: nothing else in that folder is ever taken."""
+SHARED_FOLDERS = (
+    "", "Desktop", "Documents", "Downloads", "Pictures", "Movies", "Music", "Library",
+    "Library/Mobile Documents/com~apple~CloudDocs",
+)  # fmt: skip
+"""The home folder and the standard folders in it (relative to home; ``""`` is home)."""
 
 
 def probe_ollama() -> list[str] | None:
@@ -105,6 +146,10 @@ class Answers:
     """The model, when it was asked for (``openai-compat``, ``ollama``)."""
     base_url: str | None = None
     """``openai-compat``: the server's API root."""
+    desktop: Path | None = None
+    """The Desktop, added with conservative rules (``DESKTOP_ONLY``...)."""
+    screenshots: Path | None = None
+    """A screenshots folder, added with a fixed category and a year/month layout."""
 
     @property
     def model(self) -> str:
@@ -114,6 +159,77 @@ class Answers:
 def _q(value: str) -> str:
     """A YAML double-quoted scalar (JSON strings are valid YAML)."""
     return json.dumps(value, ensure_ascii=False)
+
+
+def _inputs_block(answers: Answers) -> str:
+    lines = [f"  - {_q(display_path(answers.input_folder))}"]
+    if answers.desktop is not None:
+        lines += [
+            "  # People keep work in progress on the Desktop: only documents and images",
+            f"  # that have not changed for {DESKTOP_MIN_AGE_DAYS} days are taken, and folders "
+            "are left alone.",
+            f"  - path: {_q(display_path(answers.desktop))}",
+            *_flow("    only: ", DESKTOP_ONLY),
+            f"    min_age_days: {DESKTOP_MIN_AGE_DAYS}",
+            "    folders: ignore",
+        ]
+    if answers.screenshots is not None:
+        category = LOCALES[answers.language].screenshots_category
+        lines += [
+            "  # Screenshots: filed by year and month with no AI call (and no cost). Only",
+            "  # what macOS names as a screenshot or screen recording is taken; folders",
+            "  # and everything else there are left alone.",
+            f"  - path: {_q(display_path(answers.screenshots))}",
+            f"    category: {_q(category)}",
+            f"    layout: {_q(SCREENSHOT_LAYOUT)}",
+            *_flow("    only: ", SCREENSHOT_ONLY),
+            "    folders: ignore",
+        ]
+    return "\n".join(lines)
+
+
+def _flow(prefix: str, items: tuple[str, ...], width: int = 88) -> list[str]:
+    """``prefix`` and a YAML flow list of ``items``, wrapped at ``width`` columns."""
+    lines: list[str] = []
+    start = f"{prefix}["
+    pad = " " * len(start)
+    line = start
+    for i, item in enumerate(items):
+        text = _q(item) + ("]" if i == len(items) - 1 else ",")
+        fresh = line in (start, pad)
+        joined = line + text if fresh else f"{line} {text}"
+        if len(joined) > width and not fresh:
+            lines.append(line)
+            line = pad + text
+        else:
+            line = joined
+    lines.append(line)
+    return lines
+
+
+def _categories_block(answers: Answers) -> str:
+    """Only when a screenshots folder needs its category: the language's default
+    categories, written out, with it added."""
+    if answers.screenshots is None:
+        return ""
+    locale = LOCALES[answers.language]
+    lines = [
+        "",
+        "# The language's default categories, plus one for screenshots. A hint tells",
+        "# the AI what belongs in a category; rename: false keeps file names as they are.",
+        "categories:",
+    ]
+    for category in locale.categories:
+        lines.append(f"  - name: {_q(category.name)}")
+        if category.hint:
+            lines.append(f"    hint: {_q(category.hint)}")
+        if not category.rename:
+            lines.append("    rename: false")
+    lines += [
+        f"  - name: {_q(locale.screenshots_category)}",
+        "    rename: false",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def render_config(answers: Answers) -> str:
@@ -142,7 +258,7 @@ language: {answers.language}
 
 # Folders to keep organized. Only their top level is read.
 inputs:
-  - {_q(display_path(answers.input_folder))}
+{_inputs_block(answers)}
 
 # Category folders are created here. Files flib is unsure about go to
 # review_folder, inside it, for you to decide.
@@ -167,7 +283,7 @@ vision:
   # Has no effect with claude-code; ollama and openai-compat also need
   # provider.vision: true, and read images only.
   enabled: {"true" if answers.vision else "false"}
-
+{_categories_block(answers)}
 schedule:
   time: "12:30"  # the daily run, 24-hour local time; applied by `flib schedule`
 """
@@ -188,6 +304,62 @@ def write_config(path: Path, text: str) -> None:
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(text)
     tmp.replace(path)
+
+
+# --- More inboxes: the Desktop and screenshots (#89) ---------------------------------
+
+
+def desktop_folder() -> Path | None:
+    """The Desktop, if there is one."""
+    desktop = Path.home() / "Desktop"
+    return desktop if desktop.is_dir() else None
+
+
+def screenshot_folder(timeout: float = 5.0) -> Path | None:
+    """Where macOS saves screenshots (``com.apple.screencapture location``).
+
+    Unset, that is the Desktop. ``None`` when ``defaults`` cannot be run or the
+    folder it names does not exist. Nothing is written.
+    """
+    try:
+        # A fixed binary and arguments; nothing from the user goes in.
+        result = subprocess.run(  # noqa: S603
+            [DEFAULTS, "read", "com.apple.screencapture", "location"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        folder = Path.home() / "Desktop"  # the key is unset: the default place
+    else:
+        raw = result.stdout.strip()
+        if not raw:
+            return None
+        folder = Path(os.path.normpath(Path(raw).expanduser()))
+    return folder if folder.is_absolute() and folder.is_dir() else None
+
+
+def shared_folder(folder: Path) -> bool:
+    """``folder`` is the home folder or one of the standard folders in it (Desktop,
+    Documents, Pictures, iCloud Drive...): it holds more than screenshots."""
+    home = Path.home()
+    return any(same_place(folder, home / name) for name in SHARED_FOLDERS)
+
+
+def count_matching(folder: Path, patterns: tuple[str, ...]) -> int:
+    """How many visible items at the top of ``folder`` match ``patterns`` (nothing is read)."""
+    try:
+        with os.scandir(folder) as entries:
+            return sum(
+                1
+                for entry in entries
+                if not entry.name.startswith(".") and matches_any(entry.name, patterns)
+            )
+    except OSError:
+        return 0
 
 
 # --- The sample ----------------------------------------------------------------------
@@ -212,14 +384,24 @@ def _small_unit(root: Path) -> bool:
     return True
 
 
-def _sample_time(entry: os.DirEntry[str], config: Config) -> float | None:
-    """The item's modification time if it belongs in a trial, else ``None``."""
+def _sample_time(
+    entry: os.DirEntry[str], config: Config, rules: InputConfig, now: float
+) -> float | None:
+    """The item's modification time if it belongs in a trial, else ``None``.
+
+    The input's own rules hold as in a real run: its ``ignore`` and ``only``
+    patterns, its ``folders`` and its ``min_age_days``.
+    """
     name = entry.name
     if name.startswith(".") or entry.is_symlink():
         return None
-    if matches_any(name, (*IN_PROGRESS_PATTERNS, *config.ignore)):
+    if matches_any(name, (*IN_PROGRESS_PATTERNS, *config.ignore, *rules.ignore)):
         return None
-    if sensitive_name(name) or withheld_by_config(name, config.never_send):
+    if rules.only is not None and not matches_any(name, rules.only):
+        return None
+    if sensitive_name(name, config.sensitive.allow_names) or withheld_by_config(
+        name, config.never_send
+    ):
         return None
     path = Path(entry.path)
     if is_within(path, config.output_root):
@@ -230,21 +412,29 @@ def _sample_time(entry: os.DirEntry[str], config: Config) -> float | None:
         return None
     if st.st_flags & stat.UF_HIDDEN or hashing.is_dataless(st):
         return None
+    if item_age(st, now) < rules.min_age_days * DAY:
+        return None
     if stat.S_ISREG(st.st_mode):
         return st.st_mtime if 0 < st.st_size <= MAX_ITEM_BYTES else None
-    if stat.S_ISDIR(st.st_mode) and config.folders == "as_unit" and _small_unit(path):
+    if stat.S_ISDIR(st.st_mode) and config.folders_for(rules) == "as_unit" and _small_unit(path):
         return st.st_mtime
     return None
 
 
-def pick_sample(config: Config, size: int) -> list[Path]:
-    """Up to ``size`` of the most recent items worth a trial, newest first."""
+def pick_sample(config: Config, size: int, *, now: float | None = None) -> list[Path]:
+    """Up to ``size`` of the most recent items worth a trial, newest first.
+
+    Inputs with a fixed category are left out: no AI is asked about their files.
+    """
+    now = time.time() if now is None else now
     found: list[tuple[float, Path]] = []
-    for folder in config.inputs:
+    for rules in config.inputs:
+        if rules.category is not None:
+            continue
         try:
-            with os.scandir(folder) as entries:
+            with os.scandir(rules.path) as entries:
                 for entry in entries:
-                    when = _sample_time(entry, config)
+                    when = _sample_time(entry, config, rules, now)
                     if when is not None:
                         found.append((when, Path(entry.path)))
         except OSError:

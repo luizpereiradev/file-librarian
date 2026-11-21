@@ -64,6 +64,141 @@ scheduled runs write it to their log, and `flib status` shows it until you
 have seen it after a `flib run` in Terminal. Nothing is deleted: `flib undo`
 puts them back, and `duplicates: leave` keeps them where they are.
 
+## More than one inbox
+
+`inputs` lists the folders flib keeps organized. A plain path takes
+everything at the folder's top level, as flib always did. A mapping adds
+rules for that folder alone:
+
+```yaml
+inputs:
+  - ~/Downloads
+  - path: ~/Desktop
+    only: ["*.pdf", "*.docx", "*.png", "*.jpg"]
+    ignore: ["draft*"]
+    min_age_days: 7
+    folders: ignore
+  - path: ~/Pictures/Screenshots
+    category: Screenshots
+    layout: "{year}/{month}"
+    only: ["Screenshot*.png", "Screen Recording*.mov"]
+    folders: ignore
+```
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| `only` | (everything) | Name patterns; an item matching none of them is left alone and only counted (`N item(s) matching none of their input's only were left alone`) |
+| `ignore` | `[]` | Name patterns left alone in this folder, on top of the global `ignore`. A name matching both `ignore` and `only` is ignored |
+| `min_age_days` | `0` | Take an item only once it is this many days old (below) |
+| `category` | (the AI decides) | A configured category every file from here goes to, with no AI call |
+| `rename` | `false` | With `category`: apply `naming.pattern` to the original name (the date is the download date) |
+| `layout` | the category's | With `category`: the sub-folders for files from here ([Sub-folders](#sub-folders-inside-a-category)) |
+| `folders` | the global `folders` | `as_unit` or `ignore` for sub-folders and bundles here |
+| `duplicates` | the global `duplicates` | `move` or `leave` for copies found here |
+
+Patterns match a name, never a path, ignoring case and Unicode form the way
+Finder does (`Relatório*` matches however the accent was stored). Hidden
+files, downloads in progress, Office lock files (`~$report.docx`), files
+only in iCloud and the organized folder itself are skipped in every input
+before any rule is looked at.
+
+**How old an item is.** Its age is the time since it last changed or
+arrived in the folder: the later of its modification time and its
+status-change time, which macOS updates when an item is moved, copied or
+renamed into a folder, and when its contents or attributes change. It is
+not the last time you opened it: macOS does not record that reliably, so a
+document you only read every day still ages. A PDF from 2019 that you
+dragged to the Desktop this morning is zero days old, and a time in the
+future (a wrong clock) counts as brand new. For
+a folder taken as one unit, the newest item inside counts too. A younger
+item is skipped as `too recent (N days left)`; it is never an error, it is
+not waiting for anything (the daily run does not stay up for it), and the
+first run after it is old enough takes it. `flib status` counts how many the
+last run left for this reason.
+
+**A fixed category.** Files from an input with `category` are never sent to
+the AI: no call, no cost, nothing cached. Nothing checks what they are,
+so give such an input an `only` with the names you expect;
+`flib check-config` warns about one without (`everything in this folder is
+filed as X without being looked at`). They keep their name (unless
+`rename: true`), get no description, and their tags are the words of their
+name, so `flib search` finds them by name, category and tag. Their
+`{year}` and `{month}` come from the download date; an `{issuer}` level is
+never filled (no AI names one), so they stop just above it. Text is still
+read on your Mac (including OCR of screenshots) for one reason: the secret
+scan. A screenshot of a password or an API key is marked sensitive and stays
+where it is, like anywhere else. The index marks these files as filed by
+rule (`filed_by_rule`), and only those: `flib reprocess` (and
+`--fill-fields`) never asks the AI about them, while a file the AI filed
+from the same folder into the same category is reprocessed like any other.
+`--apply-layout` leaves them alone when their input has a `layout` of its
+own.
+
+**Which input a file came from.** The index records it for every file it
+files (files indexed before this version count as coming from their
+original folder), and keeps it: `flib undo` puts a file back exactly where
+it was taken from, and `flib reconcile` recognises a file you dragged back
+into an input folder, its own or another, and leaves it there; the index
+then knows where it is now and still which input it came from. With more
+than one input,
+`flib status` shows how many files each input gave (`flib doctor` writes
+them as `<input-1>`, `<input-2>`... and never the folder names).
+
+**What is rejected.** Inputs that overlap (the same folder twice, through a
+symlink, the `/System/Volumes/Data/...` spelling or a different case, or
+one folder inside another), your home folder itself, an input inside
+`output_root`, a
+`category` that is not in `categories`, `rename` or `layout` without a
+`category`, an empty `only`, and a pattern with a `/`. `flib check-config`
+prints each input with the rules it ends up with, the global ones included.
+
+**`flib init`** offers two more inboxes after the first folder, both
+answered no by default (Enter or `--yes` keep a Downloads-only setup):
+
+- the Desktop, with `only` documents and images (PDF, Word, Excel,
+  PowerPoint, Pages, Numbers, Keynote and the OpenDocument formats, and
+  common image types; not plain text, Markdown or CSV, where scratch notes
+  and exports live), `min_age_days: 7` and `folders: ignore`, because
+  people keep work in progress there;
+- the folder macOS saves screenshots to (read with `defaults read
+  com.apple.screencapture location`), with a fixed `Screenshots` category
+  (`Capturas de tela` in pt-BR), a `{year}/{month}` layout,
+  `folders: ignore` and an `only` of the names macOS gives screenshots and
+  screen recordings (`Screenshot*`, `Screen Shot*`, `Screen Recording*`,
+  and the Portuguese, Spanish, French, German, Italian and Japanese ones
+  such as `Captura de Tela*`, `Captura de pantalla*`, `Capture d’écran*`,
+  `Bildschirmfoto*`, `Schermata*`, `スクリーンショット*`, as images or
+  videos). Init says how many items there match before asking, and when
+  none does, says that no is probably the answer. It is not offered when that folder holds other
+  things: your home folder or a standard one in it (Desktop, the macOS
+  default, Documents, Downloads, Pictures, Movies, Music, Library, iCloud
+  Drive). Init then says how to pick a folder just for screenshots
+  (Cmd+Shift+5 > Options > Other Location).
+
+**Two limits to know.**
+
+- The age check uses when an item last changed or arrived in the folder,
+  not when it was last opened: a document you read every day but never edit
+  still becomes old enough.
+- When screenshots are saved to the Desktop (the macOS default) and the
+  Desktop is an input, screenshots older than its `min_age_days` match its
+  `only` list (`*.png`) and are classified like any image: their text is
+  read on your Mac, the secret scan applies (a screenshot of a password stays
+  where it is), and the AI picks the category. To keep them apart, have
+  macOS save screenshots to a folder of their own (Cmd+Shift+5 > Options >
+  Other Location) and add that folder with a fixed category, as `flib init`
+  offers.
+
+**One input that cannot be read** (macOS denied it, it was deleted, its disk
+is not connected) is skipped with a warning in the run's output and log,
+and `flib status` counts it; the other inputs are organized as usual. The
+run fails only when no input can be read.
+
+**macOS privacy.** The Desktop, Documents and Downloads are each guarded by
+their own permission. `flib schedule` checks every input as the daily run
+sees it and lists each one with `ok` or what macOS said; see
+[troubleshooting](troubleshooting.md#macos-asks-about-the-desktop-or-documents).
+
 ## Sub-folders inside a category
 
 By default each category is one folder. An optional `layout` files a
