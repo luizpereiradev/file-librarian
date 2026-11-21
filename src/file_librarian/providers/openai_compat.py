@@ -1,8 +1,9 @@
 """Any server that speaks the OpenAI Chat Completions API (M3, issue #34).
 
 OpenAI itself, OpenRouter, Groq, LM Studio, llama.cpp's server, vLLM and
-Ollama (see ``providers/ollama.py``, a preset of this one) all accept
-``POST {base_url}/chat/completions``.
+Ollama all accept ``POST {base_url}/chat/completions``. (The ``ollama``
+provider, ``providers/ollama.py``, lists models here but classifies through
+Ollama's own API.)
 
 - Where it goes: only to ``provider.base_url``, which the user configured.
   Redirects are refused, not followed, so a server cannot send the file on to
@@ -213,7 +214,7 @@ class OpenAICompatProvider:
         if not text:
             raise ProviderError("the answer had no text")
         try:
-            data = json.loads(_strip_wrapping(text))
+            data = json.loads(strip_wrapping(text))
             if not isinstance(data, dict):
                 raise ValueError("not an object")
             allowed = [c.name for c in rules.categories]
@@ -311,7 +312,7 @@ _THINK = re.compile(r"\A\s*<think>.*?</think>\s*", re.DOTALL)
 _FENCE = re.compile(r"\A```(?:json)?\s*(.*?)\s*```\Z", re.DOTALL)
 
 
-def _strip_wrapping(text: str) -> str:
+def strip_wrapping(text: str) -> str:
     """Drop a leading ``<think>`` block and a Markdown code fence some local models add."""
     text = _THINK.sub("", text).strip()
     match = _FENCE.match(text)

@@ -72,7 +72,9 @@ default, so pressing Enter all the way gives a working setup (`flib init
   with a model pulled (it is offered only then, and the trial checks the model
   is there), otherwise `anthropic`, and then it offers to store your API key in
   the Keychain (typed hidden, never shown). `openai-compat` is always offered:
-  it asks for the server's URL and the model, and offers to store a key.
+  it asks for the server's URL and the model, and offers to store a key. So
+  is `local`, the fully local setup that `flib init --local` goes straight
+  to ([Nothing leaves this Mac](#nothing-leaves-this-mac)).
 - **Configuration:** written to `~/.config/file-librarian/config.yaml` (or
   `--config PATH`), readable only by you. If one exists, it is kept unless you
   confirm replacing it (`--force` replaces it without asking).
@@ -376,9 +378,11 @@ filters combine with the others and with a query:
 
 `--sum` adds up the amounts of every match instead of listing them, per
 currency (two currencies are never added together), and `--by issuer`,
-`month`, `year`, `kind` or `category` groups the totals:
+`month`, `year`, `kind` or `category` groups the totals. `--sum` with no
+words or filter adds up every filed document:
 
 ```sh
+flib search --sum --by kind                             # everything, per kind of document
 flib search --issuer "Power Co" --period 2026 --sum     # what did I pay Power Co in 2026?
 flib search --kind bill --period 2026 --sum --by month --json
 flib search --kind bill --due-after 2026-11-20          # bills still to pay
@@ -566,15 +570,27 @@ a model on your own machine: nothing leaves it, and there is no key and no bill.
 ```yaml
 provider:
   name: ollama
-  model: llama3.2            # any model you have pulled: `ollama pull llama3.2`
+  model: gemma4:e4b          # any model you have pulled: `ollama pull gemma4:e4b`
   # base_url: http://localhost:11434/v1   # the default
-  timeout_seconds: 120       # local models can be slow on the first file
+  # timeout_seconds: 300     # the default for ollama: the first file also loads the model
 ```
 
-`flib check-config` asks Ollama for its model list (no file content is sent)
-and tells you if it is not running (`ollama serve`) or the model is not pulled.
-Small models make more mistakes than Claude: try `flib simulate` first and
-keep `limits.confidence_threshold` where it is, so doubtful files go to review.
+`flib init --local` sets this up for you, with the model measured best on a
+16 GB Mac ([Nothing leaves this Mac](#nothing-leaves-this-mac)). `flib
+check-config` asks Ollama for its model list (no file content is sent) and
+tells you if it is not running (`ollama serve`) or the model is not pulled.
+Local models make more mistakes than Claude, and send too little to review:
+try `flib simulate` first.
+
+flib talks to Ollama's own API for this provider (`/api/chat`, next to the
+OpenAI-compatible `base_url`), because only it takes what small models need:
+a context sized to the request (Ollama's default would cut the instructions
+off a long prompt), temperature 0, thinking off, and the answer's JSON schema
+where the model supports it. Models that do not (the builds Ollama pulls by
+default on Apple silicon answer "structured output is unavailable") get the
+schema in the instructions instead. Near-valid JSON is repaired, and an
+answer with a category outside the list is asked for once more; a second bad
+answer fails the file, as with any provider.
 
 What being local changes, precisely: requests are not spaced by
 `provider.requests_per_minute`, and loopback requests skip any HTTP proxy.
@@ -868,6 +884,54 @@ absolute path that `./scripts/install.sh` printed:
 Add `"--config", "/path/to/config.yaml"` to `args` if your configuration is
 not in the default place.
 
+## Nothing leaves this Mac
+
+```sh
+flib init --local
+```
+
+sets flib up so that no file, name or search ever leaves your Mac:
+
+| What | Where it runs |
+| --- | --- |
+| Classifying files | `gemma4:e4b` in [Ollama](https://ollama.com), on this Mac |
+| Text in images and scanned PDFs | macOS's own text recognition (on by default) |
+| Semantic search | `embeddinggemma` in Ollama, on this Mac |
+| The index, logs, undo history | flib's folder, as always |
+
+`flib init --local` checks that Ollama is installed and running and tells you
+how to get it if not (`brew install ollama` and `brew services start
+ollama`, or the app from [ollama.com](https://ollama.com/download)); flib
+never installs it for you. It then offers to download the two models (about
+10 GB; it shows the sizes and asks first), writes the configuration, runs the
+usual trial on copies of your recent files, and says what quality to expect.
+Plain `flib init` offers the same setup as the provider `local`.
+`flib check-config` and `flib doctor` say `fully local: yes`, or list what
+leaves the Mac and where to (the classification request with `anthropic`,
+`claude-code` or a remote server; the index text with remote embeddings).
+
+**What quality to expect.** Measured on flib's synthetic test corpus
+([docs/quality.md](docs/quality.md#local-models-92)), `gemma4:e4b` files 92%
+of items in a right category in English and 97% in Portuguese, against 99%
+and 100% for the hosted default (Claude Haiku), and sends 7 of the 9 items
+that need a person to review, against 9 of 9. It keeps descriptive names as
+often (and more generic ones too), reads amounts, currencies and due dates as well, and gets
+issuers and document dates wrong more often. It does about 20 files a minute
+on an M3 Pro, and costs nothing. Expect to correct more at first: `flib
+simulate` before the first run, and a look at the review folder.
+
+**Hardware.** An Apple silicon Mac with 16 GB of memory or more, and about
+10 GB of disk for the models. The model needs about 9.5 GB once loaded, and
+Ollama's figure grows to about 17 GB over a long run before it is unloaded
+(10 minutes after the last file); on 16 GB macOS will swap during a large
+first run. Of the four models measured, the smaller `qwen3.5:4b` (4 GB) is
+less accurate in English (85%) and rarely sends anything to review; the
+larger ones are not more accurate enough to pay for being 2.5 to 3 times
+slower.
+
+Vision stays off in this setup: on the corpus's images with text it gained
+one item in twelve at half the speed. Text recognition reads them instead.
+
 ## Privacy
 
 The index, the logs and the `flib doctor` report stay on your Mac. What
@@ -1010,7 +1074,8 @@ lists exactly what is redacted.
 ## Measuring quality
 
 `flib eval` runs a synthetic corpus of about 150 downloads, in English and
-Portuguese, through the real pipeline in a temporary folder and reports
+Portuguese, through the real pipeline in a temporary folder (with any
+provider, a local Ollama model included) and reports
 category accuracy, the review rate, how often descriptive names are kept,
 speed and cost. It never reads your configuration or touches your library;
 with a paid provider it shows the estimated cost (a few US cents with the

@@ -508,13 +508,15 @@ def sum_amounts(
 ) -> Sums:
     """Add up the amounts of every file matching ``text`` (by words) and ``filters``.
 
-    No words and no filters add up nothing. ``by`` is one of ``GROUPS``.
+    No words and no filters add up every filed document (never duplicates or
+    sensitive files). Words with nothing searchable in them (``"..."``) and no
+    filters match nothing. ``by`` is one of ``GROUPS``.
     """
     if by is not None and by not in GROUPS:
         raise SearchError(f"cannot group by {by!r} (one of: {', '.join(GROUPS)})")
     filters = filters or SearchFilters()
     query = fts_query(text)
-    if query is None and not filters:
+    if query is None and text.strip() and not filters:
         return Sums(by, [], [], 0)
 
     def totals(group: str | None) -> tuple[list[AmountTotal], int]:

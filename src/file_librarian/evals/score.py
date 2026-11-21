@@ -96,6 +96,9 @@ class Usage:
     output_tokens: int = 0
     cost_usd: float = 0.0
     cost_known: bool = True
+    answers: dict[str, int] = field(default_factory=dict)
+    """How the provider got its answers, when it says (``ollama``: ``repaired``,
+    ``retried``...; see ``providers/ollama.py``)."""
 
 
 @dataclass(slots=True)
@@ -374,6 +377,10 @@ def report_lines(run: Run, *, worst: int = 8) -> list[str]:
             + "."
         )
     lines.append("Status: " + ", ".join(f"{k} {v}" for k, v in m["status"].items()) + ".")
+    if run.usage.answers:
+        lines.append(
+            "Answers: " + ", ".join(f"{k} {v}" for k, v in sorted(run.usage.answers.items())) + "."
+        )
     speed = m["items_per_minute"]
     cost = m["cost_usd"]
     lines.append(

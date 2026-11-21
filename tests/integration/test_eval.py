@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from typer.testing import CliRunner
@@ -116,6 +116,25 @@ def test_an_oracle_scores_full_marks(monkeypatch: pytest.MonkeyPatch) -> None:
         [line] = [line for line in result.stdout.splitlines() if line.startswith(f"  {name} ")]
         assert line.count("100.0%") == 2, line
         assert "invented 0/" in line or "invented n/a" in line, line
+
+
+def test_how_answers_were_obtained_is_reported_and_saved(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class Counting(Oracle):
+        answers: ClassVar[dict[str, int]] = {"repaired": 3, "retried": 1}  # as ollama counts
+
+    use(monkeypatch, Counting("en"))
+    out = tmp_path / "run.json"
+    result = runner.invoke(
+        cli.app, ["eval", "--provider", "fake", "--limit", "5", "--out", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    assert "Answers: repaired 3, retried 1." in result.stdout
+    assert json.loads(out.read_text(encoding="utf-8"))["usage"]["answers"] == {
+        "repaired": 3,
+        "retried": 1,
+    }
 
 
 IMAGE_TEXT = [i.path for i in corpus.items() if "image-text" in i.gold.cases]
@@ -321,3 +340,12 @@ def test_a_base_url_reaches_the_provider_settings(tmp_path: Path) -> None:
     assert cfg.input_paths == [tmp_path / "inbox"]
     assert cfg.database.is_relative_to(tmp_path)
     assert cfg.output_root.is_relative_to(tmp_path)
+
+
+def test_vision_tells_a_local_model_it_reads_images(tmp_path: Path) -> None:
+    on = harness.Settings(provider="ollama", model="small", vision=True)
+    assert harness.eval_config(tmp_path, on, 3).provider.vision
+    off = harness.Settings(provider="ollama", model="small")
+    assert not harness.eval_config(tmp_path, off, 3).provider.vision
+    hosted = harness.Settings(provider="fake", vision=True)
+    assert not harness.eval_config(tmp_path, hosted, 3).provider.vision

@@ -8,6 +8,32 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- A measured, fully local setup (#92). `flib init --local` (and the
+  provider `local` in plain `flib init`) checks that Ollama is installed and
+  running (explaining `brew install ollama` or the app if not; it never
+  installs it), offers to download `gemma4:e4b` and `embeddinggemma` after
+  showing their sizes (never with `--yes`), writes `provider: ollama` with
+  that model, local OCR, vision off and semantic search on with
+  `embeddinggemma`, runs the trial on copies and states the measured
+  quality gap. `flib check-config` and `flib doctor` show `fully local:
+  yes`, or what leaves the Mac and where to. Four local models were measured
+  on the whole `flib eval` corpus in both languages (docs/quality.md, "Local
+  models"): `gemma4:e4b` files 92% (`en`) and 97% (`pt-BR`) of items in a
+  right category against 99% and 100% for Claude Haiku, sends 7 of 9
+  doubtful items to review against 9 of 9, at 21-24 items a minute; README
+  has a "Nothing leaves this Mac" section. The `ollama` provider now
+  classifies through Ollama's own `/api/chat`: `think: false`,
+  `temperature: 0`, a context sized to the request (8192 to 32768 tokens,
+  the excerpt cut to fit), the schema as `format`, or in the instructions
+  for models that answer "structured output is unavailable" (the MLX builds
+  Ollama pulls by default on Apple silicon, with which every request used to
+  fail), repair of near-valid JSON, category matching ignoring case and
+  accents, one corrective retry, a 300-second default timeout and a clear
+  "not pulled" error. `flib eval` reports how answers were obtained
+  (`Answers: repaired, retried...`) and `--vision` also sets
+  `provider.vision` for `ollama` and `openai-compat`. The hosted providers'
+  requests are unchanged.
+
 - Watch mode: organize files as they arrive (#90). `schedule.mode: watch`
   (or `flib schedule --mode watch`) installs a second launchd agent that
   starts flib when an input folder changes (`WatchPaths`; the top level
@@ -327,6 +353,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- `flib search --sum` with no words and no filter (for example `--sum --by
+  kind`) adds up every filed document instead of refusing, and the message
+  for a search with nothing to look for lists every filter (`--issuer`,
+  `--kind`, the amounts, due dates, `--period`...).
 - In every mode (#90): an item Finder is still copying in (type `brok`,
   creator `MACS`, creation date 24 January 1984) is skipped as a download in
   progress; an item whose modification time is more than five minutes in the

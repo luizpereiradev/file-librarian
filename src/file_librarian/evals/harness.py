@@ -84,6 +84,8 @@ def eval_config(root: Path, settings: Settings, files: int) -> Config:
     provider: dict[str, Any] = {"name": settings.provider, "model": model}
     if settings.base_url is not None:
         provider["base_url"] = settings.base_url
+    if settings.vision and settings.provider in ("ollama", "openai-compat"):
+        provider["vision"] = True  # --vision: the model is said to read images, so it gets them
     try:
         return parse_config(
             {
@@ -238,6 +240,7 @@ def run(prep: Prepared, provider: Provider, *, clock: Callable[[], float] = time
         output_tokens=recorder.output_tokens,
         cost_usd=outcome.cost_usd,
         cost_known=outcome.cost_known,
+        answers=dict(getattr(provider, "answers", None) or {}),
     )
     return Run(meta(prep), results, usage)
 

@@ -60,13 +60,16 @@ duplicates: move
 
 provider:
   name: anthropic            # anthropic | claude-code (your Claude subscription, no key) | ollama (a local model) | openai-compat (any OpenAI-compatible API) | fake (offline, for trying flib)
+  # Fully local (`flib init --local`): name: ollama, model: gemma4:e4b (measured in
+  # docs/quality.md), with search.semantic below turned on: nothing leaves this Mac.
   model: claude-haiku-5-5    # fast and cheap; for harder files try claude-sonnet-5-5 or claude-opus-5-5
   effort: low                # low | medium | high | xhigh | max: classification needs little (anthropic)
   max_chars_per_file: 4000   # only this much text is ever sent
   max_examples: 10           # recent corrections (flib fix, reconcile) sent as examples; 0-50, 0 = none
   requests_per_minute: 30    # not applied to a provider on this Mac (ollama, or base_url on localhost)
   max_retries: 3
-  timeout_seconds: 60        # raise it for a slow local model
+  # timeout_seconds: 60      # seconds per request; default 60, and 300 for ollama (loading
+  #                          # a model and reading a long prompt on a laptop is slow)
   # Where the API key comes from (never from this file):
   #   auto: the environment variable (ANTHROPIC_API_KEY, or for openai-compat the one
   #   below), then the macOS Keychain (`flib key set`), then env_file

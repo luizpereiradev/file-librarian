@@ -30,6 +30,7 @@ from file_librarian import (
     credentials,
     embeddings,
     keychain,
+    locality,
     onboarding,
     pipeline,
     scheduler,
@@ -181,6 +182,8 @@ def check_config(config: ConfigOption = None) -> None:
         )
     _report_ocr(cfg)
     _report_semantic(cfg)
+    for line in locality.summary_lines(cfg):
+        typer.echo(f"  {line}")
     for line in status_mod.cost_cap_lines(cfg):
         typer.echo(
             line if line.startswith("warning") else f"  {line}", err=line.startswith("warning")
@@ -1153,6 +1156,13 @@ def _search_filters(
         _fatal(str(exc))
 
 
+NOTHING_TO_SEARCH = (
+    "give words to search for, a filter, or both. Filters: --category, --ext, --since, "
+    "--until (when flib processed it), --issuer, --kind, --min-amount, --max-amount, "
+    "--currency, --due-before, --due-after, --period. --sum alone adds up everything."
+)
+
+
 @app.command()
 def search(
     query: Annotated[
@@ -1261,7 +1271,8 @@ def search(
     Duplicates are left out unless --duplicates is given.
     --issuer, --kind, --min-amount/--max-amount, --currency, --due-before/--due-after
     and --period filter by what the AI read in the document. --sum adds up the
-    amounts of every match instead (never mixing currencies), --by groups them.
+    amounts of every match instead (never mixing currencies), --by groups them;
+    --sum with no words or filter adds up every filed document.
     """
     cfg = _load(config)
     fields: dict[str, Any] = {
@@ -1290,8 +1301,8 @@ def search(
         _reindex(cfg)
         if not query.strip() and not has_filters:
             return
-    if not query.strip() and not has_filters:
-        _fatal("give words to search for, a filter (--category, --since, --until, --ext), or both")
+    if not query.strip() and not has_filters and not total:
+        _fatal(NOTHING_TO_SEARCH)
     use_semantic = cfg.search.semantic.default if semantic is None else semantic
     configured = [c.name for c in cfg.categories]
     hits: list[SearchHit] = []
@@ -1947,15 +1958,27 @@ def init(
             "--sample", min=0, max=200, help="Recent items to try it on; 0 skips the trial."
         ),
     ] = onboarding.DEFAULT_SAMPLE,
+    local: Annotated[
+        bool,
+        typer.Option(
+            "--local",
+            help="Keep everything on this Mac: a local model through Ollama, local text "
+            "recognition and local semantic search.",
+        ),
+    ] = False,
 ) -> None:
     """Set flib up step by step, then try it on copies of your recent files.
 
     Nothing in your folders moves: the trial runs on copies in a temporary
-    folder, with a throwaway index.
+    folder, with a throwaway index. With --local, nothing leaves this Mac:
+    it checks that Ollama is installed and running (it never installs it),
+    offers to download the recommended models, and says what quality to expect.
     """
     ask = _Asker(yes)
     path = config or default_config_path()
     typer.echo("Setting up file-librarian. Press Enter to take the suggestion in brackets.\n")
+    if local and not _local_setup(ask):
+        raise typer.Exit(EXIT_ERROR)
     overwrite = force or (
         path.exists()
         and ask.confirm(f"A configuration already exists at {path}. Replace it?", default=False)
@@ -1963,7 +1986,7 @@ def init(
     if path.exists() and not overwrite:
         typer.echo(f"Keeping {path}.")
     else:
-        answers = _ask_answers(ask)
+        answers = _ask_answers(ask, local=local)
         onboarding.write_config(path, onboarding.render_config(answers))
         typer.echo(f"\nWrote {path} (only you can read it). `flib check-config` validates it.")
     cfg = _load(path)
@@ -1972,6 +1995,8 @@ def init(
         _trial(cfg, sample, ask)
     else:
         typer.echo("Skipping the trial. `flib simulate` shows the plan once flib can run.")
+    if cfg.provider.name == "ollama" and cfg.provider.model == onboarding.LOCAL_MODEL:
+        typer.echo(onboarding.LOCAL_QUALITY)
     typer.echo("")
     _offer_schedule(path, cfg, ask)
     typer.echo(
@@ -1984,7 +2009,7 @@ def init(
     )
 
 
-def _ask_answers(ask: _Asker) -> onboarding.Answers:
+def _ask_answers(ask: _Asker, *, local: bool = False) -> onboarding.Answers:
     language = cast(
         Language,
         ask.choice(
@@ -2003,7 +2028,20 @@ def _ask_answers(ask: _Asker) -> onboarding.Answers:
                 _fatal(str(exc))
             typer.echo(f"error: {exc}\nLet's try the folders again.", err=True)
     answers = _ask_more_inboxes(ask, answers)
-    choice = _ask_provider(ask)
+    choice = _ProviderChoice("local") if local else _ask_provider(ask)
+    while choice.provider == "local" and not local:
+        local = _local_setup(ask)  # the "local" answer: set up as `flib init --local` does
+        if not local:
+            typer.echo("Choose another provider for now.")
+            choice = _ask_provider(ask)
+    if choice.provider == "local":
+        return dataclasses.replace(
+            answers,
+            provider="ollama",
+            model_name=onboarding.LOCAL_MODEL,
+            vision=onboarding.LOCAL_VISION,
+            semantic=True,
+        )
     vision = False
     if choice.provider == "anthropic":
         typer.echo(VISION_NOTE)
@@ -2018,6 +2056,52 @@ def _ask_answers(ask: _Asker) -> onboarding.Answers:
         model_name=choice.model,
         base_url=choice.base_url,
     )
+
+
+def _local_setup(ask: _Asker) -> bool:
+    """The fully local setup's checks (#92): Ollama installed and running, and the models
+    pulled, offering to download them. False when Ollama cannot be used yet."""
+    from file_librarian.providers import ProviderError
+    from file_librarian.providers.ollama import INSTALL_HINT
+
+    state = onboarding.local_state()
+    if state.models is None:
+        if state.command is None:
+            typer.echo(
+                "Ollama is not installed: it runs the local model. flib does not install it "
+                f"for you; {INSTALL_HINT}. Then run `flib init --local` again.",
+                err=True,
+            )
+        else:
+            typer.echo(
+                f"Ollama is installed ({state.command}) but not running. Start it with "
+                "`ollama serve`, `brew services start ollama` or the Ollama app, then run "
+                "`flib init --local` again.",
+                err=True,
+            )
+        return False
+    typer.echo(
+        f"Ollama is running. The local setup uses {onboarding.LOCAL_MODEL} to classify and "
+        f"{onboarding.LOCAL_EMBEDDING_MODEL} for semantic search."
+    )
+    missing = state.missing
+    if not missing:
+        typer.echo("Both models are already downloaded.")
+        return True
+    sizes = ", ".join(f"{m} ({onboarding.LOCAL_MODELS[m]:.1f} GB)" for m in missing)
+    total = sum(onboarding.LOCAL_MODELS[m] for m in missing)
+    typer.echo(f"Not downloaded yet: {sizes}.")
+    # --yes takes defaults; a download of several gigabytes is never one of them.
+    if not ask.confirm(f"Download them now ({total:.1f} GB)?", default=not ask.yes):
+        pulls = "; ".join(f"ollama pull {m}" for m in missing)
+        typer.echo(f"Download them later with: {pulls}")
+        return True
+    for model in missing:
+        try:
+            onboarding.pull_model(model, lambda line: typer.echo(f"  {line}"))
+        except ProviderError as exc:
+            typer.echo(f"warning: {exc}; try `ollama pull {model}`.", err=True)
+    return True
 
 
 def _with_inbox(
@@ -2140,6 +2224,11 @@ def _ask_provider(ask: _Asker) -> _ProviderChoice:
         )
     options.append("openai-compat")
     lines.append("  openai-compat  any OpenAI-compatible API, with its URL and an optional key")
+    options.append("local")
+    lines.append(
+        f"  local          nothing leaves this Mac: {onboarding.LOCAL_MODEL} in Ollama, local "
+        "search; slower and less accurate (needs Ollama, ~10 GB, 16 GB of memory)"
+    )
     typer.echo("\nWhich AI classifies your files?\n" + "\n".join(lines))
     default = "claude-code" if ready else ("ollama" if local_models else "anthropic")
     name = ask.choice("Provider", options, default)

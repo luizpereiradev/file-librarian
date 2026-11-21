@@ -43,7 +43,7 @@ from typing import Any, Literal
 
 import yaml
 
-from file_librarian import __version__, credentials, protection, scheduler
+from file_librarian import __version__, credentials, locality, protection, scheduler
 from file_librarian import status as status_mod
 from file_librarian.config import (
     Config,
@@ -434,6 +434,7 @@ def _configuration(
     output = _folder_state(config.output_root)
     section.lines.append(f"output: {output}")
     section.lines.append(f"ocr: {_ocr_state(config, r)}")
+    section.lines.extend(locality.summary_lines(config, hosts=False))
     section.blocks.append(("Configuration (redacted)", redacted_config(config, r)))
 
 
