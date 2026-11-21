@@ -292,3 +292,36 @@ def test_the_default_month_starts_at_local_midnight_on_the_first(store: Store) -
     assert store.stats().month_cost_usd == 0.125  # started now: this month
     start = datetime.fromisoformat(_month_start()).astimezone()
     assert (start.day, start.hour, start.minute) == (1, 0, 0)
+
+
+def test_migration_0017_adds_settled_and_journals_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "library.db"
+    before = [m for m in load_migrations() if m.version < 17]
+    with monkeypatch.context() as patch:
+        patch.setattr("file_librarian.db.store.load_migrations", lambda: before)
+        old = Store.open(path)
+    with old:
+        assert old.schema_version == 16
+        file_id = insert_file(old, "a.pdf", "d")
+        old.change_index(1, "files.due_date", file_id, None, "2026-11-23")
+        with pytest.raises(sqlite3.IntegrityError):  # not a target before 0017
+            old.conn.execute(
+                """INSERT INTO index_changes (run_id, target, row_id, status, created_at)
+                   VALUES (1, 'files.settled_at', ?, 'done', 'x')""",
+                (file_id,),
+            )
+    with Store.open(path) as store:
+        assert store.schema_version == len(load_migrations()) >= 17
+        row = store.file_by_id(file_id)
+        assert (row.due_date, row.settled_at, row.due_reminded_for) == ("2026-11-23", None, None)
+        [change] = store.index_changes(1)
+        assert (change.target, change.new_value) == ("files.due_date", "2026-11-23")
+        store.change_index(1, "files.settled_at", file_id, None, "2026-11-20T12:00:00+00:00")
+        assert store.file_by_id(file_id).settled_at == "2026-11-20T12:00:00+00:00"
+        store.set_reminded([(file_id, "2026-11-23")])
+        assert store.file_by_id(file_id).due_reminded_for == "2026-11-23"
+        assert all(store.revert_index_change(c) for c in reversed(store.index_changes(1)))
+        assert store.file_by_id(file_id).settled_at is None
+        assert store.conn.execute("PRAGMA foreign_key_check").fetchall() == []

@@ -475,6 +475,59 @@ only where the index has none: category, name, description and the file's
 place stay as they are, and nothing moves. It is one run: `flib undo` clears
 what it recorded.
 
+## What is due
+
+`flib due` lists the documents whose due date the AI read in them, soonest
+first, with the due date, how far away it is ("in 3 days", "2 days ago"),
+the amount, the issuer, the kind and where the file is, then the totals per
+currency of the open ones. It only reads the index: no lock, no AI, and it
+works before the first run.
+
+- **Nothing is guessed.** Only a due date the document states counts; a
+  document without one is never listed, with any option.
+- **Which kinds.** `due.kinds` (bills, invoices and taxes by default). A due
+  date on any other kind, or on a document of unknown kind, is shown only
+  with `--all`; `--kind` names the kinds you want, listed or not. Organized
+  files and files in review count; duplicates and sensitive files never do.
+- **The window** is counted in calendar days of your time zone: a bill due
+  tomorrow is "tomorrow" from midnight to midnight, also on the days the
+  clock changes. By default it runs from 30 days ago to 7 days ahead;
+  `--within 10d`, `2w` or `1m` (calendar months, so from the 31st one month
+  later is the month's last day) moves the far end, up to a year. `--overdue`
+  lists every open document whose due date has passed, however long ago. A
+  document due today is not overdue.
+- **Done.** `flib fix PATH --done` marks a document paid or done and
+  `--not-done` opens it again. Each is journaled as its own small run, so
+  `flib undo` (or `--run ID`) reverts it; nothing moves. Done documents leave
+  the list and the totals; `--all` shows them, marked `done`. With
+  `due.done_tag: Paid`, a file with the Finder tag `Paid` (any case or
+  color) counts as done too, for as long as it has the tag; nothing is
+  recorded, so removing the tag opens it again.
+
+`flib status` adds a line such as "Due: 3 documents within 7 days, 1 overdue"
+(the default window), and `--json` the same counts.
+
+**The reminder.** After a scheduled run, the [periodic
+summary](../README.md#staying-on-top-of-it) also counts the open documents of
+`due.kinds` that are due within `due.remind_days_before` days (3 by default)
+or overdue (up to 30 days ago): "1 document is due within 3 days, 1 document
+overdue". The rule, so it never nags:
+
+- a document no summary counted yet makes the summary come now, whatever
+  `summary.every_days`; it is recorded with its due date, so it never does
+  that again (a reprocess that reads another due date may remind once more);
+- a reminder alone carries only the due counts and does not restart
+  `summary.every_days`; a summary that comes for files waiting in review
+  carries the due counts too;
+- documents marked done are never counted; `due.remind: false` turns the
+  reminder off.
+
+Like the rest of the summary, the notification holds counts only: never a
+name, an amount or an issuer, because it shows on the lock screen.
+
+The MCP server has the same list as `list_due` (read-only, same filters), so
+an assistant can answer "what is due this week?".
+
 ## What vision costs
 
 Estimated on the default model (Claude Haiku 5.5, US$0.10 per million input

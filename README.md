@@ -101,6 +101,7 @@ flib run                  # organize now
 flib undo                 # revert the last run (--run ID for another, --file PATH for one file)
 flib search "power bill"  # find a file again
 flib status               # what waits for you
+flib due                  # bills due this week, and what is overdue
 ```
 
 Files the AI is not sure about go to the review folder (`_Review` inside
@@ -143,6 +144,7 @@ Review: 3 files in _Review, the oldest for 10 days
     1  the AI chose a category that is not configured: Recipes
 Failed: 1 file
     1  classification failed (1 of 3 attempts; the next run tries again; for 10 days)
+Due: 3 documents within 7 days, 1 overdue (`flib due`).
 Left in place as sensitive: 1 file
 Last run: 2026-11-19 12:30, scheduled: 4 organized, 3 to review, 1 failed; US$ 0.0123
   skipped: 1 unreadable, 1 only in iCloud (see its log)
@@ -280,7 +282,8 @@ Every command takes `--config PATH` (`-c`); without it, flib reads
 | `flib undo [--run ID \| --file PATH]` | Revert the last run, a given run, or the last operation on one file |
 | `flib search [QUERY] [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--issuer NAME] [--kind KIND] [--min-amount N] [--max-amount N] [--currency CODE] [--due-before DATE] [--due-after DATE] [--period YYYY[-MM]] [--sum [--by GROUP]] [--semantic \| --no-semantic] [--reindex] [--duplicates] [--limit N] [--json]` | Search names, descriptions and tags, narrowed by category, period, extension or what the document states (issuer, kind, amount, due date); add up amounts with `--sum`; optionally by meaning ([Searching](#searching)) |
 | `flib status [--json] [--sensitive]` | What waits for you: files in review and why, failures, files left in place as sensitive, the last and next run, this month's cost ([Staying on top of it](#staying-on-top-of-it)); `--sensitive` lists each file left in place as sensitive and why |
-| `flib fix FILE [--category NAME] [--name NAME]` | Correct one file's category or name; flib learns from it ([Teaching it](#teaching-it)) |
+| `flib fix FILE [--category NAME] [--name NAME]` | Correct one file's category or name; flib learns from it ([Teaching it](#teaching-it)); `--done` / `--not-done` marks a bill paid, or open again ([What is due](#what-is-due)) |
+| `flib due [--within 7d\|2w\|1m] [--overdue] [--all] [--issuer NAME] [--kind KIND] [--json]` | Bills, invoices and taxes with a due date: overdue, then the next 7 days, soonest first, with totals per currency ([What is due](#what-is-due)) |
 | `flib reconcile` | Update the index after you move, rename or delete files by hand; files only in iCloud are left unchecked |
 | `flib reprocess [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--rename] [--override-corrections] [--simulate] [--yes]` | Reclassify organized files after the rules change; `--rename-category OLD NEW` and `--remove-category OLD [--to-review]` migrate a category ([guide](docs/guide.md#changing-your-rules)); `--apply-layout [--category NAME] [--ask-issuer]` moves organized files into their category's layout ([Sub-folders](#sub-folders-by-year-or-issuer)); `--scrub-descriptions` removes identifiers from stored descriptions, no AI ([Privacy](#privacy)); `--fill-fields` asks only for the amount, dates, issuer, period and kind of files filed before flib kept them ([Amounts and dates](#amounts-dates-and-issuers)) |
 | `flib schedule [--at HH:MM \| --status \| --remove \| --refresh] [--no-save-key] [--no-check]` | Run every day via launchd, with an access check ([Run it every day](#run-it-every-day)) |
@@ -359,6 +362,33 @@ Files filed before flib kept these fields have none: `flib reprocess
 records the fields in the index (nothing moves, categories and names stay)
 and `flib undo` reverts it. With `--sum`, a query matches words only, not
 meaning.
+
+### What is due
+
+`flib due` answers "what is due this week?" from the due dates the AI read in
+your documents:
+
+```text
+Due from 2026-10-21 to 2026-11-27 (today is 2026-11-20):
+  2026-11-18  (2 days ago, overdue)  BRL 80.06  Agua Clara Ltda  bill
+    /Users/you/Downloads/Organized/Finance/water-bill.pdf
+  2026-11-23  (in 3 days)  USD 96.74  Northwind Power  bill
+    /Users/you/Downloads/Organized/Finance/power-bill.pdf
+  2026-11-27  (in 7 days)  BRL 1,137.44  Revenue Office  tax
+    /Users/you/Downloads/Organized/Finance/tax-2026.pdf
+Total open: BRL 1,217.50 (2 documents); USD 96.74 (1 document)
+```
+
+Bills, invoices and taxes (`due.kinds`) overdue up to 30 days ago and due in
+the next 7 days; `--within 2w` looks further ahead, `--overdue` lists
+everything past due, `--issuer` and `--kind` narrow it, `--json` is for
+scripts. A document without a stated due date is never listed. When you have
+paid one, `flib fix PATH --done` takes it off the list (`flib undo` reverts
+it, `--all` still shows it), and `due.done_tag: Paid` lets a Finder tag do the
+same. `flib status` adds one line ("Due: 3 documents within 7 days, 1
+overdue"), and the periodic summary reminds you once per document when one
+comes due within 3 days; details in the
+[guide](docs/guide.md#what-is-due).
 
 ### Semantic search (optional)
 
@@ -729,6 +759,7 @@ meaning sends the query there (the `search_files` tool then says so).
 | --- | --- |
 | `search_files` | Search names, descriptions and tags, with the same category, extension, period, issuer, kind, amount, currency, due date and document period filters as `flib search`; `semantic: true` also searches by meaning ([Semantic search](#semantic-search-optional)); duplicates only with `include_duplicates` |
 | `summarize_amounts` | Add up the amounts of the matching documents per currency, optionally by issuer, month, year, kind or category, like `flib search --sum` ("what did I pay to Power Co in 2026?") |
+| `list_due` | Bills, invoices and taxes with a due date, overdue and coming up, with totals per currency, like `flib due` ("what is due this week?") |
 | `get_file` | Everything the index knows about one file: where it is and was, category, description, tags, kind, issuer, amount, dates and period, hash, size, download origin, whether it is only in iCloud, why it is in review (if it is), and its history (moves, renames, fixes, undos with when each was undone; newest first, last 20) |
 | `list_recent` | The files organized most recently, newest first, optionally in one category |
 | `list_review` | What waits in the review folder, newest first, with the AI's confidence and why each file is there |

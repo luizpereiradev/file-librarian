@@ -50,6 +50,7 @@ READ_TOOLS = {
     "list_review",
     "get_stats",
     "summarize_amounts",
+    "list_due",
 }
 
 SECRET = "token = " + "ghp_" + "a" * 36

@@ -123,6 +123,10 @@ class FileRow:
     """For a sensitive file: ``name`` or ``content``; ``None`` on older rows."""
     sensitive_reason: str | None = None
     """For a sensitive file: why, in words."""
+    settled_at: str | None = None
+    """When the user marked it paid or done (UTC, ISO 8601); ``None`` while open (#91)."""
+    due_reminded_for: str | None = None
+    """The due date a due reminder last counted it for; ``None`` until then (#91)."""
 
     @property
     def review(self) -> tuple[ReviewReason | None, str | None]:
@@ -169,6 +173,8 @@ class FileRow:
             filed_by_rule=bool(row["filed_by_rule"]),
             sensitive_by=row["sensitive_by"],
             sensitive_reason=row["sensitive_reason"],
+            settled_at=row["settled_at"],
+            due_reminded_for=row["due_reminded_for"],
         )
 
 
@@ -448,6 +454,7 @@ _INDEX_TARGETS = {
     "files.review_reason": ("files", "review_reason"),
     "files.review_category": ("files", "review_category"),
     "files.layout_date": ("files", "layout_date"),
+    "files.settled_at": ("files", "settled_at"),
     "corrections.old_value": ("corrections", "old_value"),
     "corrections.new_value": ("corrections", "new_value"),
     "operations.finder_tag": ("operations", "finder_tag"),
@@ -476,6 +483,16 @@ class Store:
         store = cls(conn)
         store.migrate()
         return store
+
+    @classmethod
+    def open_read_only(cls, path: Path) -> Store:
+        """The index for reading only: never created, migrated or written (``flib status``,
+        ``flib due``). Fails if the file does not exist."""
+        conn = sqlite3.connect(
+            f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=BUSY_TIMEOUT_MS / 1000
+        )
+        conn.row_factory = sqlite3.Row
+        return cls(conn)
 
     @property
     def schema_version(self) -> int:
@@ -1110,6 +1127,24 @@ class Store:
         ]
         return totals, int(missing)
 
+    def due_files(self) -> list[FileRow]:
+        """Every filed document (organized or in review) with a due date, soonest first;
+        never a duplicate (#91)."""
+        rows = self.conn.execute(
+            """SELECT * FROM files
+               WHERE due_date IS NOT NULL AND duplicate_of IS NULL
+                 AND status IN ('organized', 'review')
+               ORDER BY due_date, current_path"""
+        )
+        return [FileRow.from_row(r) for r in rows]
+
+    def set_reminded(self, reminded: Sequence[tuple[int, str]]) -> None:
+        """Record that a due reminder counted each ``(file id, due date)`` (#91)."""
+        self.conn.executemany(
+            "UPDATE files SET due_reminded_for = ? WHERE id = ?",
+            [(due, file_id) for file_id, due in reminded],
+        )
+
     def files_by_ids(self, ids: Sequence[int]) -> dict[int, FileRow]:
         found: dict[int, FileRow] = {}
         for start in range(0, len(ids), 500):
@@ -1216,6 +1251,8 @@ class Store:
                  AND (r.trigger = 'reprocess'
                       OR NOT EXISTS (SELECT 1 FROM operations o
                                      WHERE o.run_id = r.id AND o.fix_status IS NOT NULL))
+                 AND NOT EXISTS (SELECT 1 FROM index_changes c
+                                 WHERE c.run_id = r.id AND c.target = 'files.settled_at')
                ORDER BY id DESC LIMIT 1"""
         ).fetchone()
         month = self.conn.execute(

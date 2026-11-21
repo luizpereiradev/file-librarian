@@ -34,6 +34,7 @@ from file_librarian import (
     pipeline,
     scheduler,
 )
+from file_librarian import due as due_mod
 from file_librarian import reprocess as reprocess_mod
 from file_librarian import status as status_mod
 from file_librarian.config import (
@@ -1288,9 +1289,28 @@ def fix(
         str | None,
         typer.Option("--name", help="Its new file name; the extension is kept if left out."),
     ] = None,
+    done: Annotated[
+        bool | None,
+        typer.Option(
+            "--done/--not-done",
+            help="Mark a document with a due date paid or done (it leaves `flib due`), or "
+            "open again.",
+            show_default=False,
+        ),
+    ] = None,
     config: ConfigOption = None,
 ) -> None:
-    """Correct a file's category or name; flib learns from it. `flib undo` reverts it."""
+    """Correct a file's category or name; flib learns from it. `flib undo` reverts it.
+
+    --done marks a bill or other document with a due date as paid or done, so
+    `flib due` leaves it out; --not-done opens it again. Both are journaled
+    too: `flib undo` reverts them.
+    """
+    if done is not None:
+        if category is not None or name is not None:
+            _fatal("--done and --not-done go alone, without --category or --name")
+        _settle(config, file, done=done)
+        return
     cfg = _load(config)
     try:
         with instance_lock(cfg.database), Store.open(cfg.database) as store:
@@ -1307,6 +1327,79 @@ def fix(
     for warning in report.warnings:
         typer.echo(f"  warning {warning}")
     typer.echo(f"Fixed in run {report.run_id}; `flib undo` reverts it.")
+
+
+def _settle(config: Path | None, file: Path, *, done: bool) -> None:
+    """``flib fix --done`` / ``--not-done``."""
+    cfg = _load(config)
+    try:
+        with instance_lock(cfg.database), Store.open(cfg.database) as store:
+            recover(store, cfg)  # finish the journal before adding to it
+            report = due_mod.settle(store, file, done=done)
+    except (due_mod.DueError, AlreadyRunningError) as exc:
+        _fatal(str(exc))
+    what = "done" if report.done else "not done (open again)"
+    typer.echo(f"  marked {what}  {_short(report.path, cfg)}  (due {report.due_date})")
+    typer.echo(f"Recorded in run {report.run_id}; `flib undo` reverts it.")
+
+
+@app.command()
+def due(
+    within: Annotated[
+        str | None,
+        typer.Option(
+            "--within",
+            help="How far ahead: 7d, 2w, 1m (days, weeks, calendar months). [default: 7d]",
+            show_default=False,
+        ),
+    ] = None,
+    overdue: Annotated[
+        bool, typer.Option("--overdue", help="Only what is past due, however long ago.")
+    ] = False,
+    show_all: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            help="Also documents marked done, and due dates on kinds outside due.kinds.",
+        ),
+    ] = False,
+    issuer: Annotated[
+        str | None,
+        typer.Option(
+            "--issuer",
+            help="Only documents from this organisation (case, accents, Inc/Ltd... ignored).",
+        ),
+    ] = None,
+    kind: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--kind",
+            help=f"Only this kind of document: {', '.join(KINDS)}. Repeat it or use commas.",
+        ),
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON for other programs.")] = False,
+    config: ConfigOption = None,
+) -> None:
+    """List bills and other documents with a due date: overdue first, then the next 7 days.
+
+    Only due dates the AI read in a document count; nothing is guessed. By
+    default the bills, invoices and taxes (due.kinds) from 30 days ago to 7 days
+    ahead that are not marked done (`flib fix PATH --done`), soonest first, with
+    totals per currency. It only reads: no lock, and it works before the first run.
+    """
+    cfg = _load(config, warn_orphans=False)
+    try:
+        query = due_mod.make_query(
+            within=within, overdue=overdue, include_all=show_all, issuer=issuer, kinds=kind
+        )
+        found = due_mod.find(cfg, query)
+    except due_mod.DueError as exc:
+        _fatal(str(exc))
+    if as_json:
+        typer.echo(json.dumps(found.to_dict(), ensure_ascii=False, indent=2))
+        return
+    for line in due_mod.render(found):
+        typer.echo(line)
 
 
 @app.command()
