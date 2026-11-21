@@ -14,6 +14,7 @@ from datetime import date
 from typing import Any
 
 from file_librarian.models import Attachment, Correction, FileContext, Rules
+from file_librarian.privacy import scrub
 
 LANGUAGE_NAMES = {"en": "English", "pt-BR": "Brazilian Portuguese"}
 
@@ -30,6 +31,7 @@ def response_schema(rules: Rules) -> dict[str, Any]:
             "tags": {"type": "array", "items": {"type": "string"}},
             "confidence": {"type": "number"},
             "document_date": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "issuer": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         },
         "required": [
             "category",
@@ -40,6 +42,7 @@ def response_schema(rules: Rules) -> dict[str, Any]:
             "tags",
             "confidence",
             "document_date",
+            "issuer",
         ],
         "additionalProperties": False,
     }
@@ -110,6 +113,11 @@ Answer fields:
 - document_date: the date the document itself refers to (issue date, invoice
   date) as YYYY-MM-DD, or null if the content does not show one with
   confidence. Read ambiguous numeric dates as {order}.
+- issuer: the organisation the document comes from (the company, bank,
+  utility, public body or brand that issued or sent it), as it names itself,
+  for example "Acme" or "Power Co". null when there is none, it is unclear,
+  or the document comes from a private individual: never a private person's
+  name.
 
 Describe what the file is without copying personal identifiers from it into
 suggested_name, name_choice_reason, description or tags: no phone numbers,
@@ -176,7 +184,26 @@ def normalize_answer(data: dict[str, Any]) -> dict[str, Any]:
     data["name_choice_reason"] = str(data.get("name_choice_reason") or "").strip()[:300] or None
     data["description"] = str(data.get("description", "")).strip()[:600] or "No description."
     data["document_date"] = _iso_date(data.get("document_date"))
+    data["issuer"] = clean_issuer(data.get("issuer"))
     return data
+
+
+MAX_ISSUER = 100
+
+
+def clean_issuer(value: object) -> str | None:
+    """An issuer worth a folder, or ``None``: blank, a placeholder word, or holding
+    an identifier ``privacy.scrub`` would replace (a phone or document number).
+
+    Whatever ``privacy.descriptions`` says, such a value is dropped rather than
+    marked: a folder named after a marker helps no one.
+    """
+    if not isinstance(value, str):
+        return None
+    text = " ".join(value.split())[:MAX_ISSUER].strip()
+    if not text or text.casefold() in {"null", "none", "unknown", "n/a"}:
+        return None
+    return text if scrub(text) == text else None
 
 
 def _iso_date(value: object) -> str | None:

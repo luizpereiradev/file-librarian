@@ -152,17 +152,22 @@ def scrub_tags(tags: Iterable[str], *, max_chars: int = 40) -> list[str]:
 
 
 def scrub_answer(answer: Classification) -> Classification:
-    """The answer with its free text scrubbed: description, tags, proposed name and reason."""
+    """The answer with its free text scrubbed: description, tags, proposed name and
+    reason. An issuer holding an identifier is dropped."""
     description = scrub(answer.description)[:600].strip() or "No description."
     reason = answer.name_choice_reason
     if reason is not None:
         reason = scrub(reason)[:300].strip() or None
     name = scrub_name(answer.suggested_name)[:200] or "untitled"
+    issuer = answer.issuer
+    if issuer is not None and scrub(issuer) != issuer:
+        issuer = None  # a folder name: dropped, never marked
     update = {
         "description": description,
         "tags": scrub_tags(answer.tags),
         "suggested_name": name,
         "name_choice_reason": reason,
+        "issuer": issuer,
     }
     if all(getattr(answer, k) == v for k, v in update.items()):
         return answer

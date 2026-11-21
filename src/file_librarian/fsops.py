@@ -165,14 +165,16 @@ def has_exact_name(path: Path) -> bool:
     return any(unicodedata.normalize("NFC", n) == wanted for n in names)
 
 
-def ensure_folder(path: Path, *, inside: Path) -> None:
+def ensure_folder(path: Path, *, inside: Path) -> list[Path]:
     """Create ``path`` (a folder under ``inside``) refusing symlinks on the way.
 
     A symlinked category folder could send files anywhere on disk, so every
     existing component from ``inside`` down must be a real directory.
+    Returns the folders it created, outermost first.
     """
     if not (path == inside or path.is_relative_to(inside)):
         raise ValueError(f"{path} is outside {inside}")
+    created: list[Path] = []
     current = inside.parent
     for part in path.relative_to(inside.parent).parts:
         current = current / part
@@ -180,9 +182,11 @@ def ensure_folder(path: Path, *, inside: Path) -> None:
             st = os.lstat(current)
         except FileNotFoundError:
             current.mkdir()
+            created.append(current)
             continue
         if not stat.S_ISDIR(st.st_mode):
             raise NotADirectoryError(f"{current} exists and is not a real folder (symlink or file)")
+    return created
 
 
 # --- moving across volumes (RF-33) ---------------------------------------------------------

@@ -190,7 +190,18 @@ def file_record(
         name_choice_reason=answer.name_choice_reason if answer and item.name_choice else None,
         review_reason=item.review_reason if status is FileStatus.REVIEW else None,
         review_category=item.review_category if status is FileStatus.REVIEW else None,
+        document_date=_document_date(answer),
+        issuer=answer.issuer if answer else None,
+        layout_date=item.layout_date.isoformat()
+        if item.layout_date and status is FileStatus.ORGANIZED
+        else None,
     )
+
+
+def _document_date(answer: Classification | None) -> str | None:
+    """The answer's document date as the index stores it, for category layouts (#86)."""
+    when = answer.document_date if answer else None
+    return when.isoformat() if when else None
 
 
 def _apply(
@@ -286,7 +297,7 @@ def _place(
         )
     try:
         _require_safe_volume(ctx.path, config.output_root)
-        ensure_folder(destination.parent, inside=config.output_root)
+        _made(store, run_id, ensure_folder(destination.parent, inside=config.output_root))
         destination, kept = _move(ctx.path, destination, store, op_id, ctx.sha256)
     except (OSError, ValueError) as exc:
         environmental = isinstance(exc, OSError) and exc.errno in _ENVIRONMENTAL
@@ -411,7 +422,7 @@ def _relocate_one(
             previous=previous,
         )
     try:
-        ensure_folder(item.destination.parent, inside=config.output_root)
+        _made(store, run_id, ensure_folder(item.destination.parent, inside=config.output_root))
         destination, kept = _move(ctx.path, item.destination, store, op_id, ctx.sha256)
     except (OSError, ValueError) as exc:
         # The file is still where it was, and so is its row.
@@ -451,6 +462,8 @@ def _answer_record(item: Relocation, provider: str | None, model: str | None) ->
         model=model,
         name_choice=item.name_choice,
         name_choice_reason=answer.name_choice_reason if item.name_choice else None,
+        document_date=_document_date(answer),
+        issuer=answer.issuer,
     )
 
 
@@ -499,6 +512,14 @@ def finish_relocation(
         if unit is not None:
             store.set_file_identity(file_id, unit)
     return warnings
+
+
+def _made(store: Store, run_id: int, folders: list[Path]) -> None:
+    """Remember the folders a move just created: when two folders hold the same
+    issuer, the planner prefers the one flib made (#86)."""
+    if folders:
+        with store.transaction():
+            store.add_flib_folders(run_id, folders)
 
 
 def _require_safe_volume(src: Path, output_root: Path) -> None:

@@ -100,6 +100,7 @@ def _run(
         config,
         today=date.fromtimestamp(now) if now is not None else None,
         duplicates=found.duplicates,
+        made_by_flib=store.flib_folders(),
     )
     deferred = found.deferred + len(classified.deferred)
     if simulate:

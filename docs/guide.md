@@ -64,6 +64,127 @@ scheduled runs write it to their log, and `flib status` shows it until you
 have seen it after a `flib run` in Terminal. Nothing is deleted: `flib undo`
 puts them back, and `duplicates: leave` keeps them where they are.
 
+## Sub-folders inside a category
+
+By default each category is one folder. An optional `layout` files a
+category into sub-folders:
+
+```yaml
+categories:
+  - name: Finance
+    layout: "{year}/{month}"    # Finance/2026/03/…
+  - name: Contracts
+    layout: "{issuer}"          # Contracts/Acme/…
+  - name: Bills
+    layout: "{issuer}/{year}"   # Bills/Power Co/2026/…
+```
+
+Each part between `/` is one folder. The placeholders:
+
+- `{year}` and `{month}` (two digits): the date the document refers to, as
+  the AI read it; without one, the download date; without that, the day the
+  file was filed. It is the same date the file name gets, so a file's folder
+  and its name agree.
+- `{issuer}`: the organisation the document comes from (a company, bank,
+  utility, public body or brand), as the AI names it. The prompt asks the
+  AI never to give a private person's name; flib cannot check that, but it
+  drops an answer holding a phone or document number. `{issuer}` stands
+  alone between two `/`.
+
+A folder part may add fixed text (`"Y{year}"`, `"{year}-{month}"`), up to
+three levels. `flib check-config` refuses unknown placeholders, empty parts,
+`.` or `..`, `:` or `\`, and anything that would not make a plain folder
+name.
+
+**When a value is unknown** (no issuer named, or nothing usable left of it),
+the file stops at the deepest folder known: with `{year}/{issuer}` it goes to
+`Finance/2026/`, with `{issuer}/{year}` to `Finance/` itself. The same
+happens when something that is not a real folder (a file, a symlink, a
+folder only in iCloud) already has that name.
+
+**The same company, the same folder.** Before making a new issuer folder,
+flib compares the name with the folders already there, ignoring case,
+accents (in either Unicode form), punctuation, a leading "The", a trailing
+`.com` or `.com.br`, and legal forms that are never ordinary words (`Inc`,
+`Ltd`, `LLC`, `Corp`, `GmbH`, `PLC`, `Ltda`, `EIRELI`, `S.A.`, `SpA`...):
+`Acme Inc.`, `ACME`, `Acme Ltda`, `Ácme` and `acme.com` all join an `Acme`
+folder, `Banco Inter SA` joins `Banco Inter` (a trailing `SA` after another
+word; `SA` alone is a name), and `Power Co` and `PowerCo` share one. `Co`,
+`Company`, `Spa` and `Me` can be part of a name (`Lotus Spa`, `Pay Me`), so
+they count. Only then, and only when a single folder is that
+close, it accepts a slip: a doubled letter (`Fabrikkam`) or two letters
+swapped (`Nortwhind`), never with digits. One different letter
+(`Acme`/`Acne`), a plural (`Morgan`/`Morgans`), a different number or an
+extra word (`Acme Bank`) is another company, with its own folder.
+
+The folder keeps the spelling it was made with, so rename it by hand if you
+prefer another (a change of case only is fine: the files stay and the index
+follows); flib matches the new name from then on. With `{year}/{issuer}`,
+a company new to a year gets the spelling its folder has in the other
+years (only year folders count, never one of your own, and only the same
+name, never a slip). If two folders hold the same company, a file already in one of them
+stays there; a new file goes to the one flib made, else the oldest. An
+existing folder is used as it is spelled on disk, even with a `:` (what
+Finder shows as `/`). A layout folder that cannot take a file never leaves
+it behind: it goes to the category's own folder, and the plan says why.
+
+New files get a name that is free in their own folder (`-2`, `-3`...);
+nothing is ever replaced. Review, duplicates and sensitive files never get a
+layout.
+
+### Applying a layout to files already organized
+
+Adding or changing a layout affects new files. To file the library into it:
+
+```sh
+flib reprocess --apply-layout --simulate            # what would move; moves nothing
+flib reprocess --apply-layout                       # asks, then moves
+flib reprocess --apply-layout --category Finance    # one category only
+```
+
+It does not ask the AI: the date and issuer come from the index (stored with
+each answer since this feature, or taken from a recent cached answer).
+Organized files whose layout needs an issuer the index does not have stay
+where they are; `--ask-issuer` asks the AI for it, showing the estimated cost
+and asking first, and keeps only the issuer and date from the answer (the
+category and name stay). Names are kept; a taken one gets `-2`.
+
+It never moves a file you placed yourself: one not where flib last put it
+(moved or renamed by hand, into a sub-folder, out of one to the category's
+top, then `flib reconcile`) stays, and the plan says "you moved or renamed
+it". To hand such a file back to flib, move it with `flib fix` (for example
+`flib fix FILE --category Finance`, which puts it at the category's top for
+the next `--apply-layout`), or move it into its layout folder yourself and
+run `flib reconcile`.
+
+The year and month a file is filed under are kept in the index from the
+moment it is filed (the document's date, else its download date, else the
+day it was filed) and used ever after: copying the library to another disk,
+restoring it from a backup or travelling to another time zone never moves a
+file. For files organized before this was kept, `--apply-layout` takes it
+once from the layout folder the file is already in, or else resolves it as
+above, and stores it with the run (`flib undo` removes it). A date or issuer it takes from a cached answer is
+written to the index with the run, so the file stays where it went once the
+cache has expired, and `flib undo` takes them back out. A category whose layout you removed gets the files flib had put
+in its sub-folders back to its top folder. Everything moved is one run:
+`flib undo` puts it all back (the issuers and dates `--ask-issuer` learned
+too); the emptied sub-folders are left in place. It cannot be combined with
+`--rename-category` or `--remove-category`: migrate first, then apply the
+layout.
+
+Plain `flib reprocess` follows layouts too, since it files by the current
+rules: each file it reclassifies goes to its layout's folder (asking the AI,
+with its cost), except one you placed in a sub-folder yourself, which stays
+unless its category changes.
+
+**Elsewhere.** `flib reconcile` treats a file you moved between sub-folders
+of the same category as still in that category (no correction recorded); a
+move into another category's folder, at any depth, is a correction.
+`flib fix --name` renames a file in its own sub-folder; `flib fix --category`
+moves it to the top of the new category, and `--apply-layout` then files it.
+Search, `--category` filters, Finder tags, duplicates, `flib status` and the
+MCP tools work the same at any depth.
+
 ## Correcting files
 
 ```sh

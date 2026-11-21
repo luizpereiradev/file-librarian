@@ -8,6 +8,29 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Sub-folders inside a category (#86): an optional `layout` per category,
+  with `{year}`, `{month}` and `{issuer}` (`"{year}"`, `"{issuer}/{year}"`...,
+  up to three levels, validated at load). The year and month come from the
+  document's date, else the download date, else the day filed; the issuer is
+  a new field of the answer (the prompt asks for an organisation, not a
+  private person; one holding an identifier is dropped), stored in the index
+  with the document date and with the date the file's year and month were
+  taken from, kept from then on so a change of file metadata (a copy to
+  another disk, a time zone) never moves a file (migration 0014; prompt
+  version 6). Issuer folders are stable: a name is matched with the folders
+  already there ignoring case, accents, punctuation, `.com` and unambiguous
+  legal forms (`Inc`, `Ltd`, `LLC`, `S.A.`, a trailing `SA`...), then by a
+  conservative similarity (a doubled or swapped letter, never a digit, a
+  plural, a different letter or word), and reuses its exact spelling across
+  sibling year folders. An unknown value
+  stops at the deepest folder known; a folder that cannot take a file sends
+  it to the category's top, never failing it.
+  `flib reprocess --apply-layout [--category NAME] [--ask-issuer]` moves
+  organized files into their layout from what the index stores, as one run
+  `flib undo` reverts; files you placed yourself stay, and values taken
+  from the cache are written to the index with the run. `flib fix
+  --name` now renames a file inside its sub-folder instead of moving it to
+  the category's top folder.
 - Local OCR (RF-26 done): the text in screenshots, photographed documents and
   scanned PDFs (first `ocr.max_pages`, 3) is recognised on the Mac with
   macOS's Vision framework, through a small `osascript` helper (no install,

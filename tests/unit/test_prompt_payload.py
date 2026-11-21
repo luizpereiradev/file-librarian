@@ -163,6 +163,7 @@ def test_answer_schema_is_pinned() -> None:
             "tags": {"type": "array", "items": {"type": "string"}},
             "confidence": {"type": "number"},
             "document_date": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "issuer": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         },
         "required": [
             "category",
@@ -173,10 +174,23 @@ def test_answer_schema_is_pinned() -> None:
             "tags",
             "confidence",
             "document_date",
+            "issuer",
         ],
         "additionalProperties": False,
     }
-    assert PROMPT_VERSION == "5"
+    assert PROMPT_VERSION == "6"
+
+
+def test_issuer_instructions_are_pinned() -> None:
+    """The issuer names a folder (#86): an organisation, never a private person."""
+    prompt = system_prompt(RULES)
+    assert (
+        "- issuer: the organisation the document comes from (the company, bank,\n"
+        "  utility, public body or brand that issued or sent it), as it names itself,\n"
+        '  for example "Acme" or "Power Co". null when there is none, it is unclear,\n'
+        "  or the document comes from a private individual: never a private person's\n"
+        "  name.\n"
+    ) in prompt
 
 
 def test_name_choice_instructions_are_pinned() -> None:

@@ -14,7 +14,10 @@ The same safety rules as the executor apply: the file must still be the one
 indexed (same content), the destination is a configured folder under
 ``output_root``, and nothing is ever overwritten: a taken name gets the next
 free ``-N``. Changing only the capitalization of a name renames the file in
-place (see ``fsops.move_no_replace``).
+place (see ``fsops.move_no_replace``). A file renamed in its own category
+stays in its sub-folder (a layout's, or one the user made); a file moved to
+another category goes to that category's top folder, which ``flib reprocess
+--apply-layout`` then files into the category's layout.
 
 A fix is all or nothing, even across a crash (#47): the journal entry
 carries the status and category the fix gives the file, and stays
@@ -88,6 +91,9 @@ def fix_file(
     folder, new_category = _folder(config, row, category)
     new_name = _name(row, name) if name is not None else row.current_name
     destination = config.output_root / folder / new_name
+    if row.status is FileStatus.ORGANIZED and new_category == row.category:
+        # Same category: it stays in its sub-folder (a layout's, or one the user made).
+        destination = source.parent / new_name
     if destination == source:
         raise FixError(f"{path} is already there with that name")
 
