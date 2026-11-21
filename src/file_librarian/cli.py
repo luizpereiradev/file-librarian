@@ -416,14 +416,30 @@ def inspect(
 @app.command()
 def status(
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    sensitive: Annotated[
+        bool,
+        typer.Option(
+            "--sensitive", help="List each file left in place as sensitive, and why (names!)."
+        ),
+    ] = False,
     config: ConfigOption = None,
 ) -> None:
     """Show what waits for you: files in review and why, failures, the last and next run.
 
     Also files left in place as sensitive and this month's provider cost. It
     only reads: no lock, nothing created, and it works before the first run.
+    ``--sensitive`` lists those files by path, here only: never in `flib doctor`,
+    a notification or the MCP server.
     """
     cfg = _load(config, warn_orphans=False)
+    if sensitive:
+        try:
+            found = status_mod.sensitive_files(cfg)
+        except (status_mod.StatusError, sqlite3.Error) as exc:
+            _fatal(f"cannot read the index: {exc}")
+        for line in status_mod.render_sensitive(found):
+            typer.echo(line)
+        return
     try:
         state = status_mod.collect(cfg)
     except (status_mod.StatusError, sqlite3.Error) as exc:
@@ -904,6 +920,11 @@ def _moved_line(source: str, item: ItemResult, cfg: Config) -> str:
     return line + (f"  (review: {item.note})" if item.status is FileStatus.REVIEW else "")
 
 
+def _label(status: FileStatus) -> str:
+    """A status as a column eight wide, with a space after a longer one (``sensitive``)."""
+    return f"{status.value:<8}" if len(status.value) < 8 else f"{status.value} "
+
+
 def _print_report(
     report: RunReport,
     cfg: Config,
@@ -920,7 +941,7 @@ def _print_report(
             if item.warning:
                 lines.append(f"  warning {_short(item.destination, cfg)}  ({item.warning})")
         else:
-            lines.append(f"  {item.status.value:<8}{source}  ({item.note})")
+            lines.append(f"  {_label(item.status)}{source}  ({item.note})")
     lines.extend(skipped)
     lines.append(
         f"Run {report.run_id}: {report.count(FileStatus.ORGANIZED, moved=True)} organized, "
@@ -1704,6 +1725,12 @@ def _ask_more_inboxes(ask: _Asker, answers: onboarding.Answers) -> onboarding.An
         "asking the AI (no cost), keeping their names; anything else there, and folders, "
         "are left alone."
     )
+    if not found:
+        typer.echo(
+            "Nothing there has a name flib knows for a screenshot (in English, Portuguese, "
+            "Spanish, French, German, Italian or Japanese), so it may never file anything "
+            "from it; the answer you probably want is no."
+        )
     if ask.confirm("File screenshots too?", default=False):
         answers = _with_inbox(
             answers, dataclasses.replace(answers, screenshots=shots), "the screenshots folder"
@@ -2488,7 +2515,7 @@ def _print_reprocess_report(
             if item.warning:
                 lines.append(f"  warning {_short(item.destination, cfg)}  ({item.warning})")
         elif item.status in {FileStatus.FAILED, FileStatus.SKIPPED}:
-            lines.append(f"  {item.status.value:<8}{_short(item.source, cfg)}  ({item.note})")
+            lines.append(f"  {_label(item.status)}{_short(item.source, cfg)}  ({item.note})")
     summary = (
         f"Reprocess run {report.run_id}: {report.count(FileStatus.ORGANIZED, moved=True)} "
         f"filed, {report.count(FileStatus.REVIEW, moved=True)} to review, "

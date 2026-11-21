@@ -171,6 +171,20 @@ def file_record(
     ctx = item.context
     # Only files that were classified get a description; only organized ones a category.
     answer = item.classification if status in {FileStatus.ORGANIZED, FileStatus.REVIEW} else None
+    if status is FileStatus.SENSITIVE:
+        return FileRecord(
+            sha256=ctx.sha256,
+            original_path=ctx.path,
+            current_path=ctx.path,
+            status=status,
+            extension=ctx.extension,
+            size_bytes=ctx.size_bytes,
+            is_unit=ctx.is_unit,
+            source_url=ctx.source_urls[0] if ctx.source_urls else None,
+            source_input=ctx.input,
+            sensitive_by=ctx.metadata.sensitive_by,
+            sensitive_reason=ctx.metadata.sensitive,
+        )
     if answer is not None and item.by_rule:
         # Filed by its input's fixed category: no AI answer to keep, only the
         # category and the words of its name (#89).

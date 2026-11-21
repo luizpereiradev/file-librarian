@@ -170,7 +170,11 @@ def correction_examples(rows: Iterable[CorrectionRow], config: Config) -> tuple[
         names = {row.original_name, row.current_name}
         if row.field == "name" and row.old_value:
             names.add(row.old_value)
-        if any(sensitive_name(n) or withheld_by_config(n, config.never_send) for n in names):
+        if any(
+            sensitive_name(n, config.sensitive.allow_names)
+            or withheld_by_config(n, config.never_send)
+            for n in names
+        ):
             continue
         description = (row.description or "")[:EXAMPLE_DESCRIPTION_CHARS] or None
         chosen.append(

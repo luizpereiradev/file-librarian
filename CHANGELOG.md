@@ -35,9 +35,14 @@ All notable changes to this project are documented here. The format follows
 - Patterns (`ignore`, `never_send`, `only`) now ignore the Unicode form of a
   name as well as its case, so a decomposed `Relatório.pdf` matches
   `Relatório*`. Office lock files (`~$*`) are always skipped, and names that
-  say they hold passwords or recovery material (`*password*`, `*senha*`,
-  `*recovery*code*`, `*backup*code*`, `*2fa*`, `*seed*phrase*`,
-  `*private*key*`...) are sensitive: never sent, left in place.
+  say they hold passwords or recovery material, matched as whole words
+  (`password`, `senha`, `contraseña`, `mot de passe`, `Passwort`, `2fa`,
+  `recovery codes`, `backup codes`, `seed phrase`, `private key`,
+  `bitwarden export`, `logins.csv`...; never an installer), are sensitive:
+  never sent, left in place. The index records why a file is sensitive
+  (its name or its content); one sensitive by its name alone is looked at
+  again once renamed or allowed by the new `sensitive.allow_names`, and
+  `flib status --sensitive` lists each file left in place and why.
 - Amounts, dates and issuers (#88): the answer also carries what a document
   states, and nothing it does not: its `kind` (bill, receipt, invoice,
   statement, contract, payslip, tax, ticket, policy, report, form, letter,

@@ -164,14 +164,30 @@ answered no by default (Enter or `--yes` keep a Downloads-only setup):
   com.apple.screencapture location`), with a fixed `Screenshots` category
   (`Capturas de tela` in pt-BR), a `{year}/{month}` layout,
   `folders: ignore` and an `only` of the names macOS gives screenshots and
-  screen recordings in English and Portuguese (`Screenshot*`,
-  `Screen Shot*`, `Screen Recording*`, `Captura de Tela*`,
-  `Gravação de Tela*`, as images or videos). Init says how many items there
-  match before asking. It is not offered when that folder holds other
+  screen recordings (`Screenshot*`, `Screen Shot*`, `Screen Recording*`,
+  and the Portuguese, Spanish, French, German, Italian and Japanese ones
+  such as `Captura de Tela*`, `Captura de pantalla*`, `Capture d’écran*`,
+  `Bildschirmfoto*`, `Schermata*`, `スクリーンショット*`, as images or
+  videos). Init says how many items there match before asking, and when
+  none does, says that no is probably the answer. It is not offered when that folder holds other
   things: your home folder or a standard one in it (Desktop, the macOS
   default, Documents, Downloads, Pictures, Movies, Music, Library, iCloud
   Drive). Init then says how to pick a folder just for screenshots
   (Cmd+Shift+5 > Options > Other Location).
+
+**Two limits to know.**
+
+- The age check uses when an item last changed or arrived in the folder,
+  not when it was last opened: a document you read every day but never edit
+  still becomes old enough.
+- When screenshots are saved to the Desktop (the macOS default) and the
+  Desktop is an input, screenshots older than its `min_age_days` match its
+  `only` list (`*.png`) and are classified like any image: their text is
+  read on your Mac, the secret scan applies (a screenshot of a password stays
+  where it is), and the AI picks the category. To keep them apart, have
+  macOS save screenshots to a folder of their own (Cmd+Shift+5 > Options >
+  Other Location) and add that folder with a fixed category, as `flib init`
+  offers.
 
 **One input that cannot be read** (macOS denied it, it was deleted, its disk
 is not connected) is skipped with a warning in the run's output and log,

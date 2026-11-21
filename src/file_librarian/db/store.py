@@ -119,6 +119,10 @@ class FileRow:
     """The input folder it was taken from; ``None`` for rows from before #89."""
     filed_by_rule: bool = False
     """Filed by its input's fixed category, with no AI answer (#89)."""
+    sensitive_by: str | None = None
+    """For a sensitive file: ``name`` or ``content``; ``None`` on older rows."""
+    sensitive_reason: str | None = None
+    """For a sensitive file: why, in words."""
 
     @property
     def review(self) -> tuple[ReviewReason | None, str | None]:
@@ -163,6 +167,8 @@ class FileRow:
             kind=row["kind"],
             source_input=None if row["source_input"] is None else Path(row["source_input"]),
             filed_by_rule=bool(row["filed_by_rule"]),
+            sensitive_by=row["sensitive_by"],
+            sensitive_reason=row["sensitive_reason"],
         )
 
 
@@ -503,7 +509,7 @@ class Store:
         ``flib undo`` put back are listed (``FileState.kept``).
         """
         row = self.conn.execute(
-            "SELECT status, attempts, current_path FROM files "
+            "SELECT status, attempts, current_path, sensitive_by FROM files "
             "WHERE sha256 = ? AND duplicate_of IS NULL",
             (sha256,),
         ).fetchone()
@@ -519,6 +525,7 @@ class Store:
             int(row["attempts"]),
             Path(row["current_path"]),
             frozenset(str(r[0]) for r in kept),
+            sensitive_by=row["sensitive_by"],
         )
 
     @contextmanager
@@ -602,9 +609,10 @@ class Store:
                    tags, confidence, status, attempts, last_error, provider, model, run_id,
                    processed_at, is_unit, name_choice, name_choice_reason, review_reason,
                    review_category, document_date, issuer, layout_date, amount_minor, currency,
-                   due_date, period, kind, source_input, filed_by_rule)
+                   due_date, period, kind, source_input, filed_by_rule, sensitive_by,
+                   sensitive_reason)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(sha256) WHERE duplicate_of IS NULL DO UPDATE SET
                    current_name = excluded.current_name, current_path = excluded.current_path,
                    category = excluded.category, description = excluded.description,
@@ -621,7 +629,9 @@ class Store:
                    currency = excluded.currency, due_date = excluded.due_date,
                    period = excluded.period, kind = excluded.kind,
                    source_input = COALESCE(files.source_input, excluded.source_input),
-                   filed_by_rule = excluded.filed_by_rule""",
+                   filed_by_rule = excluded.filed_by_rule,
+                   sensitive_by = excluded.sensitive_by,
+                   sensitive_reason = excluded.sensitive_reason""",
             (
                 r.sha256, normalize(r.original_path.name), normalize(str(r.original_path)),
                 normalize(r.current_path.name), normalize(str(r.current_path)), r.extension,
@@ -632,6 +642,7 @@ class Store:
                 None if r.review_reason is None else r.review_reason.value, r.review_category,
                 r.document_date, r.issuer, r.layout_date, r.amount_minor, r.currency,
                 r.due_date, r.period, r.kind, _path_text(r.source_input), int(r.by_rule),
+                r.sensitive_by, r.sensitive_reason,
             ),
         )  # fmt: skip
         row = self.conn.execute(
@@ -758,13 +769,27 @@ class Store:
     def set_file_status(self, file_id: int, status: FileStatus) -> None:
         self.conn.execute("UPDATE files SET status = ? WHERE id = ?", (status.value, file_id))
 
+    def sensitive_files(self) -> list[tuple[Path, str | None]]:
+        """Files left in place as sensitive: where each is and why (``flib status
+        --sensitive``, on this Mac only)."""
+        rows = self.conn.execute(
+            """SELECT current_path, sensitive_reason FROM files
+               WHERE status = 'sensitive' AND duplicate_of IS NULL ORDER BY current_path"""
+        )
+        return [(Path(r[0]), r[1]) for r in rows]
+
     def add_correction(self, file_id: int, field: str, old: str | None, new: str) -> None:
-        """A change the user made by hand; the classifier learns from these (RF-29)."""
+        """A change the user made by hand; the classifier learns from these (RF-29).
+
+        The file is no longer one an input rule filed (#89): the user chose for it,
+        so ``flib reprocess`` treats it like any corrected file from now on.
+        """
         self.conn.execute(
             """INSERT INTO corrections (file_id, field, old_value, new_value, created_at)
                VALUES (?, ?, ?, ?, ?)""",
             (file_id, field, old, new, _now()),
         )
+        self.conn.execute("UPDATE files SET filed_by_rule = 0 WHERE id = ?", (file_id,))
 
     def current_corrections(self) -> list[CorrectionRow]:
         """Corrections still in effect, newest first: the last one per file and field,
@@ -1601,6 +1626,8 @@ def record_to_json(r: FileRecord) -> str:
     data |= {
         "source_input": _path_text(r.source_input),
         "by_rule": r.by_rule,
+        "sensitive_by": r.sensitive_by,
+        "sensitive_reason": r.sensitive_reason,
         "original_path": str(r.original_path),
         "current_path": str(r.current_path),
         "status": r.status.value,
@@ -1619,9 +1646,11 @@ def record_from_json(text: str | None) -> FileRecord | None:
     data["status"] = FileStatus(data["status"])
     data["tags"] = tuple(data["tags"])
     data["review_reason"] = _reason(data["review_reason"])
-    # Both absent from records journaled before #89.
+    # All absent from records journaled before #89.
     source = data.pop("source_input", None)
     by_rule = bool(data.pop("by_rule", False))
+    data.setdefault("sensitive_by", None)
+    data.setdefault("sensitive_reason", None)
     return FileRecord(
         **data, source_input=None if source is None else Path(source), by_rule=by_rule
     )

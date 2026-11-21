@@ -70,9 +70,17 @@ DESKTOP_ONLY = (
 Markdown and CSV are left out: scratch notes and exports live there."""
 SCREENSHOT_LAYOUT = "{year}/{month}"
 SCREENSHOT_NAMES = (
-    "Screenshot*", "Screen Shot*", "Screen Recording*", "Captura de Tela*", "Gravação de Tela*",
+    "Screenshot*", "Screen Shot*", "Screen Recording*",  # English
+    "Captura de Tela*", "Gravação de Tela*",  # Portuguese
+    "Captura de pantalla*", "Grabación de pantalla*",  # Spanish
+    # French
+    "Capture d\u2019écran*", "Capture d'écran*", "Enregistrement de l\u2019écran*",
+    "Enregistrement de l'écran*", "Enregistrement d\u2019écran*", "Enregistrement d'écran*",
+    "Bildschirmfoto*", "Bildschirmaufnahme*",  # German
+    "Schermata*", "Registrazione schermo*",  # Italian
+    "スクリーンショット*", "画面収録*",  # Japanese
 )  # fmt: skip
-"""How macOS names screenshots and screen recordings, in English and Portuguese."""
+"""How macOS names screenshots and screen recordings in the languages it is most used in."""
 SCREENSHOT_EXTENSIONS = (".png", ".jpg", ".jpeg", ".heic", ".tif", ".tiff", ".gif", ".mov", ".mp4")
 SCREENSHOT_ONLY = tuple(
     f"{name}{ext}" for name in SCREENSHOT_NAMES for ext in SCREENSHOT_EXTENSIONS
@@ -391,7 +399,9 @@ def _sample_time(
         return None
     if rules.only is not None and not matches_any(name, rules.only):
         return None
-    if sensitive_name(name) or withheld_by_config(name, config.never_send):
+    if sensitive_name(name, config.sensitive.allow_names) or withheld_by_config(
+        name, config.never_send
+    ):
         return None
     path = Path(entry.path)
     if is_within(path, config.output_root):

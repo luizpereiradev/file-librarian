@@ -11,7 +11,10 @@
 - Waits until an item has not changed for ``stable_seconds`` and its size and
   mtime are the same before and after hashing (RF-02).
 - Skips anything already in the database by content hash, except files that
-  failed fewer than ``max_attempts`` times (RF-01, RF-30).
+  failed fewer than ``max_attempts`` times (RF-01, RF-30) and files left in
+  place as sensitive because of their name alone whose current name no
+  longer is (renamed, allowed by ``sensitive.allow_names``, or the rules
+  changed): those are looked at again like a new file.
 - Finds duplicates (RF-21), with ``duplicates: move``: an item with the same
   content as a file filed in the library (organized or in review) that is
   still there with that content, or as another item going ahead in this run.
@@ -69,6 +72,7 @@ from file_librarian.hashing import file_sha256, unit_manifest
 from file_librarian.lock import lock_path
 from file_librarian.models import FileState, FileStatus
 from file_librarian.reconcile import content_at
+from file_librarian.sensitive import sensitive_name
 
 # Browsers write in-progress downloads under these names (Safari's are folders).
 # Office's lock files (``~$report.docx``) only exist while a document is open.
@@ -274,6 +278,16 @@ def _known(
     if there:
         return Duplicate(candidate, state.path, in_library=True)
     return SkipReason.NOT_WHERE_LEFT
+
+
+def _name_cleared(candidate: Candidate, state: FileState, config: Config) -> bool:
+    """A file left in place as sensitive because of its name alone, whose current name
+    no longer is (renamed, ``sensitive.allow_names``, changed rules): it goes ahead
+    and is looked at like any new file, its content scanned for secrets."""
+    if state.status is not FileStatus.SENSITIVE or state.sensitive_by != "name":
+        return False
+    detect = config.sensitive.detect_secrets
+    return not (detect and sensitive_name(candidate.path.name, config.sensitive.allow_names))
 
 
 def _protected_ids(config: Config) -> set[tuple[int, int]]:
@@ -482,10 +496,9 @@ def scan(
                 continue
 
             state = lookup(candidate.sha256)
-            retry = (
-                state is not None
-                and state.status is FileStatus.FAILED
-                and state.attempts < limits.max_attempts
+            retry = state is not None and (
+                (state.status is FileStatus.FAILED and state.attempts < limits.max_attempts)
+                or _name_cleared(candidate, state, config)
             )
             if state is not None and not retry:
                 known = _known(candidate, state, config, rules)

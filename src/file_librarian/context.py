@@ -44,7 +44,13 @@ from file_librarian.extractors.origin import download_origin
 from file_librarian.extractors.visual import is_image
 from file_librarian.models import BundleInfo, FileContext, FileMetadata, VisualKind
 from file_librarian.scanner import Candidate
-from file_librarian.sensitive import find_secrets, sensitive_name, withheld_by_config
+from file_librarian.sensitive import (
+    find_secrets,
+    name_sensitive,
+    sensitive_name,
+    sensitive_reason,
+    withheld_by_config,
+)
 
 SCAN_WINDOW = 256_000
 SNIFF_LIMIT = 1024 * 1024
@@ -98,21 +104,29 @@ def build_context(
         input=candidate.input,
     )
     detect = config.sensitive.detect_secrets
+    allow = config.sensitive.allow_names
 
     if candidate.is_unit:
         names, bundle = _unit_listing(path)
-        if detect and any(sensitive_name(Path(n).name) for n in names):
+        inside = next((n for n in names if sensitive_name(Path(n).name, allow)), None)
+        if detect and inside is not None:
+            reason = sensitive_reason(Path(inside).name, allow)
             return replace(
-                base, sensitive=True, metadata=FileMetadata(sensitive="credential files")
+                base,
+                sensitive=True,
+                metadata=FileMetadata(
+                    sensitive=f"content: holds a file named like {reason}",
+                    sensitive_by="content",
+                ),
             )
         return replace(
             base, text=_describe_unit(names, bundle, config), metadata=FileMetadata(bundle=bundle)
         )
 
-    if detect and any(sensitive_name(n) for n in known_as):
-        return replace(
-            base, sensitive=True, metadata=FileMetadata(sensitive="credential file name")
-        )
+    named = next((r for n in known_as if (r := sensitive_reason(n, allow))), None)
+    if detect and named is not None:
+        metadata = FileMetadata(sensitive=name_sensitive(named), sensitive_by="name")
+        return replace(base, sensitive=True, metadata=metadata)
 
     if any(withheld_by_config(n, config.never_send) for n in known_as):
         return replace(base, metadata=FileMetadata(content="withheld (never_send)"))
@@ -148,7 +162,10 @@ def build_context(
     if detect and scanned:
         kinds = find_secrets(scanned)
         if kinds:
-            return replace(base, sensitive=True, metadata=FileMetadata(sensitive=", ".join(kinds)))
+            metadata = FileMetadata(
+                sensitive=f"content: looks like {', '.join(kinds)}", sensitive_by="content"
+            )
+            return replace(base, sensitive=True, metadata=metadata)
 
     from_ocr = recognized is not None and ocr.enough_text(recognized, config.ocr)
     if from_ocr:

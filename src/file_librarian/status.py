@@ -218,6 +218,38 @@ def input_counts(config: Config, store: Store) -> list[InputCount] | None:
     return found
 
 
+def sensitive_files(config: Config) -> list[tuple[Path, str | None]]:
+    """Every file left in place as sensitive, with why (``flib status --sensitive``).
+
+    Names and paths: for the terminal on this Mac only, never for ``flib doctor``,
+    notifications or the MCP server. Read-only, like ``collect``.
+    """
+    if not config.database.exists():
+        return []
+    with _open_read_only(config.database) as store:
+        try:
+            return store.sensitive_files()
+        except sqlite3.OperationalError:  # an index from before reasons were recorded
+            rows = store.conn.execute(
+                "SELECT current_path FROM files WHERE status = 'sensitive' ORDER BY current_path"
+            )
+            return [(Path(r[0]), None) for r in rows]
+
+
+def render_sensitive(found: list[tuple[Path, str | None]]) -> list[str]:
+    if not found:
+        return ["No file is left in place as sensitive."]
+    lines = [f"Left in place as sensitive: {_files(len(found))}"]
+    for path, reason in found:
+        why = reason or "reason not recorded (left in place by an earlier version)"
+        lines.append(f"  {path}  ({why})")
+    lines.append(
+        "A file sensitive only because of its name is looked at again once renamed, or "
+        "when `sensitive.allow_names` lets its name through."
+    )
+    return lines
+
+
 def _open_read_only(path: Path) -> Store:
     conn = sqlite3.connect(
         f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=BUSY_TIMEOUT_MS / 1000

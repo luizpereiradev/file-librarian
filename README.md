@@ -279,7 +279,7 @@ Every command takes `--config PATH` (`-c`); without it, flib reads
 | `flib run` | Classify, rename, move and index new files |
 | `flib undo [--run ID \| --file PATH]` | Revert the last run, a given run, or the last operation on one file |
 | `flib search [QUERY] [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--issuer NAME] [--kind KIND] [--min-amount N] [--max-amount N] [--currency CODE] [--due-before DATE] [--due-after DATE] [--period YYYY[-MM]] [--sum [--by GROUP]] [--semantic \| --no-semantic] [--reindex] [--duplicates] [--limit N] [--json]` | Search names, descriptions and tags, narrowed by category, period, extension or what the document states (issuer, kind, amount, due date); add up amounts with `--sum`; optionally by meaning ([Searching](#searching)) |
-| `flib status [--json]` | What waits for you: files in review and why, failures, files left in place as sensitive, the last and next run, this month's cost ([Staying on top of it](#staying-on-top-of-it)) |
+| `flib status [--json] [--sensitive]` | What waits for you: files in review and why, failures, files left in place as sensitive, the last and next run, this month's cost ([Staying on top of it](#staying-on-top-of-it)); `--sensitive` lists each file left in place as sensitive and why |
 | `flib fix FILE [--category NAME] [--name NAME]` | Correct one file's category or name; flib learns from it ([Teaching it](#teaching-it)) |
 | `flib reconcile` | Update the index after you move, rename or delete files by hand; files only in iCloud are left unchecked |
 | `flib reprocess [--category NAME] [--since DATE] [--until DATE] [--ext EXT] [--rename] [--override-corrections] [--simulate] [--yes]` | Reclassify organized files after the rules change; `--rename-category OLD NEW` and `--remove-category OLD [--to-review]` migrate a category ([guide](docs/guide.md#changing-your-rules)); `--apply-layout [--category NAME] [--ask-issuer]` moves organized files into their category's layout ([Sub-folders](#sub-folders-by-year-or-issuer)); `--scrub-descriptions` removes identifiers from stored descriptions, no AI ([Privacy](#privacy)); `--fill-fields` asks only for the amount, dates, issuer, period and kind of files filed before flib kept them ([Amounts and dates](#amounts-dates-and-issuers)) |
@@ -827,11 +827,19 @@ Two kinds of files are treated differently, with every provider:
   content. Add `"*.eml"` to keep e-mail messages to their metadata.
 - **Credential names (`id_rsa`, `*.pem`…) or secrets found in the content:**
   nothing at all is sent, the file stays where it is, and the index records
-  only that it is sensitive. Names that say they hold passwords or recovery
-  material count too (`*password*`, `*senha*`, `*recovery*code*`,
-  `*backup*code*`, `*2fa*`, `*seed*phrase*`, `*private*key*`…, any case):
-  a harmless "password reset guide.pdf" is left in place as well, which is
-  the safe side to err on.
+  only that it is sensitive, and why. Names that say they hold passwords or
+  recovery material count too, matched as whole words in any case:
+  `password(s)`, `passwd`, `2fa`, `senha(s)`, `contraseña(s)`,
+  `mot(s) de passe`, `Passwort`/`Passwörter`, `recovery code(s)`,
+  `backup code(s)`, `seed phrase`, `private key`, `recovery key`,
+  `bitwarden export`, `logins.csv`. `1Password-8.10.dmg` or a hexadecimal
+  name with `2fa` inside is not caught, and installers (`.dmg`, `.pkg`,
+  `.app`…) never are by name alone. A harmless "password reset guide.pdf" is
+  still left in place: rename it, or list it in `sensitive.allow_names`, and
+  the next run looks at it like any file (a file whose content holds a
+  secret stays sensitive whatever its name). `flib status --sensitive` lists
+  every file left in place and why, in your terminal only (never in `flib
+  doctor`, a notification or the MCP server).
 
 **Where it goes, by provider:**
 

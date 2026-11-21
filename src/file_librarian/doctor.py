@@ -479,6 +479,8 @@ def redacted_config(config: Config, r: Redactor) -> list[str]:
             category["hint"] = f"<hint, {len(category['hint'])} characters>"
     for key in ("ignore", "never_send"):
         data[key] = [_pattern(p, i) for i, p in enumerate(data[key], start=1)]
+    allowed = data["sensitive"]["allow_names"]
+    data["sensitive"]["allow_names"] = [_pattern(p, i) for i, p in enumerate(allowed, start=1)]
     data["naming"]["pattern"] = r.text(data["naming"]["pattern"])
     dumped = yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
     return dumped.rstrip("\n").splitlines()

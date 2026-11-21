@@ -11,6 +11,7 @@ them; the planner still checks every destination again.
 
 from __future__ import annotations
 
+import functools
 import ipaddress
 import os
 import re
@@ -99,16 +100,40 @@ def canonical(path: Path) -> Path:
 
 
 _DATA_VOLUME = ("/", "system", "volumes", "data")
+FIRMLINKS_FILE = Path("/usr/share/firmlinks")
+_FIRMLINK_FALLBACK = (
+    "Applications", "Library", "Users", "Volumes", "cores", "opt", "private", "usr/local",
+    "usr/libexec/cups", "usr/share/snmp", "AppleInternal", "System/Library/Caches",
+    "System/Library/Assets", "System/Library/PreinstalledAssets", "System/Library/AssetsV2",
+    "System/Library/PreinstalledAssetsV2",
+    "System/Library/CoreServices/CoreTypes.bundle/Contents/Library",
+    "System/Library/Speech",
+)  # fmt: skip
+
+
+@functools.cache
+def firmlinked_roots() -> tuple[tuple[str, ...], ...]:
+    """The folders of the system volume that are firmlinks into the data volume, as
+    folded path parts (``/usr/share/firmlinks``, else a built-in list)."""
+    try:
+        lines = FIRMLINKS_FILE.read_text(encoding="utf-8").splitlines()
+        roots = [line.split("\t", 1)[0].strip().strip("/") for line in lines if line.strip()]
+    except OSError:
+        roots = []
+    roots = [r for r in roots if r] or list(_FIRMLINK_FALLBACK)
+    return tuple(tuple(folder_key(p) for p in r.split("/")) for r in roots)
 
 
 def _without_data_volume(path: Path) -> Path:
     """``/System/Volumes/Data/Users/x`` is ``/Users/x``: macOS joins the two with a
-    firmlink, which ``realpath`` does not resolve. Stripped when the rest exists."""
+    firmlink, which ``realpath`` does not resolve. Stripped whenever what follows is
+    one of the firmlinked folders, whether or not the path exists."""
     parts = path.parts
-    if len(parts) > 4 and tuple(folder_key(p) for p in parts[:4]) == _DATA_VOLUME:
-        rest = Path("/", *parts[4:])
-        if os.path.lexists(rest):
-            return rest
+    if len(parts) <= 4 or tuple(folder_key(p) for p in parts[:4]) != _DATA_VOLUME:
+        return path
+    rest = tuple(folder_key(p) for p in parts[4:])
+    if any(rest[: len(root)] == root for root in firmlinked_roots()):
+        return Path("/", *parts[4:])
     return path
 
 
@@ -476,6 +501,9 @@ class OcrConfig(_Section):
 
 class SensitiveConfig(_Section):
     detect_secrets: bool = True
+    allow_names: list[Glob] = Field(default_factory=list)
+    """Name patterns never sensitive by their name alone (a "password reset guide.pdf");
+    a secret found in the content still makes a file sensitive."""
 
 
 class PrivacyConfig(_Section):

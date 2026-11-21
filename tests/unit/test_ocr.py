@@ -436,7 +436,10 @@ def test_inspect_explains_sensitive_and_failed_files(
     config = write_config(tmp_path, downloads)
     shot = make_scan(downloads / "Screenshot.png", f"aws key {AWS_KEY}")
     result = runner.invoke(app, ["inspect", "-c", str(config), str(shot)])
-    assert "text:   none sent (sensitive (AWS access key); nothing is sent)" in result.stdout
+    assert (
+        "text:   none sent (sensitive (content: looks like AWS access key); nothing is sent)"
+        in result.stdout
+    )
     monkeypatch.setenv("FAKE_OCR_MODE", "fail")
     scan = make_scan(downloads / "scan.pdf", BILL)
     result = runner.invoke(app, ["inspect", "-c", str(config), str(scan)])

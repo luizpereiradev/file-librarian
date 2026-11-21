@@ -123,6 +123,8 @@ class FileState:
     kept: frozenset[str] = frozenset()
     """Paths (NFC) of other copies of this content that ``flib undo`` put back: a
     duplicate moved back by hand is left where the user wanted it."""
+    sensitive_by: str | None = None
+    """For a sensitive content: ``name`` (looked at again on every scan) or ``content``."""
 
 
 NameChoice = Literal["original", "proposed"]
@@ -180,7 +182,11 @@ class FileMetadata:
     extraction_error: str | None = None
     """Why reading the file failed (RF-27); it is then classified from metadata."""
     sensitive: str | None = None
-    """What made the file sensitive (a secret kind or a credential file name)."""
+    """What made the file sensitive, in words (``name looks like a credential file:
+    password``, ``content: looks like private key``)."""
+    sensitive_by: Literal["name", "content"] | None = None
+    """Whether its name alone (looked at again on every scan) or its content made it
+    sensitive."""
     bundle: BundleInfo | None = None
     """For an ``.app`` unit, what its ``Info.plist`` says."""
     text_source: Literal["ocr"] | None = None
@@ -354,6 +360,10 @@ class FileRecord:
     """The input folder the file was taken from (#89); an existing row keeps its own."""
     by_rule: bool = False
     """Filed by its input's fixed category, with no AI answer (#89)."""
+    sensitive_by: Literal["name", "content"] | None = None
+    """For a sensitive file: whether its name or its content made it sensitive."""
+    sensitive_reason: str | None = None
+    """For a sensitive file: why, in words."""
 
 
 @dataclass(frozen=True, slots=True)
