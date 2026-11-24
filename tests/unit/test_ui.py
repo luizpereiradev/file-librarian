@@ -7,6 +7,7 @@ Each rule has a request that breaks it.
 
 from __future__ import annotations
 
+import faulthandler
 import hmac
 import json
 import os
@@ -41,6 +42,15 @@ SECURITY_HEADERS = {
     "Referrer-Policy": "no-referrer",
     "Cache-Control": "no-store",
 }
+
+
+@pytest.fixture(autouse=True)
+def no_hang() -> Iterator[None]:
+    """A test that waits on a server for over a minute is stuck: print every thread's
+    stack and exit, rather than let the run sit until CI times it out."""
+    faulthandler.dump_traceback_later(60, exit=True)
+    yield
+    faulthandler.cancel_dump_traceback_later()
 
 
 class FakeClock:
@@ -671,7 +681,7 @@ def end_from_the_browser(log: Path) -> threading.Thread:
     """In the background: wait for the fake ``open``, open the link, End session."""
 
     def browse() -> None:
-        wait_for(lambda: opened(log))
+        wait_for(lambda: opened(log), timeout=30)  # a cold Python start on CI is slow
         url = opened(log)[0][0]
         c = UiClient(int(url.split(":")[2].split("/")[0]))
         c.launch(url)
@@ -687,7 +697,7 @@ def interrupt_when_listening(signum: int) -> threading.Thread:
     original = signal.getsignal(signum)
 
     def send() -> None:
-        wait_for(lambda: signal.getsignal(signum) is not original)
+        wait_for(lambda: signal.getsignal(signum) is not original, timeout=30)
         os.kill(os.getpid(), signum)
 
     thread = threading.Thread(target=send, daemon=True)

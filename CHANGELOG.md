@@ -381,9 +381,6 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
-- The "Due:" line of `flib status` takes "today" from the same clock as
-  `flib due`, and two tests of the due reminder no longer depend on the
-  real date (they failed from 2026-11-24 on).
 - `flib search --sum` with no words and no filter (for example `--sum --by
   kind`) adds up every filed document instead of refusing, and the message
   for a search with nothing to look for lists every filter (`--issuer`,
