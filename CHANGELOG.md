@@ -8,6 +8,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `flib ui`, an early local interface (#113): a web server on 127.0.0.1
+  that exists only while in use, with a Status page (the counts of `flib
+  status`, light and dark, in the icon's colours) and greyed-out places for
+  Review, Search, Activity, Due and Settings. `--open PAGE`, `--no-browser`
+  and `--port N`; it ends after `ui.idle_minutes` (default 10) without use,
+  with End session, or with Ctrl-C, and one runs at a time. Standard library
+  only, pages shipped in the package, no build step and nothing from a CDN.
+  The link it opens holds a single-use token that becomes an `HttpOnly`,
+  `SameSite=Strict` session cookie; every request is checked for an exact
+  loopback `Host` (DNS rebinding) and same-origin fetch metadata, every POST
+  for its `Origin` and a per-session CSRF token; a strict
+  Content-Security-Policy with no inline script, size and time limits, a
+  thread cap, static files from memory only, and error pages that say
+  nothing. docs/architecture.md has the threat model.
 - Notifications show as "file-librarian", with flib's own icon, instead of
   Script Editor. `flib schedule` (and `--refresh`, which
   `./scripts/install.sh` runs) builds a tiny notifier app inside flib's own
@@ -367,6 +381,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- The "Due:" line of `flib status` takes "today" from the same clock as
+  `flib due`, and two tests of the due reminder no longer depend on the
+  real date (they failed from 2026-11-24 on).
 - `flib search --sum` with no words and no filter (for example `--sum --by
   kind`) adds up every filed document instead of refusing, and the message
   for a search with nothing to look for lists every filter (`--issuer`,

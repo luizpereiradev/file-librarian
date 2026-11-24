@@ -82,6 +82,7 @@ from file_librarian.search import (
 )
 from file_librarian.search import search as run_search
 from file_librarian.search import to_json as search_json
+from file_librarian.ui import server as ui_server
 from file_librarian.undo import NothingToUndoError, undo_file, undo_run
 
 EXIT_ERROR = 1
@@ -2448,6 +2449,34 @@ def mcp(config: ConfigOption = None) -> None:
             "`./scripts/install.sh --with-mcp` from the file-librarian folder."
         )
     serve(cfg)
+
+
+@app.command()
+def ui(
+    open_page: Annotated[
+        str,
+        typer.Option("--open", metavar="PAGE", help=f"Page to open: {', '.join(ui_server.PAGES)}."),
+    ] = "status",
+    no_browser: Annotated[
+        bool, typer.Option("--no-browser", help="Print the link without opening a browser.")
+    ] = False,
+    port: Annotated[
+        int,
+        typer.Option("--port", min=0, max=65535, help="Port on 127.0.0.1 [default: a free one]."),
+    ] = 0,
+    config: ConfigOption = None,
+) -> None:
+    """Open the local interface in your browser (early: a status page for now).
+
+    A server on 127.0.0.1 only, for this Mac; the link works once. It ends after
+    `ui.idle_minutes` without use, with End session, or with Ctrl-C. A second
+    `flib ui` while one runs says so and exits.
+    """
+    cfg = _load(config, warn_orphans=False)
+    try:
+        ui_server.run(cfg, page=open_page, port=port, browser=not no_browser, echo=typer.echo)
+    except ui_server.UiError as exc:
+        _fatal(str(exc))
 
 
 @app.command()

@@ -203,6 +203,9 @@ due:                         # #91: `flib due`, its line in `flib status`, its r
 mcp:                         # `flib mcp`: the local MCP server for AI assistants
   read_only: false           # true hides the write tools, recategorize_file and undo
 
+ui:                          # #113: `flib ui`, the local interface in your browser (early)
+  idle_minutes: 10           # 1-1440: the server on 127.0.0.1 ends after this long without use
+
 search:
   semantic:                  # RF-15: also find files by meaning ("invoice" finds a "bill")
     enabled: false           # off by default; when on, each run embeds new and changed rows

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="flib-csrf" content="{{csrf}}">
+<title>Status · file-librarian</title>
+<link rel="icon" href="/static/icon.png">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/status.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/status"><img src="/static/icon.png" alt="" width="28" height="28"><span>file-librarian</span></a>
+  <nav aria-label="Pages">
+    <a href="/status" aria-current="page">Status</a>
+    <span class="soon" aria-disabled="true" title="Coming soon">Review</span>
+    <span class="soon" aria-disabled="true" title="Coming soon">Search</span>
+    <span class="soon" aria-disabled="true" title="Coming soon">Activity</span>
+    <span class="soon" aria-disabled="true" title="Coming soon">Due</span>
+    <span class="soon" aria-disabled="true" title="Coming soon">Settings</span>
+  </nav>
+  <form class="end" method="post" action="/session/end">
+    <input type="hidden" name="csrf" value="{{csrf}}">
+    <button type="submit">End session</button>
+  </form>
+</header>
+<main>
+  <h1>Status</h1>
+  <p class="lead" id="summary" aria-live="polite">Loading…</p>
+  <noscript><p class="lead">This page shows its counts with JavaScript. <code>flib status</code> in Terminal shows the same.</p></noscript>
+  <section class="cards" id="cards" hidden>
+    <article class="card">
+      <h2>Review</h2>
+      <p class="number" id="review-total">0</p>
+      <p class="note" id="review-note"></p>
+      <ul class="groups" id="review-groups"></ul>
+    </article>
+    <article class="card">
+      <h2>Failed</h2>
+      <p class="number" id="failed-total">0</p>
+      <ul class="groups" id="failed-groups"></ul>
+    </article>
+    <article class="card">
+      <h2>Due</h2>
+      <p class="number" id="due-total">0</p>
+      <p class="note" id="due-note"></p>
+    </article>
+    <article class="card">
+      <h2>Left in place</h2>
+      <p class="number" id="sensitive">0</p>
+      <p class="note">sensitive files, never moved or sent anywhere</p>
+    </article>
+    <article class="card">
+      <h2>Duplicates set aside</h2>
+      <p class="number" id="duplicates">0</p>
+      <p class="note">nothing is deleted</p>
+    </article>
+    <article class="card wide">
+      <h2>Runs</h2>
+      <dl class="facts">
+        <dt>Last run</dt><dd id="last-run">none yet</dd>
+        <dt>Next run</dt><dd id="next-run">none scheduled</dd>
+        <dt>Today</dt><dd id="today"></dd>
+        <dt>This month</dt><dd id="month"></dd>
+      </dl>
+    </article>
+  </section>
+  <p class="actions"><button type="button" id="refresh">Refresh</button></p>
+</main>
+<footer>Counts only: this page shows no file names. It is served on this Mac, at 127.0.0.1, while <code>flib ui</code> runs.</footer>
+</body>
+</html>
