@@ -225,8 +225,14 @@ one-time key through a file only you can read, never through the command
 line where other accounts on the Mac could see it, and the terminal says
 "session started" when it is used. If the key is used a second time, by
 anything without your session, `flib ui` ends and warns you. The page shows
-counts only, never a file name. One runs at
-a time: a second `flib ui` says so and exits. It uses only Python's standard
+counts only, never a file name. One runs at a time: a second `flib ui` says
+so and exits.
+
+`--no-browser` prints the key itself, in a link: it stays in the terminal's
+scrollback and, once opened, in the browser's history, and anyone who can see
+your screen or that scrollback could use it before you do. It works only
+once, and a second use ends the server, but prefer the default unless the
+browser cannot be opened for you. It uses only Python's standard
 library and files shipped with flib; nothing is loaded from the internet.
 [Architecture](docs/architecture.md#the-interface-flib-ui) has the details.
 

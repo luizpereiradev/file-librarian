@@ -16,14 +16,16 @@ All notable changes to this project are documented here. The format follows
   with End session, or with Ctrl-C, and one runs at a time. Standard library
   only, pages shipped in the package, no build step and nothing from a CDN.
   The browser gets a single-use token through a handoff file only the user
-  can read (never on a command line, where other accounts could see it); it
+  can read, in the account's own temporary folder (never on a command line,
+  where other accounts could see it); it
   becomes an `HttpOnly`, `SameSite=Strict` session cookie, and "session
   started" is printed. A used token that comes back without the session
   ends the server with a warning. Every request is checked for an exact
   `127.0.0.1` `Host` (DNS rebinding) and origin, every POST route for the
   session cookie and a per-session CSRF token; a strict
-  Content-Security-Policy with no inline script, size limits and a deadline
-  for the whole request, a thread cap, static files from memory only, and
+  Content-Security-Policy with no inline script, size limits, requests read
+  without a thread until they have fully arrived, a deadline for the whole
+  request, a thread cap, static files from memory only, and
   error pages that say nothing. docs/architecture.md has the threat model.
 - Notifications show as "file-librarian", with flib's own icon, instead of
   Script Editor. `flib schedule` (and `--refresh`, which
