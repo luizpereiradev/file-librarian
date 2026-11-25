@@ -192,6 +192,8 @@ class Status:
 
 def collect(config: Config, *, now: datetime | None = None) -> Status:
     """What waits for the user. Read-only and lock-free; raises ``StatusError``."""
+    # "Today" for due dates comes from the same clock `flib due` uses, so the two agree.
+    due_today = due_mod.local_today(now or due_mod.clock())
     now = now or datetime.now(UTC)
     schedule = next_run(now, config.input_paths)
     posting = notifier.choice() if config.summary.notify else None
@@ -212,7 +214,7 @@ def collect(config: Config, *, now: datetime | None = None) -> Status:
         by_input = input_counts(config, store) if len(config.inputs) > 1 else None
         due = None
         if version >= due_mod.MIN_SCHEMA:
-            due = due_mod.counts(store, config, due_mod.local_today(now))
+            due = due_mod.counts(store, config, due_today)
         last_watch = store.last_run_by(RunTrigger.WATCH)
         backlog = _backlog(store) if version >= _META_SCHEMA else None
         files_today = store.automatic_files_today()
@@ -870,6 +872,7 @@ def after_scheduled_run(
     ``every_days``.
     """
     settings = config.summary
+    due_today = due_mod.local_today(now or due_mod.clock())
     now = now or datetime.now(UTC)
     with Store.open(config.database) as store:
         waiting = store.waiting()
@@ -881,7 +884,7 @@ def after_scheduled_run(
             waited = days >= settings.every_days
         remind = None
         if config.due.remind:
-            remind = due_mod.reminder(store, config, due_mod.local_today(now))
+            remind = due_mod.reminder(store, config, due_today)
         if not waited and (remind is None or not remind.new):
             return []
         with store.transaction():
