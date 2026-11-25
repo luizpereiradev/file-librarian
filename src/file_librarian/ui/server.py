@@ -30,7 +30,8 @@ is logged: a request line can hold the launch token.
 The server ends after ``ui.idle_minutes`` without a request, on "End
 session" (a POST) or on SIGINT/SIGTERM. One ``flib ui`` runs at a time
 (``lock.ui_lock``); a second one says so and exits, since only the first knows
-its port and token. The clock and the idle poll are injectable for tests.
+its port and token. The clock, the idle poll and the timeouts are injectable
+for tests.
 """
 
 from __future__ import annotations
@@ -38,18 +39,21 @@ from __future__ import annotations
 import hmac
 import ipaddress
 import json
+import queue
 import secrets
+import selectors
 import signal
+import socket
 import socketserver
 import sqlite3
 import subprocess
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from importlib import resources
 from types import FrameType
 from typing import Any
@@ -74,6 +78,8 @@ MAX_REQUEST_LINE = 4096
 MAX_HEADER_BYTES = 16 * 1024
 MAX_BODY = 16 * 1024
 IDLE_POLL_SECONDS = 1.0
+CLOSE_GRACE = 1.0
+"""Seconds a request in progress may take to finish once the server ends."""
 
 CSRF_FIELD = "csrf"
 CSRF_HEADER = "X-Flib-CSRF"
@@ -170,6 +176,7 @@ class Ui:
         poll_seconds: float = IDLE_POLL_SECONDS,
         max_threads: int = MAX_THREADS,
         request_timeout: float = REQUEST_TIMEOUT,
+        close_grace: float = CLOSE_GRACE,
     ) -> None:
         if page not in PAGES:
             raise UiError(f"no page {page!r}; one of: {', '.join(PAGES)}")
@@ -177,6 +184,7 @@ class Ui:
         self.page = page
         self.idle_seconds = config.ui.idle_minutes * 60.0 if idle_seconds is None else idle_seconds
         self.request_timeout = request_timeout
+        self._grace = min(close_grace, request_timeout)
         self.assets = load_assets()
         self.pages = load_pages()
         self.reason: str | None = None
@@ -186,13 +194,20 @@ class Ui:
         self._launch: str | None = secrets.token_urlsafe(32)
         self._session: Session | None = None
         self._last = clock()
-        self._stop = threading.Event()
+        self._stops: queue.SimpleQueue[str] = queue.SimpleQueue()
         self._done = threading.Event()
-        self._started = False
+        self._thread: threading.Thread | None = None
+        self._wake_r, self._wake_w = socket.socketpair()
+        self._wake_r.setblocking(False)
+        self._wake_w.setblocking(False)
         try:
             self._server = _HttpServer(self, port, max_threads)
-        except OSError as exc:
-            raise UiError(f"cannot listen on {HOST}:{port}: {exc.strerror or exc}") from exc
+        except BaseException as exc:
+            self._wake_r.close()
+            self._wake_w.close()
+            if isinstance(exc, OSError):
+                raise UiError(f"cannot listen on {HOST}:{port}: {exc.strerror or exc}") from exc
+            raise
         self.port: int = self._server.server_address[1]
         self.launch_url = f"http://{HOST}:{self.port}/launch?token={self._launch}"
         self.hosts = frozenset({f"{HOST}:{self.port}", f"localhost:{self.port}"})
@@ -200,44 +215,82 @@ class Ui:
         self.cookie_name = f"flib_ui_{self.port}"
 
     # --- lifecycle ---
+    #
+    # One thread, "flib-ui", accepts connections, checks the idle timer and, when
+    # asked to stop, closes everything and joins every request thread before
+    # ``wait`` returns. ``stop`` takes no lock (a reentrant queue and a byte on a
+    # socket pair), so it is safe from a signal handler, even one that interrupts
+    # another; a handler that took a lock could deadlock the main thread.
 
     def start(self) -> None:
-        self._started = True
-        threading.Thread(
-            target=self._server.serve_forever,
-            kwargs={"poll_interval": min(0.5, self._poll)},
-            name="flib-ui",
-            daemon=True,
-        ).start()
-        threading.Thread(target=self._watch, name="flib-ui-idle", daemon=True).start()
+        self._thread = threading.Thread(target=self._serve, name="flib-ui", daemon=True)
+        self._thread.start()
 
-    def _watch(self) -> None:
-        while not self._stop.wait(self._poll):
-            with self._lock:
-                idle = self._clock() - self._last
-            if idle >= self.idle_seconds:
-                self.stop("idle")
-        self._server.shutdown()
-        self._server.server_close()
-        self._done.set()
+    def _serve(self) -> None:
+        listener = self._server.socket
+        listener.setblocking(False)
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(listener, selectors.EVENT_READ)
+                selector.register(self._wake_r, selectors.EVENT_READ)
+                while (reason := self._next_reason()) is None:
+                    for key, _ in selector.select(self._poll):
+                        if key.fileobj is listener:
+                            self._accept()
+                        else:
+                            self._drain_wake()
+        except Exception:  # the server ends rather than hang
+            reason = "closed"
+        self.reason = reason
+        try:
+            self._server.server_close()
+            self._server.close_connections(self._grace)
+        finally:
+            self._done.set()
+
+    def _next_reason(self) -> str | None:
+        try:
+            return self._stops.get_nowait()
+        except queue.Empty:
+            pass
+        with self._lock:
+            idle = self._clock() - self._last
+        return "idle" if idle >= self.idle_seconds else None
+
+    def _accept(self) -> None:
+        try:
+            request, address = self._server.get_request()
+        except OSError:  # gone before it was accepted, or nothing to accept
+            return
+        self._server.process_request(request, address)
+
+    def _drain_wake(self) -> None:
+        with suppress(OSError):
+            while self._wake_r.recv(64):
+                pass
 
     def stop(self, reason: str) -> None:
-        """Ask the server to end; the first reason given is kept."""
-        with self._lock:
-            if self.reason is None:
-                self.reason = reason
-        self._stop.set()
+        """Ask the server to end; the first reason given is kept. Takes no lock."""
+        self._stops.put(reason)
+        # Full (a wake-up is already pending) or closed (the server has ended).
+        with suppress(OSError):
+            self._wake_w.send(b"\0")
 
     def wait(self, timeout: float | None = None) -> str | None:
         """Why the server ended, once it has; ``None`` while it still runs."""
         return self.reason if self._done.wait(timeout) else None
 
     def close(self) -> None:
-        self.stop("closed")
-        if self._started:
-            self._done.wait(10)
-        else:
+        """End the server and wait until no thread or socket of it is left."""
+        if self._thread is None:
+            self.reason = self.reason or "closed"
             self._server.server_close()
+            self._done.set()
+        else:
+            self.stop("closed")
+            self._thread.join()
+        self._wake_r.close()
+        self._wake_w.close()
 
     # --- session ---
 
@@ -262,8 +315,10 @@ class Ui:
         return current
 
 
-class _HttpServer(ThreadingHTTPServer):
-    daemon_threads = True
+class _HttpServer(HTTPServer):
+    """Accepts nothing by itself: ``Ui._serve`` accepts, this runs each request in a
+    thread of its own, at most ``max_threads`` at once, and keeps track of them."""
+
     allow_reuse_address = False
     allow_reuse_port = False
     request_queue_size = 16
@@ -272,6 +327,8 @@ class _HttpServer(ThreadingHTTPServer):
         check_bind(HOST)
         self.ui = ui
         self._slots = threading.BoundedSemaphore(max_threads)
+        self._active: dict[socket.socket, threading.Thread] = {}
+        self._active_lock = threading.Lock()
         super().__init__((HOST, port), _Handler)
 
     def server_bind(self) -> None:
@@ -285,8 +342,9 @@ class _HttpServer(ThreadingHTTPServer):
     def process_request(self, request: Any, client_address: Any) -> None:
         if not self._slots.acquire(blocking=False):
             try:
-                request.settimeout(1.0)
-                request.sendall(
+                # Never blocks the accepting thread: the reply fits the socket buffer.
+                request.setblocking(False)
+                request.send(
                     b"HTTP/1.0 503 Service Unavailable\r\nContent-Length: 0\r\n"
                     b"Connection: close\r\n\r\n"
                 )
@@ -294,13 +352,48 @@ class _HttpServer(ThreadingHTTPServer):
                 pass
             self.shutdown_request(request)
             return
-        super().process_request(request, client_address)
+        thread = threading.Thread(
+            target=self._one,
+            args=(request, client_address),
+            name="flib-ui-request",
+            daemon=True,
+        )
+        with self._active_lock:
+            self._active[request] = thread
+        thread.start()
 
-    def process_request_thread(self, request: Any, client_address: Any) -> None:
+    def _one(self, request: Any, client_address: Any) -> None:
         try:
-            super().process_request_thread(request, client_address)
+            self.finish_request(request, client_address)
+        except Exception:  # noqa: S110 - a dropped client; nothing is logged
+            pass
         finally:
+            # Under the lock, so close_connections never shuts a socket whose
+            # descriptor was just closed and reused.
+            with self._active_lock:
+                del self._active[request]
+                self.shutdown_request(request)
             self._slots.release()
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        """Never print a traceback: nothing is logged."""
+
+    def close_connections(self, grace: float) -> None:
+        """Let requests in progress finish for up to ``grace`` seconds, then cut the
+        rest off; returns once every request thread has ended."""
+        deadline = time.monotonic() + grace
+        for thread in self._threads():
+            thread.join(max(0.0, deadline - time.monotonic()))
+        with self._active_lock:
+            for request in self._active:
+                with suppress(OSError):
+                    request.shutdown(socket.SHUT_RDWR)
+        for thread in self._threads():
+            thread.join()
+
+    def _threads(self) -> list[threading.Thread]:
+        with self._active_lock:
+            return list(self._active.values())
 
 
 class _Reject(Exception):

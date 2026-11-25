@@ -16,9 +16,11 @@ import signal
 import socket
 import sqlite3
 import threading
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from html.parser import HTMLParser
 from pathlib import Path
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
@@ -44,13 +46,43 @@ SECURITY_HEADERS = {
 }
 
 
+HANG_GUARD_SECONDS = 20
+
+
 @pytest.fixture(autouse=True)
 def no_hang() -> Iterator[None]:
-    """A test that waits on a server for over a minute is stuck: print every thread's
-    stack and exit, rather than let the run sit until CI times it out."""
-    faulthandler.dump_traceback_later(60, exit=True)
+    """A guard, not a timing: every test here takes well under a second. One that
+    is stuck prints every thread's stack and exits instead of sitting until CI
+    times it out."""
+    faulthandler.dump_traceback_later(HANG_GUARD_SECONDS, exit=True)
     yield
     faulthandler.cancel_dump_traceback_later()
+
+
+@pytest.fixture(autouse=True)
+def nothing_left_behind(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """No test leaves a listening socket or a server thread behind: ``close`` and
+    every way the server ends join all of them before returning."""
+    servers: list[ui_server._HttpServer] = []
+
+    class Recorded(ui_server._HttpServer):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            servers.append(self)
+
+    monkeypatch.setattr(ui_server, "_HttpServer", Recorded)
+    before = {t for t in threading.enumerate() if t.name.startswith("flib-ui")}
+    yield
+    for server in servers:
+        assert server.socket.fileno() == -1, "a listening socket was left open"
+        assert server.ui._wake_r.fileno() == -1 and server.ui._wake_w.fileno() == -1
+        assert server._active == {}
+    left = [
+        t.name
+        for t in threading.enumerate()
+        if t.name.startswith("flib-ui") and t not in before and t.is_alive()
+    ]
+    assert left == [], f"threads left running: {left}"
 
 
 class FakeClock:
@@ -383,6 +415,109 @@ def test_end_session_shows_the_ended_page_and_stops_the_server(client: UiClient,
         client.get("/status")
 
 
+# --- ending: never a hang --------------------------------------------------------------
+
+
+def test_a_signal_handler_never_waits_on_a_lock(loopback_network: None, cfg: Config) -> None:
+    """A signal can arrive at any point of the main thread, even inside another
+    handler; a handler that took a lock held there would wait forever."""
+    ui = Ui(cfg, poll_seconds=0.01)
+    ui.start()
+    try:
+        with ui_server._signals(ui):
+            handler = signal.getsignal(signal.SIGINT)
+        assert callable(handler)
+
+        def interrupted_while_holding_the_lock() -> None:
+            with ui._lock:
+                handler(signal.SIGINT, None)
+                handler(signal.SIGTERM, None)
+
+        thread = threading.Thread(target=interrupted_while_holding_the_lock, daemon=True)
+        thread.start()
+        thread.join(2)
+        assert not thread.is_alive(), "the signal handler deadlocked"
+        assert ui.wait(5) == "signal"
+    finally:
+        ui.close()
+
+
+def test_two_quick_signals_end_flib_ui_once(
+    loopback_network: None, cfg: Config, fake_browser: Path
+) -> None:
+    original = signal.getsignal(signal.SIGINT)
+
+    def twice() -> None:
+        wait_for(lambda: signal.getsignal(signal.SIGINT) is not original, timeout=10)
+        os.kill(os.getpid(), signal.SIGINT)
+        os.kill(os.getpid(), signal.SIGINT)
+
+    sender = Background(twice)
+    lines: list[str] = []
+    assert ui_server.run(cfg, browser=False, echo=lines.append) == "signal"
+    sender.join()
+    assert lines[-1] == "flib ui ended: interrupted."
+
+
+def test_close_cuts_off_a_request_in_progress(loopback_network: None, cfg: Config) -> None:
+    ui = Ui(cfg, poll_seconds=0.01, request_timeout=30, close_grace=0)
+    ui.start()
+    with socket.create_connection(("127.0.0.1", ui.port), timeout=5) as sock:
+        sock.sendall(b"GET /status HTTP/1.1\r\n")  # and nothing more, for 30 seconds
+        wait_for(lambda: ui._server._active)
+        started = time.monotonic()
+        ui.close()
+        assert time.monotonic() - started < 2  # not the 30 seconds of the timeout
+        assert sock.recv(1024) == b""
+    assert ui.reason == "closed"
+
+
+def test_a_keep_alive_connection_gets_one_reply_and_is_closed(client: UiClient, ui: Ui) -> None:
+    """A connection never stays open waiting for a second request, so idle
+    connections cannot hold the request threads."""
+    reply = client.raw(
+        f"GET /static/app.css HTTP/1.1\r\nHost: 127.0.0.1:{ui.port}\r\n"
+        "Connection: keep-alive\r\n\r\n".encode()
+    )  # returns only once the server closes the connection
+    assert reply.startswith(b"HTTP/1.0 200 ")
+    assert reply.count(b"HTTP/1.0 ") == 1
+
+
+def test_the_server_ends_if_its_loop_fails(
+    monkeypatch: pytest.MonkeyPatch, loopback_network: None, cfg: Config
+) -> None:
+    ui = Ui(cfg, poll_seconds=0.01)
+
+    def broken() -> None:
+        raise RuntimeError("accept failed")
+
+    monkeypatch.setattr(ui, "_accept", broken)
+    ui.start()
+    try:
+        with pytest.raises(OSError):
+            UiClient(ui.port).get("/status")  # the loop fails on it and closes
+        assert ui.wait(5) == "closed"
+    finally:
+        ui.close()
+
+
+def test_a_failing_helper_ends_flib_ui_instead_of_hanging(
+    loopback_network: None, cfg: Config, fake_browser: Path
+) -> None:
+    """The guard of the tests below: if what plays the browser fails, ``flib ui``
+    ends at once and the failure is raised, rather than serving ten idle minutes."""
+    original = signal.getsignal(signal.SIGTERM)
+
+    def fails() -> None:
+        wait_for(lambda: signal.getsignal(signal.SIGTERM) is not original, timeout=10)
+        raise AssertionError("the browser did not get its page")
+
+    helper = Background(fails)
+    assert ui_server.run(cfg, browser=False, echo=lambda line: None) == "signal"
+    with pytest.raises(AssertionError, match="did not get its page"):
+        helper.join()
+
+
 # --- limits ----------------------------------------------------------------------------
 
 
@@ -415,7 +550,7 @@ def test_long_request_lines_and_headers_are_refused(client: UiClient, ui: Ui) ->
 
 
 def test_a_slow_client_is_dropped(loopback_network: None, cfg: Config) -> None:
-    ui = Ui(cfg, poll_seconds=0.01, request_timeout=0.2)
+    ui = Ui(cfg, poll_seconds=0.01, request_timeout=0.05)
     ui.start()
     try:
         with socket.create_connection(("127.0.0.1", ui.port), timeout=5) as sock:
@@ -525,7 +660,7 @@ def test_content_types(client: UiClient) -> None:
 def test_nothing_is_logged(
     loopback_network: None, cfg: Config, capfd: pytest.CaptureFixture[str]
 ) -> None:
-    ui = Ui(cfg, poll_seconds=0.01, request_timeout=0.2)
+    ui = Ui(cfg, poll_seconds=0.01, request_timeout=0.05)
     ui.start()
     try:
         c = UiClient(ui.port)
@@ -537,6 +672,8 @@ def test_nothing_is_logged(
         with socket.create_connection(("127.0.0.1", ui.port), timeout=5) as sock:
             sock.sendall(b"GET /launch?token=" + token_of(ui).encode())  # then times out
             sock.recv(1024)
+        with socket.create_connection(("127.0.0.1", ui.port), timeout=5) as sock:
+            sock.sendall(b"GET /status HTTP/1.1\r\n")  # and goes away mid-request
     finally:
         ui.close()
     out, err = capfd.readouterr()
@@ -622,10 +759,10 @@ def test_the_server_ends_after_the_idle_minutes(loopback_network: None, cfg: Con
     ui.start()
     try:
         clock.now += 599
-        assert ui.wait(0.1) is None
+        assert ui.wait(0.05) is None
         UiClient(ui.port).get("/static/app.css")  # a request resets the timer
         clock.now += 599
-        assert ui.wait(0.1) is None
+        assert ui.wait(0.05) is None
         clock.now += 2
         assert ui.wait(5) == "idle"
     finally:
@@ -677,32 +814,61 @@ def opened(log: Path) -> list[list[str]]:
     return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
 
 
-def end_from_the_browser(log: Path) -> threading.Thread:
+class Background:
+    """Runs ``work`` beside a ``flib ui`` that blocks the test until it ends.
+
+    If ``work`` fails, ``flib ui`` would serve on for its ten idle minutes: so
+    it is ended with SIGTERM (once its handler is in place, never pytest's), and
+    ``join`` raises the failure.
+    """
+
+    def __init__(self, work: Callable[[], None]) -> None:
+        self._original = signal.getsignal(signal.SIGTERM)
+        self.error: BaseException | None = None
+        self._work = work
+        self._thread = threading.Thread(target=self._run, name="test-background", daemon=True)
+        self._thread.start()
+
+    def listening(self) -> bool:
+        return signal.getsignal(signal.SIGTERM) is not self._original
+
+    def _run(self) -> None:
+        try:
+            self._work()
+        except BaseException as exc:
+            self.error = exc
+            if self.listening():
+                os.kill(os.getpid(), signal.SIGTERM)
+
+    def join(self) -> None:
+        self._thread.join(10)
+        assert not self._thread.is_alive()
+        if self.error is not None:
+            raise self.error
+
+
+def end_from_the_browser(log: Path) -> Background:
     """In the background: wait for the fake ``open``, open the link, End session."""
 
     def browse() -> None:
-        wait_for(lambda: opened(log), timeout=30)  # a cold Python start on CI is slow
+        wait_for(lambda: opened(log), timeout=10)
         url = opened(log)[0][0]
         c = UiClient(int(url.split(":")[2].split("/")[0]))
-        c.launch(url)
-        c.post_form("/session/end", {"csrf": c.csrf()})
+        assert c.launch(url).status == 303
+        assert c.post_form("/session/end", {"csrf": c.csrf()}).status == 200
 
-    thread = threading.Thread(target=browse, daemon=True)
-    thread.start()
-    return thread
+    return Background(browse)
 
 
-def interrupt_when_listening(signum: int) -> threading.Thread:
+def interrupt_when_listening(signum: int) -> Background:
     """In the background: send ``signum`` once ``flib ui`` handles it."""
     original = signal.getsignal(signum)
 
     def send() -> None:
-        wait_for(lambda: signal.getsignal(signum) is not original, timeout=30)
+        wait_for(lambda: signal.getsignal(signum) is not original, timeout=10)
         os.kill(os.getpid(), signum)
 
-    thread = threading.Thread(target=send, daemon=True)
-    thread.start()
-    return thread
+    return Background(send)
 
 
 def test_flib_ui_opens_the_link_and_ends_with_the_session(
@@ -711,7 +877,7 @@ def test_flib_ui_opens_the_link_and_ends_with_the_session(
     path = write_config(tmp_path, downloads)
     browser = end_from_the_browser(fake_browser)
     result = runner.invoke(app, ["ui", "-c", str(path)])
-    browser.join(5)
+    browser.join()
     assert result.exit_code == 0, result.stdout + result.stderr
     [[url]] = opened(fake_browser)
     assert url.startswith("http://127.0.0.1:") and "/launch?token=" in url
@@ -728,7 +894,7 @@ def test_flib_ui_ends_on_a_signal(
     lines: list[str] = []
     sender = interrupt_when_listening(signum)
     assert ui_server.run(cfg, browser=False, echo=lines.append) == "signal"
-    sender.join(5)
+    sender.join()
     assert lines[-1] == "flib ui ended: interrupted."
     assert opened(fake_browser) == []  # --no-browser
     assert signal.getsignal(signum) is before  # the handlers are put back
@@ -745,7 +911,7 @@ def test_flib_ui_says_when_the_browser_cannot_open(
     path = write_config(tmp_path, downloads)
     browser = end_from_the_browser(fake_browser)
     result = runner.invoke(app, ["ui", "-c", str(path)])
-    browser.join(5)
+    browser.join()
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "warning: could not open the browser (open exited with 1)" in result.stdout
     assert "token" not in result.stdout.split("warning:")[1]
@@ -791,7 +957,7 @@ def test_flib_ui_no_browser_prints_the_link(
     path = write_config(tmp_path, downloads)
     sender = interrupt_when_listening(signal.SIGTERM)
     result = runner.invoke(app, ["ui", "--no-browser", "-c", str(path)])
-    sender.join(5)
+    sender.join()
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "/launch?token=" in result.stdout
     assert opened(fake_browser) == []
