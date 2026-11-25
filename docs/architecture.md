@@ -368,23 +368,50 @@ as the command line. For now there is one page, Status (`status.collect`, as
 counts), and the "session ended" page.
 
 **Session.** The server binds a free port and makes a random launch token
-(256 bits). `flib ui` prints `http://127.0.0.1:<port>/launch?token=...` and
-asks macOS to open it (`/usr/bin/open`, a module constant swapped for a fake
-in every test). The first request with the token (compared with
-`hmac.compare_digest`) burns it and starts the only session: a 303 redirect
-to the page, without the token, that sets an `HttpOnly`, `SameSite=Strict`
-cookie named `flib_ui_<port>`, plus a per-session CSRF token placed in the
-page. A second use of the link, a missing or wrong cookie, or a session
-that ended get the "session ended" page. The server ends after
-`ui.idle_minutes` (default 10) without a request, on End session (a POST),
-or on SIGINT/SIGTERM. One `flib ui` runs at a time (an `flock` on
-`flib-ui.lock` next to the database, apart from the instance lock, so it
-never keeps a run from starting); a second one says so and exits with 0,
-since only the first knows its port and token.
+(256 bits). The token never goes on a command line, where any account on the
+Mac could read it with `ps`. `flib ui` writes a *handoff file*, an HTML page
+readable only by the user (mode 0600, in a 0700 folder inside flib's data
+folder), and asks macOS to open that file (`/usr/bin/open`, a module constant
+swapped for a fake in every test). The page posts the token to `/launch` in a
+form body, so it is never in a URL, a history entry or a `Referer`. The first
+use of the token (compared with `hmac.compare_digest`) burns it, deletes the
+handoff file, prints "session started" in the terminal, and sets an
+`HttpOnly`, `SameSite=Strict` cookie named `flib_ui_<port>`; the page holds a
+per-session CSRF token. The reply is a small page whose script moves on to the
+interface: a redirect would continue a chain that started on disk, which the
+browser treats as cross-site, so the `Strict` cookie would not go with it.
+The handoff file is also deleted when the server ends. With `--no-browser`
+the user asked for a link: `http://127.0.0.1:<port>/launch?token=...` is
+printed, and opening it does the same exchange as a GET, ending in a 303 to
+the page.
+
+A second use of the token by the browser that holds the session just goes to
+the page. From a client *without* the session it means someone else has the
+token (or used it first): the session is dropped, the server ends, `flib ui`
+warns on stderr and exits with 1. A missing or wrong cookie or an ended
+session get the "session ended" page; End session also expires the cookie
+(`Max-Age=0`) and drops the session before the server stops. The server ends
+after `ui.idle_minutes` (default 10) without a request from the session (other
+requests do not count), on End session (a POST), or on SIGINT/SIGTERM. One
+`flib ui` runs at a time (an `flock` on `flib-ui.lock` next to the database,
+apart from the instance lock, so it never keeps a run from starting); a
+second one says so and exits with 0, since only the first knows its port and
+token. Actions that change files or the index, when they come, take the
+instance lock for that action only.
+
+**Routes.** Every POST but `/launch` is in `server.POST_ROUTES` and is reached
+only through one function that checks the exact origin, the session cookie
+and the CSRF token first; a test sends every route in the table a request
+without each of the three. `POST /launch` is the one exception: the handoff
+file is a page on disk, whose origin is `null`, so it may come with `Origin:
+null` (or none, or the server's own) and any `Sec-Fetch-Site` but
+`same-site`; the launch token in the body is what is checked.
 
 **Ending.** One thread accepts connections (a `selectors` loop, not
 `serve_forever`), checks the idle timer and hands each request to a thread of
-its own. `stop` takes no lock: it puts the reason on a `queue.SimpleQueue`
+its own, and cuts off any client that has not sent its whole request (line,
+headers and body) within 5 seconds, however slowly it trickles bytes in.
+`stop` takes no lock: it puts the reason on a `queue.SimpleQueue`
 and a byte on a socket pair that wakes the loop, so it is safe from a signal
 handler, even one that interrupts another (a handler that took a lock held on
 the main thread would wait forever). On stop the loop closes the listening
@@ -396,29 +423,33 @@ keep-alive connections cannot hold the threads.
 **Threat model.** What is protected: the index (names, descriptions,
 amounts) and, later, actions that move files. Who might attack: a web page
 open in any browser on the Mac (cross-site requests, DNS rebinding,
-clickjacking), another machine on the network, and anything that reads
-logs, shell history or the address bar. A process running as the same user
-is out of scope: it can read the database directly. How each is handled:
+clickjacking), another machine on the network, other accounts on the same
+Mac (they can list processes and connect to 127.0.0.1), other programs that
+listen on loopback or set cookies for it, and anything that reads logs, shell
+history or the address bar. Out of scope: a process running as the same user,
+which can do anything the user can (read the database, the handoff file, the
+browser's cookies). How each is handled:
 
 | Threat | Defence | Tested by |
 | --- | --- | --- |
-| Reached from the network | binds `127.0.0.1` only; `check_bind` refuses `0.0.0.0`, `::` and any non-loopback address, before and after binding | `test_never_binds_anything_but_loopback`, `test_a_wildcard_host_is_refused_before_binding` |
-| DNS rebinding | `Host` must be exactly `127.0.0.1:<port>` or `localhost:<port>`, one header; else 421 | `test_a_foreign_host_header_is_misdirected`, `test_two_host_headers_are_misdirected` |
-| Cross-site requests | `Sec-Fetch-Site` other than same-origin (or `none` on a GET) is 403; every POST needs the exact loopback `Origin` (or `Sec-Fetch-Site: same-origin`), the session cookie (`SameSite=Strict`) and the CSRF token, form field or `X-Flib-CSRF` header | `test_a_cross_site_request_is_forbidden`, `test_a_post_from_another_origin_is_forbidden`, `test_a_post_without_the_csrf_token_is_forbidden` |
-| Guessing or replaying the link | 256-bit token, constant-time compare, single use; a wrong guess does not burn it; the redirect takes it out of the address bar; `Referrer-Policy: no-referrer` everywhere; never logged | `test_the_launch_token_works_once`, `test_a_wrong_or_missing_token_gets_the_ended_page`, `test_the_token_is_compared_in_constant_time`, `test_nothing_is_logged` |
-| Script injection | `Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`; no inline script, style or handler; text goes in with `textContent`; `nosniff` | `test_every_page_references_only_packaged_files_and_has_no_inline_code`, `test_the_policy_allows_no_inline_code`, `test_every_reply_carries_the_security_headers` |
-| Clickjacking | `frame-ancestors 'none'`, `X-Frame-Options: DENY` | as above |
+| Reached from the network | binds `127.0.0.1` only; `check_bind` refuses `0.0.0.0`, `::` and any non-loopback address, before and after binding | `test_never_binds_anything_but_loopback`, `test_a_wildcard_host_is_refused_before_binding`, `test_the_bound_address_is_checked_again` |
+| Another account on the Mac takes the token | the token is never in a process's arguments: the handoff file (0600 in a 0700 folder) carries it, and is deleted once used or when the server ends; a used token that comes back without the session ends everything with a warning; "session started" in the terminal shows when the session began; `--no-browser` prints the link only to whoever asked for it | `test_the_handoff_file_is_for_the_user_only`, `test_the_handoff_file_starts_the_session_and_is_deleted`, `test_a_used_token_from_a_client_without_the_session_ends_everything`, `test_a_stolen_link_ends_flib_ui_with_a_warning`, `test_flib_ui_opens_a_handoff_file_and_ends_with_the_session` |
+| DNS rebinding, another program on `[::1]` | `Host` must be exactly `127.0.0.1:<port>`, one header, else 421; `localhost` is refused and never printed, since another program could hold `[::1]:<port>` | `test_a_foreign_host_header_is_misdirected`, `test_two_host_headers_are_misdirected`, `test_only_127_0_0_1_is_ever_named` |
+| Cross-site requests | an `Origin` other than the server's is 403 on any request (exact match, not a prefix); `Upgrade` is 400; `Sec-Fetch-Site` other than same-origin (or `none` on a GET) is 403; every POST route needs the exact `Origin` (or `Sec-Fetch-Site: same-origin`), the session cookie (`SameSite=Strict`) and the CSRF token, form field (in a form body only) or `X-Flib-CSRF` header; no `Access-Control-*` header is ever sent | `test_any_request_from_another_origin_is_forbidden`, `test_an_upgrade_request_is_refused`, `test_a_cross_site_request_is_forbidden`, `test_a_post_from_another_origin_is_forbidden`, `test_every_post_route_needs_the_cookie_the_origin_and_the_csrf_token`, `test_the_csrf_token_is_in_a_form_field_or_a_header`, `test_no_reply_ever_allows_another_origin`, `test_the_launch_post_takes_the_null_origin_and_nothing_wider` |
+| A cookie planted on 127.0.0.1 | browsers share cookies across ports: any cookie of the name that holds the session counts, so a planted one cannot lock the user out; each is compared in constant time | `test_a_planted_cookie_of_the_same_name_does_not_lock_the_user_out`, `test_the_session_id_is_compared_in_constant_time` |
+| Guessing or replaying the link | 256-bit token, constant-time compare, single use; a wrong guess does not burn it; `Referrer-Policy: no-referrer` everywhere; never logged | `test_the_launch_token_works_once`, `test_a_wrong_or_missing_token_gets_the_ended_page`, `test_a_wrong_launch_post_gets_the_ended_page`, `test_the_token_is_compared_in_constant_time`, `test_nothing_is_logged` |
+| Script injection | `Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`; no inline script, style or handler; text goes in with `textContent`; `nosniff` | `test_every_page_references_only_packaged_files_and_has_no_inline_code`, `test_the_policy_allows_no_inline_code` |
+| Clickjacking, cross-origin windows | `frame-ancestors 'none'`, `X-Frame-Options: DENY`, `Cross-Origin-Opener-Policy` and `-Resource-Policy: same-origin` | `test_every_reply_carries_the_security_headers` (all seven headers on every kind of reply, the 503 and malformed requests included), `test_the_turned_away_reply_carries_the_security_headers` |
 | Reading files through the server | static files from an in-memory map of packaged resources, looked up by exact path: no traversal, no directory listing; no file contents are ever served, and this page serves counts only (suggested categories the model wrote are masked when not configured) | `test_nothing_outside_the_packaged_files_is_served`, `test_status_holds_counts_and_never_a_file_name` |
-| Exhausting it | request line ≤ 4 KiB, headers ≤ 16 KiB (and at most 100), POST body ≤ 16 KiB with a `Content-Length`, no chunked bodies, 10 s socket timeout, one request per connection, at most 8 requests at once (one more gets 503) | `test_long_request_lines_and_headers_are_refused`, `test_a_large_body_is_refused_before_it_is_read`, `test_a_post_needs_a_plain_length`, `test_a_slow_client_is_dropped`, `test_a_keep_alive_connection_gets_one_reply_and_is_closed`, `test_requests_beyond_the_thread_cap_are_turned_away` |
-| Outliving its use | ends on idle, End session or a signal; `stop` is signal-safe; every end closes the sockets and joins all threads | `test_the_server_ends_after_the_idle_minutes`, `test_a_signal_handler_never_waits_on_a_lock`, `test_close_cuts_off_a_request_in_progress`, `test_the_server_ends_if_its_loop_fails` |
-| Leaking through errors | GET and POST only (405, unknown methods 501); every error body is its status phrase; `Server: flib`; `Cache-Control: no-store` | `test_only_get_and_post_are_allowed`, `test_error_pages_reveal_nothing` |
+| Exhausting it | request line ≤ 4 KiB, headers ≤ 16 KiB (and at most 100), POST body ≤ 16 KiB with one `Content-Length` of 1 to 5 ASCII digits, no `Transfer-Encoding`, 10 s per read, 5 s for the whole request, one request per connection, at most 8 requests at once (one more gets 503) | `test_long_request_lines_and_headers_are_refused`, `test_a_large_body_is_refused_before_it_is_read`, `test_a_post_needs_a_plain_length`, `test_a_slow_client_is_dropped`, `test_a_client_that_trickles_its_request_is_cut_off_at_the_deadline`, `test_a_keep_alive_connection_gets_one_reply_and_is_closed`, `test_requests_beyond_the_thread_cap_are_turned_away` |
+| Outliving its use | ends on idle (only the session resets the timer), End session or a signal; `stop` is signal-safe; every end closes the sockets, deletes the handoff file and joins all threads | `test_the_server_ends_after_the_idle_minutes`, `test_only_the_session_keeps_the_server_alive`, `test_a_signal_handler_never_waits_on_a_lock`, `test_close_cuts_off_a_request_in_progress`, `test_the_server_ends_if_its_loop_fails` |
+| Leaking through errors | GET and POST only (405, unknown methods 501); every error body is its status phrase, with a status line even for a request line that makes no sense; a bug gets a plain 500 and no traceback; `Server: flib`; `Cache-Control: no-store` | `test_only_get_and_post_are_allowed`, `test_error_pages_reveal_nothing`, `test_a_bug_gets_a_plain_500_and_no_traceback` |
 
-Known limits: browsers do not keep cookies apart by port, so the cookie is
-named after the port and only that name counts; it is not `Secure`, since
-there is no TLS on loopback. The launch link is one argument to `open`, so
-it shows in the process list for that instant, and in the terminal and the
-browser's history; it is useless once used. A slow client can hold one of
-the 8 threads for the timeout of each read.
+Known limits: the cookie is not `Secure`, since there is no TLS on loopback.
+With `--no-browser` the printed link stays in the terminal and, once opened,
+in the browser's history; it is useless once used. Anything running as the
+user can read the handoff file in the moment before the browser uses it, as
+it can read everything else of the user's.
 
 ## The first run
 

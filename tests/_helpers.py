@@ -13,6 +13,7 @@ import builtins
 import ctypes
 import ctypes.util
 import errno
+import html
 import http.client
 import json
 import os
@@ -493,6 +494,26 @@ class UiClient:
         """Open the launch link, as the browser does when ``open`` hands it over."""
         split = urlsplit(url)
         return self.get(f"{split.path}?{split.query}", headers={"Sec-Fetch-Site": "none"})
+
+    def launch_from_handoff(self, path: Path) -> UiResponse:
+        """Open the handoff file, as the browser does when ``open`` hands it over: the
+        page on disk (origin ``null``) posts its token to the server."""
+        text = path.read_text(encoding="utf-8")
+        action = re.search(r'action="([^"]+)"', text)
+        token = re.search(r'name="token" value="([^"]+)"', text)
+        assert action is not None and token is not None, "not a handoff page"
+        split = urlsplit(html.unescape(action.group(1)))
+        assert split.netloc == f"127.0.0.1:{self.port}", split.netloc
+        return self.request(
+            "POST",
+            split.path,
+            body=urlencode({"token": html.unescape(token.group(1))}).encode(),
+            headers={
+                "Origin": "null",
+                "Sec-Fetch-Site": "cross-site",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        )
 
     def csrf(self, page: str = "/status") -> str:
         match = re.search(r'name="csrf" value="([^"]+)"', self.get(page).text)

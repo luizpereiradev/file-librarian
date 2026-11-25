@@ -2468,15 +2468,25 @@ def ui(
 ) -> None:
     """Open the local interface in your browser (early: a status page for now).
 
-    A server on 127.0.0.1 only, for this Mac; the link works once. It ends after
-    `ui.idle_minutes` without use, with End session, or with Ctrl-C. A second
-    `flib ui` while one runs says so and exits.
+    A server on 127.0.0.1 only, for this Mac. The browser gets a one-time
+    token through a file only you can read (`--no-browser` prints a link that
+    works once instead). It ends after `ui.idle_minutes` without use, with End
+    session, or with Ctrl-C. A second `flib ui` while one runs says so and exits.
     """
     cfg = _load(config, warn_orphans=False)
     try:
-        ui_server.run(cfg, page=open_page, port=port, browser=not no_browser, echo=typer.echo)
+        reason = ui_server.run(
+            cfg,
+            page=open_page,
+            port=port,
+            browser=not no_browser,
+            echo=typer.echo,
+            warn=lambda line: typer.echo(line, err=True),
+        )
     except ui_server.UiError as exc:
         _fatal(str(exc))
+    if reason == "stolen":
+        raise typer.Exit(EXIT_ERROR)
 
 
 @app.command()

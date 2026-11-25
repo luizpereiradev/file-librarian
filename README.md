@@ -214,14 +214,18 @@ until they arrive.
 
 ```sh
 flib ui                  # opens the default browser
-flib ui --no-browser     # prints the link instead
+flib ui --no-browser     # prints a one-time link instead
 flib ui --port 8765      # a fixed port (default: a free one)
 ```
 
 It is a web server on 127.0.0.1 that exists only while you use it: it ends
 after 10 minutes without use (`ui.idle_minutes`), with **End session**, or
-with Ctrl-C. Nothing else on the network can reach it, the link it opens
-works once, and the page shows counts only, never a file name. One runs at
+with Ctrl-C. Nothing else on the network can reach it. The browser gets a
+one-time key through a file only you can read, never through the command
+line where other accounts on the Mac could see it, and the terminal says
+"session started" when it is used. If the key is used a second time, by
+anything without your session, `flib ui` ends and warns you. The page shows
+counts only, never a file name. One runs at
 a time: a second `flib ui` says so and exits. It uses only Python's standard
 library and files shipped with flib; nothing is loaded from the internet.
 [Architecture](docs/architecture.md#the-interface-flib-ui) has the details.

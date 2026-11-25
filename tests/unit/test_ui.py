@@ -15,6 +15,7 @@ import re
 import signal
 import socket
 import sqlite3
+import stat
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -43,7 +44,21 @@ SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
     "Cache-Control": "no-store",
+    "X-Frame-Options": "DENY",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
 }
+"""Written out here, not imported: a header dropped from the server fails the tests."""
+
+
+def raw_headers(reply: bytes) -> dict[str, str]:
+    """The status line (as ``""``) and headers of a raw reply."""
+    head = reply.split(b"\r\n\r\n", 1)[0].decode("latin-1").split("\r\n")
+    found = {"": head[0]}
+    for line in head[1:]:
+        name, _, value = line.partition(": ")
+        found[name] = value
+    return found
 
 
 HANG_GUARD_SECONDS = 20
@@ -77,6 +92,7 @@ def nothing_left_behind(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         assert server.socket.fileno() == -1, "a listening socket was left open"
         assert server.ui._wake_r.fileno() == -1 and server.ui._wake_w.fileno() == -1
         assert server._active == {}
+        assert server.ui._handoff is None, "a handoff file was left behind"
     left = [
         t.name
         for t in threading.enumerate()
@@ -94,8 +110,14 @@ class FakeClock:
 
 
 @pytest.fixture
-def ui(loopback_network: None, cfg: Config) -> Iterator[Ui]:
-    server = Ui(cfg, poll_seconds=0.01)
+def events() -> list[str]:
+    """What the ``ui`` fixture's server told ``flib ui`` (``on_event``)."""
+    return []
+
+
+@pytest.fixture
+def ui(loopback_network: None, cfg: Config, events: list[str]) -> Iterator[Ui]:
+    server = Ui(cfg, poll_seconds=0.01, on_event=events.append)
     server.start()
     yield server
     server.close()
@@ -148,6 +170,31 @@ def test_a_wildcard_host_is_refused_before_binding(
         Ui(cfg)
 
 
+def test_the_bound_address_is_checked_again(
+    monkeypatch: pytest.MonkeyPatch, loopback_network: None, cfg: Config
+) -> None:
+    """``check_bind`` runs on the address asked for and on the one bound."""
+    checked: list[str] = []
+    real = ui_server.check_bind
+
+    def spy(host: str) -> None:
+        checked.append(host)
+        real(host)
+
+    monkeypatch.setattr(ui_server, "check_bind", spy)
+    Ui(cfg).close()
+    assert checked == ["127.0.0.1", "127.0.0.1"]
+
+    def refuse_bound(host: str) -> None:
+        checked.append(host)
+        if len(checked) > 2:
+            raise UiError("refusing to listen on it: not a loopback address")
+
+    monkeypatch.setattr(ui_server, "check_bind", refuse_bound)
+    with pytest.raises(UiError, match="not a loopback address"):
+        Ui(cfg)
+
+
 def test_a_port_in_use_is_an_error(ui: Ui, cfg: Config) -> None:
     with pytest.raises(UiError, match="cannot listen"):
         Ui(cfg, port=ui.port)
@@ -180,14 +227,35 @@ def test_the_launch_token_becomes_a_session_cookie(ui: Ui) -> None:
     assert c.get("/").headers["Location"] == "/status"
 
 
-def test_the_launch_token_works_once(ui: Ui) -> None:
-    assert UiClient(ui.port).launch(ui.launch_url).status == 303
+def test_the_launch_token_works_once(ui: Ui, events: list[str]) -> None:
+    first = UiClient(ui.port)
+    assert first.launch(ui.launch_url).status == 303
+    assert events == ["started"]
     stale = UiClient(ui.port)
     reply = stale.launch(ui.launch_url)
     assert reply.status == 403
     assert "This session has ended" in reply.text
     assert "Set-Cookie" not in reply.headers
-    assert stale.get("/status").status == 403
+
+
+def test_a_used_token_from_a_client_without_the_session_ends_everything(
+    ui: Ui, events: list[str]
+) -> None:
+    """Whoever presents the used token without the session saw it somewhere: the
+    session is dropped (it may be theirs) and the server ends with a warning."""
+    first = UiClient(ui.port)
+    first.launch(ui.launch_url)
+    session_id = first.cookies[ui.cookie_name]
+    assert UiClient(ui.port).launch(ui.launch_url).status == 403
+    assert ui.wait(5) == "stolen"
+    assert events == ["started", "stolen"]
+    assert ui.session(session_id) is None
+
+
+def test_the_launch_exchange_says_nothing_about_the_token(ui: Ui, events: list[str]) -> None:
+    UiClient(ui.port).launch(ui.launch_url)
+    assert events == ["started"]
+    assert all(token_of(ui) not in event for event in events)
 
 
 def test_the_browser_with_the_session_may_open_the_link_again(client: UiClient, ui: Ui) -> None:
@@ -244,6 +312,38 @@ def test_pages_and_the_api_need_the_session(ui: Ui, cookie: str | None) -> None:
     assert api_reply.json() == {"error": "no session"}
 
 
+def test_a_planted_cookie_of_the_same_name_does_not_lock_the_user_out(
+    client: UiClient, ui: Ui
+) -> None:
+    """Cookies are shared by every port of 127.0.0.1: another app may set one of
+    this name, and the browser sends both."""
+    real = client.cookies[ui.cookie_name]
+    for header in (
+        f"{ui.cookie_name}=planted; {ui.cookie_name}={real}",
+        f"{ui.cookie_name}={real}; {ui.cookie_name}=planted",
+    ):
+        reply = UiClient(ui.port).get("/status", headers={"Cookie": header})
+        assert reply.status == 200, header
+    reply = UiClient(ui.port).get("/status", headers={"Cookie": f"{ui.cookie_name}=planted"})
+    assert reply.status == 403
+
+
+def test_the_session_id_is_compared_in_constant_time(
+    monkeypatch: pytest.MonkeyPatch, client: UiClient, ui: Ui
+) -> None:
+    seen = []
+    real = hmac.compare_digest
+
+    def spy(a: bytes, b: bytes) -> bool:
+        seen.append((a, b))
+        return bool(real(a, b))
+
+    monkeypatch.setattr(hmac, "compare_digest", spy)
+    session_id = client.cookies[ui.cookie_name]
+    assert client.get("/status").status == 200
+    assert (session_id.encode(), session_id.encode()) in seen
+
+
 def test_the_ended_page_is_styled_without_a_session(ui: Ui) -> None:
     c = UiClient(ui.port)
     assert c.get("/static/app.css").status == 200
@@ -261,6 +361,7 @@ def test_the_ended_page_is_styled_without_a_session(ui: Ui) -> None:
         "127.0.0.1",
         "localhost",
         "LOCALHOST:{port}",
+        "localhost:{port}",
         "127.0.0.1.:{port}",
         "[::1]:{port}",
         "0.0.0.0:{port}",
@@ -275,9 +376,13 @@ def test_a_foreign_host_header_is_misdirected(client: UiClient, ui: Ui, host: st
         assert reply.body == b"Misdirected Request\n"
 
 
-def test_both_loopback_names_are_accepted(client: UiClient, ui: Ui) -> None:
-    assert client.get("/status", host=f"localhost:{ui.port}").status == 200
+def test_only_127_0_0_1_is_ever_named(client: UiClient, ui: Ui) -> None:
+    """Another program could hold [::1] on the same port: never send the browser to
+    ``localhost``."""
     assert client.get("/status", host=f"127.0.0.1:{ui.port}").status == 200
+    assert ui.hosts == {f"127.0.0.1:{ui.port}"}
+    for url in (ui.url, ui.launch_url, ui.origin):
+        assert url.startswith(f"http://127.0.0.1:{ui.port}") and "localhost" not in url
 
 
 def test_two_host_headers_are_misdirected(client: UiClient, ui: Ui) -> None:
@@ -308,6 +413,9 @@ def test_a_cross_site_request_is_forbidden(client: UiClient, site: str) -> None:
         {"Origin": "http://evil.example"},
         {"Origin": "null"},
         {"Origin": "http://127.0.0.1:{other}"},
+        {"Origin": "http://127.0.0.1:{port}0"},
+        {"Origin": "http://127.0.0.1:{port}/"},
+        {"Sec-Fetch-Site": "none"},
         {"Origin": "https://127.0.0.1:{port}"},
         {"Origin": None, "Sec-Fetch-Site": "none"},
         {"Sec-Fetch-Site": "cross-site"},
@@ -332,6 +440,23 @@ def test_a_post_from_another_origin_is_forbidden(
     reply = client.request("POST", "/session/end", body=body, headers=sent)
     assert reply.status == 403
     assert_running(ui)
+
+
+@pytest.mark.parametrize(
+    "origin", ["http://evil.example", "null", "http://127.0.0.1:{port}0", "http://127.0.0.1"]
+)
+def test_any_request_from_another_origin_is_forbidden(
+    client: UiClient, ui: Ui, origin: str
+) -> None:
+    for path in ("/status", "/api/v1/status", "/static/app.css", "/launch?token=x"):
+        reply = client.get(path, headers={"Origin": origin.format(port=ui.port)})
+        assert reply.status == 403, path
+    assert client.get("/status", headers={"Origin": client.origin}).status == 200
+
+
+def test_an_upgrade_request_is_refused(client: UiClient, ui: Ui) -> None:
+    reply = client.get("/status", headers={"Upgrade": "websocket", "Connection": "Upgrade"})
+    assert reply.status == 400
 
 
 def test_a_post_with_only_fetch_metadata_is_accepted(client: UiClient, ui: Ui) -> None:
@@ -378,7 +503,15 @@ def test_the_csrf_token_is_in_a_form_field_or_a_header(client: UiClient, ui: Ui)
     token = client.csrf()
     page = client.get("/status").text
     assert f'<meta name="flib-csrf" content="{token}">' in page
-    # A JSON body does not count as a form.
+    # A body that is not a form does not count, whatever it says.
+    for kind in ("text/plain", "multipart/form-data; boundary=x", ""):
+        reply = client.request(
+            "POST",
+            "/session/end",
+            body=f"csrf={token}".encode(),
+            headers={"Origin": client.origin, "Content-Type": kind},
+        )
+        assert reply.status == 403, kind
     reply = client.request(
         "POST",
         "/session/end",
@@ -396,6 +529,28 @@ def test_the_csrf_token_is_in_a_form_field_or_a_header(client: UiClient, ui: Ui)
     assert ui.wait(5) == "ended"
 
 
+@pytest.mark.parametrize("path", sorted(ui_server.POST_ROUTES))
+@pytest.mark.parametrize("missing", ["cookie", "origin", "csrf"])
+def test_every_post_route_needs_the_cookie_the_origin_and_the_csrf_token(
+    client: UiClient, ui: Ui, path: str, missing: str
+) -> None:
+    token = client.csrf()
+    sender = UiClient(ui.port)
+    if missing != "cookie":
+        sender.cookies = dict(client.cookies)
+    headers = {"Origin": client.origin, "Content-Type": "application/x-www-form-urlencoded"}
+    if missing == "origin":
+        del headers["Origin"]
+    body = b"" if missing == "csrf" else f"csrf={token}".encode()
+    assert sender.request("POST", path, body=body, headers=headers).status == 403
+    assert_running(ui)
+
+
+def test_the_launch_exchange_is_the_only_post_outside_the_route_table() -> None:
+    assert ui_server.LAUNCH not in ui_server.POST_ROUTES
+    assert set(ui_server.POST_ROUTES) == {"/session/end"}
+
+
 def test_a_post_to_an_unknown_path_is_not_found(client: UiClient, ui: Ui) -> None:
     token = client.csrf()
     assert client.post_form("/api/v1/status", {"csrf": token}).status == 404
@@ -407,9 +562,14 @@ def test_a_post_to_an_unknown_path_is_not_found(client: UiClient, ui: Ui) -> Non
 
 
 def test_end_session_shows_the_ended_page_and_stops_the_server(client: UiClient, ui: Ui) -> None:
+    session_id = client.cookies[ui.cookie_name]
     reply = client.post_form("/session/end", {"csrf": client.csrf()})
     assert reply.status == 200
     assert "This session has ended" in reply.text
+    assert reply.headers["Set-Cookie"] == (
+        f"{ui.cookie_name}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict"
+    )
+    assert ui.session(session_id) is None  # gone before the server is
     assert ui.wait(5) == "ended"
     with pytest.raises(OSError):
         client.get("/status")
@@ -524,21 +684,37 @@ def test_a_failing_helper_ends_flib_ui_instead_of_hanging(
 def test_a_large_body_is_refused_before_it_is_read(client: UiClient, ui: Ui) -> None:
     head = (
         f"POST /session/end HTTP/1.1\r\nHost: 127.0.0.1:{ui.port}\r\n"
-        f"Origin: {client.origin}\r\nContent-Length: 100000\r\n\r\n"
+        f"Origin: {client.origin}\r\nContent-Length: 20000\r\n\r\n"
     )
     assert client.raw(head.encode()).startswith(b"HTTP/1.0 413 ")
 
 
 @pytest.mark.parametrize(
     ("extra", "status"),
-    [("", b"411"), ("Content-Length: abc\r\n", b"400"), ("Transfer-Encoding: chunked\r\n", b"400")],
+    [
+        ("", b"411"),
+        ("Content-Length: abc\r\n", b"400"),
+        ("Content-Length: \xb2\r\n", b"400"),  # a digit to str.isdigit, not to int
+        ("Content-Length: \u0661\r\n", b"400"),  # an Arabic-Indic one
+        ("Content-Length: 1_0\r\n", b"400"),
+        ("Content-Length: +5\r\n", b"400"),
+        ("Content-Length: 100000\r\n", b"400"),  # six digits
+        ("Content-Length: 1\r\nContent-Length: 1\r\n", b"400"),
+        ("Content-Length: 1\r\nContent-Length: 99\r\n", b"400"),
+        ("Transfer-Encoding: chunked\r\n", b"400"),
+        ("Content-Length: 1\r\nTransfer-Encoding: chunked\r\n", b"400"),
+    ],
 )
 def test_a_post_needs_a_plain_length(client: UiClient, ui: Ui, extra: str, status: bytes) -> None:
     head = (
         f"POST /session/end HTTP/1.1\r\nHost: 127.0.0.1:{ui.port}\r\n"
         f"Origin: {client.origin}\r\n{extra}\r\n"
     )
-    assert client.raw(head.encode()).startswith(b"HTTP/1.0 " + status + b" ")
+    # Latin-1 where it can be: that is how http.server decodes header bytes.
+    data = head.encode("latin-1") if max(map(ord, head)) < 256 else head.encode("utf-8")
+    reply = client.raw(data + b"x")
+    assert reply.startswith(b"HTTP/1.0 " + status + b" "), reply[:40]
+    assert b"Content-Security-Policy: " in reply
 
 
 def test_long_request_lines_and_headers_are_refused(client: UiClient, ui: Ui) -> None:
@@ -556,6 +732,62 @@ def test_a_slow_client_is_dropped(loopback_network: None, cfg: Config) -> None:
         with socket.create_connection(("127.0.0.1", ui.port), timeout=5) as sock:
             sock.sendall(b"GET /status HTTP/1.1\r\n")  # and nothing more
             assert sock.recv(1024) == b""  # closed after the timeout, without a reply
+    finally:
+        ui.close()
+
+
+def test_a_client_that_trickles_its_request_is_cut_off_at_the_deadline(
+    loopback_network: None, cfg: Config
+) -> None:
+    """A byte at a time, each well within the read timeout, never gets past the
+    deadline for the whole request; and the threads come back for everyone else."""
+    ui = Ui(cfg, poll_seconds=0.01, max_threads=2, request_timeout=5, request_deadline=0.2)
+    ui.start()
+    try:
+        slow = [socket.create_connection(("127.0.0.1", ui.port), timeout=5) for _ in range(2)]
+        for sock in slow:
+            sock.sendall(f"GET /static/app.css HTTP/1.1\r\nHost: 127.0.0.1:{ui.port}\r\n".encode())
+        started = time.monotonic()
+        cut: set[int] = set()
+        while len(cut) < len(slow):
+            assert time.monotonic() - started < 3, "the trickling clients were never cut off"
+            for i, sock in enumerate(slow):
+                if i in cut:
+                    continue
+                try:
+                    sock.sendall(b"X-Pad: a\r\n")
+                    sock.settimeout(0.02)
+                    if sock.recv(1024) == b"":
+                        cut.add(i)
+                except TimeoutError:
+                    pass
+                except OSError:
+                    cut.add(i)
+        for sock in slow:
+            sock.close()
+        assert time.monotonic() - started >= 0.2
+        wait_for(lambda: UiClient(ui.port).get("/static/app.css").status == 200)
+    finally:
+        ui.close()
+
+
+def test_the_deadline_does_not_cut_a_reply_in_progress(
+    monkeypatch: pytest.MonkeyPatch, loopback_network: None, cfg: Config
+) -> None:
+    """Once the whole request is in, the deadline no longer applies."""
+    ui = Ui(cfg, poll_seconds=0.01, request_deadline=0.05)
+    ui.start()
+    try:
+        c = UiClient(ui.port)
+        c.launch(ui.launch_url)
+        real = api.status
+
+        def slow(config: Config) -> object:
+            time.sleep(0.2)  # longer than the deadline, inside the handler
+            return real(config)
+
+        monkeypatch.setattr(api, "status", slow)
+        assert c.get("/api/v1/status").status == 200
     finally:
         ui.close()
 
@@ -631,21 +863,90 @@ def test_error_pages_reveal_nothing(client: UiClient) -> None:
 
 
 def test_every_reply_carries_the_security_headers(client: UiClient, ui: Ui) -> None:
+    host = f"Host: 127.0.0.1:{ui.port}\r\n"
     replies = [
-        client.get("/status"),
-        client.get("/api/v1/status"),
-        client.get("/static/app.css"),
-        client.get("/static/status.js"),
-        client.get("/"),
-        client.get("/nothing"),
-        client.get("/status", host="evil"),
-        client.request("PUT", "/status"),
-        UiClient(ui.port).get("/status"),
-        UiClient(ui.port).get("/launch?token=x"),
+        dict(reply.headers.items()) | {"": str(reply.status)}
+        for reply in (
+            client.get("/status"),  # 200, a page
+            client.get("/api/v1/status"),  # 200, JSON
+            client.get("/static/app.css"),  # 200, a file
+            client.get("/"),  # 303
+            UiClient(ui.port).get("/api/v1/status"),  # 401
+            UiClient(ui.port).get("/status"),  # 403, the ended page
+            client.get("/status", headers={"Sec-Fetch-Site": "cross-site"}),  # 403
+            client.get("/nothing"),  # 404
+            client.request("PUT", "/status"),  # 405
+            client.post_form("/session/end", {"csrf": "x"}, {"Content-Type": "x"}),  # 403
+            client.get("/status", host="evil"),  # 421
+            client.request("BREW", "/"),  # 501
+        )
+    ]
+    replies += [
+        raw_headers(client.raw(data))
+        for data in (
+            b"GARBAGE\r\n\r\n",  # 400, a request line that makes no sense
+            b"GET /status\r\n\r\n",  # 400, HTTP/0.9: would get a bare body
+            b"GET / HTTP/<script>\r\n\r\n",  # 400
+            f"POST /session/end HTTP/1.1\r\n{host}Origin: {client.origin}\r\n\r\n".encode(),
+            b"GET /" + b"a" * 70000 + b" HTTP/1.1\r\n\r\n",  # 414
+        )
     ]
     for reply in replies:
+        assert reply[""], reply
         for name, value in SECURITY_HEADERS.items():
-            assert reply.headers[name] == value, (reply.status, name)
+            assert reply.get(name) == value, (reply[""], name)
+        assert not any(name.lower().startswith("access-control-") for name in reply), reply
+    statuses = {reply[""].split(" ")[1] if " " in reply[""] else reply[""] for reply in replies}
+    assert {"200", "303", "400", "401", "403", "404", "405", "411", "414", "421", "501"} <= statuses
+
+
+def test_the_turned_away_reply_carries_the_security_headers(
+    loopback_network: None, cfg: Config
+) -> None:
+    ui = Ui(cfg, poll_seconds=0.01, max_threads=1, request_timeout=5)
+    ui.start()
+    try:
+        with socket.create_connection(("127.0.0.1", ui.port), timeout=5) as hog:
+            hog.sendall(b"GET /status HTTP/1.1\r\n")
+            wait_for(lambda: ui._server._active)
+            with socket.create_connection(("127.0.0.1", ui.port), timeout=5) as extra:
+                reply = raw_headers(extra.recv(4096))
+        assert reply[""] == "HTTP/1.0 503 Service Unavailable"
+        for name, value in SECURITY_HEADERS.items():
+            assert reply.get(name) == value, name
+    finally:
+        ui.close()
+
+
+def test_no_reply_ever_allows_another_origin(client: UiClient, ui: Ui) -> None:
+    """No CORS: not on a preflight, not on a reply to a request with an Origin."""
+    for method in ("OPTIONS", "GET"):
+        reply = client.request(
+            method,
+            "/api/v1/status",
+            headers={
+                "Origin": "https://evil.example",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Private-Network": "true",
+            },
+        )
+        assert reply.status in (403, 405)
+        assert not [n for n in reply.headers if n.lower().startswith("access-control-")]
+
+
+def test_a_bug_gets_a_plain_500_and_no_traceback(
+    monkeypatch: pytest.MonkeyPatch, client: UiClient, capfd: pytest.CaptureFixture[str]
+) -> None:
+    def broken(config: Config) -> None:
+        raise RuntimeError("a bug at /secret/path")
+
+    monkeypatch.setattr(api, "status", broken)
+    reply = client.get("/api/v1/status")
+    assert reply.status == 500
+    assert reply.body == b"Internal Server Error\n"
+    assert reply.headers["Content-Security-Policy"] == CSP
+    out, err = capfd.readouterr()
+    assert out == "" and err == ""
 
 
 def test_content_types(client: UiClient) -> None:
@@ -759,8 +1060,11 @@ def test_the_server_ends_after_the_idle_minutes(loopback_network: None, cfg: Con
     ui.start()
     try:
         clock.now += 599
+        c = UiClient(ui.port)
+        c.launch(ui.launch_url)  # the launch exchange resets the timer
+        clock.now += 599
         assert ui.wait(0.05) is None
-        UiClient(ui.port).get("/static/app.css")  # a request resets the timer
+        c.get("/static/app.css")  # so does any request from the session
         clock.now += 599
         assert ui.wait(0.05) is None
         clock.now += 2
@@ -770,15 +1074,23 @@ def test_the_server_ends_after_the_idle_minutes(loopback_network: None, cfg: Con
     assert ui.reason == "idle"
 
 
-def test_a_rejected_host_does_not_keep_the_server_alive(
-    loopback_network: None, cfg: Config
-) -> None:
+def test_only_the_session_keeps_the_server_alive(loopback_network: None, cfg: Config) -> None:
+    """Anything may knock on a port; only the session resets the idle timer."""
     clock = FakeClock()
     ui = Ui(cfg, clock=clock, poll_seconds=0.01, idle_seconds=60)
     ui.start()
     try:
+        session = UiClient(ui.port)
+        session.launch(ui.launch_url)
         clock.now += 59
-        UiClient(ui.port).get("/static/app.css", host="evil.example")
+        stranger = UiClient(ui.port)
+        stranger.cookies[ui.cookie_name] = "guess"
+        stranger.get("/static/app.css", host="evil.example")
+        stranger.get("/static/app.css")
+        stranger.get("/status")
+        stranger.get("/api/v1/status")
+        stranger.get("/launch?token=guess")
+        stranger.post_form("/session/end", {"csrf": "x"})
         clock.now += 2
         assert ui.wait(5) == "idle"
     finally:
@@ -848,13 +1160,20 @@ class Background:
 
 
 def end_from_the_browser(log: Path) -> Background:
-    """In the background: wait for the fake ``open``, open the link, End session."""
+    """In the background: wait for the fake ``open``, open the handoff file it was
+    given as the browser would, then End session."""
 
     def browse() -> None:
         wait_for(lambda: opened(log), timeout=10)
-        url = opened(log)[0][0]
-        c = UiClient(int(url.split(":")[2].split("/")[0]))
-        assert c.launch(url).status == 303
+        [[argument]] = opened(log)
+        handoff = Path(argument)
+        action = re.search(r"http://127\.0\.0\.1:(\d+)/", handoff.read_text(encoding="utf-8"))
+        assert action is not None
+        c = UiClient(int(action.group(1)))
+        reply = c.launch_from_handoff(handoff)
+        assert reply.status == 200 and "Session started" in reply.text
+        assert not handoff.exists()  # deleted once used
+        assert c.get("/").headers["Location"] == "/status"
         assert c.post_form("/session/end", {"csrf": c.csrf()}).status == 200
 
     return Background(browse)
@@ -871,7 +1190,7 @@ def interrupt_when_listening(signum: int) -> Background:
     return Background(send)
 
 
-def test_flib_ui_opens_the_link_and_ends_with_the_session(
+def test_flib_ui_opens_a_handoff_file_and_ends_with_the_session(
     loopback_network: None, tmp_path: Path, downloads: Path, fake_browser: Path
 ) -> None:
     path = write_config(tmp_path, downloads)
@@ -879,10 +1198,12 @@ def test_flib_ui_opens_the_link_and_ends_with_the_session(
     result = runner.invoke(app, ["ui", "-c", str(path)])
     browser.join()
     assert result.exit_code == 0, result.stdout + result.stderr
-    [[url]] = opened(fake_browser)
-    assert url.startswith("http://127.0.0.1:") and "/launch?token=" in url
-    assert f"flib ui: {url}" in result.stdout
-    assert "The link works once" in result.stdout
+    [[argument]] = opened(fake_browser)
+    assert argument.endswith("/open-file-librarian.html")  # a file, not the token
+    assert "token" not in argument and "launch" not in argument.rsplit("/", 1)[1]
+    assert re.search(r"flib ui: opening http://127\.0\.0\.1:\d+/ in your browser", result.stdout)
+    assert "token=" not in result.stdout + result.stderr
+    assert "flib ui: session started in the browser." in result.stdout
     assert "flib ui ended: the session was ended in the browser." in result.stdout
 
 
@@ -913,15 +1234,45 @@ def test_flib_ui_says_when_the_browser_cannot_open(
     result = runner.invoke(app, ["ui", "-c", str(path)])
     browser.join()
     assert result.exit_code == 0, result.stdout + result.stderr
-    assert "warning: could not open the browser (open exited with 1)" in result.stdout
-    assert "token" not in result.stdout.split("warning:")[1]
+    assert "warning: could not open the browser (open exited with 1)" in result.stderr
+    assert "open-file-librarian.html in your browser" in result.stderr
+    assert "token" not in result.stderr
 
 
 def test_flib_ui_without_open_says_why(
-    loopback_network: None, monkeypatch: pytest.MonkeyPatch, cfg: Config
+    loopback_network: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(ui_server, "OPEN", "/nonexistent/open")
-    assert ui_server.open_url("http://127.0.0.1:1/launch?token=x") == "FileNotFoundError"
+    assert ui_server.open_file(tmp_path / "page.html") == "FileNotFoundError"
+
+
+def test_a_stolen_link_ends_flib_ui_with_a_warning(
+    loopback_network: None, cfg: Config, fake_browser: Path
+) -> None:
+    lines: list[str] = []
+    warnings: list[str] = []
+
+    def steal_then_use() -> None:
+        wait_for(lambda: any("/launch?token=" in line for line in lines), timeout=10)
+        url = next(line for line in lines if "/launch?token=" in line).split(" ", 2)[2]
+        port = int(url.split(":")[2].split("/")[0])
+        assert UiClient(port).launch(url).status == 303  # another account, first
+        assert UiClient(port).launch(url).status == 403  # the user, second
+
+    thief = Background(steal_then_use)
+    assert ui_server.run(cfg, browser=False, echo=lines.append, warn=warnings.append) == "stolen"
+    thief.join()
+    assert warnings == [ui_server.STOLEN_WARNING]
+    assert "Another program or account on this Mac may have seen it" in warnings[0]
+    assert lines[-1].startswith("flib ui ended: the launch link was used again")
+
+
+def test_flib_ui_exits_with_an_error_when_the_link_was_stolen(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, downloads: Path
+) -> None:
+    monkeypatch.setattr(ui_server, "run", lambda *args, **kwargs: "stolen")
+    result = runner.invoke(app, ["ui", "-c", str(write_config(tmp_path, downloads))])
+    assert result.exit_code == 1
 
 
 def test_flib_ui_runs_once(
@@ -959,8 +1310,100 @@ def test_flib_ui_no_browser_prints_the_link(
     result = runner.invoke(app, ["ui", "--no-browser", "-c", str(path)])
     sender.join()
     assert result.exit_code == 0, result.stdout + result.stderr
-    assert "/launch?token=" in result.stdout
+    assert re.search(r"flib ui: http://127\.0\.0\.1:\d+/launch\?token=", result.stdout)
+    assert "The link works once" in result.stdout
     assert opened(fake_browser) == []
+
+
+# --- the handoff file ------------------------------------------------------------------
+
+
+def test_the_handoff_file_is_for_the_user_only(ui: Ui, cfg: Config) -> None:
+    handoff = ui.write_handoff()
+    assert handoff.parent.parent == cfg.database.parent  # flib's data folder, not /tmp
+    assert stat.S_IMODE(handoff.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(handoff.stat().st_mode) == 0o600
+    text = handoff.read_text(encoding="utf-8")
+    assert f'action="http://127.0.0.1:{ui.port}/launch"' in text
+    assert f'value="{token_of(ui)}"' in text
+    assert '<meta name="referrer" content="no-referrer">' in text
+    assert "?token=" not in text and "localhost" not in text  # never in a URL
+    ui.close()
+    assert not handoff.parent.exists()  # gone with the server, even unused
+
+
+def test_the_handoff_file_starts_the_session_and_is_deleted(ui: Ui, events: list[str]) -> None:
+    handoff = ui.write_handoff()
+    c = UiClient(ui.port)
+    reply = c.launch_from_handoff(handoff)
+    assert reply.status == 200
+    assert reply.headers["Set-Cookie"].startswith(f"{ui.cookie_name}=")
+    assert "; Path=/; HttpOnly; SameSite=Strict" in reply.headers["Set-Cookie"]
+    # No redirect: from a page on disk it would be a cross-site chain, and the
+    # browser would not send the SameSite=Strict cookie on it.
+    assert "Location" not in reply.headers
+    assert '<script src="/static/opening.js" defer></script>' in reply.text
+    assert token_of(ui) not in reply.text
+    assert not handoff.exists() and not handoff.parent.exists()
+    assert events == ["started"]
+    assert c.get("/status", headers={"Sec-Fetch-Site": "same-origin"}).status == 200
+
+
+@pytest.mark.parametrize(
+    ("headers", "status"),
+    [
+        ({"Origin": "https://evil.example"}, 403),
+        ({"Origin": "http://127.0.0.1:{port}0"}, 403),
+        ({"Sec-Fetch-Site": "same-site"}, 403),
+        ({"Content-Type": "text/plain"}, 400),
+        ({"Origin": None, "Sec-Fetch-Site": None}, 200),
+        ({"Origin": "http://127.0.0.1:{port}", "Sec-Fetch-Site": "same-origin"}, 200),
+        ({"Sec-Fetch-Site": "none"}, 200),
+    ],
+)
+def test_the_launch_post_takes_the_null_origin_and_nothing_wider(
+    ui: Ui, headers: dict[str, str | None], status: int
+) -> None:
+    sent = {
+        "Origin": "null",
+        "Sec-Fetch-Site": "cross-site",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+    for name, value in headers.items():
+        if value is None:
+            del sent[name]
+        else:
+            sent[name] = value.format(port=ui.port)
+    body = f"token={token_of(ui)}".encode()
+    assert UiClient(ui.port).request("POST", "/launch", body=body, headers=sent).status == status
+    # Only the launch exchange: every other POST still needs the exact origin.
+    other = UiClient(ui.port).request("POST", "/session/end", body=b"", headers=sent)
+    assert other.status in (400, 403)
+
+
+@pytest.mark.parametrize("body", [b"", b"token=", b"token=wrong", b"token=a&token=b"])
+def test_a_wrong_launch_post_gets_the_ended_page(ui: Ui, body: bytes) -> None:
+    sent = {"Origin": "null", "Content-Type": "application/x-www-form-urlencoded"}
+    reply = UiClient(ui.port).request("POST", "/launch", body=body, headers=sent)
+    assert reply.status == 403 and "This session has ended" in reply.text
+    assert UiClient(ui.port).launch(ui.launch_url).status == 303  # still unused
+
+
+def test_a_used_token_posted_again_without_the_session_ends_everything(
+    ui: Ui, events: list[str]
+) -> None:
+    handoff = ui.write_handoff()
+    copy = handoff.read_text(encoding="utf-8")
+    assert UiClient(ui.port).launch_from_handoff(handoff).status == 200
+    handoff.parent.mkdir()
+    handoff.write_text(copy, encoding="utf-8")  # a copy someone kept
+    try:
+        assert UiClient(ui.port).launch_from_handoff(handoff).status == 403
+    finally:
+        handoff.unlink()
+        handoff.parent.rmdir()
+    assert ui.wait(5) == "stolen"
+    assert events == ["started", "stolen"]
 
 
 # --- the packaged pages ----------------------------------------------------------------
@@ -1006,8 +1449,8 @@ class _Collector(HTMLParser):
 def test_every_page_references_only_packaged_files_and_has_no_inline_code() -> None:
     assets = load_assets()
     pages = load_pages()
-    assert set(pages) == {"status", "ended"}
-    routes = {f"/{p}" for p in ui_server.PAGES} | {"/session/end"}
+    assert set(pages) == {"status", "ended", "opening"}
+    routes = {"/"} | {f"/{p}" for p in ui_server.PAGES} | set(ui_server.POST_ROUTES)
     for name, html in pages.items():
         parser = _Collector()
         parser.feed(html)
@@ -1040,6 +1483,7 @@ def test_the_policy_allows_no_inline_code() -> None:
     assert "'unsafe-inline'" not in CSP and "'unsafe-eval'" not in CSP
     assert "default-src 'none'" in CSP
     assert "frame-ancestors 'none'" in CSP and "base-uri 'none'" in CSP
+    assert "form-action 'self'" in CSP
     assert "*" not in CSP and "http" not in CSP
 
 

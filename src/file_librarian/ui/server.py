@@ -1,34 +1,48 @@
 """The ``flib ui`` server: loopback only, one session, gone when idle (#113).
 
 How a session starts. The server binds ``127.0.0.1`` on a free port and makes
-a random *launch token*; ``flib ui`` prints ``/launch?token=...`` and asks
-macOS to open it (``OPEN``, swapped for a fake in every test). The first
-request with that token, compared in constant time, burns it and starts the
-only session there will be: the reply is a redirect to the page, without the
-token, that sets an ``HttpOnly``, ``SameSite=Strict`` cookie named after the
-port. The link never works again; a stale link, a missing or wrong cookie or
-an ended session get the "session ended" page.
+a random *launch token*. The token never goes on a command line, where every
+account on the Mac could read it with ``ps``: ``flib ui`` writes a *handoff
+file*, an HTML page readable only by the user (0600, in a 0700 folder in
+flib's data folder), and asks macOS to open that file (``OPEN``, swapped for a
+fake in every test). The page posts the token to ``/launch`` in a form body,
+so it is never in a URL, a history entry or a ``Referer``. With
+``--no-browser`` the user asked for a link: ``/launch?token=...`` is printed.
+
+The first request with the token, compared in constant time, burns it,
+deletes the handoff file and starts the only session there will be: it sets
+an ``HttpOnly``, ``SameSite=Strict`` cookie named after the port, and
+``flib ui`` says "session started". The token never works again. If it comes
+back from a client without the session, someone else has it: the session is
+dropped, the server ends and ``flib ui`` warns. A stale link, a missing or
+wrong cookie or an ended session get the "session ended" page.
 
 Every request, before anything else:
 
-- the request line and headers are size-capped, and a slow client times out;
-- ``Host`` must be exactly ``127.0.0.1:<port>`` or ``localhost:<port>`` (421
-  otherwise), which defeats DNS rebinding;
-- ``Sec-Fetch-Site``, when the browser sends it, must say same-origin (or
-  ``none``, a typed or opened address, for a GET);
-- only GET and POST are served. A POST must come from the exact loopback
-  origin (``Origin``, else ``Sec-Fetch-Site: same-origin``), carry a small
-  body with a length, a valid session cookie and the session's CSRF token
-  (form field ``csrf`` or header ``X-Flib-CSRF``).
+- the request line and headers are size-capped; each read times out, and the
+  whole request (line, headers, body) must arrive within a deadline;
+- ``Host`` must be exactly ``127.0.0.1:<port>`` (421 otherwise), which defeats
+  DNS rebinding; ``localhost`` is refused, since another program could hold
+  ``[::1]:<port>``;
+- an ``Origin``, when sent, must be exactly the server's; ``Upgrade`` is
+  refused; ``Sec-Fetch-Site``, when sent, must say same-origin (or ``none``,
+  a typed or opened address, for a GET);
+- only GET and POST are served. Every POST route but ``/launch`` is in
+  ``POST_ROUTES`` and gets the same checks: the exact origin (``Origin``, else
+  ``Sec-Fetch-Site: same-origin``), a small body with a plain length, the
+  session cookie and the session's CSRF token (form field ``csrf`` or header
+  ``X-Flib-CSRF``). ``POST /launch`` alone may come from the handoff file,
+  whose origin is ``null``: it carries the launch token instead.
 
 Static files come from an in-memory map of packaged resources, looked up by
 exact path, so no request can reach the file system. Every response carries
 a strict Content-Security-Policy (no inline script or style), ``nosniff``,
-``no-referrer`` and ``no-store``. Error replies say only the status. Nothing
-is logged: a request line can hold the launch token.
+``no-referrer``, ``no-store`` and framing and cross-origin isolation headers.
+Error replies say only the status. Nothing is logged: a request line can hold
+the launch token.
 
-The server ends after ``ui.idle_minutes`` without a request, on "End
-session" (a POST) or on SIGINT/SIGTERM. One ``flib ui`` runs at a time
+The server ends after ``ui.idle_minutes`` without a request from the session,
+on "End session" (a POST) or on SIGINT/SIGTERM. One ``flib ui`` runs at a time
 (``lock.ui_lock``); a second one says so and exits, since only the first knows
 its port and token. The clock, the idle poll and the timeouts are injectable
 for tests.
@@ -37,24 +51,30 @@ for tests.
 from __future__ import annotations
 
 import hmac
+import html
 import ipaddress
 import json
+import os
 import queue
+import re
 import secrets
 import selectors
+import shutil
 import signal
 import socket
 import socketserver
 import sqlite3
 import subprocess
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from importlib import resources
+from pathlib import Path
 from types import FrameType
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -65,15 +85,18 @@ from file_librarian.lock import AlreadyRunningError, ui_lock
 from file_librarian.ui import api
 
 OPEN = "/usr/bin/open"
-"""Opens the launch link in the default browser; tests swap in a fake."""
+"""Opens the handoff file in the default browser; tests swap in a fake."""
 HOST = "127.0.0.1"
 PAGES = ("status",)
 """Pages ``--open`` can name; Review, Search, Activity, Due and Settings come later."""
+LAUNCH = "/launch"
 
 MAX_THREADS = 8
 """Requests handled at once; one more gets 503 and is closed."""
 REQUEST_TIMEOUT = 10.0
 """Seconds a client may take on each read or write before it is dropped."""
+REQUEST_DEADLINE = 5.0
+"""Seconds a client has to send its whole request: line, headers and body."""
 MAX_REQUEST_LINE = 4096
 MAX_HEADER_BYTES = 16 * 1024
 MAX_BODY = 16 * 1024
@@ -83,6 +106,7 @@ CLOSE_GRACE = 1.0
 
 CSRF_FIELD = "csrf"
 CSRF_HEADER = "X-Flib-CSRF"
+FORM = "application/x-www-form-urlencoded"
 CSP = (
     "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
     "connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
@@ -97,6 +121,7 @@ SECURITY_HEADERS = (
     ("Cross-Origin-Resource-Policy", "same-origin"),
 )
 ALLOWED_METHODS = "GET, POST"
+_CONTENT_LENGTH = re.compile(r"[0-9]{1,5}")
 
 _TEXT = "text/plain; charset=utf-8"
 _HTML = "text/html; charset=utf-8"
@@ -112,7 +137,33 @@ ENDED = {
     "ended": "the session was ended in the browser",
     "signal": "interrupted",
     "closed": "closed",
+    "stolen": "the launch link was used again by a client without the session",
 }
+STOLEN_WARNING = (
+    "warning: the launch link was used a second time, by a client without the "
+    "session. Another program or account on this Mac may have seen it, so the "
+    "session was dropped and flib ui ended. Run `flib ui` again for a new link."
+)
+
+HANDOFF_NAME = "open-file-librarian.html"
+HANDOFF = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="referrer" content="no-referrer">
+<title>Opening file-librarian</title>
+</head>
+<body>
+<form id="launch" method="post" action="{action}">
+<input type="hidden" name="token" value="{token}">
+<p>Opening file-librarian&hellip; <button type="submit">Open</button></p>
+</form>
+<script>document.getElementById("launch").submit();</script>
+</body>
+</html>
+"""
+"""The handoff file: opened from disk (not served, so the server's CSP does not
+apply), it posts the launch token to the server at once."""
 
 
 class UiError(Exception):
@@ -163,7 +214,12 @@ class Session:
 
 
 class Ui:
-    """One server, its one session and its idle timer. ``start`` serves in threads."""
+    """One server, its one session and its idle timer. ``start`` serves in threads.
+
+    ``on_event`` hears ``"started"`` when the launch token starts the session
+    and ``"stolen"`` when a used token comes back without it (from a request
+    thread; never with the token).
+    """
 
     def __init__(
         self,
@@ -176,7 +232,9 @@ class Ui:
         poll_seconds: float = IDLE_POLL_SECONDS,
         max_threads: int = MAX_THREADS,
         request_timeout: float = REQUEST_TIMEOUT,
+        request_deadline: float = REQUEST_DEADLINE,
         close_grace: float = CLOSE_GRACE,
+        on_event: Callable[[str], None] = lambda event: None,
     ) -> None:
         if page not in PAGES:
             raise UiError(f"no page {page!r}; one of: {', '.join(PAGES)}")
@@ -184,15 +242,19 @@ class Ui:
         self.page = page
         self.idle_seconds = config.ui.idle_minutes * 60.0 if idle_seconds is None else idle_seconds
         self.request_timeout = request_timeout
+        self.request_deadline = request_deadline
         self._grace = min(close_grace, request_timeout)
         self.assets = load_assets()
         self.pages = load_pages()
         self.reason: str | None = None
+        self.on_event = on_event
         self._clock = clock
         self._poll = poll_seconds
         self._lock = threading.Lock()
         self._launch: str | None = secrets.token_urlsafe(32)
+        self._burned: str | None = None
         self._session: Session | None = None
+        self._handoff: Path | None = None
         self._last = clock()
         self._stops: queue.SimpleQueue[str] = queue.SimpleQueue()
         self._done = threading.Event()
@@ -209,18 +271,20 @@ class Ui:
                 raise UiError(f"cannot listen on {HOST}:{port}: {exc.strerror or exc}") from exc
             raise
         self.port: int = self._server.server_address[1]
-        self.launch_url = f"http://{HOST}:{self.port}/launch?token={self._launch}"
-        self.hosts = frozenset({f"{HOST}:{self.port}", f"localhost:{self.port}"})
-        self.origins = frozenset(f"http://{host}" for host in self.hosts)
+        self.origin = f"http://{HOST}:{self.port}"
+        self.url = f"{self.origin}/"
+        self.launch_url = f"{self.origin}{LAUNCH}?token={self._launch}"
+        self.hosts = frozenset({f"{HOST}:{self.port}"})
         self.cookie_name = f"flib_ui_{self.port}"
 
     # --- lifecycle ---
     #
-    # One thread, "flib-ui", accepts connections, checks the idle timer and, when
-    # asked to stop, closes everything and joins every request thread before
-    # ``wait`` returns. ``stop`` takes no lock (a reentrant queue and a byte on a
-    # socket pair), so it is safe from a signal handler, even one that interrupts
-    # another; a handler that took a lock could deadlock the main thread.
+    # One thread, "flib-ui", accepts connections, checks the idle timer and the
+    # request deadline and, when asked to stop, closes everything and joins
+    # every request thread before ``wait`` returns. ``stop`` takes no lock (a
+    # reentrant queue and a byte on a socket pair), so it is safe from a signal
+    # handler, even one that interrupts another; a handler that took a lock
+    # could deadlock the main thread.
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._serve, name="flib-ui", daemon=True)
@@ -229,22 +293,25 @@ class Ui:
     def _serve(self) -> None:
         listener = self._server.socket
         listener.setblocking(False)
+        tick = min(self._poll, self.request_deadline / 2)
         try:
             with selectors.DefaultSelector() as selector:
                 selector.register(listener, selectors.EVENT_READ)
                 selector.register(self._wake_r, selectors.EVENT_READ)
                 while (reason := self._next_reason()) is None:
-                    for key, _ in selector.select(self._poll):
+                    for key, _ in selector.select(tick):
                         if key.fileobj is listener:
                             self._accept()
                         else:
                             self._drain_wake()
+                    self._server.drop_late(self.request_deadline)
         except Exception:  # the server ends rather than hang
             reason = "closed"
         self.reason = reason
         try:
             self._server.server_close()
             self._server.close_connections(self._grace)
+            self.remove_handoff()
         finally:
             self._done.set()
 
@@ -281,16 +348,42 @@ class Ui:
         return self.reason if self._done.wait(timeout) else None
 
     def close(self) -> None:
-        """End the server and wait until no thread or socket of it is left."""
+        """End the server and wait until no thread, socket or handoff file of it is left."""
         if self._thread is None:
             self.reason = self.reason or "closed"
             self._server.server_close()
+            self.remove_handoff()
             self._done.set()
         else:
             self.stop("closed")
             self._thread.join()
         self._wake_r.close()
         self._wake_w.close()
+
+    # --- the handoff file ---
+
+    def write_handoff(self) -> Path:
+        """The page that hands the launch token to the browser, readable by the user only."""
+        with self._lock:
+            token = self._launch
+        if token is None:
+            raise UiError("the launch link is already used")
+        parent = self.config.database.parent
+        parent.mkdir(parents=True, exist_ok=True)
+        folder = Path(tempfile.mkdtemp(prefix="ui-launch-", dir=parent))  # mode 0700
+        path = folder / HANDOFF_NAME
+        text = HANDOFF.format(action=html.escape(self.origin + LAUNCH), token=html.escape(token))
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        self._handoff = path
+        return path
+
+    def remove_handoff(self) -> None:
+        with self._lock:
+            path, self._handoff = self._handoff, None
+        if path is not None:
+            shutil.rmtree(path.parent, ignore_errors=True)
 
     # --- session ---
 
@@ -303,9 +396,29 @@ class Ui:
         with self._lock:
             if self._launch is None or not same(token, self._launch):
                 return None
-            self._launch = None
+            self._burned, self._launch = self._launch, None
             self._session = Session(secrets.token_urlsafe(32), secrets.token_urlsafe(32))
-            return self._session
+            session = self._session
+        self.remove_handoff()
+        self.touch()
+        self.on_event("started")
+        return session
+
+    def burned(self, token: str) -> bool:
+        """Whether ``token`` is the launch token, already used."""
+        with self._lock:
+            used = self._burned
+        return used is not None and same(token, used)
+
+    def stolen(self) -> None:
+        """The used token came back without the session: drop it and end."""
+        self.end_session()
+        self.on_event("stolen")
+        self.stop("stolen")
+
+    def end_session(self) -> None:
+        with self._lock:
+            self._session = None
 
     def session(self, session_id: str) -> Session | None:
         with self._lock:
@@ -313,6 +426,23 @@ class Ui:
         if current is None or not same(session_id, current.id):
             return None
         return current
+
+
+@dataclass(slots=True)
+class _Connection:
+    thread: threading.Thread
+    started: float = field(default_factory=time.monotonic)
+    read: bool = False
+    """The whole request has arrived; the deadline no longer applies."""
+
+
+def _plain_reply(code: int) -> bytes:
+    """A whole reply with no body, for when there is no handler to send it."""
+    phrase = HTTPStatus(code).phrase
+    lines = [f"HTTP/1.0 {code} {phrase}", "Server: flib"]
+    lines += [f"{name}: {value}" for name, value in SECURITY_HEADERS]
+    lines += [f"Content-Type: {_TEXT}", "Content-Length: 0", "Connection: close"]
+    return ("\r\n".join(lines) + "\r\n\r\n").encode("ascii")
 
 
 class _HttpServer(HTTPServer):
@@ -327,7 +457,7 @@ class _HttpServer(HTTPServer):
         check_bind(HOST)
         self.ui = ui
         self._slots = threading.BoundedSemaphore(max_threads)
-        self._active: dict[socket.socket, threading.Thread] = {}
+        self._active: dict[socket.socket, _Connection] = {}
         self._active_lock = threading.Lock()
         super().__init__((HOST, port), _Handler)
 
@@ -341,15 +471,10 @@ class _HttpServer(HTTPServer):
 
     def process_request(self, request: Any, client_address: Any) -> None:
         if not self._slots.acquire(blocking=False):
-            try:
+            with suppress(OSError):
                 # Never blocks the accepting thread: the reply fits the socket buffer.
                 request.setblocking(False)
-                request.send(
-                    b"HTTP/1.0 503 Service Unavailable\r\nContent-Length: 0\r\n"
-                    b"Connection: close\r\n\r\n"
-                )
-            except OSError:
-                pass
+                request.send(_plain_reply(HTTPStatus.SERVICE_UNAVAILABLE))
             self.shutdown_request(request)
             return
         thread = threading.Thread(
@@ -359,7 +484,7 @@ class _HttpServer(HTTPServer):
             daemon=True,
         )
         with self._active_lock:
-            self._active[request] = thread
+            self._active[request] = _Connection(thread)
         thread.start()
 
     def _one(self, request: Any, client_address: Any) -> None:
@@ -368,15 +493,28 @@ class _HttpServer(HTTPServer):
         except Exception:  # noqa: S110 - a dropped client; nothing is logged
             pass
         finally:
-            # Under the lock, so close_connections never shuts a socket whose
-            # descriptor was just closed and reused.
+            # Under the lock, so drop_late and close_connections never shut a
+            # socket whose descriptor was just closed and reused.
             with self._active_lock:
                 del self._active[request]
                 self.shutdown_request(request)
             self._slots.release()
 
-    def handle_error(self, request: Any, client_address: Any) -> None:
-        """Never print a traceback: nothing is logged."""
+    def request_read(self, request: socket.socket) -> None:
+        """The handler has the whole request: no deadline from now on."""
+        with self._active_lock:
+            if (connection := self._active.get(request)) is not None:
+                connection.read = True
+
+    def drop_late(self, deadline: float) -> None:
+        """Cut off every client that has not sent its whole request in ``deadline``
+        seconds, however slowly it trickles bytes in."""
+        now = time.monotonic()
+        with self._active_lock:
+            for request, connection in self._active.items():
+                if not connection.read and now - connection.started > deadline:
+                    with suppress(OSError):
+                        request.shutdown(socket.SHUT_RDWR)
 
     def close_connections(self, grace: float) -> None:
         """Let requests in progress finish for up to ``grace`` seconds, then cut the
@@ -393,7 +531,7 @@ class _HttpServer(HTTPServer):
 
     def _threads(self) -> list[threading.Thread]:
         with self._active_lock:
-            return list(self._active.values())
+            return [connection.thread for connection in self._active.values()]
 
 
 class _Reject(Exception):
@@ -407,6 +545,7 @@ class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
     server_version = "flib"
     sys_version = ""
+    _replied = False
 
     def setup(self) -> None:
         super().setup()
@@ -419,8 +558,13 @@ class _Handler(BaseHTTPRequestHandler):
         return "flib"
 
     def send_error(self, code: int, message: str | None = None, explain: str | None = None) -> None:
-        """Every error says its status and nothing else."""
+        """Every error says its status and nothing else, with a status line and
+        the security headers even when the request line made no sense."""
         self.close_connection = True
+        if self._replied:
+            return
+        if self.request_version in ("HTTP/0.9", ""):
+            self.request_version = "HTTP/1.0"  # else http.server sends a bare body
         headers = [("Allow", ALLOWED_METHODS)] if code == HTTPStatus.METHOD_NOT_ALLOWED else []
         self._reply(code, f"{HTTPStatus(code).phrase}\n".encode(), _TEXT, headers)
 
@@ -439,16 +583,28 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _handle(self) -> None:
         try:
-            self._guard()
-            self.server.ui.touch()
-            if self.command == "POST":
-                self._post()
+            if self.command != "POST":  # a GET has no body: it has all arrived
+                self.server.request_read(self.connection)
+            path = urlsplit(self.path).path
+            self._guard(path)
+            body = self._body() if self.command == "POST" else b""
+            self.server.request_read(self.connection)
+            # Only the session keeps the server alive (the launch exchange too,
+            # in ``Ui.redeem``): anything else may knock on the port forever.
+            if self._session() is not None:
+                self.server.ui.touch()
+            if self.command != "POST":
+                self._get(path)
+            elif path == LAUNCH:
+                self._launch_from_handoff(body)
             else:
-                self._get()
+                self._post(path, body)
         except _Reject as reject:
             self.send_error(reject.code)
+        except Exception:  # a bug must still get a reply, and never a traceback
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR)
 
-    def _guard(self) -> None:
+    def _guard(self, path: str) -> None:
         ui = self.server.ui
         if len(self.requestline) > MAX_REQUEST_LINE:
             raise _Reject(HTTPStatus.REQUEST_URI_TOO_LONG)
@@ -460,37 +616,85 @@ class _Handler(BaseHTTPRequestHandler):
         # http.server already turns a leading "//" into "/".
         if not self.path.startswith("/"):
             raise _Reject(HTTPStatus.BAD_REQUEST)
-        site = self.headers.get("Sec-Fetch-Site")
+        if self.headers.get("Upgrade") is not None:
+            raise _Reject(HTTPStatus.BAD_REQUEST)
+        origins = self.headers.get_all("Origin") or []
+        sites = self.headers.get_all("Sec-Fetch-Site") or []
+        if len(origins) > 1 or len(sites) > 1:
+            raise _Reject(HTTPStatus.FORBIDDEN)
+        origin = origins[0] if origins else None
+        site = sites[0] if sites else None
+        if self.command == "POST" and path == LAUNCH:
+            # The handoff file is a page on disk: its origin is "null", and a
+            # browser may call its form post cross-site. The launch token in the
+            # body is what is checked; it stays exact-origin otherwise.
+            if origin not in (None, "null", ui.origin):
+                raise _Reject(HTTPStatus.FORBIDDEN)
+            if site == "same-site":
+                raise _Reject(HTTPStatus.FORBIDDEN)
+            return
+        if origin is not None and origin != ui.origin:
+            raise _Reject(HTTPStatus.FORBIDDEN)
         allowed_sites = ("same-origin",) if self.command == "POST" else ("same-origin", "none")
         if site is not None and site not in allowed_sites:
             raise _Reject(HTTPStatus.FORBIDDEN)
-        if self.command == "POST":
-            origin = self.headers.get("Origin")
-            if origin is None and site != "same-origin":
-                raise _Reject(HTTPStatus.FORBIDDEN)
-            if origin is not None and origin not in ui.origins:
-                raise _Reject(HTTPStatus.FORBIDDEN)
+        if self.command == "POST" and origin is None and site != "same-origin":
+            raise _Reject(HTTPStatus.FORBIDDEN)
 
     def _session(self) -> Session | None:
+        """The session, if any cookie of that name holds it: a cookie another app
+        on 127.0.0.1 set with the same name must not shadow the real one."""
         name = self.server.ui.cookie_name
+        found: Session | None = None
         for header in self.headers.get_all("Cookie") or []:
             for part in header.split(";"):
                 key, sep, value = part.strip().partition("=")
-                if sep and key == name:
-                    return self.server.ui.session(value)
-        return None
+                if sep and key == name and (session := self.server.ui.session(value)):
+                    found = session
+        return found
+
+    def _body(self) -> bytes:
+        """The body of a POST: one plain ``Content-Length`` of ASCII digits, no
+        ``Transfer-Encoding``, at most ``MAX_BODY`` bytes."""
+        if self.headers.get_all("Transfer-Encoding"):
+            raise _Reject(HTTPStatus.BAD_REQUEST)
+        lengths = self.headers.get_all("Content-Length") or []
+        if not lengths:
+            raise _Reject(HTTPStatus.LENGTH_REQUIRED)
+        if len(lengths) != 1 or not _CONTENT_LENGTH.fullmatch(lengths[0]):
+            raise _Reject(HTTPStatus.BAD_REQUEST)
+        length = int(lengths[0])
+        if length > MAX_BODY:
+            raise _Reject(HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+        body = self.rfile.read(length)
+        if len(body) != length:
+            raise _Reject(HTTPStatus.BAD_REQUEST)
+        return body
+
+    def _form(self, body: bytes) -> dict[str, list[str]] | None:
+        """The fields of a form body, or ``None`` when the body is not a form."""
+        kind = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
+        if kind != FORM:
+            return None
+        try:
+            return parse_qs(body.decode("utf-8", "replace"), max_num_fields=8)
+        except ValueError:
+            return None
 
     # --- GET ---
 
-    def _get(self) -> None:
+    def _get(self, path: str) -> None:
         ui = self.server.ui
-        path = urlsplit(self.path).path
         if path in ui.assets:
             body, kind = ui.assets[path]
             self._reply(HTTPStatus.OK, body, kind)
             return
-        if path == "/launch":
-            self._launch(urlsplit(self.path).query)
+        if path == LAUNCH:
+            try:
+                tokens = parse_qs(urlsplit(self.path).query, max_num_fields=4).get("token", [])
+            except ValueError as exc:
+                raise _Reject(HTTPStatus.BAD_REQUEST) from exc
+            self._launch(tokens, from_handoff=False)
             return
         session = self._session()
         if path.startswith("/api/"):
@@ -512,22 +716,6 @@ class _Handler(BaseHTTPRequestHandler):
             return
         raise _Reject(HTTPStatus.NOT_FOUND)
 
-    def _launch(self, query: str) -> None:
-        ui = self.server.ui
-        if self._session() is not None:
-            self._redirect(f"/{ui.page}")
-            return
-        try:
-            tokens = parse_qs(query, max_num_fields=4).get("token", [])
-        except ValueError as exc:
-            raise _Reject(HTTPStatus.BAD_REQUEST) from exc
-        session = ui.redeem(tokens[0]) if len(tokens) == 1 else None
-        if session is None:
-            self._ended(HTTPStatus.FORBIDDEN)
-            return
-        cookie = f"{ui.cookie_name}={session.id}; Path=/; HttpOnly; SameSite=Strict"
-        self._redirect(f"/{ui.page}", [("Set-Cookie", cookie)])
-
     def _status(self) -> None:
         try:
             data = api.status(self.server.ui.config)
@@ -538,49 +726,71 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             self._json(HTTPStatus.OK, data)
 
+    # --- the launch exchange ---
+
+    def _launch_from_handoff(self, body: bytes) -> None:
+        fields = self._form(body)
+        if fields is None:
+            raise _Reject(HTTPStatus.BAD_REQUEST)
+        self._launch(fields.get("token", []), from_handoff=True)
+
+    def _launch(self, tokens: list[str], *, from_handoff: bool) -> None:
+        ui = self.server.ui
+        if self._session() is not None:  # the same browser, opening the link again
+            self._redirect(f"/{ui.page}")
+            return
+        token = tokens[0] if len(tokens) == 1 else None
+        session = ui.redeem(token) if token is not None else None
+        if session is None:
+            if token is not None and ui.burned(token):
+                ui.stolen()
+            self._ended(HTTPStatus.FORBIDDEN)
+            return
+        cookie = f"{ui.cookie_name}={session.id}; Path=/; HttpOnly; SameSite=Strict"
+        if from_handoff:
+            # The post came from a page on disk, so a redirect would be a
+            # cross-site chain and the SameSite=Strict cookie would not go with
+            # it. This page moves on from the server's own origin instead.
+            page = ui.pages["opening"].encode()
+            self._reply(HTTPStatus.OK, page, _HTML, [("Set-Cookie", cookie)])
+        else:
+            self._redirect(f"/{ui.page}", [("Set-Cookie", cookie)])
+
     # --- POST ---
 
-    def _post(self) -> None:
-        if self.headers.get("Transfer-Encoding") is not None:
-            raise _Reject(HTTPStatus.BAD_REQUEST)
-        raw = self.headers.get("Content-Length")
-        if raw is None:
-            raise _Reject(HTTPStatus.LENGTH_REQUIRED)
-        if not raw.isdigit():
-            raise _Reject(HTTPStatus.BAD_REQUEST)
-        if int(raw) > MAX_BODY:
-            raise _Reject(HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
-        body = self.rfile.read(int(raw))
+    def _post(self, path: str, body: bytes) -> None:
+        """Every POST route but the launch exchange: the session cookie and the
+        CSRF token (the exact origin was checked by ``_guard``), then the route."""
         session = self._session()
         if session is None:
             raise _Reject(HTTPStatus.FORBIDDEN)
         token = self._csrf_token(body)
         if token is None or not same(token, session.csrf):
             raise _Reject(HTTPStatus.FORBIDDEN)
-        if urlsplit(self.path).path == "/session/end":
-            self._ended(HTTPStatus.OK)
-            self.server.ui.stop("ended")
-            return
-        raise _Reject(HTTPStatus.NOT_FOUND)
+        route = POST_ROUTES.get(path)
+        if route is None:
+            raise _Reject(HTTPStatus.NOT_FOUND)
+        route(self, session)
 
     def _csrf_token(self, body: bytes) -> str | None:
-        header = self.headers.get(CSRF_HEADER)
-        if header is not None:
-            return header
-        kind = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
-        if kind != "application/x-www-form-urlencoded":
-            return None
-        try:
-            fields = parse_qs(body.decode("utf-8", "replace"), max_num_fields=8)
-        except ValueError:
-            return None
-        values = fields.get(CSRF_FIELD, [])
+        headers = self.headers.get_all(CSRF_HEADER) or []
+        if headers:
+            return headers[0] if len(headers) == 1 else None
+        fields = self._form(body)
+        values = [] if fields is None else fields.get(CSRF_FIELD, [])
         return values[0] if len(values) == 1 else None
+
+    def _end_session(self, session: Session) -> None:
+        ui = self.server.ui
+        ui.end_session()
+        expired = f"{ui.cookie_name}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict"
+        self._ended(HTTPStatus.OK, [("Set-Cookie", expired)])
+        ui.stop("ended")
 
     # --- replies ---
 
-    def _ended(self, code: int) -> None:
-        self._reply(code, self.server.ui.pages["ended"].encode(), _HTML)
+    def _ended(self, code: int, headers: Iterable[tuple[str, str]] = ()) -> None:
+        self._reply(code, self.server.ui.pages["ended"].encode(), _HTML, headers)
 
     def _redirect(self, location: str, headers: Iterable[tuple[str, str]] = ()) -> None:
         self._reply(HTTPStatus.SEE_OTHER, b"", _TEXT, [("Location", location), *headers])
@@ -591,6 +801,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _reply(
         self, code: int, body: bytes, kind: str, headers: Iterable[tuple[str, str]] = ()
     ) -> None:
+        self._replied = True
         self.send_response(code)
         for name, value in (*SECURITY_HEADERS, ("Content-Type", kind), *headers):
             self.send_header(name, value)
@@ -600,15 +811,24 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
 
+PostRoute = Callable[[_Handler, Session], None]
+POST_ROUTES: dict[str, PostRoute] = {
+    "/session/end": _Handler._end_session,
+}
+"""Every POST route. Each one is reached only through ``_Handler._post``, after
+the exact origin, the session cookie and the CSRF token; ``POST /launch`` is the
+one exception, and is not in this table."""
+
+
 # --- flib ui ---------------------------------------------------------------------------
 
 
-def open_url(url: str) -> str | None:
-    """Ask macOS to open ``url``; why it failed, or ``None``. Never says the URL."""
+def open_file(path: Path) -> str | None:
+    """Ask macOS to open ``path`` in the default browser; why it failed, or ``None``."""
     try:
-        # A fixed binary; the URL is one argument, never parsed by a shell.
+        # A fixed binary; the path is one argument, never parsed by a shell.
         result = subprocess.run(  # noqa: S603
-            [OPEN, url], capture_output=True, timeout=15, check=False
+            [OPEN, str(path)], capture_output=True, timeout=15, check=False
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return type(exc).__name__
@@ -622,28 +842,42 @@ def run(
     port: int = 0,
     browser: bool = True,
     echo: Callable[[str], None] = print,
+    warn: Callable[[str], None] = print,
 ) -> str:
     """``flib ui``: serve until idle, ended or interrupted; why it ended.
 
-    Raises ``UiError`` when it cannot start. Returns ``"running"`` without
-    serving when another ``flib ui`` holds the lock.
+    ``warn`` gets what belongs on stderr. Raises ``UiError`` when it cannot
+    start. Returns ``"running"`` without serving when another ``flib ui`` holds
+    the lock.
     """
+
+    def on_event(event: str) -> None:
+        if event == "started":
+            echo("flib ui: session started in the browser.")
+        elif event == "stolen":
+            warn(STOLEN_WARNING)
+
+    ending = (
+        f"It ends after {config.ui.idle_minutes} idle minutes, with End session, or with Ctrl-C."
+    )
     try:
         with ui_lock(config.database):
-            ui = Ui(config, page=page, port=port)
+            ui = Ui(config, page=page, port=port, on_event=on_event)
             try:
                 with _signals(ui):
                     ui.start()
-                    echo(f"flib ui: {ui.launch_url}")
-                    echo(
-                        "The link works once. The interface ends after "
-                        f"{config.ui.idle_minutes} idle minutes, with End session, or with "
-                        "Ctrl-C."
-                    )
-                    if browser and (problem := open_url(ui.launch_url)) is not None:
-                        echo(
-                            f"warning: could not open the browser ({problem}); open the link above."
-                        )
+                    if browser:
+                        handoff = ui.write_handoff()
+                        echo(f"flib ui: opening {ui.url} in your browser. {ending}")
+                        if (problem := open_file(handoff)) is not None:
+                            warn(
+                                f"warning: could not open the browser ({problem}). Open "
+                                f"{handoff} in your browser, or end this and run "
+                                "`flib ui --no-browser` for a link."
+                            )
+                    else:
+                        echo(f"flib ui: {ui.launch_url}")
+                        echo(f"The link works once; keep it to yourself. {ending}")
                     while ui.wait(0.5) is None:
                         pass
             finally:

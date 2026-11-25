@@ -70,8 +70,11 @@ def reprocess_lock(database: Path) -> Iterator[None]:
 
 @contextmanager
 def ui_lock(database: Path) -> Iterator[None]:
-    """One ``flib ui`` at a time (#113). Separate from the instance lock: the
-    interface only reads, and must never keep a run from starting."""
+    """One ``flib ui`` at a time (#113). Separate from the instance lock, which
+    the interface never holds while it runs, so an open interface never keeps a
+    run from starting. The interface will not stay read-only: each action that
+    changes files or the index (review, fix, undo) must take ``instance_lock``
+    for that action only, and say so when a run holds it."""
     with _flock(
         database.parent / UI_LOCK_NAME,
         "flib ui is already running (pid {pid})",

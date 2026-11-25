@@ -73,7 +73,8 @@ workflows (see [SECURITY.md](SECURITY.md#supply-chain)).
   `fake_openai` (opt-in) runs an OpenAI-compatible server on 127.0.0.1 for
   that test only. `flib ui` opens its link with a fake `open`
   (`fake_browser`, autouse); its tests run the server in-process with
-  `loopback_network` and talk to it with `UiClient` from `tests/_helpers.py`.
+  `loopback_network` and talk to it with `UiClient` from `tests/_helpers.py`
+  (`launch_from_handoff` opens the handoff file the fake `open` was given).
 - **Never call `monkeypatch.undo()`.** The safety guards use the same
   `monkeypatch` as the test, so `undo()` switches them off for the rest of it.
   To patch something for part of a test, use

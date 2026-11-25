@@ -1,4 +1,4 @@
-"""Stand-in for ``/usr/bin/open`` when ``flib ui`` opens its link (see conftest.py).
+"""Stand-in for ``/usr/bin/open`` when ``flib ui`` opens its handoff file (see conftest.py).
 
 Opens nothing: appends its arguments as one JSON line to FAKE_OPEN_LOG. With
 FAKE_OPEN_FAIL set, it fails like the real tool: a message on stderr, exit 1.

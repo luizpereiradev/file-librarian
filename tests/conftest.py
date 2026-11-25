@@ -200,7 +200,7 @@ def fake_notifier_tools(
 
 @pytest.fixture(autouse=True)
 def fake_browser(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """``flib ui`` opens its link with a fake ``open``; no test opens a real browser.
+    """``flib ui`` opens its handoff file with a fake ``open``; no test opens a real browser.
 
     Returns the log of its calls (tests/fake_open.py)."""
     folder = tmp_path_factory.mktemp("open")
