@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- PROTOTYPE, NOT SHIPPED. The LaunchAgent measured in the #111 spike.
+     APP is replaced with the bundle's executable before loading:
+       launchctl bootstrap gui/$(id -u) <this plist>
+     RunAtLoad starts it at login; KeepAlive restarts it after a crash but not
+     after the user chose Quit (a clean exit). Interactive: it draws UI, so it
+     must not get the throttling of ProcessType Background. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.flibtest.menu.agent</string>
+    <key>Program</key>
+    <string>APP</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>
