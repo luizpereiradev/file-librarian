@@ -67,6 +67,10 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/file_librarian"]
 
+[tool.hatch.build.targets.sdist]
+# Spike code (prototypes/README.md) is never shipped, not even in the sdist.
+exclude = ["/prototypes"]
+
 [tool.uv]
 # Relative `exclude-newer` durations need a recent uv.
 required-version = ">=0.13"

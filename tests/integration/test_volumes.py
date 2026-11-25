@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
 from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
@@ -41,6 +42,27 @@ pytestmark = [
 HDIUTIL = "hdiutil"
 
 
+def hdiutil(*args: str, attempts: int = 5) -> None:
+    """Run ``hdiutil``, trying again when it is busy.
+
+    On a loaded machine (CI runners) ``detach`` answers "resource busy" (16)
+    while Spotlight or fsck still hold the volume, and a ``create`` or
+    ``attach`` right after another image can fail once. A short wait fixes it.
+    """
+    for attempt in range(1, attempts + 1):
+        result = subprocess.run(  # noqa: S603 - hdiutil with fixed arguments
+            [HDIUTIL, *args], capture_output=True, text=True, check=False
+        )
+        if result.returncode == 0:
+            return
+        if attempt == attempts:
+            raise RuntimeError(
+                f"hdiutil {args[0]} failed {attempts} times "
+                f"(exit {result.returncode}): {result.stderr.strip()}"
+            )
+        time.sleep(attempt)
+
+
 class Volume:
     def __init__(self, fs: str, image: Path, mountpoint: Path) -> None:
         self.fs = fs
@@ -48,25 +70,22 @@ class Volume:
         self.mountpoint = mountpoint
 
     def attach(self) -> None:
-        subprocess.run(  # noqa: S603 - hdiutil with fixed arguments
-            [HDIUTIL, "attach", "-quiet", "-nobrowse", "-noautoopen", "-mountpoint",
-             str(self.mountpoint), str(self.image)],
-            check=True,
+        hdiutil(
+            "attach", "-quiet", "-nobrowse", "-noautoopen", "-mountpoint",
+            str(self.mountpoint), str(self.image),
         )  # fmt: skip
 
     def detach(self) -> None:
-        subprocess.run(  # noqa: S603 - hdiutil with fixed arguments
-            [HDIUTIL, "detach", "-quiet", "-force", str(self.mountpoint)], check=True
-        )
+        hdiutil("detach", "-quiet", "-force", str(self.mountpoint))
 
 
 @pytest.fixture(params=["APFS", "Case-sensitive APFS", "HFS+", "ExFAT"])
 def volume(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Volume]:
     image = tmp_path / "volume.dmg"
-    subprocess.run(  # noqa: S603 - hdiutil with fixed arguments
-        [HDIUTIL, "create", "-quiet", "-size", "32m", "-fs", request.param, "-volname",
-         "flibtest", str(image)],
-        check=True,
+    image.unlink(missing_ok=True)  # a failed earlier attempt may have left a partial image
+    hdiutil(
+        "create", "-quiet", "-ov", "-size", "32m", "-fs", request.param, "-volname",
+        "flibtest", str(image),
     )  # fmt: skip
     mountpoint = tmp_path / "mnt"
     mountpoint.mkdir()
