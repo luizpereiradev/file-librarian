@@ -16,6 +16,7 @@ import signal
 import socket
 import sqlite3
 import stat
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -35,6 +36,7 @@ from file_librarian.status import StatusError
 from file_librarian.ui import api
 from file_librarian.ui import server as ui_server
 from file_librarian.ui.server import CSP, Ui, UiError, check_bind, load_assets, load_pages
+from file_librarian.ui.server import handoff_root as real_handoff_root  # before conftest
 from tests._helpers import REPO_ROOT, UiClient, answer, fake_config, put, wait_for, write_config
 
 runner = CliRunner()
@@ -49,6 +51,9 @@ SECURITY_HEADERS = {
     "Cross-Origin-Resource-Policy": "same-origin",
 }
 """Written out here, not imported: a header dropped from the server fails the tests."""
+
+
+_TIMEOUT_REPLY = ui_server._plain_reply(408)
 
 
 def raw_headers(reply: bytes) -> dict[str, str]:
@@ -129,6 +134,32 @@ def client(ui: Ui) -> UiClient:
     c = UiClient(ui.port)
     assert c.launch(ui.launch_url).status == 303
     return c
+
+
+class Busy:
+    """Makes ``/api/v1/status`` wait until ``release``: a request thread in use."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.go = threading.Event()
+        real = api.status
+
+        def held(config: Config) -> object:
+            assert self.go.wait(10), "never released"
+            return real(config)
+
+        monkeypatch.setattr(api, "status", held)
+
+    def hold(self, ui: Ui, client: UiClient) -> threading.Thread:
+        thread = threading.Thread(target=client.get, args=("/api/v1/status",), daemon=True)
+        before = len(ui._server._active)
+        thread.start()
+        wait_for(lambda: len(ui._server._active) > before)
+        return thread
+
+    def release(self, *threads: threading.Thread) -> None:
+        self.go.set()
+        for thread in threads:
+            thread.join(5)
 
 
 def token_of(ui: Ui) -> str:
@@ -621,14 +652,21 @@ def test_two_quick_signals_end_flib_ui_once(
 
 def test_close_cuts_off_a_request_in_progress(loopback_network: None, cfg: Config) -> None:
     ui = Ui(cfg, poll_seconds=0.01, request_timeout=30, close_grace=0)
+    # A reply far larger than the socket buffers, to a client that never reads it:
+    # the request thread blocks writing, for up to 30 seconds per write.
+    ui.assets["/static/big.bin"] = (b"x" * 32_000_000, "application/octet-stream")
     ui.start()
-    with socket.create_connection(("127.0.0.1", ui.port), timeout=5) as sock:
-        sock.sendall(b"GET /status HTTP/1.1\r\n")  # and nothing more, for 30 seconds
-        wait_for(lambda: ui._server._active)
-        started = time.monotonic()
+    try:
+        with socket.create_connection(("127.0.0.1", ui.port), timeout=5) as sock:
+            sock.sendall(
+                f"GET /static/big.bin HTTP/1.1\r\nHost: 127.0.0.1:{ui.port}\r\n\r\n".encode()
+            )
+            wait_for(lambda: ui._server._active)
+            started = time.monotonic()
+            ui.close()
+            assert time.monotonic() - started < 2  # not the 30 seconds of the timeout
+    finally:
         ui.close()
-        assert time.monotonic() - started < 2  # not the 30 seconds of the timeout
-        assert sock.recv(1024) == b""
     assert ui.reason == "closed"
 
 
@@ -726,12 +764,32 @@ def test_long_request_lines_and_headers_are_refused(client: UiClient, ui: Ui) ->
 
 
 def test_a_slow_client_is_dropped(loopback_network: None, cfg: Config) -> None:
-    ui = Ui(cfg, poll_seconds=0.01, request_timeout=0.05)
+    ui = Ui(cfg, poll_seconds=0.01, request_deadline=0.05)
     ui.start()
     try:
         with socket.create_connection(("127.0.0.1", ui.port), timeout=5) as sock:
             sock.sendall(b"GET /status HTTP/1.1\r\n")  # and nothing more
-            assert sock.recv(1024) == b""  # closed after the timeout, without a reply
+            reply = raw_headers(sock.recv(4096))  # told why, after the deadline
+            assert reply[""] == "HTTP/1.0 408 Request Timeout"
+            assert reply["Content-Security-Policy"] == CSP
+            assert sock.recv(1024) == b""  # then closed
+        with socket.create_connection(("127.0.0.1", ui.port), timeout=5) as sock:
+            assert sock.recv(1024) == b""  # one that says nothing is just closed
+    finally:
+        ui.close()
+
+
+def test_a_body_that_never_arrives_gets_a_timeout(loopback_network: None, cfg: Config) -> None:
+    ui = Ui(cfg, poll_seconds=0.01, request_deadline=0.05)
+    ui.start()
+    try:
+        with socket.create_connection(("127.0.0.1", ui.port), timeout=5) as sock:
+            sock.sendall(
+                f"POST /session/end HTTP/1.1\r\nHost: 127.0.0.1:{ui.port}\r\n"
+                "Content-Length: 50\r\n\r\nab".encode()
+            )  # and the other 48 bytes never come
+            assert sock.recv(4096).startswith(b"HTTP/1.0 408 ")
+        assert ui._server._active == {}  # it never had a request thread
     finally:
         ui.close()
 
@@ -757,7 +815,7 @@ def test_a_client_that_trickles_its_request_is_cut_off_at_the_deadline(
                 try:
                     sock.sendall(b"X-Pad: a\r\n")
                     sock.settimeout(0.02)
-                    if sock.recv(1024) == b"":
+                    if sock.recv(1024) in (b"", _TIMEOUT_REPLY):
                         cut.add(i)
                 except TimeoutError:
                     pass
@@ -793,21 +851,111 @@ def test_the_deadline_does_not_cut_a_reply_in_progress(
 
 
 def test_requests_beyond_the_thread_cap_are_turned_away(
-    loopback_network: None, cfg: Config
+    monkeypatch: pytest.MonkeyPatch, loopback_network: None, cfg: Config
 ) -> None:
-    ui = Ui(cfg, poll_seconds=0.01, max_threads=1, request_timeout=5)
+    ui = Ui(cfg, poll_seconds=0.01, max_threads=1)
     ui.start()
+    busy = Busy(monkeypatch)
     try:
-        with socket.create_connection(("127.0.0.1", ui.port), timeout=5) as hog:
-            hog.sendall(b"GET /status HTTP/1.1\r\n")  # holds the only thread
-            # Turned away at once, before it says anything (a request it had sent would
-            # be unread, and closing on unread data resets the connection).
-            with socket.create_connection(("127.0.0.1", ui.port), timeout=5) as extra:
-                assert extra.recv(1024).startswith(b"HTTP/1.0 503 ")
-        # The slot comes back once the hog is gone.
+        c = UiClient(ui.port)
+        c.launch(ui.launch_url)
+        held = busy.hold(ui, c)  # holds the only thread
+        assert UiClient(ui.port).get("/static/app.css").status == 503
+        busy.release(held)
+        # The slot comes back once the request is done.
         wait_for(lambda: UiClient(ui.port).get("/static/app.css").status == 200)
     finally:
+        busy.release()
         ui.close()
+
+
+def test_clients_that_never_finish_their_request_hold_no_thread(
+    loopback_network: None, cfg: Config
+) -> None:
+    """Idle and trickling connections wait in the accepting thread, not in a
+    request thread: with every one of them open, the session is still served."""
+    ui = Ui(cfg, poll_seconds=0.01, max_threads=1)
+    ui.start()
+    c = UiClient(ui.port)
+    c.launch(ui.launch_url)
+    hogs = [socket.create_connection(("127.0.0.1", ui.port), timeout=5) for _ in range(20)]
+    try:
+        for i, hog in enumerate(hogs):
+            if i % 2:
+                hog.sendall(b"GET / HTTP/1.1\r\nX: ")  # a head that never ends
+            if i % 3 == 0:
+                hog.sendall(b"POST /session/end HTTP/1.1\r\nContent-Length: 50\r\n\r\nab")
+        wait_for(lambda: ui._heads is not None and len(ui._heads.pending) == len(hogs))
+        assert ui._server._active == {}
+        for _ in range(5):
+            assert c.get("/api/v1/status").status == 200
+    finally:
+        for hog in hogs:
+            hog.close()
+        ui.close()
+
+
+def test_past_the_pending_cap_the_oldest_connection_is_dropped(
+    monkeypatch: pytest.MonkeyPatch, loopback_network: None, cfg: Config
+) -> None:
+    monkeypatch.setattr(ui_server, "MAX_PENDING", 3)
+    ui = Ui(cfg, poll_seconds=0.01, request_deadline=60)  # no help from the deadline
+    ui.start()
+    socks = []
+    try:
+        for _ in range(3):
+            socks.append(socket.create_connection(("127.0.0.1", ui.port), timeout=1))
+            wait_for(lambda: ui._heads is not None and len(ui._heads.pending) == len(socks))
+        socks.append(socket.create_connection(("127.0.0.1", ui.port), timeout=1))
+        assert socks[0].recv(10) == b""  # the oldest, closed to make room
+        with pytest.raises(TimeoutError):
+            socks[1].recv(10)  # the others wait on
+        wait_for(lambda: ui._heads is not None and len(ui._heads.pending) == 3)
+        assert UiClient(ui.port).get("/static/app.css").status == 200
+    finally:
+        for sock in socks:
+            sock.close()
+        ui.close()
+
+
+@pytest.mark.parametrize(
+    "request_head",
+    [b"GET /", b"GET /" + b"a" * 5000, b"GET / HTTP/1.1\r\nX: " + b"a" * 30000],
+)
+def test_a_head_too_long_is_refused_without_a_thread(
+    loopback_network: None, cfg: Config, request_head: bytes
+) -> None:
+    ui = Ui(cfg, poll_seconds=0.01, max_threads=1)
+    ui.start()
+    try:
+        c = UiClient(ui.port)
+        if len(request_head) < 100:
+            # A short start that never ends is just pending, then dropped.
+            with socket.create_connection(("127.0.0.1", ui.port), timeout=5) as sock:
+                sock.sendall(request_head)
+                wait_for(lambda: ui._heads is not None and len(ui._heads.pending) == 1)
+            return
+        reply = c.raw(request_head)  # read until the server closes
+        status = b"414" if b"\r\n" not in request_head else b"431"
+        assert reply.startswith(b"HTTP/1.0 " + status + b" "), reply[:40]
+        assert b"Content-Security-Policy: " in reply
+        assert ui._server._active == {}
+    finally:
+        ui.close()
+
+
+def test_a_body_shorter_than_its_length_gets_a_reply(client: UiClient, ui: Ui) -> None:
+    """The client stops sending before the body it declared: it still gets 400."""
+    with socket.create_connection(("127.0.0.1", ui.port), timeout=5) as sock:
+        sock.sendall(
+            f"POST /session/end HTTP/1.1\r\nHost: 127.0.0.1:{ui.port}\r\n"
+            f"Origin: {client.origin}\r\nContent-Type: application/x-www-form-urlencoded\r\n"
+            f"Content-Length: 50\r\n\r\ncsrf=".encode()
+        )
+        sock.shutdown(socket.SHUT_WR)
+        reply = sock.recv(4096)
+    assert reply.startswith(b"HTTP/1.0 400 ")
+    assert_running(ui)
 
 
 # --- methods, paths and error pages ----------------------------------------------------
@@ -901,20 +1049,24 @@ def test_every_reply_carries_the_security_headers(client: UiClient, ui: Ui) -> N
 
 
 def test_the_turned_away_reply_carries_the_security_headers(
-    loopback_network: None, cfg: Config
+    monkeypatch: pytest.MonkeyPatch, loopback_network: None, cfg: Config
 ) -> None:
-    ui = Ui(cfg, poll_seconds=0.01, max_threads=1, request_timeout=5)
+    ui = Ui(cfg, poll_seconds=0.01, max_threads=1)
     ui.start()
+    busy = Busy(monkeypatch)
     try:
-        with socket.create_connection(("127.0.0.1", ui.port), timeout=5) as hog:
-            hog.sendall(b"GET /status HTTP/1.1\r\n")
-            wait_for(lambda: ui._server._active)
-            with socket.create_connection(("127.0.0.1", ui.port), timeout=5) as extra:
-                reply = raw_headers(extra.recv(4096))
+        c = UiClient(ui.port)
+        c.launch(ui.launch_url)
+        held = busy.hold(ui, c)
+        reply = raw_headers(
+            c.raw(f"GET /static/app.css HTTP/1.1\r\nHost: 127.0.0.1:{ui.port}\r\n\r\n".encode())
+        )
         assert reply[""] == "HTTP/1.0 503 Service Unavailable"
         for name, value in SECURITY_HEADERS.items():
             assert reply.get(name) == value, name
+        busy.release(held)
     finally:
+        busy.release()
         ui.close()
 
 
@@ -961,7 +1113,7 @@ def test_content_types(client: UiClient) -> None:
 def test_nothing_is_logged(
     loopback_network: None, cfg: Config, capfd: pytest.CaptureFixture[str]
 ) -> None:
-    ui = Ui(cfg, poll_seconds=0.01, request_timeout=0.05)
+    ui = Ui(cfg, poll_seconds=0.01, request_deadline=0.05)
     ui.start()
     try:
         c = UiClient(ui.port)
@@ -1320,7 +1472,7 @@ def test_flib_ui_no_browser_prints_the_link(
 
 def test_the_handoff_file_is_for_the_user_only(ui: Ui, cfg: Config) -> None:
     handoff = ui.write_handoff()
-    assert handoff.parent.parent == cfg.database.parent  # flib's data folder, not /tmp
+    assert handoff.parent.parent == ui_server.handoff_root()  # the account's own temp folder
     assert stat.S_IMODE(handoff.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(handoff.stat().st_mode) == 0o600
     text = handoff.read_text(encoding="utf-8")
@@ -1404,6 +1556,166 @@ def test_a_used_token_posted_again_without_the_session_ends_everything(
         handoff.parent.rmdir()
     assert ui.wait(5) == "stolen"
     assert events == ["started", "stolen"]
+
+
+def test_the_handoff_page_posts_the_token_once_and_keeps_nothing() -> None:
+    """Back, forward, a bfcache restore or a double submit must not post the used
+    token again: that would look like theft and end the session."""
+    page = ui_server.HANDOFF
+    script = page[page.index("<script>") : page.index("</script>")]
+    submit = script.index("form.submit();")
+    assert script.index('form.elements.token.value = "";', submit) > submit  # cleared at once
+    assert "form.remove();" in script  # and the form goes
+    assert 'addEventListener("pageshow"' in script and "event.persisted" in script
+    assert "You can close this tab." in script
+    assert "<button" not in page  # nothing left to click a second time
+    assert '<meta name="referrer" content="no-referrer">' in page
+
+
+def test_the_handoff_folder_has_a_random_name(ui: Ui) -> None:
+    first = ui.write_handoff().parent
+    ui.remove_handoff()
+    second = ui.write_handoff().parent
+    assert first != second
+    for folder in (first, second):
+        assert re.fullmatch(r"ui-launch-[A-Za-z0-9_]{8}", folder.name), folder.name
+
+
+def test_the_handoff_file_is_always_new_and_never_a_link(
+    monkeypatch: pytest.MonkeyPatch, ui: Ui, tmp_path: Path
+) -> None:
+    flags: list[int] = []
+    real_open = os.open
+
+    def spy(path: Any, flag: int, *args: Any) -> int:
+        flags.append(flag)
+        return real_open(path, flag, *args)
+
+    with monkeypatch.context() as m:
+        m.setattr(os, "open", spy)
+        ui.write_handoff()
+    ui.remove_handoff()
+    assert flags[-1] & os.O_EXCL and flags[-1] & os.O_NOFOLLOW and flags[-1] & os.O_CREAT
+
+    # Something planted at the path, a file or a link to one, is never written.
+    target = tmp_path / "target"
+    target.write_text("untouched", encoding="utf-8")
+    for planted in ("file", "link"):
+        folder = tmp_path / f"planted-{planted}"
+        folder.mkdir(mode=0o700)
+        path = folder / ui_server.HANDOFF_NAME
+        if planted == "file":
+            path.write_text("untouched", encoding="utf-8")
+        else:
+            path.symlink_to(target)
+        with monkeypatch.context() as m:
+            m.setattr(tempfile, "mkdtemp", lambda folder=folder, **kw: str(folder))
+            with pytest.raises(OSError):
+                ui.write_handoff()
+        assert target.read_text(encoding="utf-8") == "untouched"
+        assert ui._handoff is None
+
+
+def test_handoff_folders_go_in_the_user_temp_folder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Not next to the database, which may be on a volume where modes mean nothing."""
+    mine = tmp_path / "T"
+    mine.mkdir(mode=0o700)
+    monkeypatch.setattr(os, "confstr", lambda name: str(mine))
+    assert real_handoff_root() == mine
+
+
+def test_the_user_temp_folder_comes_from_macos(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mine = tmp_path / "T"
+    mine.mkdir(mode=0o700)
+    monkeypatch.setattr(os, "confstr", lambda name: str(mine) + "/")
+    assert ui_server.user_temp_dir() == mine
+    fallback = Path(tempfile.gettempdir())
+    mine.chmod(0o755)  # readable by others: not used
+    assert ui_server.user_temp_dir() == fallback
+    mine.chmod(0o700)
+
+    def unknown(name: str) -> str:
+        raise ValueError("unrecognized configuration name")
+
+    monkeypatch.setattr(os, "confstr", unknown)
+    assert ui_server.user_temp_dir() == fallback
+    monkeypatch.setattr(os, "confstr", lambda name: None)
+    assert ui_server.user_temp_dir() == fallback
+
+
+def test_stale_handoff_folders_are_swept_at_start(
+    loopback_network: None, cfg: Config, fake_browser: Path
+) -> None:
+    root = ui_server.handoff_root()
+    stale = root / "ui-launch-stale123"
+    stale.mkdir(mode=0o700)
+    (stale / ui_server.HANDOFF_NAME).write_text("old token", encoding="utf-8")
+    other = root / "something-else"
+    other.mkdir()
+    sender = interrupt_when_listening(signal.SIGTERM)
+    assert ui_server.run(cfg, browser=False, echo=lambda line: None) == "signal"
+    sender.join()
+    assert not stale.exists()
+    assert other.exists()  # only handoff folders
+
+
+@pytest.mark.parametrize(
+    "header", ["Sec-Purpose: prefetch", "Sec-Purpose: prefetch;prerender", "Purpose: prefetch"]
+)
+def test_a_prefetch_of_the_link_does_not_use_it(ui: Ui, events: list[str], header: str) -> None:
+    """A browser may prerender a typed address before Enter: that must not use the
+    token, nor count as its theft."""
+    name, _, value = header.partition(": ")
+    split = ui.launch_url.split("/", 3)[3]
+    reply = UiClient(ui.port).get(f"/{split}", headers={name: value, "Sec-Fetch-Site": "none"})
+    assert reply.status == 403
+    assert "Set-Cookie" not in reply.headers
+    assert events == []
+    assert UiClient(ui.port).launch(ui.launch_url).status == 303  # still unused
+    assert_running(ui)
+
+
+def test_the_token_is_never_taken_from_the_query_of_a_post(ui: Ui, events: list[str]) -> None:
+    reply = UiClient(ui.port).request(
+        "POST",
+        f"/launch?token={token_of(ui)}",
+        body=b"x=1",
+        headers={"Origin": "null", "Content-Type": "application/x-www-form-urlencoded"},
+    )
+    assert reply.status == 400
+    assert events == []
+    assert UiClient(ui.port).launch(ui.launch_url).status == 303  # still unused
+
+
+def test_two_origin_headers_are_forbidden(client: UiClient, ui: Ui) -> None:
+    for origins in ((client.origin, "http://evil.example"), (client.origin, client.origin)):
+        head = f"GET /status HTTP/1.1\r\nHost: 127.0.0.1:{ui.port}\r\n"
+        head += f"Cookie: {ui.cookie_name}={client.cookies[ui.cookie_name]}\r\n"
+        head += "".join(f"Origin: {origin}\r\n" for origin in origins)
+        assert client.raw((head + "\r\n").encode()).startswith(b"HTTP/1.0 403 "), origins
+
+
+def test_two_csrf_headers_are_forbidden(client: UiClient, ui: Ui) -> None:
+    token = client.csrf()
+    head = (
+        f"POST /session/end HTTP/1.1\r\nHost: 127.0.0.1:{ui.port}\r\n"
+        f"Origin: {client.origin}\r\n"
+        f"Cookie: {ui.cookie_name}={client.cookies[ui.cookie_name]}\r\n"
+        f"X-Flib-CSRF: {token}\r\nX-Flib-CSRF: {token}\r\nContent-Length: 0\r\n\r\n"
+    )
+    assert client.raw(head.encode()).startswith(b"HTTP/1.0 403 ")
+    assert_running(ui)
+
+
+def test_the_opening_script_reads_nothing_from_the_address() -> None:
+    script = load_assets()["/static/opening.js"][0].decode("utf-8")
+    for read in ("location.hash", "location.search", "location.href", "document.URL"):
+        assert read not in script, read
+    assert "document.referrer" not in script
 
 
 # --- the packaged pages ----------------------------------------------------------------

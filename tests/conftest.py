@@ -208,6 +208,10 @@ def fake_browser(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.M
     monkeypatch.setenv("FAKE_OPEN_LOG", str(folder / "calls.jsonl"))
     monkeypatch.delenv("FAKE_OPEN_FAIL", raising=False)
     monkeypatch.setattr("file_librarian.ui.server.OPEN", str(script))
+    # Handoff files go in a temporary folder, not the account's real one.
+    temp = folder / "T"
+    temp.mkdir(mode=0o700)
+    monkeypatch.setattr("file_librarian.ui.server.handoff_root", lambda: temp)
     return folder / "calls.jsonl"
 
 

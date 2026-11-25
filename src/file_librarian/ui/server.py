@@ -3,10 +3,11 @@
 How a session starts. The server binds ``127.0.0.1`` on a free port and makes
 a random *launch token*. The token never goes on a command line, where every
 account on the Mac could read it with ``ps``: ``flib ui`` writes a *handoff
-file*, an HTML page readable only by the user (0600, in a 0700 folder in
-flib's data folder), and asks macOS to open that file (``OPEN``, swapped for a
-fake in every test). The page posts the token to ``/launch`` in a form body,
-so it is never in a URL, a history entry or a ``Referer``. With
+file*, an HTML page readable only by the user (0600, in a 0700 folder in the
+account's own temporary folder), and asks macOS to open that file (``OPEN``,
+swapped for a fake in every test). The page posts the token to ``/launch`` in
+a form body, so it is never in a URL, a history entry or a ``Referer``, and
+then clears it. A prefetch or prerender of ``/launch`` is refused. With
 ``--no-browser`` the user asked for a link: ``/launch?token=...`` is printed.
 
 The first request with the token, compared in constant time, burns it,
@@ -19,8 +20,9 @@ wrong cookie or an ended session get the "session ended" page.
 
 Every request, before anything else:
 
-- the request line and headers are size-capped; each read times out, and the
-  whole request (line, headers, body) must arrive within a deadline;
+- it is read by the accepting thread, without blocking, until it has fully
+  arrived (line, headers and the body they declare), within a deadline and
+  size caps; only then does it get one of the few request threads;
 - ``Host`` must be exactly ``127.0.0.1:<port>`` (421 otherwise), which defeats
   DNS rebinding; ``localhost`` is refused, since another program could hold
   ``[::1]:<port>``;
@@ -52,6 +54,7 @@ from __future__ import annotations
 
 import hmac
 import html
+import io
 import ipaddress
 import json
 import os
@@ -64,6 +67,7 @@ import signal
 import socket
 import socketserver
 import sqlite3
+import stat
 import subprocess
 import tempfile
 import threading
@@ -156,14 +160,41 @@ HANDOFF = """<!doctype html>
 <body>
 <form id="launch" method="post" action="{action}">
 <input type="hidden" name="token" value="{token}">
-<p>Opening file-librarian&hellip; <button type="submit">Open</button></p>
 </form>
-<script>document.getElementById("launch").submit();</script>
+<p id="state">Opening file-librarian&hellip;</p>
+<noscript><p>This page needs JavaScript. Run <code>flib ui --no-browser</code> for a link
+instead.</p></noscript>
+<script>
+(function () {{
+  // Posts the token once, then leaves nothing that could post it again: a
+  // used token that comes back without the session ends flib ui as stolen.
+  function spent() {{
+    var form = document.getElementById("launch");
+    if (form) {{
+      form.elements.token.value = "";
+      form.remove();
+    }}
+    document.getElementById("state").textContent =
+      "file-librarian opened in this browser. You can close this tab.";
+  }}
+  window.addEventListener("pageshow", function (event) {{
+    if (event.persisted) spent();  // shown again from the back/forward cache
+  }});
+  var form = document.getElementById("launch");
+  if (form && form.elements.token.value) {{
+    form.submit();  // the form data is taken now, before the field is cleared
+    form.elements.token.value = "";
+  }}
+  window.setTimeout(spent, 0);  // the form goes once the post is on its way
+}})();
+</script>
 </body>
 </html>
 """
 """The handoff file: opened from disk (not served, so the server's CSP does not
-apply), it posts the launch token to the server at once."""
+apply), it posts the launch token to the server at once and then clears it,
+so going back to it, a double submit or a bfcache restore cannot post it again."""
+HANDOFF_PREFIX = "ui-launch-"
 
 
 class UiError(Exception):
@@ -178,6 +209,43 @@ def check_bind(host: str) -> None:
         raise UiError(f"refusing to listen on {host!r}: not a loopback address") from exc
     if not address.is_loopback:
         raise UiError(f"refusing to listen on {host}: not a loopback address")
+
+
+def handoff_root() -> Path:
+    """Where handoff folders go (tests point it at a temporary folder)."""
+    return user_temp_dir()
+
+
+def user_temp_dir() -> Path:
+    """The per-user temporary folder macOS gives each account (``/var/folders/.../T``:
+    mode 0700, on the boot volume, not backed up or indexed), never next to the
+    database, which may sit on a volume where file modes mean nothing. Falls back
+    to Python's temporary folder, where ``mkdtemp`` still makes a 0700 folder with
+    a random name."""
+    try:
+        path = os.confstr("CS_DARWIN_USER_TEMP_DIR")
+    except (ValueError, OSError):
+        path = None
+    if path:
+        root = Path(path)
+        with suppress(OSError):
+            info = root.stat()
+            if root.is_dir() and info.st_uid == os.getuid() and not info.st_mode & 0o077:
+                return root
+    return Path(tempfile.gettempdir())
+
+
+def sweep_handoffs(root: Path) -> None:
+    """Remove handoff folders a ``flib ui`` that did not end cleanly left behind.
+    Called while holding ``ui_lock``, so none of them belongs to a running one."""
+    with suppress(OSError):
+        for entry in root.iterdir():
+            if not entry.name.startswith(HANDOFF_PREFIX):
+                continue
+            with suppress(OSError):
+                info = entry.lstat()
+                if stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid():
+                    shutil.rmtree(entry, ignore_errors=True)
 
 
 def load_assets() -> dict[str, tuple[bytes, str]]:
@@ -259,6 +327,7 @@ class Ui:
         self._stops: queue.SimpleQueue[str] = queue.SimpleQueue()
         self._done = threading.Event()
         self._thread: threading.Thread | None = None
+        self._heads: _Heads | None = None
         self._wake_r, self._wake_w = socket.socketpair()
         self._wake_r.setblocking(False)
         self._wake_w.setblocking(False)
@@ -279,9 +348,12 @@ class Ui:
 
     # --- lifecycle ---
     #
-    # One thread, "flib-ui", accepts connections, checks the idle timer and the
-    # request deadline and, when asked to stop, closes everything and joins
-    # every request thread before ``wait`` returns. ``stop`` takes no lock (a
+    # One thread, "flib-ui", accepts connections and reads each request (line,
+    # headers and a body of the length it declares) without blocking; only a
+    # whole request goes to a request thread, so a client that sends nothing, or
+    # a byte at a time, never holds one. The same thread checks the idle timer
+    # and the request deadline and, when asked to stop, closes everything and
+    # joins every request thread before ``wait`` returns. ``stop`` takes no lock (a
     # reentrant queue and a byte on a socket pair), so it is safe from a signal
     # handler, even one that interrupts another; a handler that took a lock
     # could deadlock the main thread.
@@ -296,15 +368,22 @@ class Ui:
         tick = min(self._poll, self.request_deadline / 2)
         try:
             with selectors.DefaultSelector() as selector:
+                self._heads = heads = _Heads(selector, self._server, self.request_deadline)
                 selector.register(listener, selectors.EVENT_READ)
                 selector.register(self._wake_r, selectors.EVENT_READ)
-                while (reason := self._next_reason()) is None:
-                    for key, _ in selector.select(tick):
-                        if key.fileobj is listener:
-                            self._accept()
-                        else:
-                            self._drain_wake()
-                    self._server.drop_late(self.request_deadline)
+                try:
+                    while (reason := self._next_reason()) is None:
+                        for key, _ in selector.select(tick):
+                            if key.fileobj is listener:
+                                self._accept(heads)
+                            elif key.fileobj is self._wake_r:
+                                self._drain_wake()
+                            else:
+                                heads.readable(key.fileobj)
+                        heads.expire()
+                        self._server.drop_late(self.request_deadline)
+                finally:
+                    heads.close_all()
         except Exception:  # the server ends rather than hang
             reason = "closed"
         self.reason = reason
@@ -324,12 +403,13 @@ class Ui:
             idle = self._clock() - self._last
         return "idle" if idle >= self.idle_seconds else None
 
-    def _accept(self) -> None:
-        try:
-            request, address = self._server.get_request()
-        except OSError:  # gone before it was accepted, or nothing to accept
-            return
-        self._server.process_request(request, address)
+    def _accept(self, heads: _Heads) -> None:
+        while True:
+            try:
+                request, address = self._server.get_request()
+            except OSError:  # nothing more to accept, or gone before it was
+                return
+            heads.add(request, address)
 
     def _drain_wake(self) -> None:
         with suppress(OSError):
@@ -368,14 +448,18 @@ class Ui:
             token = self._launch
         if token is None:
             raise UiError("the launch link is already used")
-        parent = self.config.database.parent
-        parent.mkdir(parents=True, exist_ok=True)
-        folder = Path(tempfile.mkdtemp(prefix="ui-launch-", dir=parent))  # mode 0700
+        # A random name, mode 0700; the file inside is new (O_EXCL) and never a
+        # link someone planted (O_NOFOLLOW).
+        folder = Path(tempfile.mkdtemp(prefix=HANDOFF_PREFIX, dir=handoff_root()))
         path = folder / HANDOFF_NAME
         text = HANDOFF.format(action=html.escape(self.origin + LAUNCH), token=html.escape(token))
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(text)
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(text)
+        except BaseException:
+            shutil.rmtree(folder, ignore_errors=True)
+            raise
         self._handoff = path
         return path
 
@@ -428,10 +512,135 @@ class Ui:
         return current
 
 
+MAX_PENDING = 128
+"""Connections whose request has not fully arrived; one more drops the oldest."""
+MAX_HEAD = MAX_REQUEST_LINE + MAX_HEADER_BYTES + 4096
+"""Bytes of request line and headers read before the request is refused (the
+headers' own limits, plus their names, separators and line ends)."""
+LINGER = 1.0
+"""Seconds a refused connection is drained, so the client reads the refusal
+instead of a reset."""
+_HEAD_END = re.compile(rb"\r?\n\r?\n")
+_LENGTH_HEADER = re.compile(rb"\ncontent-length:[ \t]*([0-9]{1,5})[ \t]*\r?\n", re.IGNORECASE)
+
+
+@dataclass(slots=True)
+class _Pending:
+    address: Any
+    started: float = field(default_factory=time.monotonic)
+    data: bytearray = field(default_factory=bytearray)
+    refused: bool = False
+
+
+class _Heads:
+    """Connections whose request is still arriving, read in the accepting thread.
+
+    A request goes to a request thread once its line and headers have arrived,
+    with the body when it declares one plain ``Content-Length`` (anything else
+    is left to the handler to refuse), or once the client stops sending. One that
+    takes longer than the deadline is dropped, one too long is refused, and past
+    ``MAX_PENDING`` the oldest is dropped.
+    """
+
+    def __init__(
+        self, selector: selectors.BaseSelector, server: _HttpServer, deadline: float
+    ) -> None:
+        self._selector = selector
+        self._server = server
+        self._deadline = deadline
+        self.pending: dict[socket.socket, _Pending] = {}
+
+    def add(self, sock: socket.socket, address: Any) -> None:
+        while len(self.pending) >= MAX_PENDING:
+            self._forget(next(iter(self.pending)))  # the oldest: dicts keep order
+        sock.setblocking(False)
+        self.pending[sock] = _Pending(address)
+        self._selector.register(sock, selectors.EVENT_READ)
+        self.readable(sock)  # a browser sends its request with the connection
+
+    def readable(self, sock: Any) -> None:
+        pending = self.pending.get(sock)
+        if pending is None:
+            return
+        try:
+            chunk = sock.recv(65536)
+        except BlockingIOError:
+            return
+        except OSError:
+            chunk = b""
+        if pending.refused:  # draining until the client has read the refusal
+            if not chunk:
+                self._forget(sock)
+            return
+        if not chunk:  # the client stopped sending: the handler says what is wrong
+            if pending.data:
+                self._hand_off(sock)
+            else:
+                self._forget(sock)
+            return
+        pending.data += chunk
+        self._check(sock, pending)
+
+    def _check(self, sock: socket.socket, pending: _Pending) -> None:
+        data = pending.data
+        line_end = data.find(b"\n")
+        if (line_end == -1 and len(data) > MAX_REQUEST_LINE) or line_end > MAX_REQUEST_LINE:
+            self._refuse(sock, pending, HTTPStatus.REQUEST_URI_TOO_LONG)
+            return
+        end = _HEAD_END.search(data)
+        if end is None:
+            if len(data) > MAX_HEAD:
+                self._refuse(sock, pending, HTTPStatus.REQUEST_HEADER_FIELDS_TOO_LARGE)
+            return
+        lengths = _LENGTH_HEADER.findall(bytes(data[: end.end()]))
+        wanted = int(lengths[0]) if len(lengths) == 1 else 0
+        if wanted > MAX_BODY:
+            wanted = 0  # the handler refuses it before reading
+        if len(data) - end.end() >= wanted:
+            self._hand_off(sock)
+
+    def expire(self) -> None:
+        now = time.monotonic()
+        for sock, pending in list(self.pending.items()):
+            if pending.refused:
+                if now - pending.started > LINGER:
+                    self._forget(sock)
+            elif now - pending.started > self._deadline:
+                if pending.data:  # it started a request: say why it ends
+                    self._refuse(sock, pending, HTTPStatus.REQUEST_TIMEOUT)
+                else:
+                    self._forget(sock)
+
+    def close_all(self) -> None:
+        for sock in list(self.pending):
+            self._forget(sock)
+
+    def _refuse(self, sock: socket.socket, pending: _Pending, code: int) -> None:
+        with suppress(OSError):
+            sock.send(_plain_reply(code))
+            sock.shutdown(socket.SHUT_WR)
+        pending.refused = True
+        pending.started = time.monotonic()
+        pending.data = bytearray()
+
+    def _hand_off(self, sock: socket.socket) -> None:
+        pending = self.pending.pop(sock)
+        self._selector.unregister(sock)
+        self._server.hand_off(sock, pending.address, bytes(pending.data), pending.started)
+
+    def _forget(self, sock: socket.socket) -> None:
+        self.pending.pop(sock, None)
+        with suppress(KeyError, ValueError):
+            self._selector.unregister(sock)
+        sock.close()
+
+
 @dataclass(slots=True)
 class _Connection:
     thread: threading.Thread
-    started: float = field(default_factory=time.monotonic)
+    head: bytes
+    """What the accepting thread read of the request; the handler reads it first."""
+    started: float
     read: bool = False
     """The whole request has arrived; the deadline no longer applies."""
 
@@ -451,7 +660,7 @@ class _HttpServer(HTTPServer):
 
     allow_reuse_address = False
     allow_reuse_port = False
-    request_queue_size = 16
+    request_queue_size = MAX_PENDING
 
     def __init__(self, ui: Ui, port: int, max_threads: int) -> None:
         check_bind(HOST)
@@ -469,7 +678,10 @@ class _HttpServer(HTTPServer):
         self.server_name = host
         self.server_port = port
 
-    def process_request(self, request: Any, client_address: Any) -> None:
+    def hand_off(self, request: socket.socket, address: Any, head: bytes, started: float) -> None:
+        """Serve a request that has arrived (``head`` is what was read of it) in a
+        request thread of its own, or turn it away when all are busy."""
+        request.setblocking(True)
         if not self._slots.acquire(blocking=False):
             with suppress(OSError):
                 # Never blocks the accepting thread: the reply fits the socket buffer.
@@ -479,13 +691,22 @@ class _HttpServer(HTTPServer):
             return
         thread = threading.Thread(
             target=self._one,
-            args=(request, client_address),
+            args=(request, address),
             name="flib-ui-request",
             daemon=True,
         )
         with self._active_lock:
-            self._active[request] = _Connection(thread)
+            self._active[request] = _Connection(thread, head, started)
         thread.start()
+
+    def take_head(self, request: socket.socket) -> bytes:
+        """What the accepting thread already read of this request, once."""
+        with self._active_lock:
+            connection = self._active.get(request)
+            if connection is None:
+                return b""
+            head, connection.head = connection.head, b""
+            return head
 
     def _one(self, request: Any, client_address: Any) -> None:
         try:
@@ -534,6 +755,26 @@ class _HttpServer(HTTPServer):
             return [connection.thread for connection in self._active.values()]
 
 
+class _Prefixed(io.RawIOBase):
+    """Reads ``head`` first, then the socket: what a request handler reads."""
+
+    def __init__(self, head: bytes, sock: socket.socket) -> None:
+        super().__init__()
+        self._head = memoryview(head)
+        self._sock = sock
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: Any) -> int:
+        if self._head:
+            n = min(len(buffer), len(self._head))
+            buffer[:n] = self._head[:n]
+            self._head = self._head[n:]
+            return n
+        return self._sock.recv_into(buffer)
+
+
 class _Reject(Exception):
     def __init__(self, code: int) -> None:
         super().__init__(code)
@@ -550,6 +791,10 @@ class _Handler(BaseHTTPRequestHandler):
     def setup(self) -> None:
         super().setup()
         self.connection.settimeout(self.server.ui.request_timeout)
+        # The accepting thread already read the request (or most of it).
+        self.rfile.close()
+        raw = _Prefixed(self.server.take_head(self.connection), self.connection)
+        self.rfile = io.BufferedReader(raw)
 
     def log_message(self, format: str, *args: Any) -> None:
         """Never log: a request line can hold the launch token."""
@@ -624,7 +869,13 @@ class _Handler(BaseHTTPRequestHandler):
             raise _Reject(HTTPStatus.FORBIDDEN)
         origin = origins[0] if origins else None
         site = sites[0] if sites else None
+        if path == LAUNCH and self._speculative():
+            # A browser may prerender a typed address before Enter: that must
+            # not use the token (nor count as its theft).
+            raise _Reject(HTTPStatus.FORBIDDEN)
         if self.command == "POST" and path == LAUNCH:
+            if urlsplit(self.path).query:
+                raise _Reject(HTTPStatus.BAD_REQUEST)  # the token goes in the body only
             # The handoff file is a page on disk: its origin is "null", and a
             # browser may call its form post cross-site. The launch token in the
             # body is what is checked; it stays exact-origin otherwise.
@@ -640,6 +891,15 @@ class _Handler(BaseHTTPRequestHandler):
             raise _Reject(HTTPStatus.FORBIDDEN)
         if self.command == "POST" and origin is None and site != "same-origin":
             raise _Reject(HTTPStatus.FORBIDDEN)
+
+    def _speculative(self) -> bool:
+        """A prefetch or prerender, not the user opening the page."""
+        purposes = [*self.headers.get_all("Sec-Purpose", []), *self.headers.get_all("Purpose", [])]
+        return any(
+            word.strip().lower() in ("prefetch", "prerender")
+            for value in purposes
+            for word in value.split(";")
+        )
 
     def _session(self) -> Session | None:
         """The session, if any cookie of that name holds it: a cookie another app
@@ -862,6 +1122,7 @@ def run(
     )
     try:
         with ui_lock(config.database):
+            sweep_handoffs(handoff_root())
             ui = Ui(config, page=page, port=port, on_event=on_event)
             try:
                 with _signals(ui):
