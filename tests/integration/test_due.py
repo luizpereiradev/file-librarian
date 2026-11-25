@@ -338,7 +338,7 @@ def at(day: int) -> datetime:
 def test_each_document_is_reminded_once(downloads: Path, fake_osascript: Path) -> None:
     cfg = quiet_review(fake_config(downloads))
     organize(downloads, cfg, FILES)
-    first = st.after_scheduled_run(cfg, now=at(0))
+    first = st.after_scheduled_run(cfg)  # the review file is new now; due dates use the fixed day
     assert first == [
         "Summary: 1 document is due within 3 days, 1 document overdue. "
         "Run `flib status` for details."
@@ -398,7 +398,7 @@ def test_reminders_can_be_turned_off_or_moved(downloads: Path, fake_osascript: P
 def test_a_review_summary_carries_the_due_count(downloads: Path, fake_osascript: Path) -> None:
     cfg = fake_config(downloads, summary={"min_age_days": 0})
     organize(downloads, cfg, FILES)
-    first = st.after_scheduled_run(cfg, now=datetime.now(UTC))
+    first = st.after_scheduled_run(cfg)  # the review file is new now; due dates use the fixed day
     assert first == [
         "Summary: 1 document is due within 3 days, 1 document overdue, 1 file waits for "
         "review. Run `flib status` for details."
@@ -406,7 +406,7 @@ def test_a_review_summary_carries_the_due_count(downloads: Path, fake_osascript:
     with Store.open(cfg.database) as store:
         assert store.meta(st.SUMMARY_KEY) is not None
     # Within summary.every_days and nothing new due: no second summary.
-    assert st.after_scheduled_run(cfg, now=datetime.now(UTC)) == []
+    assert st.after_scheduled_run(cfg) == []
 
 
 # --- MCP ----------------------------------------------------------------------------------
