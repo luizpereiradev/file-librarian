@@ -382,6 +382,17 @@ or on SIGINT/SIGTERM. One `flib ui` runs at a time (an `flock` on
 never keeps a run from starting); a second one says so and exits with 0,
 since only the first knows its port and token.
 
+**Ending.** One thread accepts connections (a `selectors` loop, not
+`serve_forever`), checks the idle timer and hands each request to a thread of
+its own. `stop` takes no lock: it puts the reason on a `queue.SimpleQueue`
+and a byte on a socket pair that wakes the loop, so it is safe from a signal
+handler, even one that interrupts another (a handler that took a lock held on
+the main thread would wait forever). On stop the loop closes the listening
+socket, gives requests in progress a second, shuts down the sockets of any
+still running, and joins every request thread before `flib ui` returns. Each
+connection carries one request (HTTP/1.0, closed after the reply), so idle
+keep-alive connections cannot hold the threads.
+
 **Threat model.** What is protected: the index (names, descriptions,
 amounts) and, later, actions that move files. Who might attack: a web page
 open in any browser on the Mac (cross-site requests, DNS rebinding,
@@ -398,7 +409,8 @@ is out of scope: it can read the database directly. How each is handled:
 | Script injection | `Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`; no inline script, style or handler; text goes in with `textContent`; `nosniff` | `test_every_page_references_only_packaged_files_and_has_no_inline_code`, `test_the_policy_allows_no_inline_code`, `test_every_reply_carries_the_security_headers` |
 | Clickjacking | `frame-ancestors 'none'`, `X-Frame-Options: DENY` | as above |
 | Reading files through the server | static files from an in-memory map of packaged resources, looked up by exact path: no traversal, no directory listing; no file contents are ever served, and this page serves counts only (suggested categories the model wrote are masked when not configured) | `test_nothing_outside_the_packaged_files_is_served`, `test_status_holds_counts_and_never_a_file_name` |
-| Exhausting it | request line ≤ 4 KiB, headers ≤ 16 KiB (and at most 100), POST body ≤ 16 KiB with a `Content-Length`, no chunked bodies, 10 s socket timeout, at most 8 requests at once (one more gets 503) | `test_long_request_lines_and_headers_are_refused`, `test_a_large_body_is_refused_before_it_is_read`, `test_a_post_needs_a_plain_length`, `test_a_slow_client_is_dropped`, `test_requests_beyond_the_thread_cap_are_turned_away` |
+| Exhausting it | request line ≤ 4 KiB, headers ≤ 16 KiB (and at most 100), POST body ≤ 16 KiB with a `Content-Length`, no chunked bodies, 10 s socket timeout, one request per connection, at most 8 requests at once (one more gets 503) | `test_long_request_lines_and_headers_are_refused`, `test_a_large_body_is_refused_before_it_is_read`, `test_a_post_needs_a_plain_length`, `test_a_slow_client_is_dropped`, `test_a_keep_alive_connection_gets_one_reply_and_is_closed`, `test_requests_beyond_the_thread_cap_are_turned_away` |
+| Outliving its use | ends on idle, End session or a signal; `stop` is signal-safe; every end closes the sockets and joins all threads | `test_the_server_ends_after_the_idle_minutes`, `test_a_signal_handler_never_waits_on_a_lock`, `test_close_cuts_off_a_request_in_progress`, `test_the_server_ends_if_its_loop_fails` |
 | Leaking through errors | GET and POST only (405, unknown methods 501); every error body is its status phrase; `Server: flib`; `Cache-Control: no-store` | `test_only_get_and_post_are_allowed`, `test_error_pages_reveal_nothing` |
 
 Known limits: browsers do not keep cookies apart by port, so the cookie is
