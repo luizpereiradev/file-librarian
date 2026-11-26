@@ -145,7 +145,7 @@ def change(
     reply = post(c, route, body)
     assert reply.status == 303, (reply.status, reply.text)
     location = reply.headers["Location"]
-    assert re.fullmatch(r"/settings\?n=[A-Za-z0-9_-]{16}(#s-[a-z]+)?", location), location
+    assert re.fullmatch(r"/settings\?n=[A-Za-z0-9_-]{16}(#o-[a-z]+)?", location), location
     result = c.get(location.split("#", 1)[0])
     assert result.status == 200
     assert_safe(result.text)
@@ -250,7 +250,8 @@ def test_without_its_file_the_page_only_reads(serve: list[Ui], cfg: Config, path
     assert reply.status == 303
     assert "does not know its configuration file" in c.get(reply.headers["Location"]).text
     assert "does not know" in c.get("/settings/restore").text
-    assert post(c, "/settings/open", {"csrf": csrf.group(1)}).status == 502
+    reply = post(c, "/settings/open", {"csrf": csrf.group(1)})
+    assert "does not know" in c.get(reply.headers["Location"].split("#")[0]).text
     unchanged(path, before)
 
 
@@ -357,7 +358,17 @@ def test_ollama_is_offered_only_on_this_mac_and_a_server_only_as_the_file_has_it
         }
     )
     assert settings.leaves(local) == "Nothing leaves this Mac: the model runs here."
-    assert any(c.name == "openai-compat" for c in settings.provider_choices(local))
+    # Another server is never suggested with a model the page made up.
+    assert [c.model for c in settings.provider_choices(remote) if c.name == "openai-compat"] == [
+        "m"
+    ]
+    anthropic = parse_config(
+        {
+            "inputs": [str(downloads)],
+            "provider": {"name": "anthropic", "model": "m", "base_url": "https://h.example/v1"},
+        }
+    )
+    assert not any(c.name == "openai-compat" for c in settings.provider_choices(anthropic))
 
 
 def test_cost_caps(client: UiClient, path: Path) -> None:
@@ -479,10 +490,12 @@ def test_a_bad_category_name_is_said_with_its_field(
 
 def test_a_long_or_multiline_hint_is_refused(client: UiClient, path: Path) -> None:
     before = path.read_bytes()
-    assert "longer than 300" in change(
+    assert "the hint is longer than 300" in change(
         client, "category-add", name="A", hint="x" * 301, layout="none"
     )
-    assert "line breaks" in change(client, "category-add", name="A", hint="a\nb", layout="none")
+    assert "the hint has invisible characters" in change(
+        client, "category-add", name="A", hint="a\u0007b", layout="none"
+    )
     unchanged(path, before)
 
 
@@ -490,6 +503,7 @@ def test_a_category_is_edited(client: UiClient, path: Path) -> None:
     change(
         client,
         "category-edit",
+        hint_field="1",
         category="Images",
         name="Pictures",
         hint="photos",
@@ -502,6 +516,7 @@ def test_a_category_is_edited(client: UiClient, path: Path) -> None:
     change(
         client,
         "category-edit",
+        hint_field="1",
         category="Pictures",
         name="Pictures",
         hint="",
@@ -520,13 +535,16 @@ def test_a_category_that_holds_files_is_renamed_only_by_reprocess(
     fill(downloads, cfg, {"bill.pdf": answer("Finance", confidence=0.95)})
     before = path.read_bytes()
     text = change(
-        client, "category-edit", category="Finance", name="Money", layout="none", rename="1"
+        client,
+        "category-edit",
+        hint_field="1",
+        category="Finance",
+        name="Money",
+        layout="none",
+        rename="1",
     )
     assert "was not renamed" in text and "the index has 1 file in it" in text
-    assert (
-        "<code>flib reprocess --rename-category &quot;Finance&quot; &quot;Money&quot;</code>"
-        in text
-    )
+    assert "<code>flib reprocess --rename-category Finance Money</code>" in text
     text = change(client, "category-remove", category="Finance")
     assert "was not removed" in text and "--remove-category" in text
     unchanged(path, before)
@@ -534,6 +552,7 @@ def test_a_category_that_holds_files_is_renamed_only_by_reprocess(
     change(
         client,
         "category-edit",
+        hint_field="1",
         category="Finance",
         name="Finance",
         hint="money",
@@ -549,7 +568,15 @@ def test_a_category_whose_folder_has_files_is_not_renamed(
     folder = cfg.output_root / "Images"
     folder.mkdir(parents=True)
     (folder / ".DS_Store").write_bytes(b"")
-    change(client, "category-edit", category="Images", name="Pics", layout="none", rename="1")
+    change(
+        client,
+        "category-edit",
+        hint_field="1",
+        category="Images",
+        name="Pics",
+        layout="none",
+        rename="1",
+    )
     assert load_config(path).category("Pics") is not None  # only .DS_Store: empty
     folder = cfg.output_root / "Pics"
     folder.mkdir()
@@ -608,7 +635,16 @@ def test_hostile_category_names_are_text(serve: list[Ui], fake_home: Path, downl
     c = start(serve, load_config(target), target)
     text = page(c)
     assert "&lt;img src=x onerror=alert(1)&gt; {{csrf}}" in text
-    change(c, "category-edit", category=EVIL, name=EVIL, hint="calm", layout="none", rename="1")
+    change(
+        c,
+        "category-edit",
+        hint_field="1",
+        category=EVIL,
+        name=EVIL,
+        hint="calm",
+        layout="none",
+        rename="1",
+    )
     assert load_config(target).category(EVIL).hint == "calm"  # type: ignore[union-attr]
 
 
@@ -1070,7 +1106,10 @@ def test_open_in_a_text_editor_opens_the_servers_own_path(
 ) -> None:
     csrf, _ = form_values(client)
     reply = post(client, "/settings/open", {"csrf": csrf, "path": "/etc/passwd"})
-    assert reply.status == 204
+    assert reply.status == 303 and reply.headers["Location"].endswith("#o-file")
+    text = client.get(reply.headers["Location"].split("#")[0]).text
+    assert "Opened in your text editor" in text
+    assert text.index("Opened in your text editor") > text.index('id="s-file"')
     calls = opened(fake_browser)
     assert calls[-1][-4:] == ["-t", "--", str(path)] or calls[-1][-3:] == ["-t", "--", str(path)]
 
@@ -1080,11 +1119,18 @@ def test_when_the_editor_cannot_open_it_the_page_says_so(
 ) -> None:
     monkeypatch.setenv("FAKE_OPEN_FAIL", "1")
     csrf, _ = form_values(client)
-    reply = post(client, "/settings/open", {"csrf": csrf}, Accept="text/html")
-    assert reply.status == 502 and "macOS could not open it" in reply.text
+
+    def opened_page() -> str:
+        reply = post(client, "/settings/open", {"csrf": csrf})
+        assert reply.status == 303
+        return client.get(reply.headers["Location"].split("#")[0]).text
+
+    assert "macOS could not open it" in opened_page()
     path.unlink()
     path.mkdir()
-    assert "not a plain file" in post(client, "/settings/open", {"csrf": csrf}).text
+    assert "not a plain file" in opened_page()
+    path.rmdir()
+    assert "no configuration file there" in opened_page()
 
 
 def test_the_last_category_is_never_removed(

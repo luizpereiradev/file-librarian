@@ -36,7 +36,7 @@ import re
 import secrets
 import stat
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -418,7 +418,21 @@ class _Text:
             empty = "[]" if isinstance(parent, SequenceNode) else "{}"
             begin = start if key is None else int(key.start_mark.index)
             return self._splice(begin, _last(node), empty)
-        return self._splice(line, self._line_end(_last(node)), "")
+        begin = self._comments_above(line, start - line)
+        return self._splice(begin, self._line_end(_last(node)), "")
+
+    def _comments_above(self, line: int, column: int) -> int:
+        """Where the comment lines right above ``line`` start, those at its own column and
+        with no blank line between: the notes that belong to what is removed."""
+        begin = line
+        while begin > 0:
+            previous = self._line_start(begin - 1)
+            text = self.text[previous:begin].rstrip("\r\n")
+            stripped = text.lstrip(" ")
+            if not stripped.startswith("#") or len(text) - len(stripped) != column:
+                break
+            begin = previous
+        return begin
 
     def _append(self, chain: list[tuple[Node | None, Node]], edit: Append, exists: bool) -> str:
         if not exists:
@@ -436,14 +450,31 @@ class _Text:
 # --- the file --------------------------------------------------------------------------
 
 
+_STAMP = re.compile(r"(\d{8}-\d{6})Z(?:-(\d{2,}))?")
+"""A backup's name after ``<file>.backup-``: a UTC time and, past the first in that
+second, a sequence number. Nothing else is a backup: a file of the user's that only
+starts the same way is never listed, offered or deleted."""
+
+
+def stamp_of(path: Path, backup: Path) -> tuple[str, int] | None:
+    """(the UTC time, the sequence number) of ``backup`` if it is one of ``path``'s."""
+    rest = backup.name.removeprefix(path.name + BACKUP_MARK)
+    if rest == backup.name:
+        return None
+    match = _STAMP.fullmatch(rest)
+    if match is None:
+        return None
+    return match.group(1), int(match.group(2) or 1)
+
+
 def backups(path: Path) -> list[Path]:
-    """The backups of ``path`` next to it, newest first."""
-    prefix = path.name + BACKUP_MARK
+    """The backups of ``path`` next to it, newest first (by time, then sequence)."""
     try:
-        found = [p for p in path.parent.iterdir() if p.name.startswith(prefix)]
+        found = [(stamp, p) for p in path.parent.iterdir() if (stamp := stamp_of(path, p))]
     except OSError:
         return []
-    return sorted((p for p in found if _own_file(p)), key=lambda p: p.name, reverse=True)
+    found = [(stamp, p) for stamp, p in found if _own_file(p)]
+    return [p for _, p in sorted(found, key=lambda item: item[0], reverse=True)]
 
 
 def _own_file(path: Path) -> bool:
@@ -478,13 +509,23 @@ def check_writable(path: Path) -> None:
         raise EditError("the configuration file is a symbolic link; change it by hand")
     if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
         raise EditError("the configuration file is not a plain file of yours")
+    if info.st_nlink > 1:
+        # Another name shares it: a new file in its place would part the two.
+        raise EditError("the configuration file has another name (a hard link); change it by hand")
+
+
+class Changed(EditError):
+    """The file is no longer the one the change was made to."""
 
 
 def write(path: Path, old: bytes, new: str, *, now: datetime | None = None) -> Path:
-    """Save ``new`` as ``path`` atomically, after a backup of ``old`` (its bytes now);
-    returns the backup. Raises ``OSError`` or ``EditError``; then nothing changed."""
+    """Save ``new`` as ``path`` atomically, after a backup; returns the backup. ``old``:
+    the bytes the change was made to. The file is read again right before the backup
+    and the rename: anything else there (an editor saved it meanwhile) is ``Changed``,
+    and it is the bytes on disk that are backed up. Raises ``OSError`` or ``EditError``;
+    then nothing changed."""
     check_writable(path)
-    stamp = (now or datetime.now()).strftime("%Y%m%d-%H%M%S")
+    stamp = (now or datetime.now(UTC)).astimezone(UTC).strftime("%Y%m%d-%H%M%S") + "Z"
     backup = path.with_name(f"{path.name}{BACKUP_MARK}{stamp}")
     number = 1
     while True:
@@ -497,6 +538,9 @@ def write(path: Path, old: bytes, new: str, *, now: datetime | None = None) -> P
     tmp = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
     try:
         _create(tmp, new.encode("utf-8"))
+        if path.read_bytes() != old:  # the last look, just before the rename
+            backup.unlink(missing_ok=True)
+            raise Changed("the configuration file changed while saving")
         tmp.replace(path)
     except BaseException:
         tmp.unlink(missing_ok=True)

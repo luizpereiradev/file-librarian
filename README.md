@@ -247,7 +247,7 @@ Mac. It reads the same index as the command line:
   check-config` checks it **before** it is written; a value it refuses is
   shown with its field and why, and nothing is written. Only the keys you
   changed are touched: your comments and the order of the file stay. The
-  old file is kept as a backup next to it (`config.yaml.backup-<time>`, the
+  old file is kept as a backup next to it (`config.yaml.backup-<time>Z`, the
   latest 10), and **Restore the previous settings** puts it back after
   showing what changes. A category that holds files is renamed or removed
   with `flib reprocess --rename-category` / `--remove-category`, which move

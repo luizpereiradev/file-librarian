@@ -643,7 +643,9 @@ class ScheduleConfig(_Section):
     @classmethod
     def _hh_mm(cls, value: str) -> str:
         hour, _, minute = value.partition(":")
-        if not (hour.isdigit() and minute.isdigit() and len(minute) == 2):
+        # ASCII digits only: str.isdigit also takes Arabic-Indic and full-width digits.
+        digits = hour.isascii() and minute.isascii() and hour.isdigit() and minute.isdigit()
+        if not (digits and len(minute) == 2):
             raise ValueError("schedule.time must look like 12:30")
         if not (0 <= int(hour) <= 23 and 0 <= int(minute) <= 59):
             raise ValueError("schedule.time must be a valid 24-hour time")

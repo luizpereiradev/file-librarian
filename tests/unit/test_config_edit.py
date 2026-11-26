@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import stat
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -244,23 +244,27 @@ def mode(path: Path) -> int:
 def test_write_keeps_a_backup_and_writes_atomically(tmp_path: Path) -> None:
     path = config_file(tmp_path)
     old = path.read_bytes()
-    backup = config_edit.write(path, old, "new: 1\n", now=datetime(2026, 1, 2, 3, 4, 5))
+    backup = config_edit.write(path, old, "new: 1\n", now=datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC))
     assert path.read_text(encoding="utf-8") == "new: 1\n"
-    assert backup.name == "config.yaml.backup-20260102-030405"
+    assert backup.name == "config.yaml.backup-20260102-030405Z"
     assert backup.read_bytes() == old
     assert mode(path) == 0o600 and mode(backup) == 0o600
     assert not list(tmp_path.glob(".*.tmp"))
-    again = config_edit.write(path, b"new: 1\n", "new: 2\n", now=datetime(2026, 1, 2, 3, 4, 5))
+    again = config_edit.write(
+        path, b"new: 1\n", "new: 2\n", now=datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+    )
     assert again.name.endswith("-02") and config_edit.backups(path)[0] == again
 
 
 def test_write_keeps_the_latest_backups_only(tmp_path: Path) -> None:
     path = config_file(tmp_path)
     for i in range(config_edit.KEEP_BACKUPS + 3):
-        config_edit.write(path, path.read_bytes(), f"n: {i}\n", now=datetime(2026, 1, 1, 0, 0, i))
+        config_edit.write(
+            path, path.read_bytes(), f"n: {i}\n", now=datetime(2026, 1, 1, 0, 0, i, tzinfo=UTC)
+        )
     found = config_edit.backups(path)
     assert len(found) == config_edit.KEEP_BACKUPS
-    assert found[0].name.endswith("000012") and found[-1].name.endswith("000003")
+    assert found[0].name.endswith("000012Z") and found[-1].name.endswith("000003Z")
 
 
 def test_write_never_replaces_a_link_or_a_folder(tmp_path: Path) -> None:
@@ -296,8 +300,8 @@ def test_a_planted_temporary_or_backup_link_is_never_followed(tmp_path: Path) ->
     path = config_file(tmp_path)
     target = tmp_path / "elsewhere"
     target.write_text("keep", encoding="utf-8")
-    stamp = datetime(2026, 1, 2, 3, 4, 5)
-    (tmp_path / "config.yaml.backup-20260102-030405").symlink_to(target)
+    stamp = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+    (tmp_path / "config.yaml.backup-20260102-030405Z").symlink_to(target)
     backup = config_edit.write(path, path.read_bytes(), "x: 1\n", now=stamp)
     assert backup.name.endswith("-02")
     assert target.read_text(encoding="utf-8") == "keep"
@@ -305,8 +309,8 @@ def test_a_planted_temporary_or_backup_link_is_never_followed(tmp_path: Path) ->
 
 def test_backups_list_only_the_users_plain_files(tmp_path: Path) -> None:
     path = config_file(tmp_path)
-    (tmp_path / "config.yaml.backup-20260101-000000").mkdir()
-    (tmp_path / "config.yaml.backup-20260101-000001").symlink_to(path)
+    (tmp_path / "config.yaml.backup-20260101-000000Z").mkdir()
+    (tmp_path / "config.yaml.backup-20260101-000001Z").symlink_to(path)
     assert config_edit.backups(path) == []
     assert config_edit.backups(tmp_path / "missing" / "config.yaml") == []
 

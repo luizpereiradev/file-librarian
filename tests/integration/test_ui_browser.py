@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from file_librarian import config_edit, pipeline
-from file_librarian.config import Config, load_config
+from file_librarian.config import Category, Config, load_config
 from file_librarian.db.store import Store
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.ui.server import Ui
@@ -124,6 +124,11 @@ def test_review_and_undo_in_a_real_browser(
     assert in_review.exists()
     with Store.open(cfg.database) as store:
         shot = store.file_by_current_path(in_review).id  # type: ignore[union-attr]
+    # A category with the longest name a configuration takes (64 characters): its chip
+    # on Search must wrap, not widen the page (#117 browser testing).
+    long_name = Category(name=("Householdstatements" * 4)[:64])  # one word: it must break
+    assert len(long_name.name) == 64
+    cfg = cfg.model_copy(update={"categories": [*cfg.categories, long_name]})
     ui = Ui(cfg, poll_seconds=0.05)
     ui.start()
     profile = tmp_path / "profile"

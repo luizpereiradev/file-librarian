@@ -509,15 +509,38 @@ old data with that change, else nothing is written (anchors, aliases and odd
 layouts end there, with "change it in the file"). The result is validated by
 `config.parse_config`, the parser every command uses, **before** it is
 written; its refusal is shown with the field and why. Then a backup of the
-old bytes (`config.yaml.backup-<YYYYmmdd-HHMMSS>`, created `O_EXCL |
+old bytes (`config.yaml.backup-<YYYYmmdd-HHMMSS>Z[-NN]`, UTC with a sequence number, so a clock or time-zone change cannot reorder them; only names of exactly that form are backups, so a file of the user's that starts the same way is never offered or deleted; created `O_EXCL |
 O_NOFOLLOW`, 0600, the latest 10 kept) and an atomic write (a new temporary
-file in the same folder, 0600, fsynced, renamed over the file). A file that
-is a symbolic link, or not the user's own plain file, is refused: replacing
-it would cut the link. A change whose file names another `database` than the
+file in the same folder, 0600, fsynced, renamed over the file). The file is read once more right before the backup and again right before
+the rename: anything else there (an editor saved it meanwhile) refuses the
+change and stays as it is. A file that is a symbolic link or a hard link, or
+not the user's own plain file, is refused: replacing it would cut the link. A change whose file names another `database` than the
 running server's is refused. The server goes on with the configuration it
 saved. Restore (`GET /settings/restore`, then its button) shows what the
 latest backup changes back and writes it the same way, after backing up the
 current file, so a restore is undone the same way.
+
+A field the user did not touch is left alone: each posted value is compared
+with what the page showed after the clean-up a browser gives a one-line text
+field (line breaks dropped) and the page's own (ends trimmed, NFC), so saving
+one field of a category never rewrites another; a hint a text field cannot
+hold (line breaks, tabs, longer than 300 characters) is shown as text, not
+offered for editing. A cost cap is shown with every digit the file has (never
+`1e-05`), and a value posted as shown is not written again; `due.kinds`
+keeps the file's order. What changed is said field by field ("Category Work
+hint: old → new", "Category Taxes: added"). The outcome, or the refusal with
+what was typed, is shown inside the section that was sent, where the
+redirect's anchor lands. Removing an input folder has a confirmation page
+(`GET /settings/input-remove?index=<i>`), and the comment lines right above a
+removed list item, at its indentation, go with it. A command the page
+suggests in a refusal (`flib reprocess --rename-category ...`) is quoted with
+`shlex.quote` and carries `-c <file>` when this is not the default
+configuration file; text from the file or the user is never turned into
+`<code>`. When the installed agents belong to another configuration file, the
+page says so: Save the schedule changes nothing in launchd unless "Use this
+file for the schedule" is ticked, and a change of input folders never
+refreshes them. A refused install reports what launchd has loaded, or that
+the agent is written but not loaded.
 
 What the page takes is fixed: the provider and model from
 `settings.provider_choices` (the current pair, Anthropic, Claude Code, Ollama
@@ -540,9 +563,9 @@ file first, so the library never moves. The schedule is installed by
 `scheduler.install_for`, the function `flib schedule` uses (with the fake
 launchctl in tests), after the mode and time are written; launchd's refusal
 is reported with what is installed now; a change of input folders refreshes
-an installed watch agent. Secrets never reach a page: an API key is only
-"set (in the Keychain)" or "not set" (`settings.key_state` never holds its
-value), and web addresses show their host only (`settings.host_of`); YAML
+an installed watch agent of this file. Secrets never reach a page: an API
+key is only "set (in the Keychain)" or "not set" (`settings.key_state` asks
+`keychain.exists`, which never reads the secret), and web addresses show their host only (`settings.host_of`); YAML
 errors give a line and column, never the file's text. `POST /settings/open`
 runs `open -t -- <the server's own path>`, never one from the form.
 

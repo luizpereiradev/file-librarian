@@ -237,7 +237,12 @@ footer { max-width: 64rem; margin: 0 auto; padding: 0 1.25rem 2rem; color: var(-
   text-decoration: none;
   white-space: nowrap;
   cursor: pointer;
+  max-width: 100%;
 }
+
+/* A long name (a 64-character category) wraps inside its chip instead of widening the
+   page. */
+.chip { white-space: normal; overflow-wrap: anywhere; }
 
 .chip input { margin: 0; accent-color: var(--accent-text); }
 
@@ -496,3 +501,16 @@ section.settings .hit .settings-form { margin-top: 0.4rem; }
 section.settings .facts { margin: 0.8rem 0; }
 
 section.settings .facts dd { overflow-wrap: anywhere; }
+
+.toc { margin: 0 0 1rem; }
+
+details.rules { margin: 0.2rem 0 0; }
+
+.field .label { color: var(--muted); }
+
+.hint { margin: 0; white-space: pre-wrap; }
+
+.outcome:focus { outline: none; }
+
+/* After a change the browser lands on its outcome: keep the section heading in view. */
+.outcome[id] { scroll-margin-top: 4rem; }

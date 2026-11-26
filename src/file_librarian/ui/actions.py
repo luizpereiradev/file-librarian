@@ -92,6 +92,8 @@ class Outcome:
     """Where on the page the browser goes back to (a review group's ``id``)."""
     restore: bool = False
     """A settings change (#117): the page offers to restore the settings from before."""
+    form: tuple[tuple[str, str], ...] = ()
+    """A refused settings form (#117): what was typed, put back in the fields."""
 
 
 class Refused(Exception):

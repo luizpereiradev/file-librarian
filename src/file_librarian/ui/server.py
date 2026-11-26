@@ -1103,12 +1103,12 @@ class _Handler(BaseHTTPRequestHandler):
             else:
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
-        if path == "/settings/restore":
+        if path in SETTINGS_PAGES:
             if session is None:
                 self._ended(HTTPStatus.FORBIDDEN)
                 return
             try:
-                code, body = settings.restore_page(
+                code, body = SETTINGS_PAGES[path](
                     ui.config_path, session.csrf, urlsplit(self.path).query
                 )
             except views.BadRequest as exc:
@@ -1418,7 +1418,7 @@ class _Handler(BaseHTTPRequestHandler):
                 ui.config = saved
             return outcome
 
-        self._act(session, "/settings", do, prefix="s-")
+        self._act(session, "/settings", do, prefix="o-")
 
     def _settings_save(self, session: Session) -> None:
         self._change_settings(session, settings.save)
@@ -1431,12 +1431,14 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _settings_open(self, session: Session) -> None:
         """Open the configuration file in the default text editor: the server's own path,
-        never one from the form."""
-        problem = settings.open_in_editor(self.server.ui.config_path, OPEN, views.run_open)
-        if problem is None:
-            self._reply(HTTPStatus.NO_CONTENT, b"", _TEXT)
-        else:
-            self._reply(*views.problem_page(HTTPStatus.BAD_GATEWAY, problem, session.csrf), _HTML)
+        never one from the form. The page says it did (or why not)."""
+        path = self.server.ui.config_path
+        self._act(
+            session,
+            "/settings",
+            lambda: settings.open_in_editor(path, OPEN, views.run_open),
+            prefix="o-",
+        )
 
     def _fields(self) -> dict[str, list[str]]:
         """The form ``_post`` already read (and found the CSRF token in)."""
@@ -1494,6 +1496,11 @@ STALE_SESSION = (
 )
 
 ACTION_PAGES = frozenset({"/review", "/review/accept", "/undo"})
+SETTINGS_PAGES: dict[str, Callable[[Path | None, str, str], views.Page]] = {
+    "/settings/restore": settings.restore_page,
+    "/settings/input-remove": settings.input_remove_page,
+}
+"""Confirmation pages of Settings (#117): they only read; their buttons post."""
 """Pages whose forms post actions (#115); built per request, they only read."""
 
 PostRoute = Callable[[_Handler, Session], None]
