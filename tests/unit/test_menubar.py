@@ -257,7 +257,9 @@ CORPUS: list[tuple[str, bytes | None, dict[str, Any]]] = [
         json.dumps({"version": 1, "line": "a\nb", "next": "x\u202ey"}).encode(),
         {},
     ),
-    ("line separator", json.dumps({"version": 1, "line": "a\u2028b"}).encode(), {}),
+    ("a bidi override alone", b'{"version":1,"line":"a\\u202eb","due":1}', {"due": 1}),
+    ("a zero-width joiner alone", b'{"version":1,"next":"a\\u200db"}', {}),
+    ("line separator",json.dumps({"version": 1, "line": "a\u2028b"}).encode(), {}),
     ("empty line", json.dumps({"version": 1, "line": "", "next": ""}).encode(), {}),
     (
         "longest text",
