@@ -591,6 +591,10 @@ def test_the_launch_exchange_is_the_only_post_outside_the_route_table() -> None:
         "/review/accept",
         "/undo",
         "/due/settle",
+        "/settings/save",
+        "/settings/schedule",
+        "/settings/restore",
+        "/settings/open",
     }
 
 
@@ -1832,7 +1836,8 @@ def test_the_policy_allows_no_inline_code() -> None:
     assert "*" not in CSP and "http" not in CSP
 
 
-def test_the_navigation_lists_what_comes_next_disabled() -> None:
+def test_the_navigation_has_no_disabled_item_left() -> None:
     parser = _Collector()
     parser.feed(load_pages()["status"])
-    assert parser.disabled == ["Settings"]
+    assert parser.disabled == []
+    assert '<a href="/settings">Settings</a>' in load_pages()["status"]

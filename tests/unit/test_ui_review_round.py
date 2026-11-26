@@ -580,7 +580,7 @@ def test_the_status_card_hides_its_link_when_nothing_waits(client: UiClient) -> 
 
 def test_flib_ui_help_lists_review() -> None:
     result = CliRunner().invoke(app, ["ui", "--help"])
-    assert "Status, Review, Search, Activity and Due" in " ".join(result.stdout.split())
+    assert "Status, Review, Search, Activity, Due and Settings" in " ".join(result.stdout.split())
     assert "review" in result.stdout  # --open's choices
 
 
@@ -615,4 +615,4 @@ def test_the_phone_menu_wraps_instead_of_overflowing(client: UiClient) -> None:
     css = client.get("/static/app.css").text
     phone = css.split("@media (max-width: 640px)", 1)[1].split("}\n}", 1)[0]
     assert "flex-wrap: wrap" in phone and "flex: 1 1 100%" in phone
-    assert "nav .soon { position: relative;" in css
+    assert "nav .soon" not in css  # no greyed-out item is left (#117)

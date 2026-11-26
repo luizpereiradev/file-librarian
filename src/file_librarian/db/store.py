@@ -1263,6 +1263,12 @@ class Store:
         ).fetchone()
         return int(row[0])
 
+    def files_in_category(self, name: str) -> int:
+        """How many indexed files have category ``name``, whatever their status (#117:
+        a category that holds files is renamed or removed only by ``flib reprocess``)."""
+        row = self.conn.execute("SELECT COUNT(*) FROM files WHERE category = ?", (name,))
+        return int(row.fetchone()[0])
+
     def categories(self) -> list[str]:
         """Every category some indexed file has."""
         rows = self.conn.execute(

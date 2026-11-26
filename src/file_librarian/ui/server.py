@@ -88,13 +88,13 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from file_librarian import status as status_mod
 from file_librarian.config import Config
 from file_librarian.lock import AlreadyRunningError, ui_lock
-from file_librarian.ui import actions, api, review, views
+from file_librarian.ui import actions, api, review, settings, views
 
 OPEN = "/usr/bin/open"
 """Opens the handoff file in the default browser; tests swap in a fake."""
 HOST = "127.0.0.1"
-PAGES = ("status", "review", "search", "activity", "due")
-"""Pages ``--open`` can name; Settings comes later."""
+PAGES = ("status", "review", "search", "activity", "due", "settings")
+"""Pages ``--open`` can name."""
 VIEWS: dict[str, Callable[[Config, str, str], views.Page]] = {
     "activity": views.activity_page,
 }
@@ -356,10 +356,14 @@ class Ui:
         close_grace: float = CLOSE_GRACE,
         end_linger: float = END_LINGER,
         on_event: Callable[[str], None] = lambda event: None,
+        config_path: Path | None = None,
     ) -> None:
         if page not in PAGES:
             raise UiError(f"no page {page!r}; one of: {', '.join(PAGES)}")
         self.config = config
+        self.config_path = config_path
+        """The configuration file the Settings page reads and changes (#117); ``None``:
+        it only says so."""
         self.page = page
         self.idle_seconds = config.ui.idle_minutes * 60.0 if idle_seconds is None else idle_seconds
         self.request_timeout = request_timeout
@@ -1099,6 +1103,18 @@ class _Handler(BaseHTTPRequestHandler):
             else:
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
+        if path == "/settings/restore":
+            if session is None:
+                self._ended(HTTPStatus.FORBIDDEN)
+                return
+            try:
+                code, body = settings.restore_page(
+                    ui.config_path, session.csrf, urlsplit(self.path).query
+                )
+            except views.BadRequest as exc:
+                raise _Reject(HTTPStatus.BAD_REQUEST) from exc
+            self._reply(code, body, _HTML)
+            return
         if path in ACTION_PAGES:
             if session is None:
                 self._ended(HTTPStatus.FORBIDDEN)
@@ -1115,6 +1131,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._search_page(session, query)
             elif path == "/due":
                 self._due_page(session, query)
+            elif path == "/settings":
+                self._settings_page(session, query)
             elif path[1:] in VIEWS:
                 try:
                     code, body = VIEWS[path[1:]](ui.config, session.csrf, urlsplit(self.path).query)
@@ -1156,6 +1174,18 @@ class _Handler(BaseHTTPRequestHandler):
             code, body = views.due_page(ui.config, session.csrf, rest, notice=notice)
         except views.BadRequest as exc:
             raise _Reject(HTTPStatus.BAD_REQUEST) from exc
+        self._reply(code, body, _HTML)
+
+    def _settings_page(self, session: Session, query: str) -> None:
+        """``GET /settings``, and with ``?n=<id>`` what the last change did."""
+        ui = self.server.ui
+        try:
+            key = views.one_choice(views.query_params(query, frozenset({"n"})), "n")
+        except views.BadRequest as exc:
+            raise _Reject(HTTPStatus.BAD_REQUEST) from exc
+        outcome = None if key is None else ui.kept_outcome(session, key)
+        gone = key is not None and outcome is None
+        code, body = settings.settings_page(ui.config_path, session.csrf, outcome, gone=gone)
         self._reply(code, body, _HTML)
 
     def _action_page(self, session: Session, path: str, query: str) -> None:
@@ -1289,7 +1319,14 @@ class _Handler(BaseHTTPRequestHandler):
 
     # --- actions (#115): each one ends in a redirect to a page that says what it did ---
 
-    def _act(self, session: Session, back: str, do: Callable[[], actions.Outcome]) -> None:
+    def _act(
+        self,
+        session: Session,
+        back: str,
+        do: Callable[[], actions.Outcome],
+        *,
+        prefix: str = "g-",
+    ) -> None:
         """Run one action and send the browser to ``back`` with what happened (post,
         redirect, get): reload, Back and Forward never do it again. A form the pages
         never send is a 400; a refusal is an outcome like any other."""
@@ -1300,7 +1337,7 @@ class _Handler(BaseHTTPRequestHandler):
         except actions.Refused as exc:
             outcome = exc.outcome
         key = self.server.ui.keep_outcome(session, outcome)
-        anchor = f"#g-{outcome.anchor}" if outcome.anchor else ""
+        anchor = f"#{prefix}{outcome.anchor}" if outcome.anchor else ""
         self._redirect(f"{back}{'&' if '?' in back else '?'}n={key}{anchor}")
 
     def _review_file(self, session: Session) -> None:
@@ -1365,6 +1402,41 @@ class _Handler(BaseHTTPRequestHandler):
         except views.BadRequest as exc:
             raise _Reject(HTTPStatus.BAD_REQUEST) from exc
         self._act(session, f"/due?{window}" if window else "/due", do)
+
+    # --- settings (#117): each change ends in a redirect to the page, like the actions ---
+
+    def _change_settings(self, session: Session, change: settings.Change) -> None:
+        """Run one settings change; the server goes on with the configuration it saved."""
+        ui = self.server.ui
+        fields = self._fields()
+
+        def do() -> actions.Outcome:
+            if ui.config_path is None:
+                raise actions.Refused(settings.NO_PATH)
+            outcome, saved = change(ui.config, ui.config_path, fields)
+            if saved is not None:
+                ui.config = saved
+            return outcome
+
+        self._act(session, "/settings", do, prefix="s-")
+
+    def _settings_save(self, session: Session) -> None:
+        self._change_settings(session, settings.save)
+
+    def _settings_schedule(self, session: Session) -> None:
+        self._change_settings(session, settings.schedule)
+
+    def _settings_restore(self, session: Session) -> None:
+        self._change_settings(session, settings.restore)
+
+    def _settings_open(self, session: Session) -> None:
+        """Open the configuration file in the default text editor: the server's own path,
+        never one from the form."""
+        problem = settings.open_in_editor(self.server.ui.config_path, OPEN, views.run_open)
+        if problem is None:
+            self._reply(HTTPStatus.NO_CONTENT, b"", _TEXT)
+        else:
+            self._reply(*views.problem_page(HTTPStatus.BAD_GATEWAY, problem, session.csrf), _HTML)
 
     def _fields(self) -> dict[str, list[str]]:
         """The form ``_post`` already read (and found the CSRF token in)."""
@@ -1435,6 +1507,10 @@ POST_ROUTES: dict[str, PostRoute] = {
     "/review/accept": _Handler._review_accept,
     "/undo": _Handler._undo,
     "/due/settle": _Handler._settle,
+    "/settings/save": _Handler._settings_save,
+    "/settings/schedule": _Handler._settings_schedule,
+    "/settings/restore": _Handler._settings_restore,
+    "/settings/open": _Handler._settings_open,
 }
 """Every POST route. Each one is reached only through ``_Handler._post``, after
 the exact origin, the session cookie and the CSRF token; ``POST /launch`` is the
@@ -1464,6 +1540,7 @@ def run(
     browser: bool = True,
     echo: Callable[[str], None] = print,
     warn: Callable[[str], None] = print,
+    config_path: Path | None = None,
 ) -> str:
     """``flib ui``: serve until idle, ended or interrupted; why it ended.
 
@@ -1483,7 +1560,7 @@ def run(
     try:
         with ui_lock(config.database):
             sweep_handoffs(handoff_root())
-            ui = Ui(config, page=page, port=port, on_event=on_event)
+            ui = Ui(config, page=page, port=port, on_event=on_event, config_path=config_path)
             try:
                 with _signals(ui):
                     ui.start()
