@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 from importlib import resources
-from importlib.abc import Traversable
+from importlib.resources.abc import Traversable
 
 from file_librarian.status import Status
 
