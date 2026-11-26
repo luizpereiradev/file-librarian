@@ -11,8 +11,8 @@ All notable changes to this project are documented here. The format follows
 - **flib in the menu bar** (#116): `flib menu` builds a small AppleScriptObjC
   stay-open applet with `osacompile` (no Xcode, nothing downloaded), signs it
   ad hoc, puts it next to the notifier in flib's environment and starts it
-  at login with the LaunchAgent `io.github.luizpereiradev.file-librarian.menu`
-  (back after a crash, off after Quit until the next login); `--remove`
+  at login with the LaunchAgent `io.github.luizpereiradev.file-librarian.menu`;
+  `--remove`
   takes everything away, `--status` and `flib status`/`flib doctor` say how
   it is, `--refresh` (also run by `flib schedule --refresh` and
   `scripts/install.sh`) rebuilds it when it is out of date, and `flib init`
@@ -23,11 +23,18 @@ All notable changes to this project are documented here. The format follows
   (atomic, 0600, counts only, never a file name) whenever the instance lock
   is released (every run, undo, fix, review action, due settlement, MCP
   write), when a run starts, when the schedule changes and when a run could
-  not work; writing never fails or slows a run, and nudges the applet with
-  `open -g` only while it runs. The applet checks the file key by key (a
+  not work; writing never fails or slows a run (one `stat` when the item is
+  not installed; no subprocess; a write only when the content changed) and
+  then nudges the applet with a distributed notification, which reaches only
+  a running applet and can never start one. The file is plain ASCII in one
+  flat form, each key once; the applet checks it as a whole and key by key (a
   hostile file can only show the defaults), and a click runs only flib's own
-  interpreter, fixed when it was built, with `-I` and one fixed list of
-  arguments, output to `/dev/null`. **Organize now** starts the daily agent
+  interpreter, fixed when it was built, with `-I`, the words of one action
+  picked by its key inside the script, a fixed minimal environment and
+  output to `/dev/null`. The agent has no `KeepAlive`: off after Quit or a
+  crash until the next login, and nothing respawns if the app is gone. The
+  interface's Settings page says whether the item is installed, with the
+  command for it. **Organize now** starts the daily agent
   (`launchctl kickstart`) when it is this configuration's, and otherwise runs
   here; with a run going on it does nothing and says so.
 - `flib ui --open PAGE` while an interface is already running opens that

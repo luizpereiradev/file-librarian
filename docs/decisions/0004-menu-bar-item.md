@@ -172,16 +172,33 @@ The applet shipped as decided. Where it differs from the plan above:
   ignored). It carries `version`, `pose`, `count`, `line`, `next` (the next
   run), `review`, `due` and `running`; the applet checks every key against
   the same contract as `menubar.sanitize`.
+- **The form** is stricter than "JSON with these keys": plain ASCII, one flat
+  object, each key once, values a printable string (only `\uXXXX` escapes),
+  a whole number 0..9999, `true` or `false` (`menubar.FORM`, matched as a
+  whole on both sides). Anything else gives the defaults, so the applet
+  (`NSJSONSerialization`) and flib (`json`) can never read one file two ways.
 - **Where flib writes it**: when the instance lock is released (every write,
   from any front end), when a run starts, when the schedule changes, and when
-  a run could not work or works again. "Is it running" for the nudge is
-  `launchctl print` saying `state = running`.
+  a run could not work or works again; only when the content changed, with
+  no subprocess.
+- **The nudge is a distributed notification**, not `open -g`: `open` could
+  start an app the user had just quit (launchd's "running" can be stale by
+  the time `open` runs); a notification reaches only a running applet. flib
+  posts it through CoreFoundation with `ctypes`; the applet observes it with
+  `NSNotificationSuspensionBehaviorDeliverImmediately`, since it is never the
+  active app.
+- **No `KeepAlive`.** Like flib's other agents, the item's agent only has
+  `RunAtLoad`: after a crash it stays off until the next login or `flib
+  menu`, and if flib is uninstalled without `flib menu --remove`, launchd
+  fails once at login instead of retrying.
 - **The applet writes one file**, `seen.json` (what it shows, and its pid),
   for `flib doctor`; mutable state is in AppleScript globals, not properties,
   so the applet never tries to save itself (its signature still verifies
   after a run).
 - **A click** runs `flib-python -I -m file_librarian <fixed words> --config
-  <fixed path>` with `NSTask`, in `/`, output to `/dev/null`: `ui --open
+  <fixed path>` with `NSTask`, in `/`, with a fixed minimal environment,
+  output to `/dev/null`; the menu handlers pass only an action key, looked up
+  exactly in a table inside the script: `ui --open
   PAGE` for the pages, `menu --organize` for Organize now (which kickstarts
   the daily agent when it is this configuration's, and otherwise runs in
   place). `flib ui --open PAGE` with an interface already running opens that

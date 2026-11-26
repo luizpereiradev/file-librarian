@@ -330,11 +330,16 @@ fix, undo or due change, and when the schedule changes) and runs nothing but
 flib itself, with fixed arguments. It is a tiny app built on your Mac by
 `flib menu` with tools that ship with macOS (`osacompile`), inside flib's own
 environment, like the notifier; nothing is downloaded and nothing needs
-Xcode. After **Quit** it stays off until the next login, or until `flib
-menu`. `flib status` and `flib doctor` say whether it is there and running;
-`./scripts/install.sh` rebuilds it after an update. On a Mac where it
-cannot be built, `flib menu` says why, and everything else works as
-before.
+Xcode. After **Quit** (or a crash) it stays off until the next login, or
+until `flib menu`. `flib status`, `flib doctor` and the interface's
+Settings page say whether it is there; `./scripts/install.sh` rebuilds it
+after an update. On a Mac where it cannot be built, `flib menu` says why,
+and everything else works as before.
+
+**Uninstalling flib?** Run `flib menu --remove` first (and `flib schedule
+--remove`): the app lives inside flib's environment, and its LaunchAgent
+stays in `~/Library/LaunchAgents` until removed. Left behind, it only fails
+once at each login (it never retries), but it is clutter.
 
 Actions you take in an interface the menu opened, and **Organize now**
 without a daily run, run on behalf of the menu bar app: macOS may ask once
