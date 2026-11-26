@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from file_librarian import catchup, pipeline
+from file_librarian import activity, catchup, pipeline
 from file_librarian.cli import ACCESS_HINT, app
 from file_librarian.config import Config, load_config
 from file_librarian.db.store import Store
@@ -137,6 +137,11 @@ def test_a_scheduled_run_waits_for_the_unlock_and_files_it(
     assert any(line.startswith("The Mac was unlocked") for line in first)
     assert "Catch-up run, after the Mac was unlocked." in second
     assert not any(line.startswith("Waiting up to") for line in second)  # never waits twice
+    # The interface's Activity page reads the same logs back (#114).
+    [day] = activity.collect(cfg, 7).found
+    catch_up, waited = day.runs
+    assert waited.unlock == activity.Unlock(locked=1, waited="unlocked")
+    assert catch_up.unlock.catch_up and catch_up.unlock.locked == 0
 
 
 def test_it_gives_up_at_the_limit(

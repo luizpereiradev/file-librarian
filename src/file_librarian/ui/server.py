@@ -86,13 +86,19 @@ from urllib.parse import parse_qs, urlsplit
 from file_librarian import status as status_mod
 from file_librarian.config import Config
 from file_librarian.lock import AlreadyRunningError, ui_lock
-from file_librarian.ui import api
+from file_librarian.ui import api, views
 
 OPEN = "/usr/bin/open"
 """Opens the handoff file in the default browser; tests swap in a fake."""
 HOST = "127.0.0.1"
-PAGES = ("status",)
-"""Pages ``--open`` can name; Review, Search, Activity, Due and Settings come later."""
+PAGES = ("status", "search", "activity", "due")
+"""Pages ``--open`` can name; Review and Settings come later."""
+VIEWS: dict[str, Callable[[Config, str, str], views.Page]] = {
+    "activity": views.activity_page,
+    "due": views.due_page,
+    "search": lambda config, csrf, query: views.search_page(config, csrf, None),
+}
+"""Pages built on the server for each request (#114): config, CSRF token, query."""
 LAUNCH = "/launch"
 
 MAX_THREADS = 8
@@ -104,6 +110,8 @@ REQUEST_DEADLINE = 5.0
 MAX_REQUEST_LINE = 4096
 MAX_HEADER_BYTES = 16 * 1024
 MAX_BODY = 16 * 1024
+MAX_FORM_FIELDS = 100
+"""Fields of a form body or a query: the search form has a chip per category."""
 IDLE_POLL_SECONDS = 1.0
 CLOSE_GRACE = 1.0
 """Seconds a request in progress may take to finish once the server ends."""
@@ -113,7 +121,8 @@ CSRF_HEADER = "X-Flib-CSRF"
 FORM = "application/x-www-form-urlencoded"
 CSP = (
     "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
-    "connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+    "connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; "
+    "require-trusted-types-for 'script'"
 )
 SECURITY_HEADERS = (
     ("Content-Security-Policy", CSP),
@@ -787,6 +796,7 @@ class _Handler(BaseHTTPRequestHandler):
     server_version = "flib"
     sys_version = ""
     _replied = False
+    _posted = b""
 
     def setup(self) -> None:
         super().setup()
@@ -937,7 +947,7 @@ class _Handler(BaseHTTPRequestHandler):
         if kind != FORM:
             return None
         try:
-            return parse_qs(body.decode("utf-8", "replace"), max_num_fields=8)
+            return parse_qs(body.decode("utf-8", "replace"), max_num_fields=MAX_FORM_FIELDS)
         except ValueError:
             return None
 
@@ -970,6 +980,12 @@ class _Handler(BaseHTTPRequestHandler):
                 self._ended(HTTPStatus.FORBIDDEN)
             elif path == "/":
                 self._redirect(f"/{ui.page}")
+            elif path[1:] in VIEWS:
+                try:
+                    code, body = VIEWS[path[1:]](ui.config, session.csrf, urlsplit(self.path).query)
+                except views.BadRequest as exc:
+                    raise _Reject(HTTPStatus.BAD_REQUEST) from exc
+                self._reply(code, body, _HTML)
             else:
                 page = ui.pages[path[1:]].replace("{{csrf}}", session.csrf)
                 self._reply(HTTPStatus.OK, page.encode(), _HTML)
@@ -1030,6 +1046,7 @@ class _Handler(BaseHTTPRequestHandler):
         route = POST_ROUTES.get(path)
         if route is None:
             raise _Reject(HTTPStatus.NOT_FOUND)
+        self._posted = body
         route(self, session)
 
     def _csrf_token(self, body: bytes) -> str | None:
@@ -1039,6 +1056,36 @@ class _Handler(BaseHTTPRequestHandler):
         fields = self._form(body)
         values = [] if fields is None else fields.get(CSRF_FIELD, [])
         return values[0] if len(values) == 1 else None
+
+    def _search(self, session: Session) -> None:
+        code, body = views.search_page(self.server.ui.config, session.csrf, self._fields())
+        self._reply(code, body, _HTML)
+
+    def _export(self, session: Session) -> None:
+        code, body, kind = views.search_csv(self.server.ui.config, self._fields())
+        headers = []
+        if code == HTTPStatus.OK:
+            headers.append(("Content-Disposition", 'attachment; filename="flib-search.csv"'))
+        self._reply(code, body, kind, headers)
+
+    def _open(self, session: Session) -> None:
+        self._ask_macos(session, reveal=False)
+
+    def _reveal(self, session: Session) -> None:
+        self._ask_macos(session, reveal=True)
+
+    def _ask_macos(self, session: Session, *, reveal: bool) -> None:
+        code, text = views.open_by_id(
+            self.server.ui.config, self._fields(), reveal=reveal, program=OPEN
+        )
+        if text is None:  # asked: the browser stays on the page it was on
+            self._reply(code, b"", _TEXT)
+        else:
+            self._reply(*views.problem_page(code, text, session.csrf), _HTML)
+
+    def _fields(self) -> dict[str, list[str]]:
+        """The form ``_post`` already read (and found the CSRF token in)."""
+        return self._form(self._posted) or {}
 
     def _end_session(self, session: Session) -> None:
         ui = self.server.ui
@@ -1074,6 +1121,10 @@ class _Handler(BaseHTTPRequestHandler):
 PostRoute = Callable[[_Handler, Session], None]
 POST_ROUTES: dict[str, PostRoute] = {
     "/session/end": _Handler._end_session,
+    "/search": _Handler._search,
+    "/search/export": _Handler._export,
+    "/files/open": _Handler._open,
+    "/files/reveal": _Handler._reveal,
 }
 """Every POST route. Each one is reached only through ``_Handler._post``, after
 the exact origin, the session cookie and the CSRF token; ``POST /launch`` is the

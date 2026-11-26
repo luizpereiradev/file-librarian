@@ -129,3 +129,168 @@ h2 { margin: 0; font-size: 0.95rem; font-weight: 600; color: var(--muted); }
 .error { color: var(--accent-text); }
 
 footer { max-width: 64rem; margin: 0 auto; padding: 0 1.25rem 2rem; color: var(--muted); font-size: 0.85rem; }
+
+/* Activity, Search and Due (#114): built on the server, read without JavaScript. */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.muted, .where { color: var(--muted); }
+
+.where { font-size: 0.9rem; overflow-wrap: anywhere; }
+
+.name { font-weight: 600; overflow-wrap: anywhere; }
+
+.notice {
+  margin: 1rem 0;
+  padding: 0.6rem 0.9rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.notice.error { border-color: var(--accent); }
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.5rem 0 1rem;
+  padding: 0;
+  border: 0;
+}
+
+.chips legend { padding: 0; margin-bottom: 0.3rem; color: var(--muted); font-size: 0.9rem; }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: inherit;
+  font-size: 0.9rem;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.chip[aria-current="true"], .chip:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.badge {
+  display: inline-block;
+  padding: 0 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.badge.warn { border-color: var(--accent); color: var(--accent-text); }
+
+input, select {
+  font: inherit;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+input:focus-visible, select:focus-visible, summary:focus-visible, .chip:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.searchbar { display: flex; gap: 0.5rem; margin: 0.5rem 0; }
+
+.query { flex: 1; }
+
+.query input { width: 100%; }
+
+details { margin: 0.5rem 0; }
+
+summary { cursor: pointer; color: var(--muted); }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+  gap: 0.6rem 1rem;
+  margin: 0.6rem 0;
+}
+
+.field { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.9rem; }
+
+.field span { color: var(--muted); }
+
+.check { display: block; margin: 0.3rem 0; }
+
+button.quiet { background: transparent; color: var(--accent-text); border: 1px solid var(--line); }
+
+button.small { padding: 0.15rem 0.6rem; font-size: 0.85rem; }
+
+form.inline { display: inline; margin: 0; }
+
+.acts { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.4rem; }
+
+.hits { list-style: none; margin: 0; padding: 0; }
+
+.hit, .run {
+  margin: 0 0 0.8rem;
+  padding: 0.8rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.hit-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4rem; }
+
+.desc { margin: 0.4rem 0 0; }
+
+.fields { margin-top: 0.2rem; font-size: 0.9rem; }
+
+.tags { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.4rem 0 0; padding: 0; list-style: none; }
+
+.tags li { padding: 0 0.45rem; border-radius: 4px; background: var(--bg); font-size: 0.8rem; }
+
+.day { margin: 1.5rem 0; }
+
+.day h2 { font-size: 1.1rem; color: var(--text); }
+
+.run h3 { margin: 0 0 0.3rem; font-size: 1rem; }
+
+.run p { margin: 0.2rem 0; }
+
+.special { color: var(--accent-text); }
+
+.moves { margin: 0.5rem 0 0; padding-left: 1.1rem; font-size: 0.92rem; }
+
+.moves li { margin: 0.15rem 0; overflow-wrap: anywhere; }
+
+.scroll { overflow-x: auto; }
+
+table { border-collapse: collapse; margin: 0.8rem 0; }
+
+caption { text-align: left; color: var(--muted); font-size: 0.9rem; padding-bottom: 0.3rem; }
+
+th, td { padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+
+th { color: var(--muted); font-weight: 600; font-size: 0.9rem; }
+
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+table.due { width: 100%; }
+
+tr.overdue td:first-child { border-left: 3px solid var(--accent); }

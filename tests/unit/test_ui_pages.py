@@ -1,0 +1,840 @@
+"""``flib ui``'s read-only pages (#114): Activity, Search and Due.
+
+Each page is fetched from a real server on 127.0.0.1 (``loopback_network``),
+over a real index the fake provider filled. File names, descriptions and
+issuers are hostile on purpose: they must come out as text, never markup.
+Opening a file goes to the fake ``open`` of conftest.py.
+"""
+
+from __future__ import annotations
+
+import csv
+import io
+import json
+import sqlite3
+from collections.abc import Iterator
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlencode
+
+import pytest
+
+from file_librarian import activity, catchup, due, pipeline
+from file_librarian.config import Config
+from file_librarian.db.store import RunRow, Store
+from file_librarian.models import Classification, FileStatus, OperationStatus, RunTrigger
+from file_librarian.providers.fake import FakeProvider
+from file_librarian.runlog import write_log
+from file_librarian.scanner import SkipReason
+from file_librarian.ui import markup, views
+from file_librarian.ui import server as ui_server
+from file_librarian.ui.server import CSP, Ui
+from file_librarian.undo import undo_run
+from tests._helpers import UiClient, UiResponse, answer, fake_config, library, put
+from tests.unit.test_ui import (  # noqa: F401 - fixtures: every server is checked the same way
+    _Collector,
+    events,
+    no_hang,
+    nothing_left_behind,
+)
+
+# Hostile on purpose: markup, quotes, an entity, the page's own slot, a formula.
+EVIL_NAME = """<img src=x onerror=alert(1)> "q" 'a' &amp; {{csrf}}.pdf"""
+EVIL_TEXT = """"><script>alert(2)</script> {{nav}}"""
+EVIL_ISSUER = "<i>Evil & Co</i>"
+FORMULA = "=HYPERLINK(1)"
+RAW = ("<img src=x", "<script>", "<i>Evil", "onerror=alert(1)>")
+
+TODAY = date.today()
+
+
+def soon(days: int) -> str:
+    return (TODAY + timedelta(days=days)).isoformat()
+
+
+def bill(description: str = "d", **kw: Any) -> Classification:
+    fields: dict[str, Any] = {"kind": "bill", "currency": "USD"} | kw
+    return answer("Finance", confidence=0.9, description=description, **fields)
+
+
+LIBRARY = {
+    EVIL_NAME: bill(description=EVIL_TEXT, issuer=EVIL_ISSUER, amount="10", due_date=soon(1)),
+    "power.pdf": bill(issuer="Power Co", amount="120.50", due_date=soon(3)),
+    "water.pdf": bill(issuer="Water Co", amount="40", due_date=soon(-2)),
+    "formula.pdf": answer("Finance", confidence=0.9, description=FORMULA),
+    "refund.pdf": bill(issuer="Shop", amount="5", currency="EUR", kind="receipt"),
+    "unsure.pdf": answer("Finance", confidence=0.3, kind="bill", due_date=soon(2)),
+    "notes.txt": answer("Other", name="Meeting notes", confidence=0.95, tags=["<tag>", "work"]),
+}
+
+
+def fill(downloads: Path, cfg: Config, files: dict[str, Classification] | None = None) -> int:
+    """Run the pipeline over ``files`` (the library above by default); the run's id."""
+    files = LIBRARY if files is None else files
+    for name in files:
+        put(downloads, name, name.encode())
+    put(downloads, "id_rsa", b"key material")  # sensitive: left in place, never listed
+    outcome = pipeline.run(cfg, FakeProvider(files, default=answer()), simulate=False)
+    assert outcome.report is not None and outcome.report.run_id is not None
+    return outcome.report.run_id
+
+
+@pytest.fixture
+def serve(loopback_network: None) -> Iterator[list[Ui]]:
+    """Servers started with ``start``, all closed at the end."""
+    started: list[Ui] = []
+    yield started
+    for ui in started:
+        ui.close()
+
+
+def start(serve: list[Ui], cfg: Config, **kw: object) -> UiClient:
+    ui = Ui(cfg, poll_seconds=0.01, **kw)  # type: ignore[arg-type]
+    ui.start()
+    serve.append(ui)
+    c = UiClient(ui.port)
+    assert c.launch(ui.launch_url).status == 303
+    return c
+
+
+@pytest.fixture
+def filled(downloads: Path, cfg: Config) -> int:
+    return fill(downloads, cfg)
+
+
+@pytest.fixture
+def client(serve: list[Ui], cfg: Config, filled: int) -> UiClient:
+    return start(serve, cfg)
+
+
+@pytest.fixture
+def empty(serve: list[Ui], cfg: Config) -> UiClient:
+    return start(serve, cfg)
+
+
+def search(c: UiClient, path: str = "/search", **fields: str | list[str]) -> UiResponse:
+    body: dict[str, str | list[str]] = {"csrf": c.csrf("/search"), **fields}
+    return c.request(
+        "POST",
+        path,
+        body=urlencode(body, doseq=True).encode(),
+        headers={
+            "Origin": c.origin,
+            "Sec-Fetch-Site": "same-origin",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+    )
+
+
+def post(c: UiClient, route: str, **fields: str) -> UiResponse:
+    return c.post_form(route, {"csrf": c.csrf("/search")} | fields)
+
+
+def assert_safe(page: str) -> None:
+    """No hostile value came out as markup, and the page has no inline code."""
+    for raw in RAW:
+        assert raw not in page, raw
+    parser = _Collector()
+    parser.feed(page)
+    assert parser.problems == []
+    assert page.count('aria-label="Pages"') == 1  # a slot in a value is never filled
+
+
+def file_id(cfg: Config, name: str) -> int:
+    with Store.open(cfg.database) as store:
+        return next(r.id for r in store.all_files() if r.original_name == name)
+
+
+def opened(log: Path) -> list[list[str]]:
+    if not log.exists():
+        return []
+    return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+
+
+# --- every page ------------------------------------------------------------------------
+
+
+PAGES = ["/activity", "/search", "/due"]
+
+
+@pytest.mark.parametrize("path", PAGES)
+def test_each_page_needs_the_session(empty: UiClient, path: str) -> None:
+    reply = UiClient(empty.port).get(path)
+    assert reply.status == 403
+    assert "This session has ended" in reply.text
+
+
+@pytest.mark.parametrize("path", ["/search", "/search/export", "/files/open", "/files/reveal"])
+def test_each_new_post_route_is_in_the_route_table(path: str) -> None:
+    assert path in ui_server.POST_ROUTES  # so the route-table test covers it
+
+
+@pytest.mark.parametrize("path", PAGES)
+def test_an_empty_library_creates_nothing(empty: UiClient, cfg: Config, path: str) -> None:
+    reply = empty.get(path)
+    assert reply.status == 200
+    assert "No run yet" in reply.text or "Nothing due" in reply.text
+    assert_safe(reply.text)
+    assert not cfg.database.exists()
+
+
+def test_search_and_export_before_the_first_run(empty: UiClient, cfg: Config) -> None:
+    reply = search(empty, q="bill")
+    assert reply.status == 200 and "No run yet" in reply.text
+    reply = search(empty, since="not a day")
+    assert "is not a date" in reply.text
+    export = search(empty, "/search/export", q="bill")
+    assert export.status == 200
+    assert export.text.splitlines() == [",".join(views.CSV_COLUMNS)]
+    assert not cfg.database.exists()
+
+
+@pytest.mark.parametrize("path", PAGES)
+def test_each_page_is_escaped_and_has_no_inline_code(client: UiClient, path: str) -> None:
+    reply = client.get(path)
+    assert reply.status == 200
+    assert reply.headers["Content-Security-Policy"] == CSP
+    assert reply.headers["Content-Type"] == "text/html; charset=utf-8"
+    assert_safe(reply.text)
+
+
+def test_the_navigation_links_the_pages_that_exist(client: UiClient) -> None:
+    for path in ["/status", *PAGES]:
+        page = client.get(path).text
+        for name in ("search", "activity", "due"):
+            assert f'href="/{name}"' in page, (path, name)
+        parser = _Collector()
+        parser.feed(page)
+        assert parser.disabled == ["Review", "Settings"], path
+    assert 'aria-current="page"' in client.get("/due").text
+
+
+def test_the_generated_navigation_matches_the_status_page() -> None:
+    """Status is a static file; its menu is the one the other pages are built with."""
+    static = ui_server.load_pages()["status"]
+    built = markup.nav("status")
+    assert built in static.replace("\n    ", "").replace("\n  </nav>", "</nav>")
+
+
+def test_the_policy_requires_trusted_types() -> None:
+    assert "require-trusted-types-for 'script'" in CSP
+
+
+@pytest.mark.parametrize("page", ["search", "activity", "due"])
+def test_flib_ui_can_open_each_page(serve: list[Ui], cfg: Config, page: str) -> None:
+    ui = Ui(cfg, page=page, poll_seconds=0.01)
+    ui.start()
+    serve.append(ui)
+    c = UiClient(ui.port)
+    assert c.launch(ui.launch_url).headers["Location"] == f"/{page}"
+    assert c.get(f"/{page}").status == 200
+
+
+# --- Search ----------------------------------------------------------------------------
+
+
+def test_the_search_form_lists_categories_and_kinds(client: UiClient) -> None:
+    page = client.get("/search").text
+    assert 'name="category" value="Finance"' in page
+    assert 'name="kind" value="bill"' in page
+    assert 'formaction="/search/export"' in page
+    assert 'method="post" action="/search"' in page
+    assert "<ol" not in page  # no results without a search
+
+
+def test_a_search_in_the_address_is_never_run(client: UiClient) -> None:
+    """Words go in a form body only: an address stays in the browser's history."""
+    page = client.get("/search?q=power").text
+    assert "power.pdf" not in page
+    assert 'value="power"' not in page
+
+
+def test_search_finds_by_words_and_escapes_everything(client: UiClient) -> None:
+    reply = search(client, q="img onerror")
+    text = reply.text
+    assert reply.status == 200
+    assert_safe(text)
+    assert "1 match" in text
+    assert "&lt;img src=x onerror=alert(1)&gt; &quot;q&quot; &#x27;a&#x27; &amp;amp;" in text
+    assert "{{csrf}}.pdf" in text  # the slot in a name is never filled
+    assert "&quot;&gt;&lt;script&gt;alert(2)&lt;/script&gt; {{nav}}" in text
+    assert "&lt;i&gt;Evil &amp; Co&lt;/i&gt;" in text
+
+
+def test_search_by_filters_with_totals(client: UiClient) -> None:
+    reply = search(client, kind=["bill"], by="issuer")
+    text = reply.text
+    assert "4 matches" in text  # one is in review
+    assert "USD 170.50" in text  # per currency, every match
+    assert "Power Co" in text and "By issuer" in text
+    assert "refund.pdf" not in text
+
+
+def test_search_totals_never_mix_currencies(client: UiClient) -> None:
+    text = search(client, category=["finance"]).text
+    assert "USD 170.50" in text and "EUR 5.00" in text
+    assert "no amount; not counted" in text  # the files without one are counted apart
+
+
+@pytest.mark.parametrize(
+    ("fields", "error"),
+    [
+        ({}, views.NOTHING),
+        ({"since": "2026-13-01"}, "Processed from &#x27;2026-13-01&#x27; is not a valid date"),
+        ({"category": "Nope"}, "Unknown category &#x27;Nope&#x27;"),
+        ({"min_amount": "lots"}, "At least &#x27;lots&#x27; is not an amount"),
+        ({"period": "<b>"}, "Period &#x27;&lt;b&gt;&#x27; is not a year or month"),
+        ({"ext": "p/d"}, "Bad extension"),
+    ],
+)
+def test_search_errors_are_said_in_the_forms_words(
+    client: UiClient, fields: dict[str, str], error: str
+) -> None:
+    reply = search(client, **fields)
+    assert reply.status == 200
+    assert error in reply.text
+    assert "<ol" not in reply.text
+
+
+def test_the_form_keeps_what_was_typed(client: UiClient) -> None:
+    text = search(client, q='a "b"', issuer="Power Co", limit="20", duplicates="1").text
+    assert 'value="a &quot;b&quot;"' in text
+    assert 'name="issuer" value="Power Co"' in text
+    assert '<option value="20" selected>' in text
+    assert 'name="duplicates" value="1" checked' in text
+    assert "<details open>" in text
+
+
+def test_sensitive_files_never_appear_in_search(client: UiClient) -> None:
+    text = search(client, q="id_rsa").text
+    assert "id_rsa" not in text.replace('value="id_rsa"', "")
+    assert "1 sensitive file also matched" in text
+
+
+def test_a_hit_says_its_old_name_its_tags_and_review(client: UiClient) -> None:
+    text = search(client, q="meeting").text
+    assert 'was <span class="name">notes.txt</span>' in text
+    assert "<li>&lt;tag&gt;</li>" in text
+    assert "in review" in search(client, q="unsure").text
+
+
+def test_search_on_an_index_that_fails_to_read(
+    monkeypatch: pytest.MonkeyPatch, client: UiClient
+) -> None:
+    def broken(self: Store) -> list[str]:
+        raise sqlite3.OperationalError("disk I/O error at /secret/path")
+
+    monkeypatch.setattr(Store, "categories", broken)
+    reply = client.get("/search")
+    assert reply.status == 503
+    assert "cannot read the index" in reply.text and "/secret" not in reply.text
+    export = search(client, "/search/export", q="x")
+    assert export.status == 503 and export.text == "cannot read the index\n"
+
+
+def test_no_matches(client: UiClient) -> None:
+    assert "No matches." in search(client, q="nothingatall").text
+
+
+def test_duplicates_only_when_asked(downloads: Path, cfg: Config, serve: list[Ui]) -> None:
+    fill(downloads, cfg, {"bill.pdf": answer("Finance")})
+    put(downloads, "bill copy.pdf", b"bill.pdf")
+    pipeline.run(cfg, FakeProvider(default=answer()), simulate=False)
+    c = start(serve, cfg)
+    assert "duplicate of" not in search(c, q="bill").text
+    text = search(c, q="bill", duplicates="1").text
+    assert "duplicate of Finance/bill.pdf" in text
+
+
+def test_semantic_search_falls_back_with_a_notice(
+    downloads: Path, serve: list[Ui], tmp_path: Path
+) -> None:
+    cfg = fake_config(
+        downloads, database=str(tmp_path / "l.db"), search={"semantic": {"enabled": True}}
+    )
+    fill(downloads, cfg, {"power.pdf": answer("Finance")})
+    c = start(serve, cfg)
+    assert 'name="semantic"' in c.get("/search").text
+    text = search(c, q="power", semantic="1").text
+    assert "no file has an embedding" in text
+    assert "power.pdf" in text
+    assert "not by meaning" in text  # the totals match the words only
+
+
+def test_search_on_an_index_from_an_older_flib(client: UiClient, cfg: Config) -> None:
+    with sqlite3.connect(cfg.database) as conn:
+        conn.execute("PRAGMA user_version = 12")
+    reply = client.get("/search")
+    assert reply.status == 503
+    assert "the next `flib run` updates it" in reply.text
+
+
+def test_a_form_with_too_many_fields_is_refused(client: UiClient) -> None:
+    fields = {f"f{i}": "x" for i in range(ui_server.MAX_FORM_FIELDS + 1)}
+    assert post(client, "/search", **fields).status == 403
+
+
+# --- CSV export ------------------------------------------------------------------------
+
+
+def test_the_export_is_an_attachment_a_spreadsheet_cannot_run(client: UiClient) -> None:
+    reply = search(client, "/search/export", category=["Finance"])
+    assert reply.status == 200
+    headers = reply.headers
+    assert headers["Content-Disposition"] == 'attachment; filename="flib-search.csv"'
+    assert headers["Content-Type"] == "text/csv; charset=utf-8"
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    assert headers["Content-Security-Policy"] == CSP
+    rows = list(csv.DictReader(io.StringIO(reply.text)))
+    by_name = {Path(r["path"]).name: r for r in rows}
+    assert "id_rsa" not in by_name
+    assert by_name["formula.pdf"]["description"] == "'" + FORMULA
+    assert by_name["refund.pdf"]["amount"] == "5.00"
+    assert by_name[EVIL_NAME]["issuer"] == EVIL_ISSUER  # CSV is data, not HTML
+
+
+def test_an_export_with_a_bad_filter_says_why(client: UiClient) -> None:
+    reply = search(client, "/search/export", since="soon")
+    assert reply.status == 400
+    assert reply.headers["Content-Type"] == "text/plain; charset=utf-8"
+    assert "Content-Disposition" not in reply.headers
+
+
+@pytest.mark.parametrize(
+    ("value", "cell"),
+    [("=1+1", "'=1+1"), ("+1", "'+1"), ("@x", "'@x"), ("-x", "'-x"), ("\tx", "'\tx"), ("a", "a")],
+)
+def test_cells_that_look_like_formulas_are_quoted(value: str, cell: str) -> None:
+    assert views.cell(value) == cell
+    assert views.cell("-12.50", number=True) == "-12.50"
+    assert views.cell("-x", number=True) == "'-x"
+    assert views.cell(None) == ""
+
+
+# --- Due -------------------------------------------------------------------------------
+
+
+def test_due_lists_the_window_with_totals(client: UiClient) -> None:
+    text = client.get("/due").text
+    assert_safe(text)
+    for name in ("power.pdf", "water.pdf"):
+        assert name in text
+    assert "overdue" in text and "tomorrow" in text
+    assert "USD 170.50" in text  # the three bills; the receipt is not a kind `flib due` lists
+    assert "refund.pdf" not in text
+    assert 'class="chip" aria-current="true">7 days' in text.replace('href="/due?within=7d" ', "")
+
+
+def test_due_shows_review_and_documents_without_an_amount(client: UiClient) -> None:
+    text = client.get("/due").text
+    assert "unsure.pdf" in text and "in review" in text
+    assert "1 document states no amount; not counted." in text
+
+
+def test_due_choices_go_in_the_address(client: UiClient) -> None:
+    assert "power.pdf" not in client.get("/due?overdue=1").text
+    assert "water.pdf" in client.get("/due?overdue=1").text
+    assert client.get("/due?within=1m&all=1").status == 200
+    assert "Hide those marked done" in client.get("/due?within=1m&all=1").text
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["within=9y", "within=7d&within=2w", "overdue=yes", "all=0", "overdue=1&within=7d", "a=1&" * 9],
+)
+def test_due_refuses_choices_it_does_not_offer(client: UiClient, query: str) -> None:
+    assert client.get(f"/due?{query}").status == 400
+
+
+def test_due_says_what_is_done_or_missing(client: UiClient, cfg: Config) -> None:
+    with Store.open(cfg.database) as store:
+        row = store.file_by_id(file_id(cfg, "water.pdf"))
+        due.settle(store, row.current_path, done=True)
+        moved = store.file_by_id(file_id(cfg, "power.pdf")).current_path
+    moved.unlink()
+    text = client.get("/due").text
+    assert "1 document marked done or of another kind not shown." in text
+    assert "missing: moved by hand?" in text
+    assert "done" in client.get("/due?all=1&within=7d").text
+
+
+def test_due_on_an_index_it_cannot_read(client: UiClient, cfg: Config) -> None:
+    with sqlite3.connect(cfg.database) as conn:
+        conn.execute("PRAGMA user_version = 999")
+    reply = client.get("/due")
+    assert reply.status == 503
+    assert "newer than this flib" in reply.text
+
+
+def test_due_never_shows_a_database_error(
+    monkeypatch: pytest.MonkeyPatch, client: UiClient, cfg: Config
+) -> None:
+    def broken(config: Config, query: due.Query) -> None:
+        raise due.DueError("cannot read the index: at /secret/path") from sqlite3.Error("x")
+
+    monkeypatch.setattr(due, "find", broken)
+    reply = client.get("/due")
+    assert reply.status == 503
+    assert "/secret/path" not in reply.text
+
+
+# --- Activity --------------------------------------------------------------------------
+
+
+def test_activity_shows_each_run_and_what_it_moved(client: UiClient) -> None:
+    text = client.get("/activity").text
+    assert_safe(text)
+    assert "by hand" in text and "run 1" in text
+    assert "Finance/power.pdf" in text
+    assert "1 sensitive file left in place" in text
+    assert "id_rsa" not in text
+    assert 'aria-current="true">7 days' in text.replace('href="/activity?days=7" ', "")
+
+
+def test_activity_marks_duplicates_and_undone_moves(
+    downloads: Path, cfg: Config, serve: list[Ui]
+) -> None:
+    fill(downloads, cfg, {"bill.pdf": answer("Finance")})
+    put(downloads, "bill copy.pdf", b"bill.pdf")
+    pipeline.run(cfg, FakeProvider(default=answer()), simulate=False)
+    with Store.open(cfg.database) as store:
+        undo_run(store, 1, config=cfg)
+    text = start(serve, cfg).get("/activity").text
+    assert ">duplicate<" in text
+    assert ">undone<" in text
+
+
+def test_activity_reads_the_wait_for_an_unlock_from_the_logs(
+    filled: int, cfg: Config, serve: list[Ui]
+) -> None:
+    locked = f"  skip    photo.jpeg  ({SkipReason.LOCKED.value})"
+    write_log(
+        cfg.database,
+        filled,
+        [locked, catchup.WAITING_LINE.format(hours=8, count=1), catchup.UNLOCKED_LINE],
+    )
+    text = start(serve, cfg).get("/activity").text
+    assert "1 file protected while the Mac is locked skipped" in text
+    assert "then ran once more" in text
+    assert "photo.jpeg" not in text
+
+
+@pytest.mark.parametrize(
+    ("lines", "expected"),
+    [
+        ([], activity.Unlock()),
+        ([catchup.CATCH_UP_LINE], activity.Unlock(catch_up=True)),
+        ([catchup.WAITING_LINE.format(hours=2, count=3)], activity.Unlock(waited="waiting")),
+        (
+            [catchup.WAITING_LINE.format(hours=2, count=3), catchup.TIMED_OUT_LINE.format(hours=2)],
+            activity.Unlock(waited="timed out"),
+        ),
+        ([catchup.STOPPED_LINE], activity.Unlock(waited="stopped")),
+        ([catchup.NOT_WAITING_LINE], activity.Unlock(waited="elsewhere")),
+    ],
+)
+def test_what_a_log_says_about_the_unlock(
+    cfg: Config, lines: list[str], expected: activity.Unlock
+) -> None:
+    write_log(cfg.database, 7, lines)
+    assert activity.read_unlock(cfg.database, 7) == expected
+
+
+def test_no_log_says_nothing_about_the_unlock(cfg: Config) -> None:
+    assert activity.read_unlock(cfg.database, 99) == activity.Unlock()
+
+
+@pytest.mark.parametrize(
+    ("unlock", "text"),
+    [
+        (activity.Unlock(catch_up=True), "Run after the Mac was unlocked."),
+        (activity.Unlock(locked=2, waited="timed out"), "2 files protected"),
+        (activity.Unlock(locked=1), "skipped."),
+        (activity.Unlock(), None),
+    ],
+)
+def test_the_unlock_in_words(unlock: activity.Unlock, text: str | None) -> None:
+    said = views._unlock(unlock)
+    assert said == text if text is None else text in (said or "")
+
+
+def test_activity_counts_documents_marked_done(filled: int, cfg: Config, serve: list[Ui]) -> None:
+    with Store.open(cfg.database) as store:
+        due.settle(store, store.file_by_id(file_id(cfg, "water.pdf")).current_path, done=True)
+    assert "1 document marked done or open again." in start(serve, cfg).get("/activity").text
+
+
+def test_activity_windows(client: UiClient) -> None:
+    for days in activity.DAYS:
+        assert client.get(f"/activity?days={days}").status == 200
+    for query in ("days=1", "days=7&days=30", "days=x"):
+        assert client.get(f"/activity?{query}").status == 400
+
+
+def test_activity_with_no_run_in_the_window(
+    monkeypatch: pytest.MonkeyPatch, filled: int, cfg: Config
+) -> None:
+    later = activity.collect(cfg, 7)
+    assert len(later.found) == 1
+    future = activity.collect(cfg, 7, now=lambda: datetime(2099, 1, 1, tzinfo=UTC))
+    assert future.found == []
+    page = views.activity_page(cfg, "t", "")[1].decode()
+    assert "run 1" in page
+    monkeypatch.setattr(activity, "collect", lambda config, days: activity.Activity(days, []))
+    assert "No run in the last 7 days." in views.activity_page(cfg, "t", "")[1].decode()
+
+
+def test_activity_lists_a_bounded_number_of_runs_and_moves(
+    monkeypatch: pytest.MonkeyPatch, downloads: Path, cfg: Config
+) -> None:
+    fill(downloads, cfg, {f"f{i}.pdf": answer("Finance") for i in range(3)})
+    pipeline.run(cfg, FakeProvider(default=answer()), simulate=False)
+    monkeypatch.setattr(activity, "MAX_RUNS", 1)
+    monkeypatch.setattr(activity, "MAX_MOVES", 2)
+    found = activity.collect(cfg, 7)
+    assert found.capped
+    [day] = found.found
+    [run] = day.runs
+    assert run.run.id == 2
+    with monkeypatch.context() as m:
+        m.setattr(activity, "MAX_RUNS", 5)
+        first = activity.collect(cfg, 7).found[0].runs[-1]
+    assert len(first.moves) == 2 and first.more == 1
+    page = views.activity_page(cfg, "t", "")[1].decode()
+    assert "Only the newest 1 runs are shown" in page
+
+
+def test_simulations_are_not_activity(downloads: Path, cfg: Config) -> None:
+    put(downloads, "a.pdf", b"a")
+    pipeline.run(cfg, FakeProvider(default=answer()), simulate=True)
+    assert activity.collect(cfg, 7).found == []
+
+
+def run_row(**kw: object) -> RunRow:
+    fields: dict[str, object] = {
+        "id": 3,
+        "trigger": RunTrigger.WATCH,
+        "started_at": "2026-01-02T03:04:05+00:00",
+        "finished_at": "2026-01-02T03:05:05+00:00",
+        "files_seen": 1,
+        "files_moved": 1,
+        "files_review": 0,
+        "errors": 0,
+        "cost_usd": 0.5,
+    } | kw
+    return RunRow(**fields)  # type: ignore[arg-type]
+
+
+def test_a_run_in_words(cfg: Config, downloads: Path) -> None:
+    move = activity.Move(
+        file_id=1,
+        source=downloads / "<a>.pdf",
+        destination=library(downloads) / "Other" / "<a>.pdf",
+        status=OperationStatus.FAILED,
+        file_status=FileStatus.ORGANIZED,
+        category=None,
+        fix=True,
+    )
+    item = activity.RunActivity(run_row(), [move], more=4, index_changes=2)
+    assert item.duplicates == 0
+    text = views._run(item, cfg)
+    assert "on arrival (watch)" in text
+    assert "fixed by hand" in text and ">failed<" in text
+    assert "and 4 more" in text and "2 changes to the index." in text
+    assert "&lt;a&gt;.pdf" in text and "<a>" not in text
+    day = activity.Day(date(2026, 1, 2), [item, activity.RunActivity(run_row(cost_usd=None))])
+    assert day.cost_usd == 0.5 and day.unpriced == 1
+    assert "US$ 0.5000 (and 1 run without a cost)" in views._day(day, cfg)
+
+
+def test_a_run_that_did_not_finish_says_so(filled: int, cfg: Config) -> None:
+    with sqlite3.connect(cfg.database) as conn:
+        conn.execute("UPDATE runs SET finished_at = NULL, cost_usd = NULL")
+    page = views.activity_page(cfg, "t", "")[1].decode()
+    assert "It did not finish" in page
+    assert "no cost recorded" in page
+
+
+@pytest.mark.parametrize(
+    ("version", "message"), [(12, "older flib"), (999, "newer than this flib")]
+)
+def test_activity_on_an_index_it_cannot_read(
+    filled: int, cfg: Config, version: int, message: str
+) -> None:
+    with sqlite3.connect(cfg.database) as conn:
+        conn.execute(f"PRAGMA user_version = {version}")
+    code, page = views.activity_page(cfg, "t", "")
+    assert code == 503 and message in page.decode()
+
+
+def test_activity_never_shows_a_database_error(
+    monkeypatch: pytest.MonkeyPatch, filled: int, cfg: Config
+) -> None:
+    def broken(self: Store, since: str, *, limit: int) -> None:
+        raise sqlite3.OperationalError("disk I/O error at /secret/path")
+
+    monkeypatch.setattr(Store, "runs_since", broken)
+    code, page = views.activity_page(cfg, "t", "")
+    assert code == 503
+    assert "cannot read the index" in page.decode() and "/secret" not in page.decode()
+
+
+# --- Open and Show in Finder -----------------------------------------------------------
+
+
+def test_open_and_reveal_ask_macos_by_id(
+    client: UiClient, cfg: Config, fake_browser: Path, downloads: Path
+) -> None:
+    ident = str(file_id(cfg, "power.pdf"))
+    target = str(library(downloads) / "Finance" / "power.pdf")
+    reply = post(client, "/files/open", id=ident)
+    assert reply.status == 204 and reply.body == b""
+    assert post(client, "/files/reveal", id=ident).status == 204
+    assert opened(fake_browser) == [[target], ["-R", target]]
+
+
+@pytest.mark.parametrize(
+    ("ident", "status"), [("", 400), ("x", 400), ("-1", 400), ("1" * 19, 400), ("9999", 404)]
+)
+def test_open_needs_a_known_id(
+    client: UiClient, fake_browser: Path, ident: str, status: int
+) -> None:
+    reply = post(client, "/files/open", id=ident)
+    assert reply.status == status
+    assert_safe(reply.text)
+    assert opened(fake_browser) == []
+
+
+def test_open_never_takes_a_path(
+    client: UiClient, cfg: Config, fake_browser: Path, downloads: Path
+) -> None:
+    ident = str(file_id(cfg, "power.pdf"))
+    reply = post(client, "/files/open", id=ident, path=str(downloads / "id_rsa"))
+    assert reply.status == 204
+    assert opened(fake_browser) == [[str(library(downloads) / "Finance" / "power.pdf")]]
+
+
+def test_open_refuses_a_sensitive_file(client: UiClient, cfg: Config, fake_browser: Path) -> None:
+    reply = post(client, "/files/open", id=str(file_id(cfg, "id_rsa")))
+    assert reply.status == 403
+    assert "id_rsa" not in reply.text
+    assert opened(fake_browser) == []
+
+
+def test_open_rechecks_the_path_from_the_index(
+    client: UiClient, cfg: Config, fake_browser: Path, tmp_path: Path
+) -> None:
+    ident = file_id(cfg, "power.pdf")
+    with Store.open(cfg.database) as store:
+        path = store.file_by_id(ident).current_path
+    outside = tmp_path / "elsewhere.pdf"
+    outside.write_bytes(b"x")
+    with sqlite3.connect(cfg.database) as conn:
+        conn.execute("UPDATE files SET current_path = ? WHERE id = ?", (str(outside), ident))
+    reply = post(client, "/files/open", id=str(ident))
+    assert reply.status == 403
+    assert str(tmp_path) not in reply.text
+    with sqlite3.connect(cfg.database) as conn:
+        conn.execute("UPDATE files SET current_path = ? WHERE id = ?", (str(path), ident))
+    path.unlink()
+    path.symlink_to(outside)
+    assert post(client, "/files/open", id=str(ident)).status == 403
+    path.unlink()
+    reply = post(client, "/files/open", id=str(ident))
+    assert reply.status == 404
+    assert "no longer where the index says" in reply.text
+    assert str(path) not in reply.text
+    assert opened(fake_browser) == []
+
+
+def test_when_macos_cannot_open_it_the_page_says_so_plainly(
+    monkeypatch: pytest.MonkeyPatch, client: UiClient, cfg: Config
+) -> None:
+    monkeypatch.setenv("FAKE_OPEN_FAIL", "1")
+    reply = post(client, "/files/open", id=str(file_id(cfg, "power.pdf")))
+    assert reply.status == 502
+    assert "macOS could not open it." in reply.text
+    assert "LSOpen" not in reply.text and "power.pdf" not in reply.text
+
+
+def test_open_survives_a_missing_program(client: UiClient, cfg: Config) -> None:
+    fields = {"id": [str(file_id(cfg, "power.pdf"))]}
+    code, text = views.open_by_id(cfg, fields, reveal=False, program="/nonexistent/open")
+    assert code == 502 and text == "macOS could not open it."
+
+
+def test_open_without_an_index(empty: UiClient, cfg: Config) -> None:
+    assert post(empty, "/files/open", id="1").status == 404
+    assert not cfg.database.exists()
+
+
+def test_open_on_an_index_it_cannot_read(filled: int, cfg: Config) -> None:
+    with sqlite3.connect(cfg.database) as conn:
+        conn.execute("PRAGMA user_version = 999")
+    code, text = views.open_by_id(cfg, {"id": ["1"]}, reveal=True, program="x")
+    assert code == 503 and "newer" in (text or "")
+
+
+def test_the_buttons_post_the_id_and_the_csrf_token(client: UiClient, cfg: Config) -> None:
+    text = search(client, q="power").text
+    ident = file_id(cfg, "power.pdf")
+    assert f'<input type="hidden" name="id" value="{ident}">' in text
+    assert 'action="/files/reveal"' in text
+    assert str(cfg.output_root) not in text.split("<ol", 1)[1].split("</ol>", 1)[0]
+
+
+def test_a_missing_file_has_no_buttons(client: UiClient, cfg: Config) -> None:
+    with Store.open(cfg.database) as store:
+        store.file_by_id(file_id(cfg, "power.pdf")).current_path.unlink()
+    text = search(client, q="power").text
+    assert "missing: moved by hand?" in text
+    assert 'action="/files/open"' not in text
+
+
+# --- markup ----------------------------------------------------------------------------
+
+
+def test_el_escapes_text_and_attributes() -> None:
+    built = markup.el("a", '<b>"x"</b>', href='/" onclick="x', title=None, hidden=True)
+    assert built == '<a href="/&quot; onclick=&quot;x" hidden>&lt;b&gt;&quot;x&quot;&lt;/b&gt;</a>'
+    assert markup.el("p", markup.el("b", "x"), 3, None, ["&", ["<"]]) == "<p><b>x</b>3&amp;&lt;</p>"
+    assert markup.el("input", type="text", value="<") == '<input type="text" value="&lt;">'
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: markup.el("a b"),
+        lambda: markup.el("script>"),
+        lambda: markup.el("a", **{"on click": "x"}),
+        lambda: markup.el("input", "child"),
+    ],
+)
+def test_el_refuses_names_that_are_not_code(call: object) -> None:
+    with pytest.raises(ValueError):
+        call()  # type: ignore[operator]
+
+
+def test_esc_escapes_once() -> None:
+    once = markup.esc("<&>")
+    assert once == "&lt;&amp;&gt;"
+    assert markup.esc(once) == once
+    assert markup.join("<", markup.Markup("<br>")) == "&lt;<br>"
+
+
+def test_the_layout_fills_its_slots_in_one_pass() -> None:
+    page = markup.layout("{{csrf}}", "due", markup.esc("{{csrf}} {{main}}"), "TOKEN").decode()
+    assert page.count("TOKEN") == 1  # the End session form only
+    assert "<title>{{csrf}} · file-librarian</title>" in page
+    assert "{{csrf}} {{main}}" in page
+
+
+def test_short_paths_and_times(cfg: Config, downloads: Path) -> None:
+    assert views.short(library(downloads) / "Finance" / "a.pdf", cfg) == "Finance/a.pdf"
+    assert views.short(downloads / "a.pdf", cfg) == "a.pdf"
+    assert views.short(Path("/elsewhere/a.pdf"), cfg) == "/elsewhere/a.pdf"
+    assert views.local_time(None) == ""
+    assert views.local_time("garbage") == "garbage"
+    assert len(views.local_time("2026-01-02T03:04:05")) == 5
+    assert activity.local_day("2026-01-02T12:00:00") in (date(2026, 1, 2), date(2026, 1, 3))

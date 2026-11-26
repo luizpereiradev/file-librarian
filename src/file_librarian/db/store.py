@@ -1297,6 +1297,30 @@ class Store:
         ).fetchone()
         return None if row is None else RunRow.from_row(row)
 
+    def runs_since(self, since: str, *, limit: int) -> list[RunRow]:
+        """Runs (never simulations) started at or after ``since`` (UTC ISO text),
+        newest first, at most ``limit`` (the interface's Activity page, #114)."""
+        rows = self.conn.execute(
+            """SELECT * FROM runs WHERE mode = 'run' AND started_at >= ?
+               ORDER BY id DESC LIMIT ?""",
+            (since, limit),
+        )
+        return [RunRow.from_row(r) for r in rows]
+
+    def sensitive_by_run(self, run_ids: Sequence[int]) -> dict[int, int]:
+        """Sensitive files each run left in place, by run id (counts only)."""
+        found: dict[int, int] = {}
+        for start in range(0, len(run_ids), 500):
+            chunk = run_ids[start : start + 500]
+            rows = self.conn.execute(
+                f"""SELECT run_id, COUNT(*) FROM files
+                    WHERE status = 'sensitive' AND run_id IN ({", ".join("?" * len(chunk))})
+                    GROUP BY run_id""",  # noqa: S608 - placeholders only
+                tuple(chunk),
+            )
+            found.update((int(r[0]), int(r[1])) for r in rows)
+        return found
+
     def waiting(self) -> list[WaitingRow]:
         """Files in review or failed, oldest first. No names: only why, and since when.
 

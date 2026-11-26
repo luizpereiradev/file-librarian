@@ -8,6 +8,24 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `flib ui` has Search, Activity and Due pages (#114), read-only and
+  readable without JavaScript. **Search** is `flib search` in a form:
+  category and kind chips, the other filters under "More filters", each
+  match with Open and Show in Finder, totals per currency over every match
+  as `flib search --sum` adds them up (optionally by issuer, month, year,
+  kind or category), and Export CSV. **Activity** lists the runs of the last
+  7, 30 or 90 days by day: what each moved where, duplicates set aside,
+  moves undone, sensitive files left in place (a count), files skipped while
+  the Mac was locked and the wait for the unlock (from the run logs), and
+  the cost. **Due** is `flib due`, with its window (7 days, 2 weeks, 1 or 3
+  months, overdue) and totals per currency. `flib ui --open` takes
+  `search`, `activity` and `due`. The pages are built on the server with
+  every value from the index escaped; search words go in a form body, never
+  in the address, so they stay out of the browser's history; sensitive
+  files are never listed, only counted; Open and Show in Finder post the
+  file's index id and the server checks its path again before asking macOS;
+  the CSV is an attachment whose cells cannot run as spreadsheet formulas.
+  The Content-Security-Policy now also requires Trusted Types.
 - `flib ui`, an early local interface (#113): a web server on 127.0.0.1
   that exists only while in use, with a Status page (the counts of `flib
   status`, light and dark, in the icon's colours) and greyed-out places for

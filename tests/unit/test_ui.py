@@ -579,7 +579,13 @@ def test_every_post_route_needs_the_cookie_the_origin_and_the_csrf_token(
 
 def test_the_launch_exchange_is_the_only_post_outside_the_route_table() -> None:
     assert ui_server.LAUNCH not in ui_server.POST_ROUTES
-    assert set(ui_server.POST_ROUTES) == {"/session/end"}
+    assert set(ui_server.POST_ROUTES) == {
+        "/session/end",
+        "/search",
+        "/search/export",
+        "/files/open",
+        "/files/reveal",
+    }
 
 
 def test_a_post_to_an_unknown_path_is_not_found(client: UiClient, ui: Ui) -> None:
@@ -1802,4 +1808,4 @@ def test_the_policy_allows_no_inline_code() -> None:
 def test_the_navigation_lists_what_comes_next_disabled() -> None:
     parser = _Collector()
     parser.feed(load_pages()["status"])
-    assert parser.disabled == ["Review", "Search", "Activity", "Due", "Settings"]
+    assert parser.disabled == ["Review", "Settings"]
