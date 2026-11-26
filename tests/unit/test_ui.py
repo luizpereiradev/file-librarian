@@ -44,7 +44,7 @@ runner = CliRunner()
 SECURITY_HEADERS = {
     "Content-Security-Policy": CSP,
     "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
+    "Referrer-Policy": "same-origin",
     "Cache-Control": "no-store",
     "X-Frame-Options": "DENY",
     "Cross-Origin-Opener-Policy": "same-origin",
@@ -244,7 +244,7 @@ def test_the_launch_token_becomes_a_session_cookie(ui: Ui) -> None:
     reply = c.launch(ui.launch_url)
     assert reply.status == 303
     assert reply.headers["Location"] == "/status"  # the token leaves the address bar
-    assert reply.headers["Referrer-Policy"] == "no-referrer"
+    assert reply.headers["Referrer-Policy"] == "same-origin"
     cookie = reply.headers["Set-Cookie"]
     assert cookie.startswith(f"flib_ui_{ui.port}=")
     assert "; Path=/; HttpOnly; SameSite=Strict" in cookie
@@ -337,7 +337,9 @@ def test_pages_and_the_api_need_the_session(ui: Ui, cookie: str | None) -> None:
         c.cookies[f"flib_ui_{ui.port + 1}"] = real  # cookies are not kept apart by port
     for path in ("/", "/status"):
         reply = c.get(path)
-        assert reply.status == 403 and "This session has ended" in reply.text
+        # The session lives on in the other browser: this one is told so, not "ended".
+        assert reply.status == 403 and "is open in another window" in reply.text
+        assert "This session has ended" not in reply.text
     api_reply = c.get("/api/v1/status")
     assert api_reply.status == 401
     assert api_reply.json() == {"error": "no session"}
@@ -579,7 +581,13 @@ def test_every_post_route_needs_the_cookie_the_origin_and_the_csrf_token(
 
 def test_the_launch_exchange_is_the_only_post_outside_the_route_table() -> None:
     assert ui_server.LAUNCH not in ui_server.POST_ROUTES
-    assert set(ui_server.POST_ROUTES) == {"/session/end"}
+    assert set(ui_server.POST_ROUTES) == {
+        "/session/end",
+        "/search",
+        "/search/export",
+        "/files/open",
+        "/files/reveal",
+    }
 
 
 def test_a_post_to_an_unknown_path_is_not_found(client: UiClient, ui: Ui) -> None:
@@ -1578,7 +1586,8 @@ def test_the_handoff_folder_has_a_random_name(ui: Ui) -> None:
     second = ui.write_handoff().parent
     assert first != second
     for folder in (first, second):
-        assert re.fullmatch(r"ui-launch-[A-Za-z0-9_]{8}", folder.name), folder.name
+        # The owner's process id, then a random part: a sweep can tell it is ours.
+        assert re.fullmatch(rf"ui-launch-{os.getpid()}-[A-Za-z0-9_]{{8}}", folder.name)
 
 
 def test_the_handoff_file_is_always_new_and_never_a_link(
@@ -1651,16 +1660,36 @@ def test_stale_handoff_folders_are_swept_at_start(
     loopback_network: None, cfg: Config, fake_browser: Path
 ) -> None:
     root = ui_server.handoff_root()
-    stale = root / "ui-launch-stale123"
+    gone = 2**22 + 12345  # a process id no process has (macOS stops at 99998)
+    stale = root / f"ui-launch-{gone}-abcdefgh"
     stale.mkdir(mode=0o700)
     (stale / ui_server.HANDOFF_NAME).write_text("old token", encoding="utf-8")
+    old = root / "ui-launch-stale123"
+    old.mkdir(mode=0o700)
+    hour_ago = time.time() - 3600
+    os.utime(old, (hour_ago, hour_ago))
     other = root / "something-else"
     other.mkdir()
     sender = interrupt_when_listening(signal.SIGTERM)
     assert ui_server.run(cfg, browser=False, echo=lambda line: None) == "signal"
     sender.join()
-    assert not stale.exists()
+    assert not stale.exists()  # its owner is gone
+    assert not old.exists()  # too old to belong to a link anyone still opens
     assert other.exists()  # only handoff folders
+
+
+def test_a_running_flib_uis_handoff_folder_is_left_alone(tmp_path: Path) -> None:
+    """Another ``flib ui`` (another configuration, so another lock) may be waiting for
+    its browser: its fresh folder, whose owner lives, is not swept."""
+    alive = tmp_path / f"ui-launch-{os.getppid()}-abcdefgh"
+    alive.mkdir(mode=0o700)
+    unnamed = tmp_path / "ui-launch-xyz"  # no owner recorded, but fresh
+    unnamed.mkdir(mode=0o700)
+    ui_server.sweep_handoffs(tmp_path)
+    assert alive.exists() and unnamed.exists()
+    later = time.time() + ui_server.HANDOFF_STALE_SECONDS + 1
+    ui_server.sweep_handoffs(tmp_path, now=later)
+    assert not alive.exists() and not unnamed.exists()
 
 
 @pytest.mark.parametrize(
@@ -1761,7 +1790,7 @@ class _Collector(HTMLParser):
 def test_every_page_references_only_packaged_files_and_has_no_inline_code() -> None:
     assets = load_assets()
     pages = load_pages()
-    assert set(pages) == {"status", "ended", "opening"}
+    assert set(pages) == {"status", "ended", "opening", "elsewhere"}
     routes = {"/"} | {f"/{p}" for p in ui_server.PAGES} | set(ui_server.POST_ROUTES)
     for name, html in pages.items():
         parser = _Collector()
@@ -1769,7 +1798,7 @@ def test_every_page_references_only_packaged_files_and_has_no_inline_code() -> N
         assert parser.problems == [], name
         assert parser.refs, name
         for ref in parser.refs:
-            assert ref in assets or ref in routes, (name, ref)
+            assert ref in assets or ref in routes or ref == "#main", (name, ref)
     for name, (body, _) in assets.items():
         text = body.decode("utf-8", "replace") if not name.endswith(".png") else ""
         for ref in re.findall(r"url\(([^)]*)\)", text):
@@ -1802,4 +1831,4 @@ def test_the_policy_allows_no_inline_code() -> None:
 def test_the_navigation_lists_what_comes_next_disabled() -> None:
     parser = _Collector()
     parser.feed(load_pages()["status"])
-    assert parser.disabled == ["Review", "Search", "Activity", "Due", "Settings"]
+    assert parser.disabled == ["Review", "Settings"]

@@ -72,6 +72,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
@@ -86,13 +87,18 @@ from urllib.parse import parse_qs, urlsplit
 from file_librarian import status as status_mod
 from file_librarian.config import Config
 from file_librarian.lock import AlreadyRunningError, ui_lock
-from file_librarian.ui import api
+from file_librarian.ui import api, views
 
 OPEN = "/usr/bin/open"
 """Opens the handoff file in the default browser; tests swap in a fake."""
 HOST = "127.0.0.1"
-PAGES = ("status",)
-"""Pages ``--open`` can name; Review, Search, Activity, Due and Settings come later."""
+PAGES = ("status", "search", "activity", "due")
+"""Pages ``--open`` can name; Review and Settings come later."""
+VIEWS: dict[str, Callable[[Config, str, str], views.Page]] = {
+    "activity": views.activity_page,
+    "due": views.due_page,
+}
+"""Pages built on the server for each request (#114): config, CSRF token, query."""
 LAUNCH = "/launch"
 
 MAX_THREADS = 8
@@ -104,21 +110,28 @@ REQUEST_DEADLINE = 5.0
 MAX_REQUEST_LINE = 4096
 MAX_HEADER_BYTES = 16 * 1024
 MAX_BODY = 16 * 1024
+MAX_FORM_FIELDS = 100
+"""Fields of a form body or a query: the search form has a chip per category."""
 IDLE_POLL_SECONDS = 1.0
 CLOSE_GRACE = 1.0
 """Seconds a request in progress may take to finish once the server ends."""
 
+REFERRER_POLICY = "same-origin"
 CSRF_FIELD = "csrf"
 CSRF_HEADER = "X-Flib-CSRF"
 FORM = "application/x-www-form-urlencoded"
 CSP = (
     "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
-    "connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+    "connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; "
+    "require-trusted-types-for 'script'"
 )
 SECURITY_HEADERS = (
     ("Content-Security-Policy", CSP),
     ("X-Content-Type-Options", "nosniff"),
-    ("Referrer-Policy", "no-referrer"),
+    # Not "no-referrer": under it a browser sends ``Origin: null`` on a same-origin
+    # form post, which ``_guard`` must refuse. "same-origin" sends a referrer (and the
+    # origin) to this server only; nothing goes to another site.
+    ("Referrer-Policy", REFERRER_POLICY),
     ("Cache-Control", "no-store"),
     ("X-Frame-Options", "DENY"),
     ("Cross-Origin-Opener-Policy", "same-origin"),
@@ -137,7 +150,7 @@ _TYPES = {
     ".svg": "image/svg+xml",
 }
 ENDED = {
-    "idle": "idle for {minutes} minutes",
+    "idle": "idle for {minutes}",
     "ended": "the session was ended in the browser",
     "signal": "interrupted",
     "closed": "closed",
@@ -195,6 +208,14 @@ instead.</p></noscript>
 apply), it posts the launch token to the server at once and then clears it,
 so going back to it, a double submit or a bfcache restore cannot post it again."""
 HANDOFF_PREFIX = "ui-launch-"
+HANDOFF_STALE_SECONDS = 600.0
+"""A handoff folder older than this is left over, whoever made it: a link is used
+within seconds, and a ``flib ui`` whose link was never used is no loss."""
+END_LINGER = 1.5
+"""Seconds the server keeps serving its static files after End session or a theft,
+so the "session ended" page it just sent gets its stylesheet and icon."""
+MAX_SAVED_SEARCHES = 32
+"""Searches kept for ``GET /search?r=<id>`` (post, redirect, get), per server."""
 
 
 class UiError(Exception):
@@ -235,17 +256,45 @@ def user_temp_dir() -> Path:
     return Path(tempfile.gettempdir())
 
 
-def sweep_handoffs(root: Path) -> None:
+def sweep_handoffs(root: Path, *, now: float | None = None) -> None:
     """Remove handoff folders a ``flib ui`` that did not end cleanly left behind.
-    Called while holding ``ui_lock``, so none of them belongs to a running one."""
+
+    ``ui_lock`` is per database, but the folders share the account's temporary
+    folder: another ``flib ui`` (another configuration) may be running. So only a
+    folder that is provably stale goes: its owner (the process id in its name) is
+    gone, or it is older than ``HANDOFF_STALE_SECONDS``."""
+    moment = time.time() if now is None else now
     with suppress(OSError):
         for entry in root.iterdir():
             if not entry.name.startswith(HANDOFF_PREFIX):
                 continue
             with suppress(OSError):
                 info = entry.lstat()
-                if stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid():
+                if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+                    continue
+                old = moment - info.st_mtime > HANDOFF_STALE_SECONDS
+                owner = _handoff_owner(entry.name)
+                if old or (owner is not None and not _alive(owner)):
                     shutil.rmtree(entry, ignore_errors=True)
+
+
+def _handoff_owner(name: str) -> int | None:
+    """The process id a handoff folder's name records (``ui-launch-<pid>-...``)."""
+    head = name.removeprefix(HANDOFF_PREFIX).split("-", 1)[0]
+    return int(head) if head.isdigit() and len(head) < 10 else None
+
+
+def _alive(pid: int) -> bool:
+    """Whether process ``pid`` exists (signal 0 checks without sending anything)."""
+    if pid == os.getpid():
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:  # it exists but belongs to someone else
+        return True
+    return True
 
 
 def load_assets() -> dict[str, tuple[bytes, str]]:
@@ -257,6 +306,7 @@ def load_assets() -> dict[str, tuple[bytes, str]]:
             found[f"/static/{entry.name}"] = (entry.read_bytes(), kind)
     icon = resources.files("file_librarian") / "assets" / "icon-1024.png"
     found["/static/icon.png"] = (icon.read_bytes(), "image/png")
+    found["/favicon.ico"] = found["/static/icon.png"]  # what a browser asks for anyway
     return found
 
 
@@ -302,6 +352,7 @@ class Ui:
         request_timeout: float = REQUEST_TIMEOUT,
         request_deadline: float = REQUEST_DEADLINE,
         close_grace: float = CLOSE_GRACE,
+        end_linger: float = END_LINGER,
         on_event: Callable[[str], None] = lambda event: None,
     ) -> None:
         if page not in PAGES:
@@ -312,6 +363,8 @@ class Ui:
         self.request_timeout = request_timeout
         self.request_deadline = request_deadline
         self._grace = min(close_grace, request_timeout)
+        self.end_linger = end_linger
+        self._searches: OrderedDict[str, tuple[str, dict[str, list[str]]]] = OrderedDict()
         self.assets = load_assets()
         self.pages = load_pages()
         self.reason: str | None = None
@@ -373,15 +426,13 @@ class Ui:
                 selector.register(self._wake_r, selectors.EVENT_READ)
                 try:
                     while (reason := self._next_reason()) is None:
-                        for key, _ in selector.select(tick):
-                            if key.fileobj is listener:
-                                self._accept(heads)
-                            elif key.fileobj is self._wake_r:
-                                self._drain_wake()
-                            else:
-                                heads.readable(key.fileobj)
-                        heads.expire()
-                        self._server.drop_late(self.request_deadline)
+                        self._turn(selector, listener, heads, tick)
+                    if reason in ("ended", "stolen"):
+                        # The page that says so asks for its stylesheet next: serve
+                        # it (there is no session any more) unless told to stop.
+                        until = time.monotonic() + self.end_linger
+                        while time.monotonic() < until and self._stops.empty():
+                            self._turn(selector, listener, heads, min(tick, 0.05))
                 finally:
                     heads.close_all()
         except Exception:  # the server ends rather than hang
@@ -393,6 +444,23 @@ class Ui:
             self.remove_handoff()
         finally:
             self._done.set()
+
+    def _turn(
+        self,
+        selector: selectors.BaseSelector,
+        listener: socket.socket,
+        heads: _Heads,
+        tick: float,
+    ) -> None:
+        for key, _ in selector.select(tick):
+            if key.fileobj is listener:
+                self._accept(heads)
+            elif key.fileobj is self._wake_r:
+                self._drain_wake()
+            else:
+                heads.readable(key.fileobj)
+        heads.expire()
+        self._server.drop_late(self.request_deadline)
 
     def _next_reason(self) -> str | None:
         try:
@@ -450,7 +518,8 @@ class Ui:
             raise UiError("the launch link is already used")
         # A random name, mode 0700; the file inside is new (O_EXCL) and never a
         # link someone planted (O_NOFOLLOW).
-        folder = Path(tempfile.mkdtemp(prefix=HANDOFF_PREFIX, dir=handoff_root()))
+        prefix = f"{HANDOFF_PREFIX}{os.getpid()}-"  # so a sweep can tell it is ours
+        folder = Path(tempfile.mkdtemp(prefix=prefix, dir=handoff_root()))
         path = folder / HANDOFF_NAME
         text = HANDOFF.format(action=html.escape(self.origin + LAUNCH), token=html.escape(token))
         try:
@@ -503,6 +572,30 @@ class Ui:
     def end_session(self) -> None:
         with self._lock:
             self._session = None
+            self._searches.clear()
+
+    def live(self) -> bool:
+        """Whether a session is going on (in some browser)."""
+        with self._lock:
+            return self._session is not None
+
+    def save_search(self, session: Session, fields: dict[str, list[str]]) -> str:
+        """Keep a search form for ``GET /search?r=<id>``; its random id."""
+        key = secrets.token_urlsafe(12)
+        with self._lock:
+            self._searches[key] = (session.id, fields)
+            while len(self._searches) > MAX_SAVED_SEARCHES:
+                self._searches.popitem(last=False)
+        return key
+
+    def saved_search(self, session: Session, key: str) -> dict[str, list[str]] | None:
+        """A search this session kept, or ``None`` (unknown, dropped, another session)."""
+        with self._lock:
+            found = self._searches.get(key)
+            if found is None or not same(found[0], session.id):
+                return None
+            self._searches.move_to_end(key)
+            return found[1]
 
     def session(self, session_id: str) -> Session | None:
         with self._lock:
@@ -787,6 +880,8 @@ class _Handler(BaseHTTPRequestHandler):
     server_version = "flib"
     sys_version = ""
     _replied = False
+    _posted = b""
+    _guarded = False
 
     def setup(self) -> None:
         super().setup()
@@ -832,6 +927,7 @@ class _Handler(BaseHTTPRequestHandler):
                 self.server.request_read(self.connection)
             path = urlsplit(self.path).path
             self._guard(path)
+            self._guarded = True  # from here on, a refusal may be a page
             body = self._body() if self.command == "POST" else b""
             self.server.request_read(self.connection)
             # Only the session keeps the server alive (the launch exchange too,
@@ -845,7 +941,10 @@ class _Handler(BaseHTTPRequestHandler):
             else:
                 self._post(path, body)
         except _Reject as reject:
-            self.send_error(reject.code)
+            if self._guarded and reject.code in PROBLEMS and self._wants_html():
+                self._problem(reject.code)
+            else:
+                self.send_error(reject.code)
         except Exception:  # a bug must still get a reply, and never a traceback
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR)
 
@@ -937,9 +1036,23 @@ class _Handler(BaseHTTPRequestHandler):
         if kind != FORM:
             return None
         try:
-            return parse_qs(body.decode("utf-8", "replace"), max_num_fields=8)
+            return parse_qs(body.decode("utf-8", "replace"), max_num_fields=MAX_FORM_FIELDS)
         except ValueError:
             return None
+
+    def _wants_html(self) -> bool:
+        """A browser opening a page (not a script asking for JSON or a file)."""
+        return "text/html" in self.headers.get("Accept", "")
+
+    def _problem(self, code: int) -> None:
+        """A refusal as a page with the menu and one sentence on what to do. Never
+        says why in detail: the status and a general hint only."""
+        session = self._session()
+        text = PROBLEMS[code]
+        if code == HTTPStatus.FORBIDDEN:
+            text = STALE_FORM if session is not None else STALE_SESSION
+        csrf = None if session is None else session.csrf
+        self._reply(*views.problem_page(code, text, csrf), _HTML)
 
     # --- GET ---
 
@@ -966,15 +1079,40 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
         if path == "/" or path[1:] in PAGES:
+            query = urlsplit(self.path).query
             if session is None:
                 self._ended(HTTPStatus.FORBIDDEN)
             elif path == "/":
                 self._redirect(f"/{ui.page}")
+            elif path == "/search":
+                self._search_page(session, query)
+            elif path[1:] in VIEWS:
+                try:
+                    code, body = VIEWS[path[1:]](ui.config, session.csrf, urlsplit(self.path).query)
+                except views.BadRequest as exc:
+                    raise _Reject(HTTPStatus.BAD_REQUEST) from exc
+                self._reply(code, body, _HTML)
             else:
+                if query:
+                    raise _Reject(HTTPStatus.BAD_REQUEST)  # a static page takes nothing
                 page = ui.pages[path[1:]].replace("{{csrf}}", session.csrf)
                 self._reply(HTTPStatus.OK, page.encode(), _HTML)
             return
         raise _Reject(HTTPStatus.NOT_FOUND)
+
+    def _search_page(self, session: Session, query: str) -> None:
+        """``GET /search``: the empty form, or a search kept by ``POST /search``
+        (``?r=<id>``): the words never go in the address."""
+        ui = self.server.ui
+        try:
+            params = views.query_params(query, frozenset({"r"}))
+            key = views.one_choice(params, "r")
+            fields = None if key is None else ui.saved_search(session, key)
+            notice = views.SEARCH_GONE if key is not None and fields is None else None
+            code, body = views.search_page(ui.config, session.csrf, fields, notice=notice)
+        except views.BadRequest as exc:
+            raise _Reject(HTTPStatus.BAD_REQUEST) from exc
+        self._reply(code, body, _HTML)
 
     def _status(self) -> None:
         try:
@@ -1030,6 +1168,7 @@ class _Handler(BaseHTTPRequestHandler):
         route = POST_ROUTES.get(path)
         if route is None:
             raise _Reject(HTTPStatus.NOT_FOUND)
+        self._posted = body
         route(self, session)
 
     def _csrf_token(self, body: bytes) -> str | None:
@@ -1040,17 +1179,63 @@ class _Handler(BaseHTTPRequestHandler):
         values = [] if fields is None else fields.get(CSRF_FIELD, [])
         return values[0] if len(values) == 1 else None
 
+    def _search(self, session: Session) -> None:
+        """Keep the form and send the browser to ``GET /search?r=<id>`` (post, redirect,
+        get): Back and Forward then work, and the words stay out of the address."""
+        fields = self._fields()
+        try:
+            views.SearchForm.parse(fields)  # its fixed choices, before keeping it
+        except views.BadRequest as exc:
+            raise _Reject(HTTPStatus.BAD_REQUEST) from exc
+        fields.pop(CSRF_FIELD, None)
+        self._redirect(f"/search?r={self.server.ui.save_search(session, fields)}")
+
+    def _export(self, session: Session) -> None:
+        try:
+            code, body, kind = views.search_csv(self.server.ui.config, self._fields())
+        except views.BadRequest as exc:
+            raise _Reject(HTTPStatus.BAD_REQUEST) from exc
+        if code != HTTPStatus.OK:  # a page saying why, not a file
+            message = body.decode("utf-8").strip()
+            self._reply(*views.problem_page(code, message, session.csrf), _HTML)
+            return
+        headers = [("Content-Disposition", 'attachment; filename="flib-search.csv"')]
+        self._reply(code, body, kind, headers)
+
+    def _open(self, session: Session) -> None:
+        self._ask_macos(session, reveal=False)
+
+    def _reveal(self, session: Session) -> None:
+        self._ask_macos(session, reveal=True)
+
+    def _ask_macos(self, session: Session, *, reveal: bool) -> None:
+        code, text = views.open_by_id(
+            self.server.ui.config, self._fields(), reveal=reveal, program=OPEN
+        )
+        if text is None:  # asked: the browser stays on the page it was on
+            self._reply(code, b"", _TEXT)
+        else:
+            self._reply(*views.problem_page(code, text, session.csrf), _HTML)
+
+    def _fields(self) -> dict[str, list[str]]:
+        """The form ``_post`` already read (and found the CSRF token in)."""
+        return self._form(self._posted) or {}
+
     def _end_session(self, session: Session) -> None:
         ui = self.server.ui
         ui.end_session()
         expired = f"{ui.cookie_name}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict"
-        self._ended(HTTPStatus.OK, [("Set-Cookie", expired)])
+        self._ended(HTTPStatus.OK, [("Set-Cookie", expired)])  # never "elsewhere": ended
         ui.stop("ended")
 
     # --- replies ---
 
     def _ended(self, code: int, headers: Iterable[tuple[str, str]] = ()) -> None:
-        self._reply(code, self.server.ui.pages["ended"].encode(), _HTML, headers)
+        """The "session ended" page, or, while a session goes on in another browser
+        or window, the page that says so (and how to move it here)."""
+        ui = self.server.ui
+        page = ui.pages["elsewhere" if ui.live() else "ended"]
+        self._reply(code, page.encode(), _HTML, headers)
 
     def _redirect(self, location: str, headers: Iterable[tuple[str, str]] = ()) -> None:
         self._reply(HTTPStatus.SEE_OTHER, b"", _TEXT, [("Location", location), *headers])
@@ -1071,9 +1256,29 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
 
+PROBLEMS: dict[int, str] = {
+    HTTPStatus.BAD_REQUEST: "This address or form asks for something the page does not "
+    "offer. Go back, or open the page from the menu.",
+    HTTPStatus.FORBIDDEN: "",  # STALE_FORM or STALE_SESSION
+    HTTPStatus.NOT_FOUND: "There is no such page here. Use the menu above.",
+}
+"""Refusals a browser gets as a page (``Accept: text/html``), with one sentence each."""
+STALE_FORM = (
+    "This form is from an earlier page or an earlier flib ui session. Reload the "
+    "page and try again."
+)
+STALE_SESSION = (
+    "This page is from an earlier flib ui session, or that session has ended. Run "
+    "`flib ui` in Terminal for a new one."
+)
+
 PostRoute = Callable[[_Handler, Session], None]
 POST_ROUTES: dict[str, PostRoute] = {
     "/session/end": _Handler._end_session,
+    "/search": _Handler._search,
+    "/search/export": _Handler._export,
+    "/files/open": _Handler._open,
+    "/files/reveal": _Handler._reveal,
 }
 """Every POST route. Each one is reached only through ``_Handler._post``, after
 the exact origin, the session cookie and the CSRF token; ``POST /launch`` is the
@@ -1117,9 +1322,8 @@ def run(
         elif event == "stolen":
             warn(STOLEN_WARNING)
 
-    ending = (
-        f"It ends after {config.ui.idle_minutes} idle minutes, with End session, or with Ctrl-C."
-    )
+    minutes = _minutes(config.ui.idle_minutes)
+    ending = f"It ends after {minutes} without use, with End session, or with Ctrl-C."
     try:
         with ui_lock(config.database):
             sweep_handoffs(handoff_root())
@@ -1144,15 +1348,19 @@ def run(
             finally:
                 ui.close()
             reason = ui.reason or "closed"
-            echo("flib ui ended: " + ENDED[reason].format(minutes=config.ui.idle_minutes) + ".")
+            echo("flib ui ended: " + ENDED[reason].format(minutes=minutes) + ".")
             return reason
     except AlreadyRunningError as exc:
         echo(
             f"{exc}. Use the browser tab it opened, or end it there (End session) or "
             "with Ctrl-C in its terminal, then run `flib ui` again; it also ends on its "
-            f"own after {config.ui.idle_minutes} idle minutes."
+            f"own after {minutes} without use."
         )
         return "running"
+
+
+def _minutes(count: int) -> str:
+    return "1 minute" if count == 1 else f"{count} minutes"
 
 
 @contextmanager

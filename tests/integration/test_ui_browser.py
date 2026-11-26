@@ -1,0 +1,107 @@
+"""``flib ui`` in a real browser (#114): a smoke test over Chrome's DevTools protocol.
+
+Opt-in: ``FLIB_TEST_BROWSER=1 uv run pytest -m browser`` (CI runs it on macOS, whose
+runner image has Chrome). It finds an installed Chrome or Chromium
+(``FLIB_TEST_BROWSER_PATH`` names another), runs it headless with a throwaway
+profile, and drives it like a person: the launch through the handoff file, a search
+submitted by a real click (post, redirect, get; Back and Forward), the CSV export,
+and End session, whose page must still get its stylesheet. Every form post goes
+through the server's real origin checks, which is what unit tests with a hand-made
+``Origin`` header could not show: a browser sends ``Origin: null`` under some
+referrer policies. Nothing goes beyond 127.0.0.1.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+from pathlib import Path
+
+import pytest
+
+from file_librarian import pipeline
+from file_librarian.config import Config
+from file_librarian.providers.fake import FakeProvider
+from file_librarian.ui.server import Ui
+from tests._cdp import find_browser, headless
+from tests._helpers import answer, put
+from tests.unit.test_ui import nothing_left_behind  # noqa: F401 - no socket left behind
+
+BROWSER = find_browser()
+
+pytestmark = [
+    pytest.mark.browser,
+    pytest.mark.skipif(
+        os.environ.get("FLIB_TEST_BROWSER") != "1" or BROWSER is None,
+        reason="the real-browser test is opt-in: FLIB_TEST_BROWSER=1 and Chrome or Chromium",
+    ),
+]
+
+
+def test_a_session_in_a_real_browser(
+    loopback_network: None, downloads: Path, cfg: Config, tmp_path: Path
+) -> None:
+    assert BROWSER is not None
+    put(downloads, "power bill.pdf", b"power")
+    put(downloads, "water bill.pdf", b"water")
+    pipeline.run(
+        cfg,
+        FakeProvider(
+            {
+                "power bill.pdf": answer(
+                    "Finance", description="Power", amount="10", currency="USD"
+                ),
+                "water bill.pdf": answer("Finance", description="Water"),
+            }
+        ),
+        simulate=False,
+    )
+    ui = Ui(cfg, poll_seconds=0.05)
+    ui.start()
+    profile = tmp_path / "profile"
+    downloads_to = tmp_path / "downloaded"
+    downloads_to.mkdir()
+    try:
+        handoff = ui.write_handoff()
+        with headless(BROWSER, profile) as (tab, browser):
+            browser(
+                "Browser.setDownloadBehavior",
+                {"behavior": "allow", "downloadPath": str(downloads_to)},
+            )
+            # The launch: the browser opens the handoff file, which posts the token.
+            tab.call("Page.navigate", {"url": handoff.as_uri()})
+            tab.wait_for(lambda: tab.url() == f"{ui.origin}/status" and tab.ready())
+            assert "Status" in tab.text()
+            # A search, submitted by a click: a POST that must pass the origin checks.
+            tab.goto(f"{ui.origin}/search")
+            tab.evaluate("document.querySelector('input[name=q]').value = 'power'")
+            tab.click("form.search button[type=submit]:not([formaction])")
+            tab.wait_for(lambda: "/search?r=" in tab.url() and tab.ready())
+            results = tab.url()
+            assert "power" not in results  # the words stay out of the address
+            assert "power bill.pdf" in tab.text() and "1 match" in tab.text()
+            # Back and Forward: plain GETs, no "Confirm Form Resubmission".
+            tab.evaluate("history.back()")
+            tab.wait_for(lambda: tab.url().endswith("/search") and tab.ready())
+            tab.evaluate("history.forward()")
+            tab.wait_for(lambda: tab.url() == results and tab.ready())
+            assert "power bill.pdf" in tab.text()
+            # The export, from the results page.
+            tab.click("button[formaction='/search/export']")
+            csv = downloads_to / "flib-search.csv"
+            tab.wait_for(lambda: csv.exists())
+            assert "power bill.pdf" in csv.read_text(encoding="utf-8")
+            # End session: the page says so, styled although the server is ending.
+            tab.click("form.end button")
+            tab.wait_for(lambda: "This session has ended" in tab.text() and tab.ready())
+            tab.wait_for(
+                lambda: bool(
+                    tab.evaluate(
+                        "getComputedStyle(document.body).backgroundColor !== 'rgba(0, 0, 0, 0)'"
+                    )
+                )
+            )
+        assert ui.wait(10) == "ended"
+    finally:
+        ui.close()
+        shutil.rmtree(profile, ignore_errors=True)

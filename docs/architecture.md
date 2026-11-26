@@ -364,8 +364,57 @@ that exists only while in use, built on `http.server` and threads from the
 standard library. Pages are static HTML, CSS and JavaScript in the package
 (`ui/pages/`, `ui/static/`), loaded into memory at start; the JavaScript reads
 a versioned JSON API (`/api/v1/...`, `ui/api.py`) built from the same modules
-as the command line. For now there is one page, Status (`status.collect`, as
-counts), and the "session ended" page.
+as the command line. Status (`status.collect`, as counts) is such a page.
+
+Activity, Search and Due (#114) are built on the server instead
+(`ui/views.py`), so they read without JavaScript: `ui/markup.py` makes every
+element, and escapes every value with `html.escape`, text and attributes
+alike; only what it built itself goes in as markup, and the page frame is
+filled in one pass, so a file named `{{csrf}}.pdf` stays a name. They read
+through the same modules as the command line and the MCP server
+(`activity.collect`, `search.search` / `semantic_search` / `sum_amounts`,
+`due.find`), with the index opened read-only (never created or migrated).
+Activity lists the runs of the last 7, 30 or 90 days (never simulations)
+from the undo journal, sensitive files as a count only, and what each run's
+log says about the Mac being locked (the lines `catchup.py` writes). Search
+takes its words and filters in a form body (`POST /search`, `POST
+/search/export`), never in the address, which would keep them in the
+browser's history. `POST /search` keeps the form on the server, under a
+random id tied to the session (the latest 32, dropped with the session), and
+answers 303 to `GET /search?r=<id>`: post, redirect, get, so Back and Forward
+reload a GET instead of asking to resubmit a form; an id no longer kept shows
+the empty form and says so. Due and Activity put only fixed choices in the address
+(`?within=2w`, `?days=30`); any other value or any other name is 400, and so
+is a query on `GET /search`. The search form's own fixed choices (`by`,
+`limit`) are enforced the same way. Search never lists a sensitive file: it
+says how many matched. Names on the pages lose their Unicode format
+characters (category `Cf`), so a right-to-left override cannot make
+`invoice\u202efdp.command` read as a PDF. The CSV export is an attachment
+(`Content-Disposition: attachment`, `nosniff`) of up to 5000 matches,
+whatever the page's limit, with a last row saying so when there were more;
+a cell that starts like a formula (`=`, `+`, `-`, `@`, a tab, a carriage
+return) gets a leading apostrophe. Open and Show in Finder (`POST
+/files/open`, `POST /files/reveal`) take a file's index id, never a path. The
+server reads the path from the index and checks it again: organized, in
+review or a duplicate, never sensitive; no `..`; its real path
+(`os.path.realpath`) inside `output_root` or an input folder, with no
+symbolic link below that folder (a link above it, such as `/var`, is the
+folder's own); still there. It then runs `open -- <real path>` (or `open -R
+--`). **Open** goes further, because opening a file in macOS can run it: only
+a regular file with no execute bit, with an extension in
+`views.OPENABLE_EXTENSIONS` (PDF, images, plain text and CSV/JSON/Markdown,
+modern Office, OpenDocument and iWork documents, mail, audio and video; not
+the legacy `.doc`, `.xls` and `.ppt`, which can carry macros), that chose no
+app of its own (no per-file "Open With", `com.apple.LaunchServices.OpenWith`,
+which flib's moves keep; no Finder type or creator code, bytes 0 to 7 of
+`com.apple.FinderInfo`) and is not an alias (`kIsAlias`). An attribute that
+cannot be read counts against opening. A folder or bundle (an `.app`), a script or program (`.command`, `.terminal`,
+`.tool`, `.sh`), a location file (`.webloc`, `.fileloc`, `.inetloc`), an
+installer, disk image, profile, workflow or `.jar`, an HTML page, an alias
+or an unknown extension gets 403, and the pages show only Show in Finder for
+it. Error pages say what went wrong in general words; no `OSError` or
+`sqlite3` text, which holds paths, reaches a page. None of these routes
+moves, renames or deletes anything.
 
 **Session.** The server binds a free port and makes a random launch token
 (256 bits). The token never goes on a command line, where any account on the
@@ -380,8 +429,11 @@ form body, so it is never in a URL, a history entry or a `Referer`, then
 clears the field and removes the form; a page restored from the back/forward
 cache shows "you can close this tab". Going back to it, a double submit or a
 retried post therefore never sends the used token again, which would look
-like theft. Folders a `flib ui` that crashed left behind are swept at start,
-under the lock. The first
+like theft. The folder's name starts with the owner's process id. Folders
+a `flib ui` that crashed left behind are swept at start, but only those that
+are provably stale (the owner is gone, or older than 10 minutes): the lock
+is per database, and another `flib ui`, for another configuration, shares
+the account's temporary folder. The first
 use of the token (compared with `hmac.compare_digest`) burns it, deletes the
 handoff file, prints "session started" in the terminal, and sets an
 `HttpOnly`, `SameSite=Strict` cookie named `flib_ui_<port>`; the page holds a
@@ -399,9 +451,16 @@ only; a query on `POST /launch` is refused.
 A second use of the token by the browser that holds the session just goes to
 the page. From a client *without* the session it means someone else has the
 token (or used it first): the session is dropped, the server ends, `flib ui`
-warns on stderr and exits with 1. A missing or wrong cookie or an ended
-session get the "session ended" page; End session also expires the cookie
-(`Max-Age=0`) and drops the session before the server stops. The server ends
+warns on stderr and exits with 1. A missing or wrong cookie gets the
+"session ended" page, or, while the session goes on in another browser or
+window, a page that says so (and how to move it). End session also expires
+the cookie (`Max-Age=0`) and drops the session before the server stops; after
+End session or a theft the server keeps serving its static files for 1.5 s,
+so the page it just sent gets its stylesheet. A browser opening a page
+(`Accept: text/html`) gets a refusal (400, 403, 404) as a page with the menu
+and one sentence on what to do (a form from an earlier session: reload, or
+run `flib ui` again); scripts and other clients get the plain status, and a
+wrong `Host` or origin always does. The server ends
 after `ui.idle_minutes` (default 10) without a request from the session (other
 requests do not count), on End session (a POST), or on SIGINT/SIGTERM. One
 `flib ui` runs at a time (an `flock` on `flib-ui.lock` next to the database,
@@ -453,19 +512,36 @@ browser's cookies). How each is handled:
 | DNS rebinding, another program on `[::1]` | `Host` must be exactly `127.0.0.1:<port>`, one header, else 421; `localhost` is refused and never printed, since another program could hold `[::1]:<port>` | `test_a_foreign_host_header_is_misdirected`, `test_two_host_headers_are_misdirected`, `test_only_127_0_0_1_is_ever_named` |
 | Cross-site requests | an `Origin` other than the server's is 403 on any request (exact match, not a prefix); `Upgrade` is 400; `Sec-Fetch-Site` other than same-origin (or `none` on a GET) is 403; every POST route needs the exact `Origin` (or `Sec-Fetch-Site: same-origin`), the session cookie (`SameSite=Strict`) and the CSRF token, form field (in a form body only) or `X-Flib-CSRF` header; no `Access-Control-*` header is ever sent | `test_any_request_from_another_origin_is_forbidden`, `test_an_upgrade_request_is_refused`, `test_a_cross_site_request_is_forbidden`, `test_a_post_from_another_origin_is_forbidden`, `test_every_post_route_needs_the_cookie_the_origin_and_the_csrf_token`, `test_the_csrf_token_is_in_a_form_field_or_a_header`, `test_no_reply_ever_allows_another_origin`, `test_the_launch_post_takes_the_null_origin_and_nothing_wider` |
 | A cookie planted on 127.0.0.1 | browsers share cookies across ports: any cookie of the name that holds the session counts, so a planted one cannot lock the user out; each is compared in constant time | `test_a_planted_cookie_of_the_same_name_does_not_lock_the_user_out`, `test_the_session_id_is_compared_in_constant_time` |
-| Guessing or replaying the link | 256-bit token, constant-time compare, single use; a wrong guess does not burn it; `Referrer-Policy: no-referrer` everywhere; never logged | `test_the_launch_token_works_once`, `test_a_wrong_or_missing_token_gets_the_ended_page`, `test_a_wrong_launch_post_gets_the_ended_page`, `test_the_token_is_compared_in_constant_time`, `test_nothing_is_logged` |
-| Script injection | `Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`; no inline script, style or handler; text goes in with `textContent`; `nosniff` | `test_every_page_references_only_packaged_files_and_has_no_inline_code`, `test_the_policy_allows_no_inline_code` |
+| Guessing or replaying the link | 256-bit token, constant-time compare, single use; a wrong guess does not burn it; `Referrer-Policy: same-origin` everywhere (a referrer goes to this server only, never to another site; the handoff page itself is `no-referrer`); never logged | `test_the_launch_token_works_once`, `test_a_wrong_or_missing_token_gets_the_ended_page`, `test_a_wrong_launch_post_gets_the_ended_page`, `test_the_token_is_compared_in_constant_time`, `test_nothing_is_logged` |
+| Script injection | `Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; require-trusted-types-for 'script'`; no inline script, style or handler; scripts put text in with `textContent` only; server-built pages escape every value from the index (names, descriptions, issuers, tags, search words) through `markup.el`; `nosniff` | `test_every_page_references_only_packaged_files_and_has_no_inline_code`, `test_the_policy_allows_no_inline_code`, `test_the_policy_requires_trusted_types`, `test_each_page_is_escaped_and_has_no_inline_code`, `test_search_finds_by_words_and_escapes_everything`, `test_el_escapes_text_and_attributes`, `test_the_layout_fills_its_slots_in_one_pass` |
+| Names and words in the history | search words and filters go in a POST body; the address holds only fixed choices, any other name is 400; Open and Show in Finder post an index id | `test_a_search_in_the_address_is_never_run`, `test_due_refuses_choices_it_does_not_offer`, `test_activity_windows`, `test_names_the_page_does_not_offer_are_refused` |
+| Opening what the page names | the id is looked up in the index; the path is checked again (status; no `..`; real path inside the library or an input with no link below it; exists) and passed to `open` after `--`; a path in the form is ignored; Open takes documents only (allow-listed extension, regular file, no execute bit, not an alias), everything else gets Show in Finder only; names lose format characters; failures get a general message | `test_open_and_reveal_ask_macos_by_id`, `test_open_never_takes_a_path`, `test_open_refuses_a_sensitive_file`, `test_open_rechecks_the_path_from_the_index`, `test_a_dotdot_in_the_index_never_leaves_the_library`, `test_a_symlinked_folder_never_leaves_the_library`, `test_open_refuses_what_could_run_and_offers_show_in_finder`, `test_open_refuses_folders_bundles_executables_and_aliases`, `test_format_characters_never_reach_the_page`, `test_when_macos_cannot_open_it_the_page_says_so_plainly` |
+| A spreadsheet running the export | `Content-Disposition: attachment` with `nosniff`; cells that start like a formula get a leading apostrophe | `test_the_export_is_an_attachment_a_spreadsheet_cannot_run`, `test_cells_that_look_like_formulas_are_quoted` |
 | Clickjacking, cross-origin windows | `frame-ancestors 'none'`, `X-Frame-Options: DENY`, `Cross-Origin-Opener-Policy` and `-Resource-Policy: same-origin` | `test_every_reply_carries_the_security_headers` (all seven headers on every kind of reply, the 503 and malformed requests included), `test_the_turned_away_reply_carries_the_security_headers` |
-| Reading files through the server | static files from an in-memory map of packaged resources, looked up by exact path: no traversal, no directory listing; no file contents are ever served, and this page serves counts only (suggested categories the model wrote are masked when not configured) | `test_nothing_outside_the_packaged_files_is_served`, `test_status_holds_counts_and_never_a_file_name` |
+| Reading files through the server | static files from an in-memory map of packaged resources, looked up by exact path: no traversal, no directory listing; no file contents are ever served; Status serves counts only (suggested categories the model wrote are masked when not configured); sensitive files are never listed with details, only counted | `test_nothing_outside_the_packaged_files_is_served`, `test_status_holds_counts_and_never_a_file_name`, `test_sensitive_files_never_appear_in_search`, `test_activity_shows_each_run_and_what_it_moved` |
 | Exhausting it | request line ≤ 4 KiB, headers ≤ 16 KiB (and at most 100), POST body ≤ 16 KiB with one `Content-Length` of 1 to 5 ASCII digits, no `Transfer-Encoding`; requests read in the accepting thread, so idle or trickling connections hold no request thread; 5 s for the whole request (then 408), at most 128 waiting connections (the oldest dropped), one request per connection, at most 8 requests at once (one more gets 503), 10 s per write | `test_clients_that_never_finish_their_request_hold_no_thread`, `test_past_the_pending_cap_the_oldest_connection_is_dropped`, `test_a_head_too_long_is_refused_without_a_thread`, `test_a_body_that_never_arrives_gets_a_timeout`, `test_a_body_shorter_than_its_length_gets_a_reply`, `test_long_request_lines_and_headers_are_refused`, `test_a_large_body_is_refused_before_it_is_read`, `test_a_post_needs_a_plain_length`, `test_a_slow_client_is_dropped`, `test_a_client_that_trickles_its_request_is_cut_off_at_the_deadline`, `test_a_keep_alive_connection_gets_one_reply_and_is_closed`, `test_requests_beyond_the_thread_cap_are_turned_away` |
 | Outliving its use | ends on idle (only the session resets the timer), End session or a signal; `stop` is signal-safe; every end closes the sockets, deletes the handoff file and joins all threads | `test_the_server_ends_after_the_idle_minutes`, `test_only_the_session_keeps_the_server_alive`, `test_a_signal_handler_never_waits_on_a_lock`, `test_close_cuts_off_a_request_in_progress`, `test_the_server_ends_if_its_loop_fails` |
-| Leaking through errors | GET and POST only (405, unknown methods 501); every error body is its status phrase, with a status line even for a request line that makes no sense; a bug gets a plain 500 and no traceback; `Server: flib`; `Cache-Control: no-store` | `test_only_get_and_post_are_allowed`, `test_error_pages_reveal_nothing`, `test_a_bug_gets_a_plain_500_and_no_traceback` |
+| Referrer policy and origin checks | not `no-referrer`: under it a browser sends `Origin: null` on a same-origin form post, which the origin check refuses, so every form failed in a real browser; `same-origin` sends the real origin; `Origin: null` is still accepted on `POST /launch` only | `test_the_referrer_policy_lets_a_browser_send_its_origin_on_a_post`, `tests/integration/test_ui_browser.py` (headless Chrome, opt-in: `FLIB_TEST_BROWSER=1`) |
+| Leaking through errors | GET and POST only (405, unknown methods 501); every error body is its status phrase, or for a browser's page a short page with the menu, with a status line even for a request line that makes no sense; a bug gets a plain 500 and no traceback; `Server: flib`; `Cache-Control: no-store` | `test_only_get_and_post_are_allowed`, `test_error_pages_reveal_nothing`, `test_a_bug_gets_a_plain_500_and_no_traceback` |
 
 Known limits: the cookie is not `Secure`, since there is no TLS on loopback.
+Browsers keep cookies per host, not per port, so the session cookie is also
+sent to any other server on 127.0.0.1; its name carries the port, and it
+is useless without this server, but a program listening there could read it
+while the session lasts. With `--no-browser` the first page after the link
+gets the link as its `Referer`, from and to this server only.
 Many local connections that reconnect as soon as they are dropped can still
 crowd out the session's: with 200 of them, about 1 request in 10 from the
 session is dropped (with 16 or 100, none). A client that asks for a large
 reply and never reads it holds a request thread for up to 10 s per write.
+A search by meaning holds its request thread while it waits for the
+embeddings server. In the interface the client's timeout is 5 s
+(`views.EMBED_TIMEOUT`, less when `search.semantic.timeout_seconds` is
+lower), and that is per socket operation (connect, each read), not for the
+whole call, so a server that trickles its reply can hold the thread longer; a
+few such searches at once can take the 8 request threads. The client is made
+only when a query is actually embedded, and a failure to make it falls back
+to the search by words, with its notice.
 With `--no-browser` the printed link stays in the terminal and, once opened,
 in the browser's history; it is useless once used. Anything running as the
 user can read the handoff file in the moment before the browser uses it, as
@@ -567,7 +643,8 @@ Everything is in `src/file_librarian/`:
 | `notifier.py`, `assets/` | the notifier app that posts notifications as "file-librarian", and its icon |
 | `credentials.py`, `keychain.py` | where an API key comes from; the macOS Keychain through `/usr/bin/security` |
 | `mcp_server.py` | `flib mcp` (optional `mcp` extra) |
-| `ui/` | `flib ui`: the loopback server and its session (`server.py`), the JSON API (`api.py`), the pages (`pages/`, `static/`) |
+| `ui/` | `flib ui`: the loopback server and its session (`server.py`), the JSON API (`api.py`), the pages built on the server (`views.py`, escaped by `markup.py`), the static pages (`pages/`, `static/`) |
+| `activity.py` | the runs of the last days, what each moved and what its log says about the Mac being locked (the interface's Activity page) |
 | `evals/` | `flib eval`: the synthetic corpus and its gold labels, the isolated simulate-mode harness and the scoring ([quality.md](quality.md)) |
 
 ## Extension points

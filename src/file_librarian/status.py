@@ -391,6 +391,11 @@ def logged_skips(database: Path, run_id: int) -> dict[str, int] | None:
         lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return None
+    return count_skips(lines)
+
+
+def count_skips(lines: Iterable[str]) -> dict[str, int]:
+    """How many lines of a run log are skips, per kind of ``_LOGGED_SKIPS``."""
     counts = dict.fromkeys(_LOGGED_SKIPS, 0)
     for line in lines:
         match = _SKIP_LINE.fullmatch(line)

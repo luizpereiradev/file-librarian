@@ -8,6 +8,44 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `flib ui` has Search, Activity and Due pages (#114), read-only and
+  readable without JavaScript. **Search** is `flib search` in a form:
+  category and kind chips, the other filters under "More filters", each
+  match with Open and Show in Finder, totals per currency over every match
+  as `flib search --sum` adds them up (optionally by issuer, month, year,
+  kind or category), and Export CSV. **Activity** lists the runs of the last
+  7, 30 or 90 days by day: what each moved where, duplicates set aside,
+  moves undone, sensitive files left in place (a count), files skipped while
+  the Mac was locked and the wait for the unlock (from the run logs), and
+  the cost. **Due** is `flib due`, with its window (7 days, 2 weeks, 1 or 3
+  months, overdue) and totals per currency. `flib ui --open` takes
+  `search`, `activity` and `due`. The pages are built on the server with
+  every value from the index escaped; search words go in a form body, never
+  in the address, so they stay out of the browser's history; sensitive
+  files are never listed, only counted; Open and Show in Finder post the
+  file's index id and the server checks its real path again (inside the
+  library or an input folder, no `..`, no symbolic link) before asking
+  macOS; Open takes documents only (an allow-list of extensions without the
+  macro-capable `.doc`, `.xls` and `.ppt`; no execute bit; no alias; no
+  per-file "Open With" or Finder type/creator picking an app), so an app,
+  script, installer or web location gets only Show in Finder; names lose Unicode format characters (no right-to-left
+  tricks); the CSV is an attachment of up to 5000 matches whose cells cannot
+  run as spreadsheet formulas; a search by meaning waits at most 5 s per socket
+  operation for the embeddings server, and falls back to words if its client
+  cannot be made; any address choice the page does not offer is 400.
+  The Content-Security-Policy now also requires Trusted Types.
+  Driven in real browsers before release: every form post (Search, Export,
+  Open, Show in Finder and End session, which `flib ui` from #113 had too)
+  was refused in Chromium, because `Referrer-Policy: no-referrer` makes a
+  browser send `Origin: null`; the policy is now `same-origin`, and a
+  headless-Chrome test (`FLIB_TEST_BROWSER=1`, run in CI) drives a whole
+  session. Search results survive Back and Forward (post, redirect, get, the
+  words never in the address); the "session ended" page keeps its style;
+  refusals are pages with the menu and what to do; a window without the
+  session is told when it is open elsewhere; another `flib ui`'s handoff
+  folder is no longer swept; Status shows review reasons compactly, dates
+  and costs as the other pages do; narrow screens get a Due card layout,
+  a skip link and stronger contrast.
 - `flib ui`, an early local interface (#113): a web server on 127.0.0.1
   that exists only while in use, with a Status page (the counts of `flib
   status`, light and dark, in the icon's colours) and greyed-out places for
