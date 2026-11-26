@@ -52,6 +52,7 @@ for tests.
 
 from __future__ import annotations
 
+import dataclasses
 import hmac
 import html
 import io
@@ -328,6 +329,8 @@ def same(given: str, expected: str) -> bool:
 class Session:
     id: str
     csrf: str
+    secret: str = field(default_factory=lambda: secrets.token_urlsafe(32))
+    """Keys what pages name in addresses (a review group, #115): never sent anywhere."""
 
 
 class Ui:
@@ -1161,14 +1164,18 @@ class _Handler(BaseHTTPRequestHandler):
         ui = self.server.ui
         try:
             if path == "/review/accept":
-                code, body = review.accept_page(ui.config, session.csrf, query)
+                code, body = review.accept_page(
+                    ui.config, session.csrf, query, secret=session.secret
+                )
             else:
                 known = frozenset({"n"}) if path == "/review" else frozenset({"run", "file", "n"})
                 key = views.one_choice(views.query_params(query, known), "n")
                 outcome = None if key is None else ui.kept_outcome(session, key)
                 gone = key is not None and outcome is None
                 if path == "/review":
-                    code, body = review.review_page(ui.config, session.csrf, outcome, gone=gone)
+                    code, body = review.review_page(
+                        ui.config, session.csrf, outcome, gone=gone, secret=session.secret
+                    )
                 else:
                     code, body = review.undo_page(
                         ui.config, session.csrf, query, outcome, gone=gone
@@ -1293,7 +1300,8 @@ class _Handler(BaseHTTPRequestHandler):
         except actions.Refused as exc:
             outcome = exc.outcome
         key = self.server.ui.keep_outcome(session, outcome)
-        self._redirect(f"{back}{'&' if '?' in back else '?'}n={key}")
+        anchor = f"#g-{outcome.anchor}" if outcome.anchor else ""
+        self._redirect(f"{back}{'&' if '?' in back else '?'}n={key}{anchor}")
 
     def _review_file(self, session: Session) -> None:
         fields = self._fields()
@@ -1307,7 +1315,9 @@ class _Handler(BaseHTTPRequestHandler):
             if category is None and name is None:
                 raise actions.Refused("Pick a category or type a new name; nothing was done.")
             ui = self.server.ui
-            return actions.fix_one(ui.config, file_id, pin, category=category, name=name)
+            return actions.fix_one(
+                ui.config, file_id, pin, category=category, name=name, secret=session.secret
+            )
 
         self._act(session, "/review", do)
 
@@ -1315,12 +1325,12 @@ class _Handler(BaseHTTPRequestHandler):
         fields = self._fields()
 
         def do() -> actions.Outcome:
-            key = actions.one(fields, "g")
-            if key is None or len(key) != 16 or not all(c in "0123456789abcdef" for c in key):
-                raise actions.Malformed("g")
+            key = actions.a_group(actions.one(fields, "g"))
             confirmed = actions.ids(actions.one(fields, "ids") or "")
             pin = actions.a_pin(fields)
-            return actions.accept_group(self.server.ui.config, key, confirmed, pin)
+            config = self.server.ui.config
+            outcome = actions.accept_group(config, session.secret, key, confirmed, pin)
+            return dataclasses.replace(outcome, anchor=key)
 
         self._act(session, "/review", do)
 
@@ -1350,7 +1360,11 @@ class _Handler(BaseHTTPRequestHandler):
             config = self.server.ui.config
             return actions.settle_one(config, file_id, pin, done=done == "1")
 
-        self._act(session, "/due", do)
+        try:  # back to the window the list was in
+            window = views.due_window(fields)
+        except views.BadRequest as exc:
+            raise _Reject(HTTPStatus.BAD_REQUEST) from exc
+        self._act(session, f"/due?{window}" if window else "/due", do)
 
     def _fields(self) -> dict[str, list[str]]:
         """The form ``_post`` already read (and found the CSRF token in)."""

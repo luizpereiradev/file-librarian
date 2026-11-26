@@ -32,6 +32,8 @@ undo reasons are turned into the same words without the path.
 from __future__ import annotations
 
 import hashlib
+import hmac
+import os
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -42,13 +44,15 @@ from file_librarian import due as due_mod
 from file_librarian.config import Config
 from file_librarian.db.store import FileRow, IndexChange, OperationRow, Store, load_migrations
 from file_librarian.executor import recover
-from file_librarian.fix import FixError, fix_file, fix_files
+from file_librarian.fix import NOT_WRITTEN, FixError, FixItem, fix_file, fix_files
+from file_librarian.hashing import check_content
 from file_librarian.lock import AlreadyRunningError, instance_lock
-from file_librarian.models import FileStatus, ReviewReason, RunTrigger
+from file_librarian.models import FileStatus, OperationStatus, ReviewReason, RunTrigger
 from file_librarian.undo import (
     NothingToUndoError,
     UndoReport,
     file_undo_plan,
+    gone_reason,
     run_undo_plan,
     undo_file,
     undo_run,
@@ -81,6 +85,12 @@ class Outcome:
     items: tuple[Item, ...] = ()
     undo_run: int | None = None
     """The run that did it: the page offers to undo it."""
+    undo_label: str = "Undo this…"
+    """What the undo link says it undoes."""
+    name: str | None = None
+    """A file the sentence is about: shown (isolated, as text) before ``text``."""
+    anchor: str | None = None
+    """Where on the page the browser goes back to (a review group's ``id``)."""
 
 
 class Refused(Exception):
@@ -96,17 +106,25 @@ class Malformed(ValueError):
 
 
 STALE = (
-    "This file is no longer as the page showed it: it was moved, renamed or undone since "
-    "(in another tab, from the command line or by a run). Nothing was done; the page now "
-    "shows how it is."
+    "This file is no longer as the page showed it: it was moved, renamed or undone since, "
+    "in another tab, from Terminal or by a run. Nothing was done; the page now shows how "
+    "it is."
 )
-STALE_RUN = (
-    "This run's moves changed since the page was shown (undone in another tab, or by a "
-    "later run). Nothing was done; check again below."
+STALE_UNDO = (
+    "This is no longer as the Undo page showed it: something was moved or undone since, "
+    "in another tab, from Terminal or by a run. Nothing was done. Open Undo again from "
+    "Review or Activity to see how it is now."
 )
 STALE_GROUP = (
-    "This group changed since the list was shown (a file was handled or added). Nothing "
+    "This group changed since the list was shown: a file was handled or added. Nothing "
     "was moved; check the list again."
+)
+BUSY = (
+    "A flib run, or another change, is going on now. Nothing was done; try again when it finishes."
+)
+NOT_WRITTEN_TEXT = (
+    "The index could not be written. Anything already moved is recorded by the next flib "
+    "command; see Activity."
 )
 NO_INDEX = "No run yet: the index is created by the first `flib run`."
 OLD_INDEX = "The index is from another version of flib; the next `flib run` updates it."
@@ -140,17 +158,24 @@ def file_pin(row: FileRow) -> str:
 
 
 def run_pin(ops: list[OperationRow], changes: list[IndexChange]) -> str:
-    """What undoing a run would revert: its moves and index changes still in effect."""
-    return _digest("run", *(op.id for op in ops), "changes", *(c.id for c in changes))
+    """What undoing a run would revert: its moves still in effect, or, for a run that
+    moved nothing, its index changes. (A run's moves carry index changes of their own,
+    such as a review reason; recovery may add one, and only an undo, which marks the
+    moves undone too, takes them away.)"""
+    if ops:
+        return _digest("run", *(op.id for op in ops))
+    return _digest("changes", *(c.id for c in changes))
 
 
 def undo_file_pin(row: FileRow, op: OperationRow) -> str:
     return _digest("undo", file_pin(row), op.id)
 
 
-def group_key(reason: object, suggested: str | None) -> str:
-    """A review group in an address: a digest, never the model's words."""
-    return _digest("group", reason, suggested)[:16]
+def group_key(secret: str, reason: object, suggested: str | None) -> str:
+    """A review group in an address: keyed with the session's secret, so the model's
+    words cannot be guessed back from the browser's history."""
+    text = f"{reason}\0{suggested}".encode("utf-8", "surrogatepass")
+    return hmac.new(secret.encode(), text, hashlib.sha256).hexdigest()[:16]
 
 
 def group_pin(rows: list[FileRow]) -> str:
@@ -178,6 +203,13 @@ def a_pin(fields: dict[str, list[str]]) -> str:
     value = one(fields, "pin")
     if value is None or len(value) != PIN_LENGTH or not all(c in "0123456789abcdef" for c in value):
         raise Malformed("pin")
+    return value
+
+
+def a_group(value: str | None) -> str:
+    """A group's name from a form or an address: 16 hex digits."""
+    if value is None or len(value) != 16 or not all(c in "0123456789abcdef" for c in value):
+        raise Malformed("g")
     return value
 
 
@@ -221,9 +253,9 @@ def writing(config: Config) -> Iterator[Store]:
             recover(store, config)  # finish the journal before adding to it
             yield store
     except AlreadyRunningError as exc:
-        raise Refused(f"A run or another change holds flib now ({exc}). Nothing was done.") from exc
+        raise Refused(BUSY) from exc
     except sqlite3.Error as exc:
-        raise Refused("Cannot write to the index; nothing was done.") from exc
+        raise Refused(NOT_WRITTEN_TEXT) from exc
 
 
 def _row(store: Store, file_id: int) -> FileRow:
@@ -248,51 +280,39 @@ def _fix_text(exc: FixError, path: Path) -> str:
     text = str(exc)
     if "is not a plain file name" in text:
         return "The new name is not a plain file name (no '/', ':' or leading '.')."
-    return without_path(text, path)
+    return stop(without_path(text, path))
+
+
+def stop(text: str) -> str:
+    """A sentence ends with a full stop."""
+    return text if text.endswith((".", "?", "!")) else text + "."
 
 
 def _undo_reason(reason: str) -> str:
     """An undo's reason for skipping a file, without the path some of them end with."""
-    for prefix in ("original folder is gone", "original path is taken", "could not move back"):
+    for prefix, words in (
+        ("original folder is gone", "its original folder is gone"),
+        ("original path is taken", "something else has its original name now"),
+        ("could not move back", "it could not be moved back"),
+        ("changed since it was moved", "it changed since it was moved (edited by hand?)"),
+    ):
         if reason.startswith(prefix):
-            return {
-                "original folder is gone": "its original folder is gone",
-                "original path is taken": "something else has its original name now",
-                "could not move back": "it could not be moved back",
-            }[prefix]
+            return words
     return reason
 
 
+def _files(count: int) -> str:
+    return "1 file" if count == 1 else f"{count} files"
+
+
+def _numbered(source: Path, destination: Path, folder: str) -> Item | None:
+    """A file that got a number because its name was taken where it went."""
+    if destination.name == source.name:
+        return None
+    return Item(destination.name, f"is its new name: {source.name} was taken in {folder}/.")
+
+
 # --- review ----------------------------------------------------------------------------
-
-
-def fix_one(
-    config: Config,
-    file_id: int,
-    pin: str,
-    *,
-    category: str | None,
-    name: str | None,
-) -> Outcome:
-    """One file out of review: to ``category`` (a configured one), renamed to ``name``,
-    or both. ``flib fix``, under its lock; refused when the pin no longer matches."""
-    if category is not None and config.category(category) is None:
-        raise Malformed("category")
-    with writing(config) as store:
-        row = _row(store, file_id)
-        if row.status is FileStatus.SENSITIVE:
-            raise Refused(SENSITIVE)
-        if row.status is not FileStatus.REVIEW or file_pin(row) != pin:
-            raise Refused(STALE)
-        try:
-            report = fix_file(config, store, row.current_path, category=category, name=name)
-        except FixError as exc:
-            raise Refused(_fix_text(exc, row.current_path)) from exc
-    where = report.destination.parent.name if category is not None else config.review_folder
-    text = f"Moved to {where}." if category is not None else "Renamed; it stays in review."
-    items = [Item(report.destination.name, f"now in {where}/")]
-    items += [Item(report.destination.name, w) for w in report.warnings]
-    return Outcome(text, items=tuple(items), undo_run=report.run_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -316,39 +336,93 @@ class Group:
         return None if found is None else found.name
 
     @property
+    def present(self) -> list[FileRow]:
+        """The group's files still on disk: a missing one is never counted, nor tried."""
+        return [r for r in self.rows if os.path.lexists(r.current_path)]
+
+    @property
     def batch(self) -> list[FileRow]:
-        """What one "accept all" moves: the oldest ``BULK_CAP``."""
-        return self.rows[:BULK_CAP]
+        """What one "accept all" moves: the oldest ``BULK_CAP`` still on disk."""
+        return self.present[:BULK_CAP]
 
 
 MAX_LISTED = 500
 """Most files the Review page lists; the rest show once these are handled."""
 
 
-def review_groups(store: Store) -> tuple[list[Group], int]:
+def review_groups(store: Store, secret: str) -> tuple[list[Group], int]:
     """The files in review by reason and suggestion, the biggest group first, and how
-    many in review are not listed (past ``MAX_LISTED``)."""
+    many in review are not listed (past ``MAX_LISTED``). ``secret`` keys the groups'
+    names in addresses (``group_key``)."""
     rows = store.review_files(limit=MAX_LISTED)
     grouped: dict[tuple[ReviewReason | None, str | None], list[FileRow]] = {}
     for row in rows:
         grouped.setdefault(row.review, []).append(row)
-    groups = [Group(group_key(r, s), r, s, items) for (r, s), items in grouped.items()]
+    groups = [Group(group_key(secret, r, s), r, s, items) for (r, s), items in grouped.items()]
     groups.sort(key=lambda g: (-len(g.rows), g.rows[0].processed_at))
     total = store.stats().by_status[FileStatus.REVIEW.value]
     return groups, max(0, total - len(rows))
 
 
-def find_group(store: Store, key: str) -> Group | None:
-    groups, _ = review_groups(store)
-    return next((g for g in groups if g.key == key), None)
+def find_group(store: Store, secret: str, key: str) -> Group | None:
+    groups, _ = review_groups(store, secret)
+    return next((g for g in groups if hmac.compare_digest(g.key, key)), None)
 
 
-def accept_group(config: Config, key: str, confirmed: list[int], pin: str) -> Outcome:
+def fix_one(
+    config: Config,
+    file_id: int,
+    pin: str,
+    *,
+    category: str | None,
+    name: str | None,
+    secret: str,
+) -> Outcome:
+    """One file out of review: to ``category`` (a configured one), renamed to ``name``,
+    or both. ``flib fix``, under its lock, on the row the form named; refused when
+    the pin no longer matches."""
+    if category is not None and config.category(category) is None:
+        raise Malformed("category")
+    with writing(config) as store:
+        row = _row(store, file_id)
+        if row.status is FileStatus.SENSITIVE:
+            raise Refused(SENSITIVE)
+        if row.status is not FileStatus.REVIEW or file_pin(row) != pin:
+            raise Refused(STALE)
+        anchor = group_key(secret, row.review_reason, row.review_category)
+        try:
+            report = fix_file(
+                config, store, row.current_path, category=category, name=name, file_id=row.id
+            )
+        except FixError as exc:
+            raise Refused(_fix_text(exc, row.current_path)) from exc
+    shown = report.destination.name
+    if category is not None:
+        where = report.destination.parent.name
+        text, label = f"is now in {where}.", f"Undo: put it back in {config.review_folder}…"
+    else:
+        where = config.review_folder
+        text, label = "is its new name; it stays in review.", "Undo the rename…"
+    items = []
+    if name is None and (numbered := _numbered(report.source, report.destination, where)):
+        items.append(numbered)
+    items += [Item(shown, stop(w)) for w in report.warnings]
+    return Outcome(
+        text,
+        items=tuple(items),
+        undo_run=report.run_id,
+        undo_label=label,
+        name=shown,
+        anchor=anchor,
+    )
+
+
+def accept_group(config: Config, secret: str, key: str, confirmed: list[int], pin: str) -> Outcome:
     """ "Accept all": the files the confirmation page listed go to the group's suggested
     category, as **one** run (``fix.fix_files``): one undo reverts them all. Refused
     unless the group's first ``BULK_CAP`` are still exactly those files, as shown."""
     with writing(config) as store:
-        group = find_group(store, key)
+        group = find_group(store, secret, key)
         if group is None:
             raise Refused(STALE_GROUP)
         target = group.target(config)
@@ -357,32 +431,63 @@ def accept_group(config: Config, key: str, confirmed: list[int], pin: str) -> Ou
         batch = group.batch
         if [r.id for r in batch] != confirmed or group_pin(batch) != pin:
             raise Refused(STALE_GROUP)
-        report = fix_files(config, store, [(r.current_path, target, None) for r in batch])
+        report = fix_files(
+            config, store, [FixItem(r.current_path, target, None, r.id) for r in batch]
+        )
     names = {r.current_path: r.current_name for r in batch}
     items = [Item(names[path], _fix_reason(text, path)) for path, text in report.skipped]
     for fixed in report.fixed:
-        items += [Item(fixed.destination.name, w) for w in fixed.warnings]
+        if numbered := _numbered(fixed.source, fixed.destination, target):
+            items.append(numbered)
+        items += [Item(fixed.destination.name, stop(w)) for w in fixed.warnings]
     moved = len(report.fixed)
+    label = "Undo: put it back in review…" if moved == 1 else f"Undo: put these {moved} back…"
+    if report.broken:
+        text = (
+            f"{_files(moved)} moved to {target} and recorded; then the index could not be "
+            "written, so the rest stopped there. See Activity: the next flib command "
+            "records a move left half-done."
+        )
+        return Outcome(
+            text,
+            error=True,
+            items=tuple(items),
+            undo_run=report.run_id if moved else None,
+            undo_label="Undo this run…",
+        )
     if not moved:
         return Outcome("Nothing was moved.", error=True, items=tuple(items))
     text = f"Moved {_files(moved)} to {target}, as one run."
     if report.skipped:
-        text += f" {_files(len(report.skipped))} could not be moved and stay in review."
-    return Outcome(text, items=tuple(items), undo_run=report.run_id)
-
-
-def _files(count: int) -> str:
-    return "1 file" if count == 1 else f"{count} files"
+        left = len(report.skipped)
+        text += f" {_files(left)} could not be moved and {'stays' if left == 1 else 'stay'}"
+        text += " in review."
+    return Outcome(text, items=tuple(items), undo_run=report.run_id, undo_label=label)
 
 
 def _fix_reason(text: str, path: Path) -> str:
     """A ``fix_files`` skip reason (a ``FixError``'s words) without the path."""
     if text.startswith("could not move"):
-        return "it could not be moved"
-    return without_path(text, path)
+        return "It could not be moved."
+    if text == NOT_WRITTEN:
+        return "Not moved: the index could not be written."
+    return stop(without_path(text, path))
 
 
 # --- undo ------------------------------------------------------------------------------
+
+
+def blocked(store: Store, op: OperationRow, row: FileRow, *, by_content: bool = True) -> str | None:
+    """Why undo would skip this move, in ``undo``'s words; ``None`` if it can be put back.
+    ``by_content``: also hash the file (the confirmation pages do)."""
+    later = store.last_done_operation(op.file_id)
+    if not os.path.lexists(op.dst_path) or (later is not None and later.id != op.id):
+        return gone_reason(store, op)
+    if by_content and check_content(op.dst_path, row.sha256) is False:
+        return _undo_reason("changed since it was moved")
+    if os.path.lexists(op.src_path):
+        return _undo_reason("original path is taken")
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -392,6 +497,15 @@ class RunPlan:
     changes: list[IndexChange]
     rows: dict[int, FileRow]
     pin: str
+    blocked: dict[int, str]
+    """Per operation id, why undo will skip it."""
+    settled: list[tuple[str, bool]]
+    """For a run that marked documents done or open (``flib fix --done``): each one's
+    name, and whether undoing it opens it again."""
+
+    @property
+    def restorable(self) -> int:
+        return len(self.ops) - len(self.blocked)
 
 
 def plan_run(store: Store, run_id: int) -> RunPlan:
@@ -400,11 +514,22 @@ def plan_run(store: Store, run_id: int) -> RunPlan:
     try:
         ops, changes = run_undo_plan(store, run_id)
     except NothingToUndoError as exc:
-        raise Refused(str(exc)) from exc
-    rows = store.files_by_ids(sorted({op.file_id for op in ops}))
+        if not store.operations(run_id=run_id, status=OperationStatus.PLANNED):
+            raise Refused(stop(str(exc))) from exc
+        ops, changes = [], []
+    # An entry a failure left "planned" is finished by recovery, which every action runs
+    # first: shown, and pinned, as the move it then is.
+    ops = sorted(
+        [*ops, *store.operations(run_id=run_id, status=OperationStatus.PLANNED)],
+        key=lambda op: op.id,
+    )
+    settle = [c for c in changes if c.target == "files.settled_at"]
+    rows = store.files_by_ids(sorted({op.file_id for op in ops} | {c.row_id for c in settle}))
     if any(row.status is FileStatus.SENSITIVE for row in rows.values()):
         raise Refused(SENSITIVE)
-    return RunPlan(run_id, ops, changes, rows, run_pin(ops, changes))
+    reasons = {op.id: why for op in ops if (why := blocked(store, op, rows[op.file_id]))}
+    settled = [(rows[c.row_id].current_name, c.old_value is None) for c in settle]
+    return RunPlan(run_id, ops, changes, rows, run_pin(ops, changes), reasons, settled)
 
 
 @dataclass(frozen=True, slots=True)
@@ -412,6 +537,7 @@ class FilePlan:
     row: FileRow
     op: OperationRow
     pin: str
+    blocked: str | None
 
 
 def plan_file(store: Store, file_id: int) -> FilePlan:
@@ -420,10 +546,10 @@ def plan_file(store: Store, file_id: int) -> FilePlan:
     if row.status is FileStatus.SENSITIVE:
         raise Refused(SENSITIVE)
     try:
-        op = file_undo_plan(store, row.current_path)
+        op = file_undo_plan(store, row.current_path, file_id=row.id)
     except NothingToUndoError as exc:
-        raise Refused(without_path(str(exc), row.current_path)) from exc
-    return FilePlan(row, op, undo_file_pin(row, op))
+        raise Refused(stop(without_path(str(exc), row.current_path))) from exc
+    return FilePlan(row, op, undo_file_pin(row, op), blocked(store, op, row))
 
 
 def undo_one_run(config: Config, run_id: int, pin: str) -> Outcome:
@@ -431,8 +557,12 @@ def undo_one_run(config: Config, run_id: int, pin: str) -> Outcome:
     with writing(config) as store:
         plan = plan_run(store, run_id)
         if plan.pin != pin:
-            raise Refused(STALE_RUN)
+            raise Refused(STALE_UNDO)
         report = undo_run(store, run_id, config=config)
+    if not plan.ops and len(plan.settled) == 1 and report.reverted:
+        name, opened = plan.settled[0]
+        text = "is open again: it is back on the Due list." if opened else "is marked done again."
+        return Outcome(text, name=name)
     return _undone(report, config, f"Run {run_id} undone")
 
 
@@ -441,17 +571,17 @@ def undo_one_file(config: Config, file_id: int, pin: str) -> Outcome:
     with writing(config) as store:
         plan = plan_file(store, file_id)
         if plan.pin != pin:
-            raise Refused(STALE)
-        report = undo_file(store, plan.row.current_path, config=config)
+            raise Refused(STALE_UNDO)
+        report = undo_file(store, plan.row.current_path, config=config, file_id=plan.row.id)
     return _undone(report, config, "Undone")
 
 
 def _undone(report: UndoReport, config: Config, title: str) -> Outcome:
     from file_librarian.ui.views import folder  # the page's way of showing a folder
 
-    items = [Item(src.name, f"back in {folder(src, config)}") for _, src in report.restored]
-    items += [Item(dst.name, f"skipped: {_undo_reason(why)}") for dst, why in report.skipped]
-    items += [Item(path.name, f"warning: {_undo_reason(w)}") for path, w in report.warnings]
+    items = [Item(src.name, f"is back in {folder(src, config)}.") for _, src in report.restored]
+    items += [Item(dst.name, f"skipped: {stop(_undo_reason(why))}") for dst, why in report.skipped]
+    items += [Item(path.name, f"warning: {stop(_undo_reason(w))}") for path, w in report.warnings]
     text = f"{title}: {len(report.restored)} restored, {len(report.skipped)} skipped"
     if report.reverted:
         text += f", {report.reverted} index {'change' if report.reverted == 1 else 'changes'} "
@@ -473,10 +603,13 @@ def settle_one(config: Config, file_id: int, pin: str, *, done: bool) -> Outcome
         if file_pin(row) != pin:
             raise Refused(STALE)
         try:
-            report = due_mod.settle(store, row.current_path, done=done, trigger=RunTrigger.MANUAL)
+            report = due_mod.settle(
+                store, row.current_path, done=done, trigger=RunTrigger.MANUAL, file_id=row.id
+            )
         except due_mod.DueError as exc:
-            raise Refused(without_path(str(exc), row.current_path)) from exc
-    text = "Marked done." if done else "Open again."
-    return Outcome(
-        text, items=(Item(row.current_name, f"due {report.due_date}"),), undo_run=report.run_id
-    )
+            raise Refused(stop(without_path(str(exc), row.current_path))) from exc
+    if done:
+        text, label = "is marked done: it leaves the Due list.", "Undo: open it again…"
+    else:
+        text, label = "is open again: it is back on the Due list.", "Undo: mark it done again…"
+    return Outcome(text, undo_run=report.run_id, undo_label=label, name=row.current_name)

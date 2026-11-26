@@ -217,11 +217,13 @@ Mac. It reads the same index as the command line:
   `flib fix`, so flib learns from it), **Put back where it was** (`flib undo`
   for that file: back in Downloads, where later runs leave it), and Open or
   Show in Finder to look first. A group with a suggestion has **Accept all**,
-  which lists the files before moving them (at most 100 at a time), as one
-  run that one Undo reverts.
+  which lists the files before moving them (at most 100 at a time, never one
+  missing on disk), as one run that one Undo reverts.
 - **Undo**: after each action, and for each run and move on Activity. It
-  shows what will be put back, and where, before doing anything, and refuses
-  what `flib undo` refuses, with the same reason.
+  shows what will be put back, and where, and what will be skipped and why
+  (moved again by a later run, edited since, its old place taken), before
+  doing anything; it refuses what `flib undo` refuses, with the same reason.
+  Undoing a correction also makes flib forget what it learned from it.
 - **Search**: `flib search` with its filters (category and kind chips, the
   dates, the issuer, amounts, the due date, the period), Open and Show in
   Finder for each match, totals per currency as `flib search --sum` adds them

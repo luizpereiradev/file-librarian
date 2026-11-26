@@ -137,7 +137,7 @@ def test_review_and_undo_in_a_real_browser(
             tab.click(f"form[action='/review/file']:has(input[name=id][value='{shot}']) button")
             tab.wait_for(lambda: "/review?n=" in tab.url() and tab.ready())
             after = tab.url()
-            assert "Moved to Images." in tab.text()
+            assert "is now in Images." in tab.text()
             assert filed.read_bytes() == b"pixels" and not in_review.exists()
             # Back and Forward: no resubmission, nothing moves again.
             tab.evaluate("history.back()")
@@ -159,6 +159,23 @@ def test_review_and_undo_in_a_real_browser(
             tab.evaluate("location.reload()")
             tab.wait_for(lambda: "/undo?n=" in tab.url() and tab.ready())
             assert in_review.exists() and not filed.exists()
+            # At 390 px no page scrolls sideways, and every menu item is in view.
+            tab.call(
+                "Emulation.setDeviceMetricsOverride",
+                {"width": 390, "height": 844, "deviceScaleFactor": 2, "mobile": True},
+            )
+            for page in ("status", "review", "search", "activity", "due", f"undo?file={shot}"):
+                tab.goto(f"{ui.origin}/{page}")
+                # A phone widens its layout to fit what overflows: measure against 390.
+                wide = tab.evaluate(
+                    "Math.max(window.innerWidth, document.documentElement.scrollWidth) - 390"
+                )
+                assert wide <= 0, (page, wide)
+                hidden = tab.evaluate(
+                    "[...document.querySelectorAll('nav[aria-label=Pages] > *')]"
+                    ".filter(e => e.getBoundingClientRect().right > 390).length"
+                )
+                assert hidden == 0, (page, hidden)
     finally:
         ui.close()
         shutil.rmtree(profile, ignore_errors=True)

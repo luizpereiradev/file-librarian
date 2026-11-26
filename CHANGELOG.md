@@ -29,6 +29,20 @@ All notable changes to this project are documented here. The format follows
   files are never listed or acted on. The Status page and the menu link
   Review; `flib ui --open review`. A run's counts after `flib fix` now come
   from its journal.
+- After the review of #115: undoing a `flib fix` now deletes the corrections
+  that fix recorded (new column `corrections.operation_id`, migration 0019),
+  so an undone fix is never sent to the classifier as an example and never
+  hides an older correction; a number added only because a name was taken
+  (`a-2.pdf`) is no longer learned as a name; the corrections of one run
+  that fixed many files the same way are sent as one example. `flib undo`
+  says "moved again since, by run N (undo that first)" instead of blaming a
+  move by hand when a later run took the file elsewhere. Recovery no longer
+  takes a copy with the same bytes, already at the name a crashed move had
+  journaled, for the moved file while the source is still in place. The
+  interface's undo pages list what will be skipped and why before anything
+  is done, and Activity offers Undo only where something can go back. File
+  names are isolated (`<bdi dir="ltr">`), and on a phone the menu wraps
+  instead of widening the page.
 - `flib ui` has Search, Activity and Due pages (#114), read-only and
   readable without JavaScript. **Search** is `flib search` in a form:
   category and kind chips, the other filters under "More filters", each

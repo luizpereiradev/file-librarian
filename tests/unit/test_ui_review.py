@@ -20,7 +20,7 @@ import pytest
 
 from file_librarian.config import Config
 from file_librarian.db.store import FileRow, Store
-from file_librarian.fix import FixError, fix_file, fix_files
+from file_librarian.fix import FixError, FixItem, fix_file, fix_files
 from file_librarian.lock import instance_lock
 from file_librarian.models import FileStatus, ReviewReason
 from file_librarian.ui import actions, review
@@ -80,12 +80,21 @@ def review_folder(cfg: Config) -> Path:
 
 
 def row(cfg: Config, original: str) -> FileRow:
-    with Store.open(cfg.database) as store:
+    with Store.open_read_only(cfg.database) as store:  # never migrates, never writes
         return next(r for r in store.all_files() if r.original_name == original)
 
 
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def group_of(c: UiClient, suggested: str) -> str:
+    """A review group's key as the page names it (keyed with the session's secret)."""
+    match = re.search(
+        rf'id="g-([0-9a-f]{{16}})"><h2>[^<]*: suggested {suggested} ', c.get("/review").text
+    )
+    assert match is not None, suggested
+    return match.group(1)
 
 
 def pin_on_page(page: str, file_id: int) -> str:
@@ -101,8 +110,9 @@ def act(c: UiClient, route: str, **fields: str) -> UiResponse:
     reply = c.post_form(route, {"csrf": c.csrf("/review")} | fields)
     assert reply.status == 303, (reply.status, reply.text)
     location = reply.headers["Location"]
-    assert re.fullmatch(r"/(review|undo|due)\?n=[A-Za-z0-9_-]{16}", location), location
-    page = c.get(location)
+    pattern = r"/(review|undo|due)\?((within=\w+|overdue=1)&)?(all=1&)?n=[A-Za-z0-9_-]{16}"
+    assert re.fullmatch(pattern + r"(#g-[0-9a-f]{16})?", location), location
+    page = c.get(location.split("#", 1)[0])  # a browser never sends the fragment
     assert page.status == 200
     assert_safe(page.text)
     return page
@@ -209,7 +219,7 @@ def test_bad_addresses_are_refused(client: UiClient, path: str) -> None:
 def test_getting_every_page_changes_nothing(client: UiClient, cfg: Config) -> None:
     before = snapshot(cfg)
     r = row(cfg, "shot-1.png")
-    group = actions.group_key(ReviewReason.LOW_CONFIDENCE, "Images")
+    group = group_of(client, "Images")
     for path in (
         "/review",
         f"/review/accept?g={group}",
@@ -232,7 +242,7 @@ def test_accept_moves_the_file_journals_it_and_undo_restores_it(
     before = row(cfg, "shot-1.png")
     content = digest(before.current_path)
     page = accept(client, cfg, "shot-1.png")
-    assert "Moved to Images." in page.text
+    assert "is now in Images." in page.text
     after = row(cfg, "shot-1.png")
     assert after.status is FileStatus.ORGANIZED and after.category == "Images"
     assert after.current_path == cfg.output_root / "Images" / "shot-1.png"
@@ -259,7 +269,7 @@ def test_accept_moves_the_file_journals_it_and_undo_restores_it(
 
 def test_move_to_another_category_with_a_new_name_is_learned(client: UiClient, cfg: Config) -> None:
     page = accept(client, cfg, "shot-2.png", category="Other", name="holiday")
-    assert "Moved to Other." in page.text
+    assert "is now in Other." in page.text
     after = row(cfg, "shot-2.png")
     assert after.current_path == cfg.output_root / "Other" / "holiday.png"  # extension kept
     with Store.open(cfg.database) as store:
@@ -269,7 +279,7 @@ def test_move_to_another_category_with_a_new_name_is_learned(client: UiClient, c
 
 def test_a_rename_alone_stays_in_review(client: UiClient, cfg: Config) -> None:
     page = accept(client, cfg, "shot-3.png", category="", name="renamed")
-    assert "Renamed; it stays in review." in page.text
+    assert "is its new name; it stays in review." in page.text
     after = row(cfg, "shot-3.png")
     assert after.status is FileStatus.REVIEW
     assert after.current_path == review_folder(cfg) / "renamed.png"
@@ -332,7 +342,7 @@ def test_a_double_submit_moves_once(client: UiClient, cfg: Config) -> None:
         "pin": pin_on_page(client.get("/review").text, r.id),
         "category": "Images",
     }
-    assert "Moved to Images." in act(client, "/review/file", **fields).text
+    assert "is now in Images." in act(client, "/review/file", **fields).text
     again = act(client, "/review/file", **fields | {"category": "Other"})
     assert actions.STALE[:40] in again.text
     assert row(cfg, "shot-1.png").category == "Images"
@@ -356,22 +366,20 @@ def test_two_tabs_one_wins(serve: list[Ui], cfg: Config, seeded: int) -> None:
 def test_a_run_in_progress_holds_everything(client: UiClient, cfg: Config) -> None:
     r = row(cfg, "shot-1.png")
     pin = pin_on_page(client.get("/review").text, r.id)
-    group = actions.group_key(ReviewReason.LOW_CONFIDENCE, "Images")
+    group = group_of(client, "Images")
     with instance_lock(cfg.database):  # a run holds the lock
         before = snapshot(cfg)
         page = act(client, "/review/file", id=str(r.id), pin=pin, category="Images")
-        assert (
-            "A run or another change holds flib" in page.text and f"pid {os.getpid()}" in page.text
-        )
+        assert actions.BUSY in page.text and f"{os.getpid()}" not in page.text
         assert "Nothing was done" in page.text
         form = dict(
             re.findall(r'name="(g|ids|pin)" value="([^"]+)"', client.get(
                 f"/review/accept?g={group}").text)
         )  # fmt: skip
-        assert "A run or another change holds flib" in act(client, "/review/accept", **form).text
+        assert actions.BUSY in act(client, "/review/accept", **form).text
         assert snapshot(cfg)[1] == before[1]
     assert (
-        "Moved to Images."
+        "is now in Images."
         in act(client, "/review/file", id=str(r.id), pin=pin, category="Images").text
     )
 
@@ -469,7 +477,7 @@ def test_an_older_index_is_never_written(client: UiClient, cfg: Config) -> None:
 
 def test_a_kept_outcome_belongs_to_its_session(client: UiClient, cfg: Config) -> None:
     page = accept(client, cfg, "shot-1.png")
-    assert "Moved to Images." in page.text
+    assert "is now in Images." in page.text
     assert "is no longer kept" in client.get("/review?n=BBBBBBBBBBBBBBBB").text
 
 
@@ -482,7 +490,7 @@ def test_reload_back_and_forward_never_act_again(client: UiClient, cfg: Config) 
     location = reply.headers["Location"]
     before = snapshot(cfg)
     for _ in range(3):
-        assert "Moved to Images." in client.get(location).text
+        assert "is now in Images." in client.get(location).text
     assert snapshot(cfg) == before
 
 
@@ -494,7 +502,7 @@ def test_outcomes_end_with_the_session(serve: list[Ui], cfg: Config, seeded: int
     reply = c.post_form(
         "/review/file", {"csrf": c.csrf(), "id": str(r.id), "pin": pin, "category": "Images"}
     )
-    key = reply.headers["Location"].rsplit("=", 1)[1]
+    key = reply.headers["Location"].split("#", 1)[0].rsplit("=", 1)[1]
     session = ui.session(c.cookies[ui.cookie_name])
     assert session is not None and ui.kept_outcome(session, key) is not None
     stranger = ui_server.Session("someone", "else")
@@ -526,7 +534,7 @@ def accept_all_form(c: UiClient) -> dict[str, str]:
 def test_accept_all_lists_the_files_first_then_moves_them_as_one_run(
     client: UiClient, cfg: Config
 ) -> None:
-    group = actions.group_key(ReviewReason.LOW_CONFIDENCE, "Images")
+    group = group_of(client, "Images")
     confirm = client.get(f"/review/accept?g={group}").text
     for name in ("shot-1.png", "shot-2.png", "shot-3.png"):
         assert name in confirm
@@ -546,7 +554,7 @@ def test_accept_all_lists_the_files_first_then_moves_them_as_one_run(
     assert tuple(run) == (3, 3, 0)
     # One undo puts all three back in review.
     form = undo_form(client, f"run={run_id}")
-    assert "moves 3 files back where they were" in client.get(f"/undo?run={run_id}").text
+    assert "puts 3 files back where they were" in client.get(f"/undo?run={run_id}").text
     assert "3 restored" in act(client, "/undo", **form).text
     for name, content in contents.items():
         back = row(cfg, name)
@@ -618,7 +626,7 @@ def test_accept_all_refuses_a_form_it_never_sends(
 def test_accept_all_without_a_configured_suggestion_is_a_bad_request(
     client: UiClient, cfg: Config, downloads: Path
 ) -> None:
-    group = actions.group_key(ReviewReason.UNKNOWN_CATEGORY, "Recipes")
+    group = group_of(client, "Recipes")
     assert "not in review any more" in client.get(f"/review/accept?g={group}").text
     r = row(cfg, "recipe.txt")
     with Store.open(cfg.database) as store:
@@ -631,9 +639,9 @@ def test_accept_all_is_capped(
     client: UiClient, cfg: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(actions, "BULK_CAP", 2)
-    group = actions.group_key(ReviewReason.LOW_CONFIDENCE, "Images")
-    assert "for the oldest 2" in client.get("/review").text
-    assert "Only the oldest 2 of the 3" in client.get(f"/review/accept?g={group}").text
+    group = group_of(client, "Images")
+    assert "for 2 of the 3" in client.get("/review").text
+    assert "Only 2 at a time" in client.get(f"/review/accept?g={group}").text
     page = act(client, "/review/accept", **accept_all_form(client))
     assert "Moved 2 files to Images" in page.text
     statuses = sorted(row(cfg, f"shot-{i}.png").status.value for i in (1, 2, 3))
@@ -646,16 +654,14 @@ def test_accept_all_skips_a_file_that_cannot_be_moved(
     form = accept_all_form(client)
     real = fix_files
 
-    def tamper(
-        config: Config, store: Store, items: list[tuple[Path, str | None, str | None]], **kw: object
-    ) -> object:
+    def tamper(config: Config, store: Store, items: list[FixItem], **kw: object) -> object:
         items[0][0].write_bytes(b"changed on disk")  # after the checks, before the move
         return real(config, store, items)
 
     monkeypatch.setattr("file_librarian.ui.actions.fix_files", tamper)
     page = act(client, "/review/accept", **form)
     assert "Moved 2 files to Images" in page.text
-    assert "1 file could not be moved and stay in review" in page.text
+    assert "1 file could not be moved and stays in review" in page.text
     assert "This file changed or moved since it was indexed" in page.text
     assert str(cfg.output_root) not in page.text
 
@@ -666,10 +672,8 @@ def test_accept_all_that_moves_nothing_says_so(
     form = accept_all_form(client)
     real = fix_files
 
-    def tamper(
-        config: Config, store: Store, items: list[tuple[Path, str | None, str | None]], **kw: object
-    ) -> object:
-        for path, _, _ in items:
+    def tamper(config: Config, store: Store, items: list[FixItem], **kw: object) -> object:
+        for path, *_ in items:
             path.write_bytes(b"changed")
         return real(config, store, items)
 
@@ -689,20 +693,20 @@ def test_put_back_returns_a_file_to_downloads_and_it_stays(
     confirm = client.get(f"/undo?file={r.id}").text
     assert "Downloads/" in confirm and "stays there" in confirm
     page = act(client, "/undo", **undo_form(client, f"file={r.id}"))
-    assert "Undone: 1 restored" in page.text and "back in Downloads/" in page.text
+    assert "Undone: 1 restored" in page.text and "is back in Downloads/." in page.text
     back = row(cfg, "shot-1.png")
     assert back.current_path == downloads / "shot-1.png" and digest(back.current_path) == content
     assert back.status is FileStatus.SKIPPED
     again = client.get(f"/undo?file={r.id}").text
-    assert "This file has no move to undo" in again and 'name="pin"' not in again
+    assert "This file has no move to undo." in again and 'name="pin"' not in again
 
 
 def test_undo_refuses_what_the_cli_refuses_in_its_words(client: UiClient, cfg: Config) -> None:
     page = client.get("/undo?run=999").text
-    assert "Run 999 has nothing left to undo" in page and 'name="pin"' not in page
+    assert "Run 999 has nothing left to undo." in page and 'name="pin"' not in page
     assert "That file is not in the index any more" in client.get("/undo?file=999").text
     reply = act(client, "/undo", run="999", pin="0" * 20)
-    assert "Run 999 has nothing left to undo" in reply.text
+    assert "Run 999 has nothing left to undo." in reply.text
 
 
 def test_a_stale_undo_is_refused(client: UiClient, cfg: Config, seeded: int) -> None:
@@ -710,7 +714,7 @@ def test_a_stale_undo_is_refused(client: UiClient, cfg: Config, seeded: int) -> 
     with Store.open(cfg.database) as store:
         undo_run(store, seeded, config=cfg)  # done from the command line meanwhile
     page = act(client, "/undo", **form)
-    assert f"Run {seeded} has nothing left to undo" in page.text
+    assert f"Run {seeded} has nothing left to undo." in page.text
 
 
 def test_an_undo_after_another_change_to_the_run_is_stale(
@@ -720,7 +724,7 @@ def test_an_undo_after_another_change_to_the_run_is_stale(
     r = row(cfg, "shot-1.png")
     act(client, "/undo", **undo_form(client, f"file={r.id}"))  # one move of it, undone
     page = act(client, "/undo", **form)
-    assert actions.STALE_RUN[11:50] in page.text
+    assert actions.STALE_UNDO[:40] in page.text
     assert row(cfg, "shot-2.png").status is FileStatus.REVIEW
 
 
@@ -729,7 +733,7 @@ def test_a_stale_file_undo_is_refused(client: UiClient, cfg: Config) -> None:
     form = undo_form(client, f"file={r.id}")
     accept(client, cfg, "shot-1.png")
     page = act(client, "/undo", **form)
-    assert actions.STALE[:40] in page.text
+    assert actions.STALE_UNDO[:40] in page.text
     assert row(cfg, "shot-1.png").category == "Images"
 
 
@@ -797,12 +801,12 @@ def test_mark_done_and_open_again_from_due(serve: list[Ui], cfg: Config, downloa
     page = c.get("/due").text
     assert "Mark done" in page
     done = act(c, "/due/settle", id=str(r.id), pin=pin_on_page(page, r.id), done="1")
-    assert "Marked done." in done.text
+    assert "is marked done: it leaves the Due list." in done.text
     assert row(cfg, "power.pdf").settled_at is not None
     shown = c.get("/due?within=7d&all=1").text
     assert "Open again" in shown
     again = act(c, "/due/settle", id=str(r.id), pin=pin_on_page(shown, r.id), done="0")
-    assert "Open again." in again.text
+    assert "is open again: it is back on the Due list." in again.text
     assert row(cfg, "power.pdf").settled_at is None
 
 
@@ -871,13 +875,16 @@ def test_messages_lose_the_path() -> None:
     error = FixError(f"could not move {path}: denied")
     error.__cause__ = OSError("/x/y/file.pdf: denied")
     assert actions._fix_text(error, path) == "It could not be moved; nothing was changed."
-    assert actions._fix_reason(f"could not move {path}: x", path) == "it could not be moved"
+    assert actions._fix_reason(f"could not move {path}: x", path) == "It could not be moved."
     for reason in ("original folder is gone: /a", "original path is taken: /a/b"):
         assert "/" not in actions._undo_reason(reason)
     assert actions._undo_reason("could not move back: Permission denied") == (
         "it could not be moved back"
     )
-    assert actions._undo_reason("changed since it was moved") == "changed since it was moved"
+    assert actions._undo_reason("changed since it was moved") == (
+        "it changed since it was moved (edited by hand?)"
+    )
+    assert actions._undo_reason("no longer there") == "no longer there"
 
 
 def test_pins_change_with_what_the_page_showed(cfg: Config, seeded: int) -> None:
@@ -907,7 +914,7 @@ def test_ids_parses_only_what_the_confirmation_sends() -> None:
 def test_fix_files_counts_its_run_from_the_journal(cfg: Config, seeded: int) -> None:
     paths = [row(cfg, f"shot-{i}.png").current_path for i in (1, 2)]
     with Store.open(cfg.database) as store:
-        report = fix_files(cfg, store, [(paths[0], "Images", None), (paths[1], "Nope", None)])
+        report = fix_files(cfg, store, [FixItem(paths[0], "Images"), FixItem(paths[1], "Nope")])
         run = store.conn.execute(
             "SELECT files_seen, files_moved, errors FROM runs WHERE id = ?", (report.run_id,)
         ).fetchone()
@@ -920,7 +927,7 @@ def test_review_groups_count_the_files_not_listed(
 ) -> None:
     monkeypatch.setattr(actions, "MAX_LISTED", 2)
     with Store.open(cfg.database) as store:
-        groups, more = actions.review_groups(store)
+        groups, more = actions.review_groups(store, "secret")
     assert sum(len(g.rows) for g in groups) == 2 and more == 3
 
 
@@ -944,7 +951,7 @@ def test_undo_confirmation_caps_its_list(
 def test_an_unreadable_index_is_said_and_nothing_is_done(client: UiClient, cfg: Config) -> None:
     r = row(cfg, "shot-1.png")
     pin = pin_on_page(client.get("/review").text, r.id)
-    group = actions.group_key(ReviewReason.LOW_CONFIDENCE, "Images")
+    group = group_of(client, "Images")
     for suffix in ("-wal", "-shm"):
         cfg.database.with_name(cfg.database.name + suffix).unlink(missing_ok=True)
     cfg.database.write_bytes(b"not a database" * 100)
@@ -981,7 +988,7 @@ def test_files_from_before_review_reasons_and_without_a_suggestion(
 def test_a_file_renamed_in_review_says_what_it_was(client: UiClient, cfg: Config) -> None:
     accept(client, cfg, "shot-3.png", category="", name="renamed")
     page = client.get("/review").text
-    assert "renamed.png" in page and "was <span" in page
+    assert "renamed.png" in page and "was <bdi" in page
 
 
 def test_a_suggestion_in_another_case_is_accepted_as_configured(
@@ -1003,9 +1010,11 @@ def test_undoing_a_run_that_only_changed_the_index(
     done = act(c, "/due/settle", id=str(r.id), pin=pin, done="1")
     link = re.search(r'href="/undo\?(run=\d+)"', done.text)
     assert link is not None
-    assert "nothing moves" in c.get(f"/undo?{link.group(1)}").text
+    assert "Undo: open it again…" in done.text
+    confirm = c.get(f"/undo?{link.group(1)}").text
+    assert "power.pdf</bdi> is open again." in confirm and "run " not in confirm.split("<main")[1]
     page = act(c, "/undo", **undo_form(c, link.group(1)))
-    assert "1 index change reverted" in page.text
+    assert "power.pdf</bdi> is open again: it is back on the Due list." in page.text
     assert row(cfg, "power.pdf").settled_at is None
 
 
@@ -1023,7 +1032,7 @@ def test_a_move_that_fails_in_a_batch_is_skipped(
 
     monkeypatch.setattr("file_librarian.fix.move_no_replace", refuse)
     with Store.open(cfg.database) as store:
-        report = fix_files(cfg, store, [(p, "Images", None) for p in paths])
+        report = fix_files(cfg, store, [FixItem(p, "Images") for p in paths])
         run = store.conn.execute(
             "SELECT files_seen, files_moved, errors FROM runs WHERE id = ?", (report.run_id,)
         ).fetchone()
@@ -1050,7 +1059,7 @@ def test_a_batch_cut_off_is_finished_by_recovery_with_true_counts(
 
     monkeypatch.setattr(fix_mod, "_complete", crash)
     with Store.open(cfg.database) as store, pytest.raises(KeyboardInterrupt):
-        fix_files(cfg, store, [(p, "Images", None) for p in paths])
+        fix_files(cfg, store, [FixItem(p, "Images") for p in paths])
     with Store.open(cfg.database) as store:
         assert recover(store, cfg) == 1
         run_id = store.last_run_with_operations()
@@ -1104,7 +1113,7 @@ def test_names_in_an_outcome_lose_format_characters(
     c = start(serve, cfg)
     r = row(cfg, tricky)
     page = accept(c, cfg, tricky)
-    assert "Moved to Finance." in page.text and "‮" not in page.text
+    assert "is now in Finance." in page.text and "‮" not in page.text
     # Undone twice (the fix, then its move into review), it is back in Downloads under
     # its own name, override and all; the page shows the name without it.
     act(c, "/undo", **undo_form(c, f"file={r.id}"))

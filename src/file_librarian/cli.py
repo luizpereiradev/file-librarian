@@ -2457,7 +2457,7 @@ def ui(
     ] = 0,
     config: ConfigOption = None,
 ) -> None:
-    """Open the local interface in your browser: Status, Search, Activity and Due.
+    """Open the local interface in your browser: Status, Review, Search, Activity and Due.
 
     A server on 127.0.0.1 only, for this Mac. The browser gets a one-time
     token through a file only you can read (`--no-browser` prints a link that

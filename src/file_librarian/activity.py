@@ -13,6 +13,7 @@ the newest runs only (``runlog.KEEP``), so older runs say nothing about it.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -57,7 +58,8 @@ class Move:
     fix: bool
     """A correction by hand (``flib fix``)."""
     last: bool = False
-    """The file's last move still in effect: the one ``flib undo --file`` reverts."""
+    """The file's last move still in effect (``flib undo --file`` reverts it), with the
+    file still where it put it and its old place free: undo can put it back."""
 
     @property
     def duplicate(self) -> bool:
@@ -171,8 +173,9 @@ def _run(store: Store, config: Config, run: RunRow, sensitive: int) -> RunActivi
     operations = store.operations(run_id=run.id)
     files = store.files_by_ids(sorted({op.file_id for op in operations}))
     last = store.last_done_operations(sorted(files))
+    can = {op.id for op in operations if _can_go_back(op, last)}
     moves = [
-        _move(op, files[op.file_id], last=last.get(op.file_id) == op.id)
+        _move(op, files[op.file_id], last=op.id in can)
         for op in operations
         if op.file_id in files and files[op.file_id].status is not FileStatus.SENSITIVE
     ]
@@ -180,7 +183,11 @@ def _run(store: Store, config: Config, run: RunRow, sensitive: int) -> RunActivi
     sensitive_moved = any(
         files[op.file_id].status is FileStatus.SENSITIVE for op in operations if op.file_id in files
     )
-    in_effect = any(op.status is OperationStatus.DONE for op in operations) or bool(changes)
+    done = any(op.status is OperationStatus.DONE for op in operations)
+    # Undo is offered when it would put something back: a move whose file is still
+    # where it put it, with its old place free; or, for a run that moved nothing,
+    # its index changes (marked done, say). Never for moves taken further since.
+    in_effect = bool(can) or (not done and bool(changes))
     settled = sum(1 for c in changes if c.target == "files.settled_at")
     return RunActivity(
         run=run,
@@ -191,6 +198,17 @@ def _run(store: Store, config: Config, run: RunRow, sensitive: int) -> RunActivi
         index_changes=len(changes) - settled,
         unlock=read_unlock(config.database, run.id),
         undoable=in_effect and not sensitive_moved,
+    )
+
+
+def _can_go_back(op: OperationRow, last: dict[int, int]) -> bool:
+    """Undo could put this move back, as far as a look tells (no hashing): it is its
+    file's last move, the file is where it put it, and its old place is free."""
+    return (
+        op.status is OperationStatus.DONE
+        and last.get(op.file_id) == op.id
+        and os.path.lexists(op.dst_path)
+        and not os.path.lexists(op.src_path)
     )
 
 

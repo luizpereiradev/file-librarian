@@ -2,20 +2,24 @@
 
 - **Review** (``GET /review``): the files waiting in the review folder, by
   reason and suggested category, the biggest group first. Each file has
-  Accept (its suggested category, when that is configured), Move (another
-  configured category, and/or a new name), Put back (undo its last move),
-  and Open / Show in Finder. A group of more than one with a configured
-  suggestion has "Accept all", which goes to a confirmation page first.
+  Accept (its suggested category, when that is configured), another category
+  and/or a new name, Put back (undo its last move), and Open / Show in
+  Finder. A group of more than one with a configured suggestion has "Accept
+  all", which goes to a confirmation page first.
 - **Accept all** (``GET /review/accept?g=<group>``): lists the files it would
-  move (at most ``actions.BULK_CAP``) and posts them, as one run.
+  move (at most ``actions.BULK_CAP``, never one missing on disk) and posts
+  them, as one run. ``g`` is keyed with the session's secret.
 - **Undo** (``GET /undo?run=<id>`` or ``?file=<id>``): what undoing would
-  put back, and where, before anything is done; the button posts it.
+  put back, and where, and what it would skip and why, before anything is
+  done; the button posts it.
 
 Every page only reads (the index is opened read-only); the forms post to
 the routes in ``server.POST_ROUTES`` (``actions`` does the work), and each
 POST ends in a redirect back here with ``?n=<id>``: what happened, kept on
 the server for the session, so no name goes in an address and reload,
-Back and Forward never do anything again.
+Back and Forward never do anything again. Text from the index or the model
+(names, suggested categories, descriptions) loses its format characters
+(``views.shown``); names are isolated (``<bdi>``).
 """
 
 from __future__ import annotations
@@ -28,12 +32,13 @@ from file_librarian.db.store import FileRow, OperationRow
 from file_librarian.models import ReviewReason, explain_review
 from file_librarian.ui import actions
 from file_librarian.ui.actions import Group, Outcome
-from file_librarian.ui.markup import Markup, csrf_field, el, join, layout
+from file_librarian.ui.markup import Markup, csrf_field, el, join, layout, prose
 from file_librarian.ui.views import (
     BadRequest,
     Page,
     Unreadable,
     file_actions,
+    filename,
     folder,
     message,
     one_choice,
@@ -45,7 +50,10 @@ from file_librarian.ui.views import (
     shown,
 )
 
-GONE = "What happened there is no longer kept (only the latest are, until the session ends)."
+GONE = (
+    "What happened there is no longer kept (only the latest are, until the session ends). "
+    "Reload the page from the menu to see how things are now."
+)
 MAX_UNDO_LISTED = 200
 """Most moves an undo confirmation lists; the rest are counted."""
 
@@ -64,19 +72,28 @@ def outcome_notice(outcome: Outcome | None, gone: bool) -> Markup | None:
     if outcome is None:
         return None
     items = [
-        el("li", el("span", shown(item.name), class_="name"), " ", el("span", item.text))
-        for item in outcome.items
+        el("li", filename(item.name), " ", el("span", prose(item.text))) for item in outcome.items
     ]
     undo = None
     if outcome.undo_run is not None:
-        undo = el("a", "Undo this…", href=f"/undo?run={outcome.undo_run}")
+        undo = el("a", outcome.undo_label, href=f"/undo?run={outcome.undo_run}")
+    if outcome.name is not None:
+        text = el(
+            "p",
+            filename(outcome.name),
+            " ",
+            prose(outcome.text),
+            class_="notice error" if outcome.error else "notice",
+            role="status",
+        )
+    else:
+        text = message(outcome.text, error=outcome.error)
     return el(
         "div",
-        message(outcome.text, error=outcome.error),
+        text,
         el("ul", *items, class_="moves") if items else None,
         el("p", undo, class_="note") if undo else None,
         class_="outcome",
-        role="status",
     )
 
 
@@ -96,14 +113,17 @@ def _title(group: Group) -> str:
     if group.reason is not None:
         label = REASONS[group.reason]
     if group.suggested:
-        label += f": suggested {group.suggested}"
+        label += f": suggested {shown(group.suggested)}"
     return label
 
 
 # --- Review ----------------------------------------------------------------------------
 
 
-def review_page(config: Config, csrf: str, outcome: Outcome | None, *, gone: bool) -> Page:
+def review_page(
+    config: Config, csrf: str, outcome: Outcome | None, *, gone: bool, secret: str
+) -> Page:
+    """``secret``: the session's, which keys each group's name in addresses."""
     parts: list[Markup | None] = [
         el("h1", "Review"),
         el(
@@ -120,7 +140,7 @@ def review_page(config: Config, csrf: str, outcome: Outcome | None, *, gone: boo
         return HTTPStatus.OK, layout("Review", "review", join(parts), csrf)
     try:
         with read_index(config) as store:
-            groups, more = actions.review_groups(store)
+            groups, more = actions.review_groups(store, secret)
     except Unreadable as exc:
         parts.append(message(str(exc), error=True))
         return HTTPStatus.SERVICE_UNAVAILABLE, layout("Review", "review", join(parts), csrf)
@@ -154,19 +174,16 @@ def review_page(config: Config, csrf: str, outcome: Outcome | None, *, gone: boo
 
 def _group(group: Group, config: Config, csrf: str, now: datetime) -> Markup:
     target = group.target(config)
+    explained = explain_review(group.reason, group.suggested and shown(group.suggested), None)
     head: list[Markup | None] = [
         el("h2", _title(group), " ", el("span", str(len(group.rows)), class_="badge")),
-        el(
-            "p",
-            sentence(explain_review(group.reason, group.suggested, None)) + ".",
-            class_="note",
-        ),
+        el("p", sentence(explained) + ".", class_="note"),
     ]
-    if target is not None and len(group.rows) > 1:
-        count = len(group.batch)
+    count, present = len(group.batch), len(group.present)
+    if target is not None and count > 1:
         label = f"Accept {target} for all {count}…"
-        if count < len(group.rows):
-            label = f"Accept {target} for the oldest {count}…"
+        if count < present:
+            label = f"Accept {target} for {count} of the {present}…"
         head.append(
             el(
                 "p",
@@ -202,22 +219,20 @@ def _file(row: FileRow, target: str | None, config: Config, csrf: str, now: date
     if row.confidence is not None:
         facts.append(f"confidence {row.confidence:.2f}")
     parts: list[Markup | None] = [
-        el("div", el("strong", name, class_="name"), class_="hit-head"),
+        el("div", el("strong", filename(row.current_name)), class_="hit-head"),
         el("div", ", ".join(facts), class_="where"),
     ]
     if row.original_name != row.current_name:
-        parts.append(
-            el("div", "was ", el("span", shown(row.original_name), class_="name"), class_="note")
-        )
+        parts.append(el("div", "was ", filename(row.original_name), class_="note"))
     if row.description:
-        parts.append(el("p", row.description, class_="desc"))
+        parts.append(el("p", shown(row.description), class_="desc"))
     if not exists:
         parts.append(
             el(
                 "p",
                 el("span", "missing: moved by hand?", class_="badge warn"),
                 " ",
-                "`flib reconcile` in Terminal finds it.",
+                prose("`flib reconcile` in Terminal finds it."),
                 class_="note",
             )
         )
@@ -240,10 +255,9 @@ def _file(row: FileRow, target: str | None, config: Config, csrf: str, now: date
                 class_="inline",
             )
         )
-    options = [el("option", "Stay in review (rename only)", value="")]
-    options += [
-        el("option", c.name, value=c.name, selected=c.name == target) for c in config.categories
-    ]
+    # Starts on "stay in review": a new name typed alone only renames (#115 review).
+    options = [el("option", "Keep in review (only rename it)", value="", selected=True)]
+    options += [el("option", f"Move to {c.name}", value=c.name) for c in config.categories]
     move = el(
         "details",
         el("summary", "Another category or a new name"),
@@ -265,10 +279,18 @@ def _file(row: FileRow, target: str | None, config: Config, csrf: str, now: date
                     value="",
                     placeholder="New name (optional)",
                     maxlength=255,
+                    autocomplete="off",
+                    spellcheck="false",
                     aria_label=f"New name for {name}",
                 ),
             ),
-            el("button", "Move", type="submit", class_="quiet", aria_label=f"Move: {name}"),
+            el(
+                "button",
+                "Move or rename as chosen",
+                type="submit",
+                class_="quiet",
+                aria_label=f"Move or rename as chosen: {name}",
+            ),
             method="post",
             action="/review/file",
             class_="move",
@@ -286,23 +308,24 @@ def _file(row: FileRow, target: str | None, config: Config, csrf: str, now: date
 # --- Accept all ------------------------------------------------------------------------
 
 
-def accept_page(config: Config, csrf: str, query: str) -> Page:
+def accept_page(config: Config, csrf: str, query: str, *, secret: str) -> Page:
     params = query_params(query, frozenset({"g"}))
-    key = one_choice(params, "g")
-    if key is None or len(key) != 16 or not all(c in "0123456789abcdef" for c in key):
-        raise BadRequest
+    try:
+        key = actions.a_group(one_choice(params, "g"))
+    except actions.Malformed as exc:
+        raise BadRequest from exc
     parts: list[Markup | None] = [el("h1", "Accept all")]
     try:
-        group = _read_group(config, key)
+        group = _read_group(config, secret, key)
     except Unreadable as exc:
         parts.append(message(str(exc), error=True))
         return HTTPStatus.SERVICE_UNAVAILABLE, layout("Accept all", "review", join(parts), csrf)
     target = None if group is None else group.target(config)
-    if group is None or target is None:
+    batch = [] if group is None else group.batch
+    if group is None or target is None or not batch:
         parts.append(message("That group is not in review any more.", error=True))
         parts.append(el("p", el("a", "Back to Review", href="/review")))
         return HTTPStatus.OK, layout("Accept all", "review", join(parts), csrf)
-    batch = group.batch
     parts.append(
         el(
             "p",
@@ -312,12 +335,17 @@ def accept_page(config: Config, csrf: str, query: str) -> Page:
             class_="lead",
         )
     )
-    if len(batch) < len(group.rows):
+    missing = sum(1 for r in group.rows if r not in batch and not r.current_path.exists())
+    if missing:
         parts.append(
             message(
-                f"Only the oldest {len(batch)} of the {len(group.rows)} at a time; the rest "
-                "stay in review for the next round."
+                f"{plural(missing, 'file')} of this group {'is' if missing == 1 else 'are'} "
+                "missing on disk and left out."
             )
+        )
+    if len(batch) + missing < len(group.rows):
+        parts.append(
+            message(f"Only {len(batch)} at a time; the rest stay in review for the next round.")
         )
     parts.append(
         el(
@@ -328,7 +356,7 @@ def accept_page(config: Config, csrf: str, query: str) -> Page:
             el("input", type="hidden", name="pin", value=actions.group_pin(batch)),
             el("button", f"Move {plural(len(batch), 'file')} to {target}", type="submit"),
             " ",
-            el("a", "Cancel", href="/review"),
+            el("a", "Cancel", href=f"/review#g-{key}"),
             method="post",
             action="/review/accept",
             class_="confirm",
@@ -340,7 +368,7 @@ def accept_page(config: Config, csrf: str, query: str) -> Page:
             *(
                 el(
                     "li",
-                    el("span", shown(r.current_name), class_="name"),
+                    filename(r.current_name),
                     " ",
                     el("span", f"from {folder(r.original_path, config)}", class_="where"),
                 )
@@ -353,11 +381,11 @@ def accept_page(config: Config, csrf: str, query: str) -> Page:
     return HTTPStatus.OK, layout("Accept all", "review", join(parts), csrf)
 
 
-def _read_group(config: Config, key: str) -> Group | None:
+def _read_group(config: Config, secret: str, key: str) -> Group | None:
     if not config.database.exists():
         return None
     with read_index(config) as store:
-        return actions.find_group(store, key)
+        return actions.find_group(store, secret, key)
 
 
 # --- Undo ------------------------------------------------------------------------------
@@ -406,49 +434,91 @@ def undo_page(
     return HTTPStatus.OK, layout("Undo", "", join(parts), csrf)
 
 
-def _back(op: OperationRow, config: Config, name: str) -> Markup:
+def _back(op: OperationRow, config: Config, name: str, why: str | None = None) -> Markup:
+    """One move as undo would treat it: back where, or skipped and why."""
+    if why is not None:
+        return el(
+            "li", filename(name), " ", el("span", f"skipped: {actions.stop(why)}", class_="note")
+        )
+    renamed = None
+    if op.src_path.name != name:
+        renamed = el("span", " (gets its old name back: ", filename(op.src_path.name), ")")
     return el(
         "li",
-        el("span", shown(name), class_="name"),
+        filename(name),
         el("span", " → ", aria_hidden="true"),
         el("span", "back to ", class_="sr-only"),
         el("span", folder(op.src_path, config), class_="where"),
+        renamed,
+    )
+
+
+def _form(field: str, value: int, pin: str, label: str, csrf: str) -> Markup:
+    return el(
+        "form",
+        csrf_field(csrf),
+        el("input", type="hidden", name=field, value=value),
+        el("input", type="hidden", name="pin", value=pin),
+        el("button", label, type="submit"),
+        " ",
+        el("a", "Cancel", href="/review"),
+        method="post",
+        action="/undo",
+        class_="confirm",
     )
 
 
 def _run_plan(plan: actions.RunPlan, config: Config, csrf: str) -> Markup:
+    if not plan.ops and plan.settled:
+        return _settle_plan(plan, csrf)
+    listed = list(reversed(plan.ops))[:MAX_UNDO_LISTED]
     moves = [
-        _back(op, config, plan.rows[op.file_id].current_name)
-        for op in reversed(plan.ops[-MAX_UNDO_LISTED:])
-        if op.file_id in plan.rows
+        _back(op, config, plan.rows[op.file_id].current_name, plan.blocked.get(op.id))
+        for op in listed
     ]
     if len(plan.ops) > MAX_UNDO_LISTED:
         moves.append(el("li", f"and {len(plan.ops) - MAX_UNDO_LISTED} more", class_="note"))
-    count = len(plan.ops)
-    lead = f"Undoing run {plan.run_id} "
+    count, can = len(plan.ops), plan.restorable
+    if count and not can:
+        lead = (
+            f"Nothing of run {plan.run_id} can be put back now: each of its "
+            f"{plural(count, 'file')} is listed below with why."
+        )
+        return join(
+            el("p", lead, class_="lead"),
+            el("ul", *moves, class_="moves", aria_label="Moves"),
+            el("p", el("a", "Back to Review", href="/review")),
+        )
     if count:
-        lead += f"moves {plural(count, 'file')} back where {'it' if count == 1 else 'they'} "
-        lead += "were before it" if count > 1 else "was before it"
-        lead += ", and puts back what it changed in the index" if plan.changes else ""
+        lead = f"Undoing run {plan.run_id} puts {plural(can, 'file')} back where "
+        lead += "it was" if can == 1 else "they were"
+        if can < count:
+            lead += f"; {count - can} {'is' if count - can == 1 else 'are'} skipped (see below)"
+        if plan.changes:
+            lead += ", and puts back what the run changed in the index"
     else:
-        lead += "puts back what it changed in the index (nothing moves)"
-    lead += ". A file that changed since, or whose place is taken, is skipped, never forced."
+        lead = f"Undoing run {plan.run_id} puts back what it changed in the index (nothing moves)"
+    lead += ". Nothing is ever forced or overwritten."
     return join(
         el("p", lead, class_="lead"),
         _inputs_note(plan.ops, config),
-        el(
-            "form",
-            csrf_field(csrf),
-            el("input", type="hidden", name="run", value=plan.run_id),
-            el("input", type="hidden", name="pin", value=plan.pin),
-            el("button", f"Undo run {plan.run_id}", type="submit"),
-            " ",
-            el("a", "Cancel", href="/review"),
-            method="post",
-            action="/undo",
-            class_="confirm",
-        ),
+        _form("run", plan.run_id, plan.pin, f"Undo run {plan.run_id}", csrf),
         el("ul", *moves, class_="moves", aria_label="Moves") if moves else None,
+    )
+
+
+def _settle_plan(plan: actions.RunPlan, csrf: str) -> Markup:
+    """A run that only marked documents done or open: said in those words."""
+    items = [
+        el("li", filename(name), " ", "is open again." if opened else "is marked done again.")
+        for name, opened in plan.settled
+    ]
+    lead = "Undoing this puts the Due list back as it was:"
+    label = "Open it again" if len(plan.settled) == 1 and plan.settled[0][1] else "Undo it"
+    return join(
+        el("p", lead, class_="lead"),
+        el("ul", *items, class_="moves"),
+        _form("run", plan.run_id, plan.pin, label, csrf),
     )
 
 
@@ -464,20 +534,15 @@ def _inputs_note(ops: list[OperationRow], config: Config) -> Markup | None:
 
 def _file_plan(plan: actions.FilePlan, config: Config, csrf: str) -> Markup:
     row = plan.row
+    if plan.blocked is not None:
+        return join(
+            el("p", "This file's last move cannot be undone now:", class_="lead"),
+            el("ul", _back(plan.op, config, row.current_name, plan.blocked), class_="moves"),
+            el("p", el("a", "Back to Review", href="/review")),
+        )
     return join(
         el("p", "Undoing this file's last move puts it back:", class_="lead"),
         el("ul", _back(plan.op, config, row.current_name), class_="moves"),
         _inputs_note([plan.op], config),
-        el(
-            "form",
-            csrf_field(csrf),
-            el("input", type="hidden", name="file", value=row.id),
-            el("input", type="hidden", name="pin", value=plan.pin),
-            el("button", "Undo this move", type="submit"),
-            " ",
-            el("a", "Cancel", href="/review"),
-            method="post",
-            action="/undo",
-            class_="confirm",
-        ),
+        _form("file", row.id, plan.pin, "Undo this move", csrf),
     )
