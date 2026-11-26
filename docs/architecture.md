@@ -565,6 +565,7 @@ Everything is in `src/file_librarian/`:
 | `onboarding.py` | `flib init`, except its questions |
 | `scheduler/` | the launchd agent behind `flib schedule` |
 | `notifier.py`, `assets/` | the notifier app that posts notifications as "file-librarian", and its icon |
+| `poses.py`, `assets/menu/` | the cat's pose for flib's state, and one template icon per pose, for the menu bar item (#112) |
 | `credentials.py`, `keychain.py` | where an API key comes from; the macOS Keychain through `/usr/bin/security` |
 | `mcp_server.py` | `flib mcp` (optional `mcp` extra) |
 | `ui/` | `flib ui`: the loopback server and its session (`server.py`), the JSON API (`api.py`), the pages (`pages/`, `static/`) |
