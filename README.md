@@ -205,6 +205,37 @@ cannot be built, notifications still come, shown as Script Editor;
 `flib status` says which one is in use. If you never see the notification,
 see [Troubleshooting](docs/troubleshooting.md#no-notification-appears).
 
+### Interface (early)
+
+`flib ui` opens a small interface in your browser. For now it has one page,
+Status: the same counts as `flib status`, light or dark like your Mac.
+Review, Search, Activity, Due and Settings are in the menu, greyed out,
+until they arrive.
+
+```sh
+flib ui                  # opens the default browser
+flib ui --no-browser     # prints a one-time link instead
+flib ui --port 8765      # a fixed port (default: a free one)
+```
+
+It is a web server on 127.0.0.1 that exists only while you use it: it ends
+after 10 minutes without use (`ui.idle_minutes`), with **End session**, or
+with Ctrl-C. Nothing else on the network can reach it. The browser gets a
+one-time key through a file only you can read, never through the command
+line where other accounts on the Mac could see it, and the terminal says
+"session started" when it is used. If the key is used a second time, by
+anything without your session, `flib ui` ends and warns you. The page shows
+counts only, never a file name. One runs at a time: a second `flib ui` says
+so and exits.
+
+`--no-browser` prints the key itself, in a link: it stays in the terminal's
+scrollback and, once opened, in the browser's history, and anyone who can see
+your screen or that scrollback could use it before you do. It works only
+once, and a second use ends the server, but prefer the default unless the
+browser cannot be opened for you. It uses only Python's standard
+library and files shipped with flib; nothing is loaded from the internet.
+[Architecture](docs/architecture.md#the-interface-flib-ui) has the details.
+
 ### Teaching it
 
 When a file lands in the wrong place, correct it:
@@ -328,6 +359,7 @@ Every command takes `--config PATH` (`-c`); without it, flib reads
 | `flib schedule [--at HH:MM] [--mode daily\|watch\|both] [--status \| --remove \| --refresh] [--no-save-key] [--no-check]` | Run every day, or as files arrive, via launchd, with an access check ([Run it every day](#run-it-every-day)) |
 | `flib inspect FILE... [--json]` | Show hash, size and download origin (no hash for a file only in iCloud), and for an indexed file its status, category, why it is in review, the name choice and what the AI read in it (kind, issuer, amount, dates, period) |
 | `flib mcp` | Local MCP server for AI assistants ([Use it from Claude](#use-it-from-claude)) |
+| `flib ui [--open PAGE] [--no-browser] [--port N]` | The interface in your browser, served on 127.0.0.1 while in use; early: a status page ([Interface](#interface-early)) |
 | `flib eval [--provider NAME] [--model M] [--language en\|pt-BR] [--limit N] [--json] [--out FILE] [--compare FILE]` | Measure classification quality on a built-in synthetic corpus, never touching your files ([Measuring quality](#measuring-quality)) |
 | `flib doctor [--stdout \| -o PATH] [--format markdown] [--logs N]` | A redacted diagnostics report for bug reports ([Troubleshooting](#troubleshooting)) |
 | `flib --version` | Print the version |

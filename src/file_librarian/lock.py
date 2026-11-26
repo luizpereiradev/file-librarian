@@ -23,6 +23,7 @@ from pathlib import Path
 LOCK_NAME = "flib.lock"
 LOCK_POLL_SECONDS = 2.0
 REPROCESS_LOCK_NAME = "flib-reprocess.lock"
+UI_LOCK_NAME = "flib-ui.lock"
 
 
 class AlreadyRunningError(RuntimeError):
@@ -63,6 +64,20 @@ def reprocess_lock(database: Path) -> Iterator[None]:
     with _flock(
         database.parent / REPROCESS_LOCK_NAME,
         "another flib reprocess (pid {pid}) is running; try again when it finishes",
+    ):
+        yield
+
+
+@contextmanager
+def ui_lock(database: Path) -> Iterator[None]:
+    """One ``flib ui`` at a time (#113). Separate from the instance lock, which
+    the interface never holds while it runs, so an open interface never keeps a
+    run from starting. The interface will not stay read-only: each action that
+    changes files or the index (review, fix, undo) must take ``instance_lock``
+    for that action only, and say so when a run holds it."""
+    with _flock(
+        database.parent / UI_LOCK_NAME,
+        "flib ui is already running (pid {pid})",
     ):
         yield
 

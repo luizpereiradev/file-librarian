@@ -694,6 +694,13 @@ class DueConfig(_Section):
         return value
 
 
+class UiConfig(_Section):
+    """``flib ui`` (#113): the local interface, a server that exists only while in use."""
+
+    idle_minutes: Annotated[int, Field(ge=1, le=1440)] = 10
+    """The server ends after this many minutes without a request."""
+
+
 def default_database_path() -> Path:
     """The database lives outside the organized folders so it is never moved by mistake."""
     return Path.home() / "Library" / "Application Support" / APP_NAME / "library.db"
@@ -737,6 +744,7 @@ class Config(_Section):
     summary: SummaryConfig = SummaryConfig()
     due: DueConfig = DueConfig()
     search: SearchConfig = SearchConfig()
+    ui: UiConfig = UiConfig()
 
     @model_validator(mode="before")
     @classmethod

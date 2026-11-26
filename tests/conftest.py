@@ -3,7 +3,8 @@
 Every test runs with HOME pointed at a temporary directory and with outbound
 connections and DNS lookups disabled, and with a throwaway keychain in place of
 the user's login Keychain and fakes of launchctl, sips, osascript, defaults, the OCR helper,
-the tools that build and launch the notifier app, and claude (and of the screen lock and
+the tools that build and launch the notifier app, the ``open`` that ``flib ui`` uses to open a
+browser, and claude (and of the screen lock and
 Data Protection classes), so code that uses
 ``Path.home()`` or ``~`` stays in a temporary folder and nothing reaches a real API. A test that
 hard-codes an absolute path could still escape; reviewers must reject those.
@@ -194,6 +195,23 @@ def fake_notifier_tools(
         monkeypatch.setattr(f"file_librarian.notifier.{constant}", str(shim))
     monkeypatch.setenv("FAKE_NOTIFIER_LOG", str(folder / "calls.jsonl"))
     monkeypatch.delenv("FAKE_NOTIFIER_FAIL", raising=False)
+    return folder / "calls.jsonl"
+
+
+@pytest.fixture(autouse=True)
+def fake_browser(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """``flib ui`` opens its handoff file with a fake ``open``; no test opens a real browser.
+
+    Returns the log of its calls (tests/fake_open.py)."""
+    folder = tmp_path_factory.mktemp("open")
+    script = _shim(folder, "open", "fake_open.py")
+    monkeypatch.setenv("FAKE_OPEN_LOG", str(folder / "calls.jsonl"))
+    monkeypatch.delenv("FAKE_OPEN_FAIL", raising=False)
+    monkeypatch.setattr("file_librarian.ui.server.OPEN", str(script))
+    # Handoff files go in a temporary folder, not the account's real one.
+    temp = folder / "T"
+    temp.mkdir(mode=0o700)
+    monkeypatch.setattr("file_librarian.ui.server.handoff_root", lambda: temp)
     return folder / "calls.jsonl"
 
 

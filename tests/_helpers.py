@@ -13,15 +13,21 @@ import builtins
 import ctypes
 import ctypes.util
 import errno
+import html
+import http.client
 import json
 import os
 import plistlib
+import re
+import socket
 import sqlite3
 import time
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urlencode, urlsplit
 
 import pytest
 
@@ -423,3 +429,121 @@ def planned(monkeypatch: pytest.MonkeyPatch, name: str, milestone: str = "M9") -
     monkeypatch.setattr(providers, "REGISTRY", registry)
     monkeypatch.setattr(providers, "PLANNED", {name: milestone})
     monkeypatch.setattr("file_librarian.cli.PLANNED", {name: milestone})
+
+
+# --- flib ui -------------------------------------------------------------------------
+
+
+class UiResponse:
+    """One reply from the ``flib ui`` server."""
+
+    def __init__(self, status: int, headers: http.client.HTTPMessage, body: bytes) -> None:
+        self.status = status
+        self.headers = headers
+        self.body = body
+
+    @property
+    def text(self) -> str:
+        return self.body.decode("utf-8")
+
+    def json(self) -> Any:
+        return json.loads(self.body)
+
+
+class UiClient:
+    """A browser stand-in for ``flib ui`` tests: requests to 127.0.0.1 with any headers,
+    and a cookie jar. Needs the ``loopback_network`` fixture."""
+
+    def __init__(self, port: int) -> None:
+        self.port = port
+        self.cookies: dict[str, str] = {}
+
+    @property
+    def origin(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: bytes | None = None,
+        headers: dict[str, str] | None = None,
+        host: str | None = None,
+    ) -> UiResponse:
+        sent = {"Host": host if host is not None else f"127.0.0.1:{self.port}"}
+        if self.cookies:
+            sent["Cookie"] = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
+        sent |= headers or {}
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        try:
+            conn.request(method, path, body=body, headers=sent)
+            reply = conn.getresponse()
+            result = UiResponse(reply.status, reply.headers, reply.read())
+        finally:
+            conn.close()
+        for cookie in result.headers.get_all("Set-Cookie") or []:
+            name, _, rest = cookie.partition("=")
+            self.cookies[name] = rest.split(";", 1)[0]
+        return result
+
+    def get(self, path: str, **kw: Any) -> UiResponse:
+        return self.request("GET", path, **kw)
+
+    def launch(self, url: str) -> UiResponse:
+        """Open the launch link, as the browser does when ``open`` hands it over."""
+        split = urlsplit(url)
+        return self.get(f"{split.path}?{split.query}", headers={"Sec-Fetch-Site": "none"})
+
+    def launch_from_handoff(self, path: Path) -> UiResponse:
+        """Open the handoff file, as the browser does when ``open`` hands it over: the
+        page on disk (origin ``null``) posts its token to the server."""
+        text = path.read_text(encoding="utf-8")
+        action = re.search(r'action="([^"]+)"', text)
+        token = re.search(r'name="token" value="([^"]+)"', text)
+        assert action is not None and token is not None, "not a handoff page"
+        split = urlsplit(html.unescape(action.group(1)))
+        assert split.netloc == f"127.0.0.1:{self.port}", split.netloc
+        return self.request(
+            "POST",
+            split.path,
+            body=urlencode({"token": html.unescape(token.group(1))}).encode(),
+            headers={
+                "Origin": "null",
+                "Sec-Fetch-Site": "cross-site",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        )
+
+    def csrf(self, page: str = "/status") -> str:
+        match = re.search(r'name="csrf" value="([^"]+)"', self.get(page).text)
+        assert match is not None, "no CSRF token on the page"
+        return match.group(1)
+
+    def post_form(
+        self, path: str, fields: dict[str, str], headers: dict[str, str] | None = None
+    ) -> UiResponse:
+        """A same-origin form POST, as the browser sends it; ``headers`` override."""
+        sent = {
+            "Origin": self.origin,
+            "Sec-Fetch-Site": "same-origin",
+            "Content-Type": "application/x-www-form-urlencoded",
+        } | (headers or {})
+        return self.request("POST", path, body=urlencode(fields).encode(), headers=sent)
+
+    def raw(self, data: bytes, *, timeout: float = 5.0) -> bytes:
+        """Send ``data`` as is and read until the server closes the connection."""
+        with socket.create_connection(("127.0.0.1", self.port), timeout=timeout) as sock:
+            sock.sendall(data)
+            chunks = []
+            while chunk := sock.recv(65536):
+                chunks.append(chunk)
+        return b"".join(chunks)
+
+
+def wait_for(condition: Callable[[], object], timeout: float = 5.0) -> None:
+    """Poll ``condition`` until it is true; fail after ``timeout`` seconds."""
+    deadline = time.monotonic() + timeout
+    while not condition():
+        assert time.monotonic() < deadline, "timed out waiting"
+        time.sleep(0.01)
