@@ -1056,3 +1056,55 @@ def test_a_batch_cut_off_is_finished_by_recovery_with_true_counts(
         ).fetchone()
     assert tuple(run) == (2, 2, 0)
     assert all(row(cfg, f"shot-{i}.png").category == "Images" for i in (1, 2))
+
+
+def test_accept_all_takes_at_most_the_cap() -> None:
+    assert len(actions.ids(",".join(str(i) for i in range(actions.BULK_CAP)))) == actions.BULK_CAP
+    with pytest.raises(actions.Malformed):
+        actions.ids(",".join(str(i) for i in range(actions.BULK_CAP + 1)))
+
+
+def test_a_group_key_of_another_length_is_refused(client: UiClient) -> None:
+    assert client.get("/review/accept?g=0123456789abcde").status == 400
+    assert client.get("/review/accept?g=0123456789abcdef0").status == 400
+
+
+def test_an_interrupted_fix_is_finished_before_an_action(
+    client: UiClient, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """As ``flib fix`` does: the journal is finished before anything is added to it."""
+    import file_librarian.fix as fix_mod
+
+    other = row(cfg, "shot-2.png")
+    real = fix_mod._complete
+    calls: list[int] = []
+
+    def crash_once(*args: object, **kw: object) -> object:
+        calls.append(1)
+        if len(calls) == 1:
+            raise KeyboardInterrupt  # moved, but the index was never written
+        return real(*args, **kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(fix_mod, "_complete", crash_once)
+    with Store.open(cfg.database) as store, pytest.raises(KeyboardInterrupt):
+        fix_file(cfg, store, other.current_path, category="Other")
+    accept(client, cfg, "shot-1.png")
+    finished = row(cfg, "shot-2.png")
+    assert finished.category == "Other" and finished.status is FileStatus.ORGANIZED
+
+
+def test_names_in_an_outcome_lose_format_characters(
+    serve: list[Ui], cfg: Config, downloads: Path
+) -> None:
+    tricky = "invoice‮fdp.txt"
+    fill(downloads, cfg, {tricky: answer("Finance", confidence=UNSURE)})
+    c = start(serve, cfg)
+    r = row(cfg, tricky)
+    page = accept(c, cfg, tricky)
+    assert "Moved to Finance." in page.text and "‮" not in page.text
+    # Undone twice (the fix, then its move into review), it is back in Downloads under
+    # its own name, override and all; the page shows the name without it.
+    act(c, "/undo", **undo_form(c, f"file={r.id}"))
+    done = act(c, "/undo", **undo_form(c, f"file={r.id}"))
+    assert "‮" in row(cfg, tricky).current_name
+    assert "1 restored" in done.text and "‮" not in done.text
