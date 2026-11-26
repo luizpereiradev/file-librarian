@@ -712,3 +712,37 @@ def test_the_real_applet_drops_a_stale_running(
     assert json.loads(out[0]) == menubar.sanitize(RUNNING, age=1)
     assert json.loads(out[1]) == menubar.sanitize(RUNNING, age=menubar.STALE_SECONDS + 60)
     assert json.loads(out[1])["line"] == menubar.STALE_LINE
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"version":1,"line":null}',
+        '{"version":1,"count":1.5}',
+        '{"version":1,"count":10000}',
+        '{"version":1,"count":-1}',
+        '{"version":1,"line":"\\u00E9"}',
+        '{"version":1,"line":"\\n"}',
+        '{"version":1,"line":[]}',
+        '{"version":1,}',
+        '{"Version":1}',
+        '{"version":1}x',
+    ],
+)
+def test_the_plain_form_refuses_what_flib_never_writes(text: str) -> None:
+    assert re.fullmatch(menubar.FORM, text) is None
+
+
+def test_the_plain_form_takes_what_flib_writes() -> None:
+    from file_librarian import menubar_state
+
+    view = menubar_state.View(poses.Pose.DUE, 9999, "caf\u00e9 \U0001f408", "", 0, 3, True)
+    assert re.fullmatch(menubar.FORM, view.to_json().decode("ascii")) is not None
+
+
+def test_the_applet_listens_for_the_nudge_even_when_inactive() -> None:
+    source = menubar.script(Path("/p"), Path("/c"), Path("/s"))
+    setup = source.split("on setUp()", 1)[1].split("end setUp", 1)[0]
+    assert "NSDistributedNotificationCenter's defaultCenter())'s addObserver:me" in setup
+    assert 'selector:"stateChanged:"' in setup and menubar.literal(menubar.NOTE_NAME) in setup
+    assert "NSNotificationSuspensionBehaviorDeliverImmediately" in setup
