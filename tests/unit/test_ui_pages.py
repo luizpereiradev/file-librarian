@@ -11,8 +11,10 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import re
 import sqlite3
+import time
 from array import array
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
@@ -125,8 +127,10 @@ def empty(serve: list[Ui], cfg: Config) -> UiClient:
 
 
 def search(c: UiClient, path: str = "/search", **fields: str | list[str]) -> UiResponse:
+    """Post the search form as a browser does; ``/search`` answers with a redirect to
+    the kept search (post, redirect, get), which is followed."""
     body: dict[str, str | list[str]] = {"csrf": c.csrf("/search"), **fields}
-    return c.request(
+    reply = c.request(
         "POST",
         path,
         body=urlencode(body, doseq=True).encode(),
@@ -136,6 +140,11 @@ def search(c: UiClient, path: str = "/search", **fields: str | list[str]) -> UiR
             "Content-Type": "application/x-www-form-urlencoded",
         },
     )
+    if path == "/search" and reply.status == 303:
+        location = reply.headers["Location"]
+        assert re.fullmatch(r"/search\?r=[A-Za-z0-9_-]{16}", location), location
+        return c.get(location)
+    return reply
 
 
 def post(c: UiClient, route: str, **fields: str) -> UiResponse:
@@ -173,7 +182,7 @@ PAGES = ["/activity", "/search", "/due"]
 def test_each_page_needs_the_session(empty: UiClient, path: str) -> None:
     reply = UiClient(empty.port).get(path)
     assert reply.status == 403
-    assert "This session has ended" in reply.text
+    assert "is open in another window" in reply.text  # the session lives elsewhere
 
 
 @pytest.mark.parametrize("path", ["/search", "/search/export", "/files/open", "/files/reveal"])
@@ -339,9 +348,10 @@ def test_search_on_an_index_that_fails_to_read(
     monkeypatch.setattr(Store, "categories", broken)
     reply = client.get("/search")
     assert reply.status == 503
-    assert "cannot read the index" in reply.text and "/secret" not in reply.text
+    assert "Cannot read the index" in reply.text and "/secret" not in reply.text
     export = search(client, "/search/export", q="x")
-    assert export.status == 503 and export.text == "cannot read the index\n"
+    assert export.status == 503 and "Cannot read the index" in export.text
+    assert "/secret" not in export.text
 
 
 def test_no_matches(client: UiClient) -> None:
@@ -368,7 +378,7 @@ def test_semantic_search_falls_back_with_a_notice(
     c = start(serve, cfg)
     assert 'name="semantic"' in c.get("/search").text
     text = search(c, q="power", semantic="1").text
-    assert "no file has an embedding" in text
+    assert "No file has an embedding" in text
     assert "power.pdf" in text
     assert "not by meaning" in text  # the totals match the words only
 
@@ -378,7 +388,8 @@ def test_search_on_an_index_from_an_older_flib(client: UiClient, cfg: Config) ->
         conn.execute("PRAGMA user_version = 12")
     reply = client.get("/search")
     assert reply.status == 503
-    assert "the next `flib run` updates it" in reply.text
+    expected = "The index is from an older flib; the next <code>flib run</code> updates it"
+    assert expected in reply.text
 
 
 def test_a_form_with_too_many_fields_is_refused(client: UiClient) -> None:
@@ -408,8 +419,12 @@ def test_the_export_is_an_attachment_a_spreadsheet_cannot_run(client: UiClient) 
 def test_an_export_with_a_bad_filter_says_why(client: UiClient) -> None:
     reply = search(client, "/search/export", since="soon")
     assert reply.status == 400
-    assert reply.headers["Content-Type"] == "text/plain; charset=utf-8"
+    assert reply.headers["Content-Type"] == "text/html; charset=utf-8"  # a page, not a file
     assert "Content-Disposition" not in reply.headers
+    assert "Processed from &#x27;soon&#x27; is not a date" in reply.text
+    assert 'action="/session/end"' in reply.text  # the menu and the session's button
+    empty = search(client, "/search/export")
+    assert empty.status == 400 and views.NOTHING in empty.text
 
 
 @pytest.mark.parametrize(
@@ -497,7 +512,7 @@ def test_due_never_shows_a_database_error(
     reply = client.get("/due")
     assert reply.status == 503
     assert "/cause/path" not in reply.text and "disk I/O" not in reply.text
-    assert "cannot read the index</p>" in reply.text
+    assert "Cannot read the index</p>" in reply.text
 
 
 # --- Activity --------------------------------------------------------------------------
@@ -507,7 +522,7 @@ def test_activity_shows_each_run_and_what_it_moved(client: UiClient) -> None:
     text = client.get("/activity").text
     assert_safe(text)
     assert "by hand" in text and "run 1" in text
-    assert "Finance/power.pdf" in text
+    assert "power.pdf</span>" in text and ">Finance/</span>" in text  # the move's folder
     assert "1 sensitive file left in place" in text
     assert "id_rsa" not in text
     assert 'aria-current="true">7 days' in text.replace('href="/activity?days=7" ', "")
@@ -522,7 +537,7 @@ def test_activity_marks_duplicates_and_undone_moves(
     with Store.open(cfg.database) as store:
         undo_run(store, 1, config=cfg)
     text = start(serve, cfg).get("/activity").text
-    assert ">duplicate<" in text
+    assert ">_Duplicates/</span>" in text
     assert ">undone<" in text
 
 
@@ -698,7 +713,7 @@ def test_activity_never_shows_a_database_error(
     monkeypatch.setattr(Store, "runs_since", broken)
     code, page = views.activity_page(cfg, "t", "")
     assert code == 503
-    assert "cannot read the index" in page.decode() and "/secret" not in page.decode()
+    assert "Cannot read the index" in page.decode() and "/secret" not in page.decode()
 
 
 # --- Open and Show in Finder -----------------------------------------------------------
@@ -1064,7 +1079,7 @@ def test_an_embedder_that_cannot_be_made_falls_back_to_words(
     monkeypatch.setattr(views, "Embedder", broken)
     reply = search(start(serve, cfg), q="power", semantic="1")
     assert reply.status == 200
-    assert "semantic search unavailable (cannot set up (RuntimeError))" in reply.text
+    assert "Semantic search unavailable (cannot set up (RuntimeError))" in reply.text
     assert "searched by words only" in reply.text and "power.pdf" in reply.text
     assert "/secret" not in reply.text
 
@@ -1264,3 +1279,340 @@ def test_format_characters_are_dropped_from_every_name_shown(
     folder = library(downloads) / "Fi\u2066nance" / "a.pdf"
     assert views.short(folder, cfg) == "Finance/a.pdf"
     assert views.short(Path("/else\u200bwhere/a.pdf"), cfg) == "/elsewhere/a.pdf"
+
+
+# --- the browser round of #124 ---------------------------------------------------------
+
+
+HTML = {"Accept": "text/html,application/xhtml+xml"}
+
+
+def test_the_referrer_policy_lets_a_browser_send_its_origin_on_a_post(client: UiClient) -> None:
+    """Under ``no-referrer`` a browser sends ``Origin: null`` on a same-origin form post,
+    which the server refuses: every POST but the launch failed in Chromium. The policy
+    must be one that sends the origin to the same origin; ``null`` stays refused."""
+    policy = client.get("/search").headers["Referrer-Policy"]
+    assert policy == ui_server.REFERRER_POLICY == "same-origin"
+    token = client.csrf("/search")
+    for sender, status in ((client.origin, 303), ("null", 403)):
+        reply = client.post_form("/search", {"csrf": token, "q": "power"}, {"Origin": sender})
+        assert reply.status == status, sender
+
+
+def test_a_search_is_kept_and_reached_by_a_get(client: UiClient) -> None:
+    """Post, redirect, get: Back and Forward reload a GET, and the words never go in
+    the address (only a random id does)."""
+    token = client.csrf("/search")
+    reply = client.post_form("/search", {"csrf": token, "q": "power"})
+    assert reply.status == 303
+    location = reply.headers["Location"]
+    assert "power" not in location and location.startswith("/search?r=")
+    again = client.get(location)
+    assert "power.pdf" in again.text and 'value="power"' in again.text
+    assert client.get(location).text.count("power.pdf") == again.text.count("power.pdf")
+    assert csrf_value(again.text) == token  # the export button posts it again
+
+
+def csrf_value(page: str) -> str:
+    match = re.search(r'name="csrf" value="([^"]+)"', page)
+    assert match is not None
+    return match.group(1)
+
+
+def test_a_kept_search_belongs_to_its_session(serve: list[Ui], cfg: Config, filled: int) -> None:
+    c = start(serve, cfg)
+    location = search_location(c, q="power")
+    ui = serve[0]
+    other = UiClient(ui.port)
+    assert other.get(location).status == 403  # no session: no search
+    ui.end_session()
+    assert ui.saved_search(views_session(ui), location.split("=", 1)[1]) is None
+
+
+def views_session(ui: Ui) -> ui_server.Session:
+    return ui_server.Session("someone-else", "x")
+
+
+def search_location(c: UiClient, **fields: str) -> str:
+    reply = c.post_form("/search", {"csrf": c.csrf("/search"), **fields})
+    assert reply.status == 303
+    return reply.headers["Location"]
+
+
+@pytest.mark.parametrize("key", ["nope", "", "x" * 16])
+def test_a_search_no_longer_kept_says_so(client: UiClient, key: str) -> None:
+    reply = client.get(f"/search?r={key}")
+    assert reply.status == 200
+    assert "That search is no longer kept" in reply.text
+    assert "<ol" not in reply.text
+
+
+def test_only_the_latest_searches_are_kept(
+    monkeypatch: pytest.MonkeyPatch, client: UiClient
+) -> None:
+    monkeypatch.setattr(ui_server, "MAX_SAVED_SEARCHES", 2)
+    first = search_location(client, q="power")
+    second = search_location(client, q="water")
+    third = search_location(client, q="notes")
+    assert "no longer kept" in client.get(first).text
+    for kept in (second, third):
+        assert "no longer kept" not in client.get(kept).text
+
+
+@pytest.mark.parametrize("query", ["r=a&r=b", "q=power", "r=x&q=y"])
+def test_the_kept_search_address_takes_only_its_id(client: UiClient, query: str) -> None:
+    assert client.get(f"/search?{query}").status == 400
+
+
+def test_a_bad_fixed_choice_is_refused_before_it_is_kept(client: UiClient) -> None:
+    reply = client.post_form("/search", {"csrf": client.csrf("/search"), "by": "nope"})
+    assert reply.status == 400
+
+
+def test_the_ended_page_still_gets_its_stylesheet(serve: list[Ui], cfg: Config) -> None:
+    c = start(serve, cfg)
+    ui = serve[0]
+    assert c.post_form("/session/end", {"csrf": c.csrf()}).status == 200
+    css = UiClient(ui.port).get("/static/app.css")  # what the browser asks for next
+    assert css.status == 200 and css.headers["Content-Type"].startswith("text/css")
+    assert UiClient(ui.port).get("/status").status == 403  # nothing else
+    assert ui.wait(5) == "ended"
+
+
+def test_closing_does_not_wait_out_the_linger(serve: list[Ui], cfg: Config) -> None:
+    c = start(serve, cfg)
+    ui = serve[0]
+    ui.end_linger = 30.0
+    c.post_form("/session/end", {"csrf": c.csrf()})
+    began = time.monotonic()
+    ui.stop("closed")
+    assert ui.wait(5) == "ended"
+    assert time.monotonic() - began < 5
+
+
+@pytest.mark.parametrize(
+    ("request_", "status", "text"),
+    [
+        (("GET", "/due?within=9y"), 400, "does not offer"),
+        (("GET", "/status?x=1"), 400, "does not offer"),
+        (("GET", "/nothing/here"), 404, "There is no such page here"),
+        (("POST", "/search/export"), 403, "Reload the page and try again"),
+    ],
+)
+def test_a_browser_gets_a_refusal_as_a_page(
+    client: UiClient, request_: tuple[str, str], status: int, text: str
+) -> None:
+    method, path = request_
+    if method == "GET":
+        reply = client.get(path, headers=HTML)
+    else:
+        reply = client.post_form(path, {"csrf": "stale"}, HTML)
+    assert reply.status == status
+    assert reply.headers["Content-Type"] == "text/html; charset=utf-8"
+    assert text in reply.text
+    assert 'aria-label="Pages"' in reply.text  # the menu, to go on from there
+    assert_safe(reply.text)
+    plain = client.get(path) if method == "GET" else client.post_form(path, {"csrf": "x"})
+    assert plain.headers["Content-Type"] == "text/plain; charset=utf-8"  # a script: plain
+
+
+def test_a_form_from_an_earlier_session_says_so(serve: list[Ui], cfg: Config) -> None:
+    c = start(serve, cfg)
+    stale = UiClient(c.port)  # its cookie went with the earlier session
+    reply = stale.post_form("/search", {"csrf": "old", "q": "x"}, HTML)
+    assert reply.status == 403
+    assert "earlier flib ui session" in reply.text
+    assert 'action="/session/end"' not in reply.text  # not this browser's to end
+
+
+def test_the_status_page_takes_no_query(client: UiClient) -> None:
+    assert client.get("/status?x=1").status == 400
+    assert client.get("/status").status == 200
+
+
+def test_a_browser_gets_an_icon_at_the_usual_address(empty: UiClient) -> None:
+    reply = UiClient(empty.port).get("/favicon.ico")  # no session needed, like the CSS
+    assert reply.status == 200 and reply.headers["Content-Type"] == "image/png"
+
+
+def test_idle_minutes_are_counted_in_words(
+    monkeypatch: pytest.MonkeyPatch, downloads: Path
+) -> None:
+    lines: list[str] = []
+    one = fake_config(downloads, ui={"idle_minutes": 1})
+
+    real_start = ui_server.Ui.start
+
+    def start_and_stop(self: Ui) -> None:
+        real_start(self)
+        self.stop("signal")
+
+    def run_and_stop(config: Config) -> None:
+        monkeypatch.setattr(ui_server.Ui, "start", start_and_stop)
+        ui_server.run(config, browser=False, echo=lines.append)
+
+    run_and_stop(one)
+    assert any("It ends after 1 minute without use" in line for line in lines)
+    assert not any("1 minutes" in line or "idle minutes" in line for line in lines)
+
+
+# --- functional fixes ------------------------------------------------------------------
+
+
+def test_a_file_put_back_by_undo_is_listed_without_buttons(
+    filled: int, cfg: Config, serve: list[Ui], downloads: Path
+) -> None:
+    with Store.open(cfg.database) as store:
+        undo_run(store, filled, config=cfg)
+    text = search(start(serve, cfg), q="power").text
+    assert "power.pdf" in text  # as `flib search` lists it
+    assert "not filed: back in Downloads" in text
+    assert ">Downloads/</div>" in text and ">./</div>" not in text
+    assert "/files/" not in text.split("<ol", 1)[1]
+
+
+def test_an_activity_move_shows_its_own_folder(filled: int, cfg: Config) -> None:
+    """The folder the move used, whatever the file is now (here: recategorised)."""
+    with sqlite3.connect(cfg.database) as conn:
+        conn.execute(
+            "UPDATE files SET category = 'Other' WHERE id = ?", (file_id(cfg, "power.pdf"),)
+        )
+    page = views.activity_page(cfg, "t", "")[1].decode()
+    assert ">Finance/</span>" in page
+    assert ">Other<" not in page
+
+
+def test_a_renamed_file_shows_its_new_name_in_activity(cfg: Config, downloads: Path) -> None:
+    move = activity.Move(
+        file_id=1,
+        source=downloads / "scan.pdf",
+        destination=library(downloads) / "Finance" / "Power bill.pdf",
+        status=OperationStatus.DONE,
+        file_status=FileStatus.ORGANIZED,
+        category="Finance",
+        fix=False,
+    )
+    assert views._destination(move, cfg) == "Finance/Power bill.pdf"
+
+
+def test_sensitive_matches_never_take_a_shown_matchs_place(
+    downloads: Path, cfg: Config, serve: list[Ui]
+) -> None:
+    fill(downloads, cfg, {f"key {c}.txt": answer("Other") for c in "abc"})
+    with sqlite3.connect(cfg.database) as conn:
+        conn.execute(
+            "UPDATE files SET status = 'sensitive' WHERE id = ?", (file_id(cfg, "key a.txt"),)
+        )
+    text = search(start(serve, cfg), q="key", limit="20").text
+    assert "2 matches" in text and "1 sensitive file also matched" in text
+    found = views.find(cfg, views.SearchForm(q="key", limit=1))
+    assert len(found.hits) == 1
+
+
+@pytest.mark.parametrize("version", [17, 18])
+def test_every_page_reads_an_index_one_schema_behind(
+    filled: int, cfg: Config, serve: list[Ui], version: int
+) -> None:
+    with sqlite3.connect(cfg.database) as conn:
+        conn.execute(f"PRAGMA user_version = {version}")
+    c = start(serve, cfg)
+    for path in ("/activity", "/due", "/search"):
+        assert c.get(path).status == 200, path
+    assert "power.pdf" in search(c, q="power").text
+
+
+def test_every_page_says_the_same_about_an_index_too_old(
+    filled: int, cfg: Config, serve: list[Ui]
+) -> None:
+    with sqlite3.connect(cfg.database) as conn:
+        conn.execute("PRAGMA user_version = 16")
+    c = start(serve, cfg)
+    for path in ("/activity", "/due", "/search"):
+        reply = c.get(path)
+        assert reply.status == 503, path
+        assert "The index is from an older flib; the next <code>flib run</code>" in reply.text
+
+
+def test_a_file_in_review_has_one_review_badge(client: UiClient) -> None:
+    text = search(client, q="unsure").text
+    hit = text.split("<ol", 1)[1]
+    assert hit.count(">in review<") == 1 and ">review<" not in hit
+
+
+def test_due_says_how_far_back_the_window_reaches(client: UiClient) -> None:
+    text = client.get("/due").text
+    assert f"{due.LOOKBACK_DAYS} days back" in text
+    assert "Past due, however long ago" in client.get("/due?overdue=1").text
+
+
+# --- layout ----------------------------------------------------------------------------
+
+
+def test_the_count_and_totals_come_before_the_matches(client: UiClient) -> None:
+    text = search(client, kind=["bill"], by="issuer").text
+    count, totals, hits = (text.index(t) for t in ('class="count"', 'class="sums"', "<ol"))
+    assert count < totals < hits
+    assert "<title>Search: 4 matches · file-librarian</title>" in text
+    assert '<details class="filters">' in text  # folded once there are results
+    assert '<details class="filters" open>' in client.get("/search").text
+
+
+def test_grouped_totals_are_sorted_by_group_then_currency(client: UiClient) -> None:
+    text = search(client, category=["Finance"], by="issuer").text
+    table = text.split("By issuer", 1)[1].split("</table>", 1)[0]
+    groups = re.findall(r"<tr><td>([^<]*)</td>", table)
+    assert groups == sorted(groups, key=str.casefold)
+    assert '<th scope="col" class="num">Files</th>' in table
+
+
+def test_due_cells_carry_their_labels_for_narrow_screens(client: UiClient) -> None:
+    text = client.get("/due").text
+    for label in ("Due", "When", "Amount", "Issuer", "Kind", "File"):
+        assert f'data-label="{label}"' in text
+    assert 'class="date"' in text and 'class="buttons"' in text
+
+
+def test_commands_in_messages_are_code(empty: UiClient) -> None:
+    text = empty.get("/activity").text
+    assert "the first <code>flib run</code>." in text and "`flib run`" not in text
+
+
+def test_the_frame_has_a_skip_link_and_says_what_is_coming(client: UiClient) -> None:
+    for path in ("/status", "/search", "/due", "/activity"):
+        text = client.get(path).text
+        assert '<a class="skip" href="#main">Skip to content</a>' in text
+        assert '<main id="main" tabindex="-1">' in text
+        assert text.count('<span class="sr-only"> (coming soon)</span>') == 2
+        assert '<button type="submit" class="quiet">End session</button>' in text
+
+
+@pytest.mark.parametrize(
+    ("value", "text"), [(None, "no cost recorded"), (0.0, "no cost"), (0.0123, "US$ 0.0123")]
+)
+def test_one_money_format(value: float | None, text: str) -> None:
+    assert views.money(value) == text
+
+
+def test_plurals_and_sentences(client: UiClient) -> None:
+    assert views.plural(1, "match", "matches") == "1 match"
+    assert views.plural(2, "match", "matches") == "2 matches"
+    assert views.sentence("macOS could not") == "macOS could not"
+    assert views.sentence("cannot read") == "Cannot read"
+    text = client.get("/activity").text
+    assert "(s)" not in text
+    assert "0 duplicates set aside" in text
+
+
+def test_who_owns_a_handoff_folder(tmp_path: Path) -> None:
+    assert ui_server._handoff_owner("ui-launch-123-abcdefgh") == 123
+    assert ui_server._handoff_owner("ui-launch-abcdefgh") is None
+    assert ui_server._alive(os.getpid()) and ui_server._alive(1)  # 1: someone else's
+    assert not ui_server._alive(2**22 + 12345)
+    (tmp_path / "ui-launch-file").write_text("not a folder")
+    ui_server.sweep_handoffs(tmp_path, now=time.time() + 10_000)
+    assert (tmp_path / "ui-launch-file").exists()  # only folders
+
+
+def test_prose_marks_commands_and_leaves_a_stray_backtick() -> None:
+    assert markup.prose("run `flib run` now") == "run <code>flib run</code> now"
+    assert markup.prose("a ` b <") == "a ` b &lt;"

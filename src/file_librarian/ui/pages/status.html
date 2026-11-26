@@ -10,22 +10,13 @@
 <script src="/static/status.js" defer></script>
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
 <header class="top">
   <a class="brand" href="/status"><img src="/static/icon.png" alt="" width="28" height="28"><span>file-librarian</span></a>
-  <nav aria-label="Pages">
-    <a href="/status" aria-current="page">Status</a>
-    <span class="soon" aria-disabled="true" title="Coming soon">Review</span>
-    <a href="/search">Search</a>
-    <a href="/activity">Activity</a>
-    <a href="/due">Due</a>
-    <span class="soon" aria-disabled="true" title="Coming soon">Settings</span>
-  </nav>
-  <form class="end" method="post" action="/session/end">
-    <input type="hidden" name="csrf" value="{{csrf}}">
-    <button type="submit">End session</button>
-  </form>
+  <nav aria-label="Pages"><a href="/status" aria-current="page">Status</a><span class="soon" aria-disabled="true">Review<span class="sr-only"> (coming soon)</span></span><a href="/search">Search</a><a href="/activity">Activity</a><a href="/due">Due</a><span class="soon" aria-disabled="true">Settings<span class="sr-only"> (coming soon)</span></span></nav>
+  <form class="end" method="post" action="/session/end"><input type="hidden" name="csrf" value="{{csrf}}"><button type="submit" class="quiet">End session</button></form>
 </header>
-<main>
+<main id="main" tabindex="-1">
   <h1>Status</h1>
   <p class="lead" id="summary" aria-live="polite">Loading…</p>
   <noscript><p class="lead">This page shows its counts with JavaScript. <code>flib status</code> in Terminal shows the same.</p></noscript>
@@ -49,12 +40,12 @@
     <article class="card">
       <h2>Left in place</h2>
       <p class="number" id="sensitive">0</p>
-      <p class="note">sensitive files, never moved or sent anywhere</p>
+      <p class="note" id="sensitive-note">Sensitive files, never moved or sent anywhere.</p>
     </article>
     <article class="card">
       <h2>Duplicates set aside</h2>
       <p class="number" id="duplicates">0</p>
-      <p class="note">nothing is deleted</p>
+      <p class="note">Nothing is deleted.</p>
     </article>
     <article class="card wide">
       <h2>Runs</h2>

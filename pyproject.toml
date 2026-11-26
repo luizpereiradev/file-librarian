@@ -114,4 +114,5 @@ markers = [
     "volumes: creates and attaches disk images with hdiutil; opt-in with FLIB_TEST_VOLUMES=1",
     "ocr: runs macOS text recognition for real (osascript, Vision); opt-in with FLIB_TEST_OCR=1",
     "notifier: builds the real notifier app (no notification); opt-in with FLIB_TEST_NOTIFIER=1",
+    "browser: drives flib ui in a headless Chrome or Chromium; opt-in with FLIB_TEST_BROWSER=1",
 ]

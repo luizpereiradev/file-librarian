@@ -34,6 +34,18 @@ All notable changes to this project are documented here. The format follows
   operation for the embeddings server, and falls back to words if its client
   cannot be made; any address choice the page does not offer is 400.
   The Content-Security-Policy now also requires Trusted Types.
+  Driven in real browsers before release: every form post (Search, Export,
+  Open, Show in Finder and End session, which `flib ui` from #113 had too)
+  was refused in Chromium, because `Referrer-Policy: no-referrer` makes a
+  browser send `Origin: null`; the policy is now `same-origin`, and a
+  headless-Chrome test (`FLIB_TEST_BROWSER=1`, run in CI) drives a whole
+  session. Search results survive Back and Forward (post, redirect, get, the
+  words never in the address); the "session ended" page keeps its style;
+  refusals are pages with the menu and what to do; a window without the
+  session is told when it is open elsewhere; another `flib ui`'s handoff
+  folder is no longer swept; Status shows review reasons compactly, dates
+  and costs as the other pages do; narrow screens get a Due card layout,
+  a skip link and stronger contrast.
 - `flib ui`, an early local interface (#113): a web server on 127.0.0.1
   that exists only while in use, with a Status page (the counts of `flib
   status`, light and dark, in the icon's colours) and greyed-out places for

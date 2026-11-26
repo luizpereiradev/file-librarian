@@ -64,7 +64,7 @@ from file_librarian.search import (
     sum_amounts,
 )
 from file_librarian.search import search as words_search
-from file_librarian.ui.markup import Markup, csrf_field, el, join, layout
+from file_librarian.ui.markup import Markup, csrf_field, el, join, layout, prose
 
 Page = tuple[int, bytes]
 """A status and a whole HTML page."""
@@ -146,19 +146,33 @@ def local_time(instant: str | None) -> str:
 
 
 def money(value: float | None) -> str:
-    return "no cost recorded" if value is None else f"US$ {value:.4f}"
+    """A cost as every page shows it: ``US$ 0.0123``, ``no cost``, ``no cost recorded``."""
+    if value is None:
+        return "no cost recorded"
+    return "no cost" if value == 0 else f"US$ {value:.4f}"
 
 
-def plural(count: int, word: str) -> str:
-    return f"{count} {word}" if count == 1 else f"{count} {word}s"
+def plural(count: int, word: str, many: str | None = None) -> str:
+    return f"{count} {word}" if count == 1 else f"{count} {many or word + 's'}"
 
 
 def _state(count: int) -> str:
     return "states" if count == 1 else "state"
 
 
+def sentence(text: str) -> str:
+    """Text from another module as a sentence: a capital first letter, unless the
+    first word is spelled with capitals of its own (``macOS``, ``iCloud``)."""
+    first = text.split(" ", 1)[0]
+    if first[1:] != first[1:].lower():
+        return text
+    return text[:1].upper() + text[1:]
+
+
 def message(text: str, *, error: bool = False) -> Markup:
-    return el("p", text, class_="notice error" if error else "notice", role="status")
+    """A notice; `backticks` mark commands (``<code>``)."""
+    body = prose(sentence(text))
+    return el("p", body, class_="notice error" if error else "notice", role="status")
 
 
 def chips(links: list[tuple[str, str, bool]], label: str) -> Markup:
@@ -202,20 +216,24 @@ def totals_table(totals: list[AmountTotal] | list[due_mod.Total], caption: str) 
         el(
             "tr",
             el("td", format_amount(t.total_minor, t.currency), class_="num"),
-            el("td", plural(t.files, "file")),
+            el("td", t.files, class_="num"),
         )
         for t in totals
     ]
+    head = el("tr", el("th", "Total", scope="col", class_="num"), el("th", "Files", **_NUM))
     return el(
         "table",
         el("caption", caption),
-        el("thead", el("tr", el("th", "Total", scope="col"), el("th", "Files", scope="col"))),
+        el("thead", head),
         el("tbody", *rows),
         class_="totals",
     )
 
 
-def _query(query: str, known: frozenset[str]) -> dict[str, list[str]]:
+_NUM: dict[str, object] = {"scope": "col", "class_": "num"}
+
+
+def query_params(query: str, known: frozenset[str]) -> dict[str, list[str]]:
     """The address's choices; any name but ``known`` is refused (400)."""
     try:
         params = parse_qs(query, keep_blank_values=True, max_num_fields=8)
@@ -228,6 +246,14 @@ def _query(query: str, known: frozenset[str]) -> dict[str, list[str]]:
 
 class BadRequest(Exception):
     """A choice in the address or the form that the page does not offer (400)."""
+
+
+def one_choice(params: dict[str, list[str]], name: str) -> str | None:
+    """The one value of ``name`` in the address, or ``None``; two is a bad request."""
+    values = params.get(name, [])
+    if len(values) > 1:
+        raise BadRequest
+    return values[0] if values else None
 
 
 def _choice(params: dict[str, list[str]], name: str, allowed: tuple[str, ...]) -> str | None:
@@ -243,7 +269,7 @@ def _choice(params: dict[str, list[str]], name: str, allowed: tuple[str, ...]) -
 
 
 def activity_page(config: Config, csrf: str, query: str) -> Page:
-    params = _query(query, frozenset({"days"}))
+    params = query_params(query, frozenset({"days"}))
     days = int(_choice(params, "days", tuple(map(str, activity_mod.DAYS))) or 0) or (
         activity_mod.DEFAULT_DAYS
     )
@@ -261,7 +287,7 @@ def activity_page(config: Config, csrf: str, query: str) -> Page:
     if not config.database.exists():
         parts.append(message("No run yet: the index is created by the first `flib run`."))
     elif not found.found:
-        parts.append(message(f"No run in the last {days} days."))
+        parts.append(message(f"No run in the last {plural(days, 'day')}."))
     for day in found.found:
         parts.append(_day(day, config))
     if found.capped:
@@ -272,7 +298,7 @@ def activity_page(config: Config, csrf: str, query: str) -> Page:
 
 
 def _day(day: activity_mod.Day, config: Config) -> Markup:
-    cost = money(day.cost_usd) if day.unpriced < len(day.runs) else "no cost recorded"
+    cost = money(day.cost_usd) if day.unpriced < len(day.runs) else money(None)
     if day.unpriced and day.unpriced < len(day.runs):
         cost += f" (and {plural(day.unpriced, 'run')} without a cost)"
     return el(
@@ -291,7 +317,7 @@ def _run(item: activity_mod.RunActivity, config: Config) -> Markup:
     counts = [
         f"{run.files_moved or 0} organized",
         f"{run.files_review or 0} to review",
-        f"{run.files_duplicates or 0} duplicate(s) set aside",
+        f"{plural(run.files_duplicates or 0, 'duplicate')} set aside",
         f"{run.errors or 0} failed",
     ]
     facts: list[Markup] = [el("p", ", ".join(counts) + f"; {money(run.cost_usd)}.", class_="note")]
@@ -348,13 +374,9 @@ def _unlock(unlock: activity_mod.Unlock) -> str | None:
 
 
 def _move(move: activity_mod.Move, config: Config) -> Markup:
+    """``name → Folder/`` (or ``Folder/new name`` when renamed): the folder this move
+    used is its category, review or duplicates folder then, whatever the file is now."""
     tags: list[Markup] = []
-    if move.duplicate:
-        tags.append(el("span", "duplicate", class_="badge"))
-    elif move.file_status is FileStatus.REVIEW:
-        tags.append(el("span", "review", class_="badge"))
-    elif move.category:
-        tags.append(el("span", move.category, class_="badge"))
     if move.fix:
         tags.append(el("span", "fixed by hand", class_="badge"))
     if move.status is OperationStatus.UNDONE:
@@ -366,10 +388,17 @@ def _move(move: activity_mod.Move, config: Config) -> Markup:
         el("span", shown(move.source.name), class_="name"),
         el("span", " → ", aria_hidden="true"),
         el("span", "to ", class_="sr-only"),
-        el("span", short(move.destination, config), class_="where"),
+        el("span", _destination(move, config), class_="where"),
         " ",
         *tags,
     )
+
+
+def _destination(move: activity_mod.Move, config: Config) -> str:
+    folder = short(move.destination.parent, config) + "/"
+    if move.destination.name == move.source.name:
+        return folder
+    return folder + shown(move.destination.name)
 
 
 # --- Search ----------------------------------------------------------------------------
@@ -528,12 +557,10 @@ class _QuickEmbedder(Embedder):
         return self._real.embed(texts)
 
 
-def find(
-    config: Config, form: SearchForm | None, *, totals: bool = True, pad_sensitive: bool = False
-) -> Found:
+def find(config: Config, form: SearchForm | None, *, totals: bool = True) -> Found:
     """``flib search`` for the form; ``None`` is the empty form (categories only).
-    ``pad_sensitive``: fetch as many more rows as there are sensitive files, so the
-    sensitive matches left out never shorten the list below ``form.limit``."""
+    Sensitive matches are left out, and never take the place of one that is shown:
+    up to ``form.limit`` others are kept."""
     configured = [c.name for c in config.categories]
     found = Found(categories=configured)
     if not config.database.exists():
@@ -557,9 +584,9 @@ def find(
         except SearchError as exc:
             found.error = _for_the_page(exc)
             return found
-        limit = form.limit
-        if pad_sensitive:
-            limit += store.stats().by_status[FileStatus.SENSITIVE.value]
+        # Sensitive matches are left out: fetch that many more, so they never take
+        # the place of a match that can be shown.
+        limit = form.limit + store.stats().by_status[FileStatus.SENSITIVE.value]
         if form.semantic and config.search.semantic.enabled:
             outcome = semantic_search(
                 store,
@@ -579,42 +606,60 @@ def find(
             if hit.status == FileStatus.SENSITIVE.value:
                 found.sensitive += 1
                 continue
-            row = store.file_by_current_path(Path(hit.path))
-            found.hits.append((hit, None if row is None else row.id))
+            if len(found.hits) < form.limit:
+                row = store.file_by_current_path(Path(hit.path))
+                found.hits.append((hit, None if row is None else row.id))
         if totals:
             found.sums = sum_amounts(store, form.q, filters=filters, by=form.by)
     return found
 
 
-def search_get(config: Config, csrf: str, query: str) -> Page:
-    """``GET /search``: the empty form. Words never come from the address (400)."""
-    _query(query, frozenset())
-    return search_page(config, csrf, None)
+SEARCH_GONE = (
+    "That search is no longer kept (only the latest ones are, until the session ends). "
+    "Search again."
+)
 
 
-def search_page(config: Config, csrf: str, fields: dict[str, list[str]] | None) -> Page:
+def search_page(
+    config: Config, csrf: str, fields: dict[str, list[str]] | None, *, notice: str | None = None
+) -> Page:
+    """The form, and the results when ``fields`` (a kept search) are given."""
     form = None if fields is None else SearchForm.parse(fields)
     try:
         found = find(config, form)
     except Unreadable as exc:
         main = join(el("h1", "Search"), message(str(exc), error=True))
         return HTTPStatus.SERVICE_UNAVAILABLE, layout("Search", "search", main, csrf)
-    parts = [
+    results = form is not None and found.error is None
+    parts: list[Markup | None] = [
         el("h1", "Search"),
         el(
             "p",
             "Words in a name, a description or a tag, and filters. Accents and case are ignored.",
             class_="lead",
         ),
-        _search_form(config, csrf, form or SearchForm(semantic=_semantic_default(config)), found),
+        message(notice) if notice else None,
+        _search_form(
+            config,
+            csrf,
+            form or SearchForm(semantic=_semantic_default(config)),
+            found,
+            collapsed=results,
+        ),
     ]
+    title = "Search"
     if found.error:
         parts.append(message(found.error, error=True))
     elif form is not None:
         parts.append(_results(found, form, config, csrf))
+        title = f"Search: {_matches(len(found.hits))}"
     elif found.notice:
         parts.append(message(found.notice))
-    return HTTPStatus.OK, layout("Search", "search", join(parts), csrf)
+    return HTTPStatus.OK, layout(title, "search", join(parts), csrf)
+
+
+def _matches(count: int) -> str:
+    return plural(count, "match", "matches")
 
 
 def _semantic_default(config: Config) -> bool:
@@ -622,7 +667,12 @@ def _semantic_default(config: Config) -> bool:
     return semantic.enabled and semantic.default
 
 
-def _search_form(config: Config, csrf: str, form: SearchForm, found: Found) -> Markup:
+def _search_form(
+    config: Config, csrf: str, form: SearchForm, found: Found, *, collapsed: bool
+) -> Markup:
+    """The search bar, and the filters: open on an empty form, folded once results
+    are shown (the results come right under it)."""
+
     def text(name: str, label: str, value: str | None, **attrs: object) -> Markup:
         return el(
             "label",
@@ -730,9 +780,15 @@ def _search_form(config: Config, csrf: str, form: SearchForm, found: Found) -> M
             el("button", "Search", type="submit"),
             class_="searchbar",
         ),
-        boxes("category", "Category", found.categories, form.categories),
-        boxes("kind", "Kind of document", list(KINDS), form.kinds),
-        more,
+        el(
+            "details",
+            el("summary", _filters_summary(form)),
+            boxes("category", "Category", found.categories, form.categories),
+            boxes("kind", "Kind of document", list(KINDS), form.kinds),
+            more,
+            class_="filters",
+            open=not collapsed,
+        ),
         el(
             "p",
             el("button", "Export CSV", type="submit", formaction="/search/export", class_="quiet"),
@@ -744,6 +800,18 @@ def _search_form(config: Config, csrf: str, form: SearchForm, found: Found) -> M
     )
 
 
+def _filters_summary(form: SearchForm) -> str:
+    used = len(form.categories) + len(form.kinds)
+    used += sum(1 for flag in _more_filters(form) if flag)
+    return "Filters" if not used else f"Filters ({used} in use)"
+
+
+def _more_filters(form: SearchForm) -> list[bool]:
+    hidden: list[object] = [form.ext, form.since, form.until, form.period, form.issuer]
+    hidden += [form.min_amount, form.max_amount, form.currency, form.due_after, form.due_before]
+    return [v is not None for v in hidden] + [form.duplicates]
+
+
 def _advanced(form: SearchForm) -> bool:
     """The more filters stay open when one of them is in use."""
     hidden = [form.ext, form.since, form.until, form.period, form.issuer, form.min_amount]
@@ -752,6 +820,7 @@ def _advanced(form: SearchForm) -> bool:
 
 
 def _results(found: Found, form: SearchForm, config: Config, csrf: str) -> Markup:
+    """The count and the totals first, right under the form; then each match."""
     parts: list[Markup | None] = []
     if found.notice:
         parts.append(message(found.notice))
@@ -762,42 +831,53 @@ def _results(found: Found, form: SearchForm, config: Config, csrf: str) -> Marku
                 "shown here (`flib search` in Terminal lists them)."
             )
         )
+    count = len(found.hits)
     if not found.hits:
         if found.weak:
             parts.append(message("No close matches; try other words, or search by words only."))
         elif config.database.exists():
             parts.append(message("No matches."))
     else:
-        shown = len(found.hits)
-        more = " (the most asked for)" if shown + found.sensitive >= form.limit else ""
-        parts.append(el("h2", ("1 match" if shown == 1 else f"{shown} matches") + more))
-        parts.append(
-            el("ol", *(_hit(hit, i, config, csrf) for hit, i in found.hits), class_="hits")
-        )
-    if found.sums is not None:
+        more = " (the most asked for)" if count >= form.limit else ""
+        parts.append(el("h2", _matches(count) + more, class_="count"))
+    if found.sums is not None and (found.hits or found.sums.totals):
         parts.append(_sums(found.sums, semantic=form.semantic))
+    if found.hits:
+        items = [_hit(hit, i, config, csrf) for hit, i in found.hits]
+        parts.append(el("ol", *items, class_="hits", aria_label="Matches"))
     return el("section", *parts, class_="results", aria_label="Results")
 
 
+def _input_of(path: Path, config: Config) -> str:
+    """The input folder ``path`` is in, by name (``Downloads``)."""
+    for root in config.input_paths:
+        if path.is_relative_to(root):
+            return shown(root.name)
+    return shown(path.parent.name)
+
+
 def _hit(hit: SearchHit, file_id: int | None, config: Config, csrf: str) -> Markup:
+    """One match, as ``flib search`` lists it. A file that is not filed (put back by
+    ``flib undo``, missing, failed) says where it is and offers no button: those
+    are for files in the library."""
     path = Path(hit.path)
-    badge = hit.category or hit.status
-    state = None
+    status = hit.status
+    filed = status in {s.value for s in OPENABLE}
+    tags: list[Markup] = []
+    if status == FileStatus.REVIEW.value:
+        tags.append(el("span", "in review", class_="badge"))
+    elif filed and hit.category:
+        tags.append(el("span", hit.category, class_="badge"))
+    elif status == FileStatus.SKIPPED.value:
+        tags.append(el("span", f"not filed: back in {_input_of(path, config)}", class_="badge"))
+    elif not filed:
+        tags.append(el("span", status, class_="badge"))
     if not hit.exists:
-        state = el("span", "missing: moved by hand?", class_="badge warn")
-    elif hit.status == FileStatus.REVIEW.value:
-        state = el("span", "in review", class_="badge")
+        tags.append(el("span", "missing: moved by hand?", class_="badge warn"))
+    where = short(path.parent, config)
     details: list[Markup | None] = [
-        el(
-            "div",
-            el("strong", shown(path.name), class_="name"),
-            " ",
-            el("span", badge, class_="badge"),
-            " ",
-            state,
-            class_="hit-head",
-        ),
-        el("div", short(path.parent, config) + "/", class_="where"),
+        el("div", el("strong", shown(path.name), class_="name"), " ", *tags, class_="hit-head"),
+        el("div", where + "/" if where != "." else _input_of(path, config) + "/", class_="where"),
     ]
     if hit.original_name != path.name:
         details.append(
@@ -815,7 +895,7 @@ def _hit(hit: SearchHit, file_id: int | None, config: Config, csrf: str) -> Mark
         details.append(
             el("ul", *(el("li", tag) for tag in hit.tags), class_="tags", aria_label="Tags")
         )
-    if file_id is not None and hit.exists:
+    if file_id is not None and hit.exists and filed:
         can_open = openable(path)
         details.append(file_actions(file_id, shown(path.name), csrf, can_open=can_open))
     return el("li", *details, class_="hit")
@@ -830,14 +910,17 @@ def _sums(sums: Sums, *, semantic: bool) -> Markup:
     if not sums.totals:
         parts.append(message("No amounts among the matches."))
     if sums.groups:
+        ordered = sorted(
+            sums.groups, key=lambda t: (t.group is None, (t.group or "").casefold(), t.currency)
+        )
         rows = [
             el(
                 "tr",
                 el("td", t.group or "(none)"),
                 el("td", format_amount(t.total_minor, t.currency), class_="num"),
-                el("td", plural(t.files, "file")),
+                el("td", t.files, class_="num"),
             )
-            for t in sums.groups
+            for t in ordered
         ]
         parts.append(
             el(
@@ -848,8 +931,8 @@ def _sums(sums: Sums, *, semantic: bool) -> Markup:
                     el(
                         "tr",
                         el("th", str(sums.by).capitalize(), scope="col"),
-                        el("th", "Total", scope="col"),
-                        el("th", "Files", scope="col"),
+                        el("th", "Total", **_NUM),
+                        el("th", "Files", **_NUM),
                     ),
                 ),
                 el("tbody", *rows),
@@ -915,7 +998,7 @@ def search_csv(config: Config, fields: dict[str, list[str]]) -> tuple[int, bytes
     matches, not the page's limit; a last row says so when there were more."""
     form = dataclasses.replace(SearchForm.parse(fields), limit=EXPORT_LIMIT + 1)
     try:
-        found = find(config, form, totals=False, pad_sensitive=True)
+        found = find(config, form, totals=False)
     except Unreadable as exc:
         return _plain_error(HTTPStatus.SERVICE_UNAVAILABLE, str(exc))
     if found.error:
@@ -956,7 +1039,7 @@ def _plain_error(code: int, text: str) -> tuple[int, bytes, str]:
 
 
 def due_page(config: Config, csrf: str, query: str) -> Page:
-    params = _query(query, frozenset({"within", "overdue", "all"}))
+    params = query_params(query, frozenset({"within", "overdue", "all"}))
     within = _choice(params, "within", tuple(code for code, _ in WITHIN))
     overdue = _choice(params, "overdue", ("1",)) == "1"
     show_all = _choice(params, "all", ("1",)) == "1"
@@ -986,17 +1069,17 @@ def due_page(config: Config, csrf: str, query: str) -> Page:
     try:
         found = due_mod.find(config, query_)
     except due_mod.DueError as exc:
-        text = "cannot read the index" if isinstance(exc.__cause__, sqlite3.Error) else str(exc)
+        text = "Cannot read the index" if isinstance(exc.__cause__, sqlite3.Error) else str(exc)
         parts.append(message(text, error=True))
         return HTTPStatus.SERVICE_UNAVAILABLE, layout("Due", "due", join(parts), csrf)
-    since = "any time" if found.start is None else found.start.isoformat()
-    parts.append(
-        el(
-            "p",
-            f"From {since} to {found.end.isoformat()} (today is {found.today.isoformat()}).",
-            class_="note",
+    if found.start is None:
+        span = f"Past due, however long ago (today is {found.today.isoformat()})."
+    else:
+        span = (
+            f"Overdue since {found.start.isoformat()} ({due_mod.LOOKBACK_DAYS} days back) "
+            f"and due up to {found.end.isoformat()}; today is {found.today.isoformat()}."
         )
-    )
+    parts.append(el("p", span, class_="note"))
     if not found.items:
         parts.append(message("Nothing due in this window."))
     else:
@@ -1050,33 +1133,35 @@ def _due_table(found: due_mod.DueList, config: Config, csrf: str) -> Markup:
             if item.amount_minor is not None and item.currency is not None
             else "-"
         )
+        day = item.due_date.isoformat()
         rows.append(
             el(
                 "tr",
-                el("td", el("time", item.due_date.isoformat(), datetime=item.due_date.isoformat())),
-                el("td", when, " ", state),
-                el("td", amount, class_="num"),
-                el("td", item.issuer or "-"),
-                el("td", item.kind or "-"),
+                el("td", el("time", day, datetime=day), class_="date", data_label="Due"),
+                el("td", when, " ", state, data_label="When"),
+                el("td", amount, class_="num", data_label="Amount"),
+                el("td", item.issuer or "-", data_label="Issuer"),
+                el("td", item.kind or "-", data_label="Kind"),
                 el(
                     "td",
                     el("span", shown(item.path.name), class_="name"),
                     el("div", short(item.path.parent, config) + "/", class_="where"),
+                    class_="file",
+                    data_label="File",
                 ),
-                el("td", _due_actions(item, csrf)),
+                el("td", _due_actions(item, csrf), class_="buttons"),
                 class_="overdue" if item.overdue else None,
             )
         )
-    head = ("Due", "When", "Amount", "Issuer", "Kind", "File", "")
+    head = [el("th", h, scope="col") for h in ("Due", "When")]
+    head.append(el("th", "Amount", **_NUM))
+    head += [el("th", h, scope="col") for h in ("Issuer", "Kind", "File")]
+    head.append(el("th", el("span", "Actions", class_="sr-only"), scope="col"))
     return el(
-        "div",
-        el(
-            "table",
-            el("thead", el("tr", *(el("th", h, scope="col") for h in head))),
-            el("tbody", *rows),
-            class_="due",
-        ),
-        class_="scroll",
+        "table",
+        el("thead", el("tr", *head)),
+        el("tbody", *rows),
+        class_="due",
     )
 
 
@@ -1184,10 +1269,11 @@ def open_by_id(
     return HTTPStatus.NO_CONTENT, None
 
 
-def problem_page(code: int, text: str, csrf: str) -> Page:
+def problem_page(code: int, text: str, csrf: str | None) -> Page:
+    """A refusal as a page with the menu; ``csrf`` ``None`` for a browser without the
+    session (no End session button)."""
     main = join(
         el("h1", HTTPStatus(code).phrase),
         message(text, error=True),
-        el("p", "Go back in your browser to return to the page.", class_="note"),
     )
     return code, layout(HTTPStatus(code).phrase, "", main, csrf)

@@ -519,7 +519,8 @@ def render(found: DueList, *, show: Callable[[Path], str] = str) -> list[str]:
             )
             lines.append(f"Total open: {overall}")
         if found.without_amount:
-            lines.append(f"{_documents(found.without_amount)} state no amount; not counted.")
+            verb = "states" if found.without_amount == 1 else "state"
+            lines.append(f"{_documents(found.without_amount)} {verb} no amount; not counted.")
     if found.hidden:
         lines.append(
             f"{_documents(found.hidden)} marked done or of another kind not shown "

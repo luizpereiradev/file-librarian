@@ -88,16 +88,29 @@ def nav(current: str) -> Markup:
     items = []
     for name, label in NAV:
         if name in SOON:
-            items.append(
-                el("span", label, class_="soon", aria_disabled="true", title="Coming soon")
-            )
+            soon = el("span", " (coming soon)", class_="sr-only")
+            items.append(el("span", label, soon, class_="soon", aria_disabled="true"))
         else:
             here = "page" if name == current else None
             items.append(el("a", label, href=f"/{name}", aria_current=here))
     return el("nav", *items, aria_label="Pages")
 
 
-_SLOT = re.compile(r"\{\{(title|nav|main|csrf)\}\}")
+def end_form(csrf: str | None) -> Markup | None:
+    """End session, for a page that has the session."""
+    if csrf is None:
+        return None
+    return el(
+        "form",
+        csrf_field(csrf),
+        el("button", "End session", type="submit", class_="quiet"),
+        class_="end",
+        method="post",
+        action="/session/end",
+    )
+
+
+_SLOT = re.compile(r"\{\{(title|nav|main|end)\}\}")
 LAYOUT = """<!doctype html>
 <html lang="en">
 <head>
@@ -108,15 +121,13 @@ LAYOUT = """<!doctype html>
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
 <header class="top">
   <a class="brand" href="/status"><img src="/static/icon.png" alt="" width="28" height="28"><span>file-librarian</span></a>
   {{nav}}
-  <form class="end" method="post" action="/session/end">
-    <input type="hidden" name="csrf" value="{{csrf}}">
-    <button type="submit">End session</button>
-  </form>
+  {{end}}
 </header>
-<main>
+<main id="main" tabindex="-1">
 {{main}}
 </main>
 <footer>Served on this Mac, at 127.0.0.1, while <code>flib ui</code> runs. Names and descriptions come from your files and the AI: they are shown as text only.</footer>
@@ -125,11 +136,25 @@ LAYOUT = """<!doctype html>
 """  # noqa: E501
 
 
-def layout(title: str, current: str, main: Markup, csrf: str) -> bytes:
-    """A whole page: the frame, the navigation and ``main``; one pass, no re-expansion."""
-    slots = {"title": esc(title), "nav": nav(current), "main": esc(main), "csrf": esc(csrf)}
+def layout(title: str, current: str, main: Markup, csrf: str | None) -> bytes:
+    """A whole page: the frame, the navigation and ``main``; one pass, no re-expansion.
+    ``csrf`` ``None``: a page for a browser without the session (no End session)."""
+    slots = {
+        "title": esc(title),
+        "nav": nav(current),
+        "main": esc(main),
+        "end": end_form(csrf) or Markup(""),
+    }
     return _SLOT.sub(lambda m: slots[m.group(1)], LAYOUT).encode("utf-8")
 
 
 def csrf_field(csrf: str) -> Markup:
     return el("input", type="hidden", name="csrf", value=csrf)
+
+
+def prose(text: str) -> Markup:
+    """Text where `backticks` mark a command: those parts become ``<code>``."""
+    parts = text.split("`")
+    if len(parts) % 2 == 0:  # an unpaired backtick: plain text
+        return esc(text)
+    return join(*(el("code", part) if i % 2 else part for i, part in enumerate(parts)))

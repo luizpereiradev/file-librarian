@@ -33,8 +33,9 @@ MAX_RUNS = 200
 """Most runs listed: a busy watch mode makes many small ones."""
 MAX_MOVES = 50
 """Most moves listed per run; the rest are counted."""
-MIN_SCHEMA = 18
-"""Reads the current schema only; an older index is updated by the next run."""
+MIN_SCHEMA = 17
+"""The oldest index the interface reads (``due.MIN_SCHEMA`` too): every column a row
+holds is there. Never migrated from here; an older one is updated by the next run."""
 
 
 class ActivityError(ValueError):

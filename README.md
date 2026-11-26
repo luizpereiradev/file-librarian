@@ -222,7 +222,8 @@ Mac. It reads the same index as the command line:
 - **Due**: `flib due`, with its window (7 days to 3 months, or overdue) and
   totals per currency.
 
-These pages only read, and work without JavaScript. Review and Settings are
+These pages only read, and work without JavaScript. A search goes in the
+form, not the address, and Back and Forward work. Review and Settings are
 in the menu, greyed out, until they arrive.
 
 ```sh
