@@ -397,10 +397,14 @@ review or a duplicate, never sensitive; no `..`; its real path
 symbolic link below that folder (a link above it, such as `/var`, is the
 folder's own); still there. It then runs `open -- <real path>` (or `open -R
 --`). **Open** goes further, because opening a file in macOS can run it: only
-a regular file with no execute bit, without the Finder alias flag, and with
-an extension in `views.OPENABLE_EXTENSIONS` (PDF, images, plain text and
-CSV/JSON/Markdown, Office and iWork documents, mail, audio and video). A
-folder or bundle (an `.app`), a script or program (`.command`, `.terminal`,
+a regular file with no execute bit, with an extension in
+`views.OPENABLE_EXTENSIONS` (PDF, images, plain text and CSV/JSON/Markdown,
+modern Office, OpenDocument and iWork documents, mail, audio and video; not
+the legacy `.doc`, `.xls` and `.ppt`, which can carry macros), that chose no
+app of its own (no per-file "Open With", `com.apple.LaunchServices.OpenWith`,
+which flib's moves keep; no Finder type or creator code, bytes 0 to 7 of
+`com.apple.FinderInfo`) and is not an alias (`kIsAlias`). An attribute that
+cannot be read counts against opening. A folder or bundle (an `.app`), a script or program (`.command`, `.terminal`,
 `.tool`, `.sh`), a location file (`.webloc`, `.fileloc`, `.inetloc`), an
 installer, disk image, profile, workflow or `.jar`, an HTML page, an alias
 or an unknown extension gets 403, and the pages show only Show in Finder for
@@ -511,9 +515,13 @@ crowd out the session's: with 200 of them, about 1 request in 10 from the
 session is dropped (with 16 or 100, none). A client that asks for a large
 reply and never reads it holds a request thread for up to 10 s per write.
 A search by meaning holds its request thread while it waits for the
-embeddings server, up to 5 s in the interface (`views.EMBED_TIMEOUT`, less
-when `search.semantic.timeout_seconds` is lower); a few at once can take the
-8 request threads for that long.
+embeddings server. In the interface the client's timeout is 5 s
+(`views.EMBED_TIMEOUT`, less when `search.semantic.timeout_seconds` is
+lower), and that is per socket operation (connect, each read), not for the
+whole call, so a server that trickles its reply can hold the thread longer; a
+few such searches at once can take the 8 request threads. The client is made
+only when a query is actually embedded, and a failure to make it falls back
+to the search by words, with its notice.
 With `--no-browser` the printed link stays in the terminal and, once opened,
 in the browser's history; it is useless once used. Anything running as the
 user can read the handoff file in the moment before the browser uses it, as

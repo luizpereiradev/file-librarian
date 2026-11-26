@@ -25,12 +25,14 @@ All notable changes to this project are documented here. The format follows
   files are never listed, only counted; Open and Show in Finder post the
   file's index id and the server checks its real path again (inside the
   library or an input folder, no `..`, no symbolic link) before asking
-  macOS; Open takes documents only (an allow-list of extensions, no execute
-  bit, no alias), so an app, script, installer or web location gets only
-  Show in Finder; names lose Unicode format characters (no right-to-left
+  macOS; Open takes documents only (an allow-list of extensions without the
+  macro-capable `.doc`, `.xls` and `.ppt`; no execute bit; no alias; no
+  per-file "Open With" or Finder type/creator picking an app), so an app,
+  script, installer or web location gets only Show in Finder; names lose Unicode format characters (no right-to-left
   tricks); the CSV is an attachment of up to 5000 matches whose cells cannot
-  run as spreadsheet formulas; a search by meaning waits at most 5 s for the
-  embeddings server; any address choice the page does not offer is 400.
+  run as spreadsheet formulas; a search by meaning waits at most 5 s per socket
+  operation for the embeddings server, and falls back to words if its client
+  cannot be made; any address choice the page does not offer is 400.
   The Content-Security-Policy now also requires Trusted Types.
 - `flib ui`, an early local interface (#113): a web server on 127.0.0.1
   that exists only while in use, with a Status page (the counts of `flib

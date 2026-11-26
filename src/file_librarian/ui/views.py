@@ -35,7 +35,8 @@ import sqlite3
 import stat
 import subprocess
 import unicodedata
-from collections.abc import Callable, Iterator
+from array import array
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -46,9 +47,9 @@ from urllib.parse import parse_qs
 
 from file_librarian import activity as activity_mod
 from file_librarian import due as due_mod
-from file_librarian.config import Config, is_within
+from file_librarian.config import Config, SemanticConfig, is_within
 from file_librarian.db.store import GROUPS, AmountTotal, Store
-from file_librarian.embeddings import Embedder
+from file_librarian.embeddings import Embedder, EmbeddingError
 from file_librarian.extractors.origin import read_xattr
 from file_librarian.fields import KINDS, format_amount
 from file_librarian.models import FileStatus, OperationStatus
@@ -81,15 +82,19 @@ OPENABLE_EXTENSIONS = frozenset(
     {
         *("pdf", "txt", "md", "markdown", "csv", "tsv", "json", "rtf"),
         *("png", "jpg", "jpeg", "gif", "heic", "heif", "webp", "tif", "tiff", "bmp"),
-        *("doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp"),
+        *("docx", "xlsx", "pptx", "odt", "ods", "odp"),
         *("pages", "numbers", "key", "eml"),
         *("mp3", "m4a", "wav", "aac", "flac", "mp4", "mov", "m4v"),
     }
 )
 """What Open hands to macOS: documents it shows in an app. Never a program, an
 installer, a script, a shortcut to a place (``.webloc``, ``.fileloc``), a disk
-image, a profile or a folder (an ``.app`` is one): those get Show in Finder only."""
+image, a profile or a folder (an ``.app`` is one): those get Show in Finder only.
+Nor the legacy Office formats (``.doc``, ``.xls``, ``.ppt``), which can carry
+macros without saying so in their name."""
 _FINDER_INFO = "com.apple.FinderInfo"
+_OPEN_WITH = "com.apple.LaunchServices.OpenWith"
+"""A per-file "Open With": macOS would open the file in the app it names."""
 _IS_ALIAS = 0x8000
 """``kIsAlias`` in the Finder flags, bytes 8-9 of ``com.apple.FinderInfo``."""
 
@@ -502,8 +507,33 @@ class Found:
 NOTHING = "Give words to search for, a filter, or both."
 
 
-def find(config: Config, form: SearchForm | None, *, totals: bool = True) -> Found:
-    """``flib search`` for the form; ``None`` is the empty form (categories only)."""
+class _QuickEmbedder(Embedder):
+    """The embeddings client for a search from the interface: made only when the query
+    is actually embedded, with at most ``EMBED_TIMEOUT`` per socket operation. A
+    failure to make it is an ``EmbeddingError``, so the search falls back to words
+    with its usual notice instead of failing the page."""
+
+    def __init__(self, settings: SemanticConfig) -> None:  # the real client: in embed
+        self._settings = settings.model_copy(
+            update={"timeout_seconds": min(settings.timeout_seconds, EMBED_TIMEOUT)}
+        )
+        self._real: Embedder | None = None
+
+    def embed(self, texts: Sequence[str]) -> list[array[float]]:
+        if self._real is None:
+            try:
+                self._real = Embedder(self._settings)
+            except Exception as exc:  # a client that cannot be made: search by words
+                raise EmbeddingError(f"cannot set up ({type(exc).__name__})") from exc
+        return self._real.embed(texts)
+
+
+def find(
+    config: Config, form: SearchForm | None, *, totals: bool = True, pad_sensitive: bool = False
+) -> Found:
+    """``flib search`` for the form; ``None`` is the empty form (categories only).
+    ``pad_sensitive``: fetch as many more rows as there are sensitive files, so the
+    sensitive matches left out never shorten the list below ``form.limit``."""
     configured = [c.name for c in config.categories]
     found = Found(categories=configured)
     if not config.database.exists():
@@ -527,24 +557,23 @@ def find(config: Config, form: SearchForm | None, *, totals: bool = True) -> Fou
         except SearchError as exc:
             found.error = _for_the_page(exc)
             return found
+        limit = form.limit
+        if pad_sensitive:
+            limit += store.stats().by_status[FileStatus.SENSITIVE.value]
         if form.semantic and config.search.semantic.enabled:
-            settings = config.search.semantic
-            quick = settings.model_copy(
-                update={"timeout_seconds": min(settings.timeout_seconds, EMBED_TIMEOUT)}
-            )
             outcome = semantic_search(
                 store,
                 form.q,
                 config,
                 filters=filters,
-                limit=form.limit,
+                limit=limit,
                 include_duplicates=form.duplicates,
-                embedder=Embedder(quick),
+                embedder=_QuickEmbedder(config.search.semantic),
             )
             hits, found.notice, found.weak = outcome.hits, outcome.notice, outcome.weak
         else:
             hits = words_search(
-                store, form.q, filters=filters, limit=form.limit, include_duplicates=form.duplicates
+                store, form.q, filters=filters, limit=limit, include_duplicates=form.duplicates
             )
         for hit in hits:
             if hit.status == FileStatus.SENSITIVE.value:
@@ -886,7 +915,7 @@ def search_csv(config: Config, fields: dict[str, list[str]]) -> tuple[int, bytes
     matches, not the page's limit; a last row says so when there were more."""
     form = dataclasses.replace(SearchForm.parse(fields), limit=EXPORT_LIMIT + 1)
     try:
-        found = find(config, form, totals=False)
+        found = find(config, form, totals=False, pad_sensitive=True)
     except Unreadable as exc:
         return _plain_error(HTTPStatus.SERVICE_UNAVAILABLE, str(exc))
     if found.error:
@@ -894,7 +923,7 @@ def search_csv(config: Config, fields: dict[str, list[str]]) -> tuple[int, bytes
     out = io.StringIO()
     writer = csv.writer(out, lineterminator="\r\n")
     writer.writerow(CSV_COLUMNS)
-    cut = len(found.hits) + found.sensitive > EXPORT_LIMIT
+    cut = len(found.hits) > EXPORT_LIMIT  # sensitive matches are left out, not counted
     for hit, _ in found.hits[:EXPORT_LIMIT]:
         writer.writerow(
             [
@@ -1082,18 +1111,28 @@ def real_location(path: Path, config: Config) -> Path | None:
 
 
 def openable(path: Path) -> bool:
-    """A regular file (not a folder, a bundle or a link) with no execute bit, an
-    extension in ``OPENABLE_EXTENSIONS`` and no Finder alias flag. Never raises."""
+    """A document macOS shows in its usual app, never a program it would run: a
+    regular file (not a folder, a bundle or a link) with no execute bit and an
+    extension in ``OPENABLE_EXTENSIONS``, that chose no app of its own (no per-file
+    "Open With", no Finder type or creator code) and is not an alias. An attribute
+    that cannot be read counts against it. Never raises."""
     try:
         info = os.lstat(path)
         finder = read_xattr(path, _FINDER_INFO)
+        open_with = read_xattr(path, _OPEN_WITH)
     except OSError:
         return False
     if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o111:
         return False
     if path.suffix.lower().removeprefix(".") not in OPENABLE_EXTENSIONS:
         return False
-    return not (finder is not None and len(finder) >= 10 and (finder[8] << 8) & _IS_ALIAS)
+    if open_with is not None:
+        return False
+    if finder is None:
+        return True
+    if any(finder[:8]):  # a type or creator code picks the app
+        return False
+    return not (len(finder) >= 10 and (finder[8] << 8) & _IS_ALIAS)
 
 
 def open_by_id(

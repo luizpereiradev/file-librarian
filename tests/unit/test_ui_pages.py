@@ -13,6 +13,7 @@ import io
 import json
 import re
 import sqlite3
+from array import array
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -21,9 +22,10 @@ from urllib.parse import urlencode
 
 import pytest
 
-from file_librarian import activity, catchup, due, embeddings, pipeline
+from file_librarian import activity, catchup, due, pipeline
 from file_librarian.config import Config
 from file_librarian.db.store import RunRow, Store
+from file_librarian.extractors import origin
 from file_librarian.models import Classification, FileStatus, OperationStatus, RunTrigger
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.runlog import write_log
@@ -1010,25 +1012,61 @@ def test_the_forms_fixed_choices_are_enforced(client: UiClient, fields: dict[str
         assert reply.status == 400, route
 
 
-def test_a_search_by_meaning_waits_a_few_seconds_at_most(
-    monkeypatch: pytest.MonkeyPatch, downloads: Path, tmp_path: Path
-) -> None:
-    cfg = fake_config(
+def semantic_cfg(downloads: Path, tmp_path: Path) -> Config:
+    return fake_config(
         downloads,
         database=str(tmp_path / "l.db"),
         search={"semantic": {"enabled": True, "timeout_seconds": 30}},
     )
+
+
+def with_vector(cfg: Config, name: str) -> None:
+    """Give ``name`` an embedding, so a search by meaning embeds the query."""
+    vector = array("f", [1.0, 0.0]).tobytes()
+    with Store.open(cfg.database) as store:
+        model = cfg.search.semantic.model
+        store.save_embeddings([(file_id(cfg, name), model, 2, "h", vector)])
+
+
+def test_the_embedder_is_made_only_when_the_query_is_embedded(
+    monkeypatch: pytest.MonkeyPatch, downloads: Path, tmp_path: Path
+) -> None:
+    cfg = semantic_cfg(downloads, tmp_path)
     fill(downloads, cfg, {"power.pdf": answer("Finance")})
-    seen: list[float] = []
-    real = embeddings.Embedder
+    made: list[float] = []
 
-    def spy(settings: Any) -> Any:
-        seen.append(settings.timeout_seconds)
-        return real(settings)
+    class Fake:
+        def __init__(self, settings: Any) -> None:
+            made.append(settings.timeout_seconds)
 
-    monkeypatch.setattr(views, "Embedder", spy)
-    views.find(cfg, views.SearchForm(q="power", semantic=True))
-    assert seen == [views.EMBED_TIMEOUT]
+        def embed(self, texts: Any) -> list[array[float]]:
+            return [array("f", [1.0, 0.0])]
+
+    monkeypatch.setattr(views, "Embedder", Fake)
+    views.find(cfg, views.SearchForm(q="power", semantic=True))  # no vector yet: words only
+    assert made == []
+    with_vector(cfg, "power.pdf")
+    found = views.find(cfg, views.SearchForm(q="power", semantic=True))
+    assert made == [views.EMBED_TIMEOUT]  # at most 5 s per socket operation, not 30
+    assert [Path(h.path).name for h, _ in found.hits] == ["power.pdf"]
+
+
+def test_an_embedder_that_cannot_be_made_falls_back_to_words(
+    monkeypatch: pytest.MonkeyPatch, downloads: Path, tmp_path: Path, serve: list[Ui]
+) -> None:
+    cfg = semantic_cfg(downloads, tmp_path)
+    fill(downloads, cfg, {"power.pdf": answer("Finance")})
+    with_vector(cfg, "power.pdf")
+
+    def broken(settings: Any) -> None:
+        raise RuntimeError("no key at /secret/keychain")
+
+    monkeypatch.setattr(views, "Embedder", broken)
+    reply = search(start(serve, cfg), q="power", semantic="1")
+    assert reply.status == 200
+    assert "semantic search unavailable (cannot set up (RuntimeError))" in reply.text
+    assert "searched by words only" in reply.text and "power.pdf" in reply.text
+    assert "/secret" not in reply.text
 
 
 def test_an_operation_on_a_file_now_sensitive_is_not_named(filled: int, cfg: Config) -> None:
@@ -1057,3 +1095,172 @@ def test_due_offers_no_buttons_for_a_missing_file(client: UiClient, cfg: Config)
     text = client.get("/due?within=1m").text
     assert "missing: moved by hand?" in text
     assert "/files/" not in text
+
+
+# --- review of #124, round 2 -----------------------------------------------------------
+
+
+def a_document(tmp_path: Path, name: str = "a.pdf") -> Path:
+    path = tmp_path / name
+    path.write_bytes(b"x")
+    return path
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "a.PDF.command",
+        "a.pdf.command",
+        "a.pdf.",
+        "a.pdf ",
+        "a.\uff50\uff44\uff46",
+        "a.pd\u200bf",
+        "a.scpt",
+        "a.svg",
+        "a.doc",
+        "a.xls",
+        "a.ppt",
+        "a",
+    ],
+)
+def test_open_refuses_extension_tricks_and_legacy_office(tmp_path: Path, name: str) -> None:
+    assert not views.openable(a_document(tmp_path, name))
+
+
+def test_the_extension_is_compared_in_any_case(tmp_path: Path) -> None:
+    assert views.openable(a_document(tmp_path, "a.PdF"))
+    assert views.openable(a_document(tmp_path, "b.DOCX"))
+
+
+def test_a_file_that_chose_its_own_app_is_not_opened(tmp_path: Path) -> None:
+    path = a_document(tmp_path)
+    write_xattr(path, "com.apple.LaunchServices.OpenWith", b"bplist00")
+    assert not views.openable(path)
+    typed = a_document(tmp_path, "b.pdf")
+    write_xattr(typed, "com.apple.FinderInfo", b"APPLaaaa" + bytes(24))  # type, creator
+    assert not views.openable(typed)
+    creator = a_document(tmp_path, "c.pdf")
+    write_xattr(creator, "com.apple.FinderInfo", bytes(7) + b"x" + bytes(24))
+    assert not views.openable(creator)
+    plain = a_document(tmp_path, "d.pdf")
+    write_xattr(plain, "com.apple.FinderInfo", bytes(32))
+    assert views.openable(plain)
+
+
+@pytest.mark.parametrize("attribute", ["com.apple.FinderInfo", "com.apple.LaunchServices.OpenWith"])
+def test_an_attribute_that_cannot_be_read_counts_against_opening(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, attribute: str
+) -> None:
+    path = a_document(tmp_path)
+    real = origin.read_xattr
+
+    def unreadable(where: Path, name: str) -> bytes | None:
+        if name == attribute:
+            raise OSError(5, "Input/output error")
+        return real(where, name)
+
+    monkeypatch.setattr(views, "read_xattr", unreadable)
+    assert not views.openable(path)
+
+
+def test_an_open_with_file_gets_show_in_finder_only(
+    client: UiClient, cfg: Config, fake_browser: Path, downloads: Path
+) -> None:
+    power = library(downloads) / "Finance" / "power.pdf"
+    write_xattr(power, "com.apple.LaunchServices.OpenWith", b"bplist00")
+    ident = str(file_id(cfg, "power.pdf"))
+    assert post(client, "/files/open", id=ident).status == 403
+    assert post(client, "/files/reveal", id=ident).status == 204
+    assert opened(fake_browser) == [["-R", "--", str(power)]]
+    text = search(client, q="power").text
+    assert 'action="/files/reveal"' in text and 'action="/files/open"' not in text
+
+
+def test_open_is_given_the_real_path_under_a_link_above_the_root(
+    filled: int, cfg: Config, downloads: Path, tmp_path: Path
+) -> None:
+    link = tmp_path / "home-link"
+    link.symlink_to(downloads.parent)
+    linked = fake_config(
+        link / "Downloads",
+        database=str(cfg.database),
+        output_root=str(link / "Downloads" / "Organized"),
+    )
+    ident = file_id(cfg, "power.pdf")
+    set_path(cfg, ident, link / "Downloads" / "Organized" / "Finance" / "power.pdf")
+    calls: list[list[str]] = []
+
+    def runner(argv: list[str]) -> int:
+        calls.append(argv)
+        return 0
+
+    for reveal in (False, True):
+        code, _ = views.open_by_id(
+            linked, {"id": [str(ident)]}, reveal=reveal, program="open", runner=runner
+        )
+        assert code == 204
+    real = str(library(downloads) / "Finance" / "power.pdf")
+    assert calls == [["open", "--", real], ["open", "-R", "--", real]]
+
+
+def test_a_link_below_the_root_into_the_library_is_refused(
+    client: UiClient, cfg: Config, fake_browser: Path, downloads: Path
+) -> None:
+    lib = library(downloads)
+    (lib / "Finance").rename(lib / "Finance2")
+    (lib / "Finance").symlink_to(lib / "Finance2")
+    ident = str(file_id(cfg, "power.pdf"))
+    for route in ("/files/open", "/files/reveal"):
+        assert post(client, route, id=ident).status == 403
+    assert opened(fake_browser) == []
+
+
+def test_due_rows_offer_open_only_for_documents(
+    downloads: Path, cfg: Config, serve: list[Ui]
+) -> None:
+    fill(downloads, cfg, {"pay.command": bill(amount="1", due_date=soon(1))})
+    text = start(serve, cfg).get("/due").text
+    assert "pay.command" in text
+    assert 'action="/files/reveal"' in text and 'action="/files/open"' not in text
+
+
+def test_the_csv_cut_is_exactly_at_the_limit_and_ignores_sensitive_matches(
+    monkeypatch: pytest.MonkeyPatch, downloads: Path, cfg: Config, serve: list[Ui]
+) -> None:
+    fill(downloads, cfg, {f"key {c}.txt": answer("Other") for c in "abc"})
+    with sqlite3.connect(cfg.database) as conn:
+        conn.execute(
+            "UPDATE files SET status = 'sensitive' WHERE id = ?", (file_id(cfg, "key c.txt"),)
+        )
+    c = start(serve, cfg)
+
+    def rows(limit: int) -> list[str]:
+        monkeypatch.setattr(views, "EXPORT_LIMIT", limit)
+        return search(c, "/search/export", q="key").text.splitlines()
+
+    assert len(rows(2)) == 1 + 2  # two matches to show, the sensitive one not counted
+    cut = rows(1)
+    assert len(cut) == 1 + 1 + 1 and cut[-1].startswith("# cut: more than 1 matches")
+    assert all("key c" not in line for line in rows(2) + cut)
+
+
+def test_format_characters_are_dropped_from_every_name_shown(
+    downloads: Path, cfg: Config, serve: list[Ui]
+) -> None:
+    name = "pay\u202efdp.pdf"
+    fill(downloads, cfg, {name: bill(amount="1", due_date=soon(1), description="pay")})
+    # flib files it under a clean name; give the index one that is not, as a
+    # file renamed by hand and reconciled would have.
+    ident = file_id(cfg, name)
+    with Store.open(cfg.database) as store:
+        filed = store.file_by_id(ident).current_path
+    renamed = filed.with_name(name)
+    filed.rename(renamed)
+    set_path(cfg, ident, renamed)
+    c = start(serve, cfg)
+    for text in (search(c, q="pay").text, c.get("/due").text, c.get("/activity").text):
+        assert "\u202e" not in text
+        assert "payfdp.pdf" in text
+    folder = library(downloads) / "Fi\u2066nance" / "a.pdf"
+    assert views.short(folder, cfg) == "Finance/a.pdf"
+    assert views.short(Path("/else\u200bwhere/a.pdf"), cfg) == "/elsewhere/a.pdf"
