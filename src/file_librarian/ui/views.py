@@ -28,11 +28,13 @@ reaches the page.
 from __future__ import annotations
 
 import csv
+import dataclasses
 import io
 import os
 import sqlite3
 import stat
 import subprocess
+import unicodedata
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -44,8 +46,10 @@ from urllib.parse import parse_qs
 
 from file_librarian import activity as activity_mod
 from file_librarian import due as due_mod
-from file_librarian.config import Config
+from file_librarian.config import Config, is_within
 from file_librarian.db.store import GROUPS, AmountTotal, Store
+from file_librarian.embeddings import Embedder
+from file_librarian.extractors.origin import read_xattr
 from file_librarian.fields import KINDS, format_amount
 from file_librarian.models import FileStatus, OperationStatus
 from file_librarian.search import (
@@ -70,6 +74,24 @@ DEFAULT_LIMIT = 50
 WITHIN = (("7d", "7 days"), ("2w", "2 weeks"), ("1m", "1 month"), ("3m", "3 months"))
 OPENABLE = frozenset({FileStatus.ORGANIZED, FileStatus.REVIEW, FileStatus.DUPLICATE})
 OPEN_TIMEOUT = 10.0
+EMBED_TIMEOUT = 5.0
+"""Seconds a search by meaning waits for the embeddings server: a request thread waits
+with it (``search.semantic.timeout_seconds`` stays the command line's)."""
+OPENABLE_EXTENSIONS = frozenset(
+    {
+        *("pdf", "txt", "md", "markdown", "csv", "tsv", "json", "rtf"),
+        *("png", "jpg", "jpeg", "gif", "heic", "heif", "webp", "tif", "tiff", "bmp"),
+        *("doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp"),
+        *("pages", "numbers", "key", "eml"),
+        *("mp3", "m4a", "wav", "aac", "flac", "mp4", "mov", "m4v"),
+    }
+)
+"""What Open hands to macOS: documents it shows in an app. Never a program, an
+installer, a script, a shortcut to a place (``.webloc``, ``.fileloc``), a disk
+image, a profile or a folder (an ``.app`` is one): those get Show in Finder only."""
+_FINDER_INFO = "com.apple.FinderInfo"
+_IS_ALIAS = 0x8000
+"""``kIsAlias`` in the Finder flags, bytes 8-9 of ``com.apple.FinderInfo``."""
 
 
 class Unreadable(Exception):
@@ -92,12 +114,18 @@ def read_index(config: Config) -> Iterator[Store]:
 # --- small pieces ----------------------------------------------------------------------
 
 
+def shown(name: str) -> str:
+    """A name for the page without format characters (Unicode ``Cf``): a right-to-left
+    override could make ``invoice\u202efdp.command`` read as ``invoicecommand.pdf``."""
+    return "".join(c for c in name if unicodedata.category(c) != "Cf")
+
+
 def short(path: Path, config: Config) -> str:
-    """``path`` from the library or an input folder, as ``flib`` prints it."""
+    """``path`` from the library or an input folder, as ``flib`` prints it (``shown``)."""
     for root in (config.output_root, *config.input_paths):
         if path.is_relative_to(root):
-            return str(path.relative_to(root))
-    return str(path)
+            return shown(str(path.relative_to(root)))
+    return shown(str(path))
 
 
 def local_time(instant: str | None) -> str:
@@ -141,8 +169,9 @@ def chips(links: list[tuple[str, str, bool]], label: str) -> Markup:
     )
 
 
-def file_actions(file_id: int, name: str, csrf: str) -> Markup:
-    """Open and Show in Finder: forms that post the file's id, never its path."""
+def file_actions(file_id: int, name: str, csrf: str, *, can_open: bool) -> Markup:
+    """Open and Show in Finder: forms that post the file's id, never its path. Open only
+    for a document ``openable`` says macOS shows in an app rather than runs."""
 
     def action(path: str, label: str) -> Markup:
         return el(
@@ -157,7 +186,7 @@ def file_actions(file_id: int, name: str, csrf: str) -> Markup:
 
     return el(
         "div",
-        action("/files/open", "Open"),
+        action("/files/open", "Open") if can_open else None,
         action("/files/reveal", "Show in Finder"),
         class_="acts",
     )
@@ -181,15 +210,19 @@ def totals_table(totals: list[AmountTotal] | list[due_mod.Total], caption: str) 
     )
 
 
-def _query(query: str) -> dict[str, list[str]]:
+def _query(query: str, known: frozenset[str]) -> dict[str, list[str]]:
+    """The address's choices; any name but ``known`` is refused (400)."""
     try:
-        return parse_qs(query, max_num_fields=8)
+        params = parse_qs(query, keep_blank_values=True, max_num_fields=8)
     except ValueError as exc:
         raise BadRequest from exc
+    if not set(params) <= known:
+        raise BadRequest
+    return params
 
 
 class BadRequest(Exception):
-    """A choice in the address that the page does not offer."""
+    """A choice in the address or the form that the page does not offer (400)."""
 
 
 def _choice(params: dict[str, list[str]], name: str, allowed: tuple[str, ...]) -> str | None:
@@ -205,7 +238,7 @@ def _choice(params: dict[str, list[str]], name: str, allowed: tuple[str, ...]) -
 
 
 def activity_page(config: Config, csrf: str, query: str) -> Page:
-    params = _query(query)
+    params = _query(query, frozenset({"days"}))
     days = int(_choice(params, "days", tuple(map(str, activity_mod.DAYS))) or 0) or (
         activity_mod.DEFAULT_DAYS
     )
@@ -325,7 +358,7 @@ def _move(move: activity_mod.Move, config: Config) -> Markup:
         tags.append(el("span", move.status.value, class_="badge warn"))
     return el(
         "li",
-        el("span", move.source.name, class_="name"),
+        el("span", shown(move.source.name), class_="name"),
         el("span", " → ", aria_hidden="true"),
         el("span", "to ", class_="sr-only"),
         el("span", short(move.destination, config), class_="where"),
@@ -368,6 +401,10 @@ class SearchForm:
 
         limit = one("limit")
         by = one("by")
+        if by is not None and by not in GROUPS:
+            raise BadRequest  # the form offers fixed choices only
+        if limit is not None and limit not in _LIMIT_TEXT:
+            raise BadRequest
         return cls(
             q=one("q") or "",
             categories=split_values(fields.get("category")),
@@ -384,8 +421,8 @@ class SearchForm:
             period=one("period"),
             duplicates=one("duplicates") == "1",
             semantic=one("semantic") == "1",
-            by=by if by in GROUPS else None,
-            limit=int(limit) if limit is not None and limit in _LIMIT_TEXT else DEFAULT_LIMIT,
+            by=by,
+            limit=int(limit) if limit is not None else DEFAULT_LIMIT,
         )
 
     @property
@@ -491,6 +528,10 @@ def find(config: Config, form: SearchForm | None, *, totals: bool = True) -> Fou
             found.error = _for_the_page(exc)
             return found
         if form.semantic and config.search.semantic.enabled:
+            settings = config.search.semantic
+            quick = settings.model_copy(
+                update={"timeout_seconds": min(settings.timeout_seconds, EMBED_TIMEOUT)}
+            )
             outcome = semantic_search(
                 store,
                 form.q,
@@ -498,6 +539,7 @@ def find(config: Config, form: SearchForm | None, *, totals: bool = True) -> Fou
                 filters=filters,
                 limit=form.limit,
                 include_duplicates=form.duplicates,
+                embedder=Embedder(quick),
             )
             hits, found.notice, found.weak = outcome.hits, outcome.notice, outcome.weak
         else:
@@ -513,6 +555,12 @@ def find(config: Config, form: SearchForm | None, *, totals: bool = True) -> Fou
         if totals:
             found.sums = sum_amounts(store, form.q, filters=filters, by=form.by)
     return found
+
+
+def search_get(config: Config, csrf: str, query: str) -> Page:
+    """``GET /search``: the empty form. Words never come from the address (400)."""
+    _query(query, frozenset())
+    return search_page(config, csrf, None)
 
 
 def search_page(config: Config, csrf: str, fields: dict[str, list[str]] | None) -> Page:
@@ -713,7 +761,7 @@ def _hit(hit: SearchHit, file_id: int | None, config: Config, csrf: str) -> Mark
     details: list[Markup | None] = [
         el(
             "div",
-            el("strong", path.name, class_="name"),
+            el("strong", shown(path.name), class_="name"),
             " ",
             el("span", badge, class_="badge"),
             " ",
@@ -724,7 +772,7 @@ def _hit(hit: SearchHit, file_id: int | None, config: Config, csrf: str) -> Mark
     ]
     if hit.original_name != path.name:
         details.append(
-            el("div", "was ", el("span", hit.original_name, class_="name"), class_="note")
+            el("div", "was ", el("span", shown(hit.original_name), class_="name"), class_="note")
         )
     if hit.duplicate_of is not None:
         details.append(
@@ -739,7 +787,8 @@ def _hit(hit: SearchHit, file_id: int | None, config: Config, csrf: str) -> Mark
             el("ul", *(el("li", tag) for tag in hit.tags), class_="tags", aria_label="Tags")
         )
     if file_id is not None and hit.exists:
-        details.append(file_actions(file_id, path.name, csrf))
+        can_open = openable(path)
+        details.append(file_actions(file_id, shown(path.name), csrf, can_open=can_open))
     return el("li", *details, class_="hit")
 
 
@@ -827,9 +876,15 @@ def cell(value: object, *, number: bool = False) -> str:
     return "'" + text if text.startswith(_FORMULA) else text
 
 
+EXPORT_LIMIT = 5000
+"""Most matches in a CSV export, whatever the page's limit; a last row says when cut."""
+CUT_ROW = "# cut: more than {limit} matches; only the first {limit} are here. Narrow the search."
+
+
 def search_csv(config: Config, fields: dict[str, list[str]]) -> tuple[int, bytes, str]:
-    """The matches as CSV (status, body, type), or an error page."""
-    form = SearchForm.parse(fields)
+    """The matches as CSV (status, body, type), or an error page. Up to ``EXPORT_LIMIT``
+    matches, not the page's limit; a last row says so when there were more."""
+    form = dataclasses.replace(SearchForm.parse(fields), limit=EXPORT_LIMIT + 1)
     try:
         found = find(config, form, totals=False)
     except Unreadable as exc:
@@ -839,7 +894,8 @@ def search_csv(config: Config, fields: dict[str, list[str]]) -> tuple[int, bytes
     out = io.StringIO()
     writer = csv.writer(out, lineterminator="\r\n")
     writer.writerow(CSV_COLUMNS)
-    for hit, _ in found.hits:
+    cut = len(found.hits) + found.sensitive > EXPORT_LIMIT
+    for hit, _ in found.hits[:EXPORT_LIMIT]:
         writer.writerow(
             [
                 cell(hit.path),
@@ -858,6 +914,8 @@ def search_csv(config: Config, fields: dict[str, list[str]]) -> tuple[int, bytes
                 cell(", ".join(hit.tags)),
             ]
         )
+    if cut:
+        writer.writerow([CUT_ROW.format(limit=EXPORT_LIMIT)])
     return HTTPStatus.OK, out.getvalue().encode("utf-8"), "text/csv; charset=utf-8"
 
 
@@ -869,7 +927,7 @@ def _plain_error(code: int, text: str) -> tuple[int, bytes, str]:
 
 
 def due_page(config: Config, csrf: str, query: str) -> Page:
-    params = _query(query)
+    params = _query(query, frozenset({"within", "overdue", "all"}))
     within = _choice(params, "within", tuple(code for code, _ in WITHIN))
     overdue = _choice(params, "overdue", ("1",)) == "1"
     show_all = _choice(params, "all", ("1",)) == "1"
@@ -936,6 +994,13 @@ def due_page(config: Config, csrf: str, query: str) -> Page:
     return HTTPStatus.OK, layout("Due", "due", join(parts), csrf)
 
 
+def _due_actions(item: due_mod.DueItem, csrf: str) -> Markup | None:
+    if not item.exists:
+        return None
+    name = shown(item.path.name)
+    return file_actions(item.file_id, name, csrf, can_open=openable(item.path))
+
+
 def _due_table(found: due_mod.DueList, config: Config, csrf: str) -> Markup:
     rows = []
     for item in found.items:
@@ -966,10 +1031,10 @@ def _due_table(found: due_mod.DueList, config: Config, csrf: str) -> Markup:
                 el("td", item.kind or "-"),
                 el(
                     "td",
-                    el("span", item.path.name, class_="name"),
+                    el("span", shown(item.path.name), class_="name"),
                     el("div", short(item.path.parent, config) + "/", class_="where"),
                 ),
-                el("td", file_actions(item.file_id, item.path.name, csrf) if item.exists else None),
+                el("td", _due_actions(item, csrf)),
                 class_="overdue" if item.overdue else None,
             )
         )
@@ -999,6 +1064,38 @@ def _run_open(argv: list[str]) -> int:
     return result.returncode
 
 
+def real_location(path: Path, config: Config) -> Path | None:
+    """Where ``path`` really is, when that is in the library or an input folder and the
+    way there has no ``..`` and no symbolic link below that folder; else ``None``. (A
+    link above the folder, such as ``/var`` to ``/private/var``, is the folder's own.)"""
+    text = str(path)
+    if not path.is_absolute() or os.path.normpath(text) != text:
+        return None
+    real = Path(os.path.realpath(text))
+    for root in (config.output_root, *config.input_paths):
+        if not path.is_relative_to(root):
+            continue
+        real_root = Path(os.path.realpath(root))
+        if real == real_root / path.relative_to(root) and is_within(real, real_root):
+            return real
+    return None
+
+
+def openable(path: Path) -> bool:
+    """A regular file (not a folder, a bundle or a link) with no execute bit, an
+    extension in ``OPENABLE_EXTENSIONS`` and no Finder alias flag. Never raises."""
+    try:
+        info = os.lstat(path)
+        finder = read_xattr(path, _FINDER_INFO)
+    except OSError:
+        return False
+    if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o111:
+        return False
+    if path.suffix.lower().removeprefix(".") not in OPENABLE_EXTENSIONS:
+        return False
+    return not (finder is not None and len(finder) >= 10 and (finder[8] << 8) & _IS_ALIAS)
+
+
 def open_by_id(
     config: Config,
     fields: dict[str, list[str]],
@@ -1025,17 +1122,20 @@ def open_by_id(
         return HTTPStatus.SERVICE_UNAVAILABLE, str(exc)
     if row.status not in OPENABLE:
         return HTTPStatus.FORBIDDEN, "That file is not one the interface opens."
-    path = row.current_path
-    roots = (config.output_root, *config.input_paths)
-    if not path.is_absolute() or not any(path.is_relative_to(root) for root in roots):
-        return HTTPStatus.FORBIDDEN, "That file is outside the library and the input folders."
+    real = real_location(row.current_path, config)
+    if real is None:
+        return HTTPStatus.FORBIDDEN, "That file is not in the library or an input folder."
     try:
-        info = os.lstat(path)
+        os.lstat(real)
     except OSError:
         return HTTPStatus.NOT_FOUND, "That file is no longer where the index says."
-    if stat.S_ISLNK(info.st_mode):
-        return HTTPStatus.FORBIDDEN, "That item is a symbolic link; it is not opened from here."
-    argv = [program, "-R", str(path)] if reveal else [program, str(path)]
+    if not reveal and not openable(real):
+        return HTTPStatus.FORBIDDEN, (
+            "Only documents are opened from here; this one could run a program or go "
+            "somewhere. Use Show in Finder instead."
+        )
+    # The path is one argument after "--": never an option, never parsed by a shell.
+    argv = [program, "-R", "--", str(real)] if reveal else [program, "--", str(real)]
     try:
         code = runner(argv)
     except (OSError, subprocess.SubprocessError):

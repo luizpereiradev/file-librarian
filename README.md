@@ -241,7 +241,10 @@ line where other accounts on the Mac could see it, and the terminal says
 anything without your session, `flib ui` ends and warns you. Search and its
 CSV export go in the form, never in the address, so your words do not stay in
 the browser's history; Open and Show in Finder send the file's number in the
-index, never a path. One runs at a time: a second `flib ui` says
+index, never a path. Open is for documents only (PDFs, images, text, office
+documents, media): anything that could run a program or go somewhere, such
+as an app, a script, an installer or a web location, gets only Show in
+Finder. One runs at a time: a second `flib ui` says
 so and exits.
 
 `--no-browser` prints the key itself, in a link: it stays in the terminal's

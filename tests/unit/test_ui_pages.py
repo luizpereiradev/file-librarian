@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
@@ -20,7 +21,7 @@ from urllib.parse import urlencode
 
 import pytest
 
-from file_librarian import activity, catchup, due, pipeline
+from file_librarian import activity, catchup, due, embeddings, pipeline
 from file_librarian.config import Config
 from file_librarian.db.store import RunRow, Store
 from file_librarian.models import Classification, FileStatus, OperationStatus, RunTrigger
@@ -31,7 +32,15 @@ from file_librarian.ui import markup, views
 from file_librarian.ui import server as ui_server
 from file_librarian.ui.server import CSP, Ui
 from file_librarian.undo import undo_run
-from tests._helpers import UiClient, UiResponse, answer, fake_config, library, put
+from tests._helpers import (
+    UiClient,
+    UiResponse,
+    answer,
+    fake_config,
+    library,
+    put,
+    write_xattr,
+)
 from tests.unit.test_ui import (  # noqa: F401 - fixtures: every server is checked the same way
     _Collector,
     events,
@@ -245,9 +254,9 @@ def test_the_search_form_lists_categories_and_kinds(client: UiClient) -> None:
 
 def test_a_search_in_the_address_is_never_run(client: UiClient) -> None:
     """Words go in a form body only: an address stays in the browser's history."""
-    page = client.get("/search?q=power").text
-    assert "power.pdf" not in page
-    assert 'value="power"' not in page
+    reply = client.get("/search?q=power")
+    assert reply.status == 400
+    assert "power" not in reply.text
 
 
 def test_search_finds_by_words_and_escapes_everything(client: UiClient) -> None:
@@ -403,7 +412,15 @@ def test_an_export_with_a_bad_filter_says_why(client: UiClient) -> None:
 
 @pytest.mark.parametrize(
     ("value", "cell"),
-    [("=1+1", "'=1+1"), ("+1", "'+1"), ("@x", "'@x"), ("-x", "'-x"), ("\tx", "'\tx"), ("a", "a")],
+    [
+        ("=1+1", "'=1+1"),
+        ("+1", "'+1"),
+        ("@x", "'@x"),
+        ("-x", "'-x"),
+        ("\tx", "'\tx"),
+        ("\rx", "'\rx"),
+        ("a", "a"),
+    ],
 )
 def test_cells_that_look_like_formulas_are_quoted(value: str, cell: str) -> None:
     assert views.cell(value) == cell
@@ -471,12 +488,14 @@ def test_due_never_shows_a_database_error(
     monkeypatch: pytest.MonkeyPatch, client: UiClient, cfg: Config
 ) -> None:
     def broken(config: Config, query: due.Query) -> None:
-        raise due.DueError("cannot read the index: at /secret/path") from sqlite3.Error("x")
+        cause = sqlite3.OperationalError("disk I/O error at /cause/path")
+        raise due.DueError(f"cannot read the index: {cause}") from cause
 
     monkeypatch.setattr(due, "find", broken)
     reply = client.get("/due")
     assert reply.status == 503
-    assert "/secret/path" not in reply.text
+    assert "/cause/path" not in reply.text and "disk I/O" not in reply.text
+    assert "cannot read the index</p>" in reply.text
 
 
 # --- Activity --------------------------------------------------------------------------
@@ -691,7 +710,7 @@ def test_open_and_reveal_ask_macos_by_id(
     reply = post(client, "/files/open", id=ident)
     assert reply.status == 204 and reply.body == b""
     assert post(client, "/files/reveal", id=ident).status == 204
-    assert opened(fake_browser) == [[target], ["-R", target]]
+    assert opened(fake_browser) == [["--", target], ["-R", "--", target]]
 
 
 @pytest.mark.parametrize(
@@ -712,7 +731,7 @@ def test_open_never_takes_a_path(
     ident = str(file_id(cfg, "power.pdf"))
     reply = post(client, "/files/open", id=ident, path=str(downloads / "id_rsa"))
     assert reply.status == 204
-    assert opened(fake_browser) == [[str(library(downloads) / "Finance" / "power.pdf")]]
+    assert opened(fake_browser) == [["--", str(library(downloads) / "Finance" / "power.pdf")]]
 
 
 def test_open_refuses_a_sensitive_file(client: UiClient, cfg: Config, fake_browser: Path) -> None:
@@ -838,3 +857,203 @@ def test_short_paths_and_times(cfg: Config, downloads: Path) -> None:
     assert views.local_time("garbage") == "garbage"
     assert len(views.local_time("2026-01-02T03:04:05")) == 5
     assert activity.local_day("2026-01-02T12:00:00") in (date(2026, 1, 2), date(2026, 1, 3))
+
+
+# --- review of #124 --------------------------------------------------------------------
+
+
+def set_path(cfg: Config, ident: int, path: Path) -> None:
+    with sqlite3.connect(cfg.database) as conn:
+        conn.execute("UPDATE files SET current_path = ? WHERE id = ?", (str(path), ident))
+
+
+def test_a_dotdot_in_the_index_never_leaves_the_library(
+    client: UiClient, cfg: Config, fake_browser: Path, tmp_path: Path
+) -> None:
+    outside = tmp_path / "outside.txt"
+    outside.write_text("x")
+    ident = file_id(cfg, "power.pdf")
+    sneaky = cfg.output_root / ("../" * 30) / outside.relative_to("/")
+    assert sneaky.is_relative_to(cfg.output_root)  # textually inside
+    set_path(cfg, ident, sneaky)
+    for route in ("/files/open", "/files/reveal"):
+        assert post(client, route, id=str(ident)).status == 403
+    assert opened(fake_browser) == []
+
+
+def test_a_symlinked_folder_never_leaves_the_library(
+    client: UiClient, cfg: Config, fake_browser: Path, tmp_path: Path, downloads: Path
+) -> None:
+    finance = library(downloads) / "Finance"
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    for item in finance.iterdir():
+        item.rename(elsewhere / item.name)
+    finance.rmdir()
+    finance.symlink_to(elsewhere)
+    ident = str(file_id(cfg, "power.pdf"))
+    for route in ("/files/open", "/files/reveal"):
+        assert post(client, route, id=ident).status == 403
+    assert opened(fake_browser) == []
+
+
+def test_a_link_above_the_library_is_the_librarys_own(tmp_path: Path) -> None:
+    """``/var`` is a link to ``/private/var``: a library under it still opens."""
+    real = tmp_path / "real"
+    (real / "Organized" / "Finance").mkdir(parents=True)
+    (tmp_path / "link").symlink_to(real)
+    cfg = fake_config(tmp_path / "link", output_root=str(tmp_path / "link" / "Organized"))
+    target = tmp_path / "link" / "Organized" / "Finance" / "a.pdf"
+    target.write_bytes(b"x")
+    assert views.real_location(target, cfg) == real / "Organized" / "Finance" / "a.pdf"
+    assert views.real_location(Path("Organized/a.pdf"), cfg) is None
+    assert views.real_location(tmp_path / "elsewhere.pdf", cfg) is None
+
+
+DANGEROUS = (
+    "run-me.command",
+    "term.terminal",
+    "tool.tool",
+    "place.fileloc",
+    "site.webloc",
+    "site.inetloc",
+    "setup.pkg",
+    "disk.dmg",
+    "profile.mobileconfig",
+    "flow.workflow",
+    "app.jar",
+    "script.sh",
+    "page.html",
+    "noextension",
+)
+
+
+def test_open_refuses_what_could_run_and_offers_show_in_finder(
+    downloads: Path, cfg: Config, serve: list[Ui], fake_browser: Path
+) -> None:
+    fill(downloads, cfg, {name: answer("Other", confidence=0.95) for name in DANGEROUS})
+    c = start(serve, cfg)
+    for name in DANGEROUS:
+        ident = str(file_id(cfg, name))
+        assert post(c, "/files/open", id=ident).status == 403, name
+        assert post(c, "/files/reveal", id=ident).status == 204, name
+    assert all(call[0] == "-R" for call in opened(fake_browser))
+    text = search(c, category=["Other"], limit="100").text
+    assert text.count('action="/files/open"') == 0
+    assert text.count('action="/files/reveal"') == len(DANGEROUS)
+
+
+def test_open_refuses_folders_bundles_executables_and_aliases(
+    client: UiClient, cfg: Config, downloads: Path
+) -> None:
+    folder = library(downloads) / "Finance"
+    app = folder / "Thing.app"
+    app.mkdir()
+    assert not views.openable(app)
+    assert not views.openable(folder / "missing.pdf")
+    power = folder / "power.pdf"
+    assert views.openable(power)
+    power.chmod(0o755)
+    assert not views.openable(power)
+    power.chmod(0o644)
+    write_xattr(power, "com.apple.FinderInfo", bytes(8) + b"\x80\x00" + bytes(22))
+    assert not views.openable(power)
+    write_xattr(power, "com.apple.FinderInfo", bytes(8) + b"\x01\x00" + bytes(22))
+    assert views.openable(power)  # another Finder flag is fine
+    assert "pdf" in views.OPENABLE_EXTENSIONS and "app" not in views.OPENABLE_EXTENSIONS
+
+
+def test_format_characters_never_reach_the_page(
+    downloads: Path, cfg: Config, serve: list[Ui]
+) -> None:
+    rlo = "invoice\u202efdp.command"
+    fill(downloads, cfg, {rlo: answer("Finance", confidence=0.95)})
+    c = start(serve, cfg)
+    pages = [search(c, q="invoice").text, c.get("/activity").text]
+    for text in pages:
+        assert "\u202e" not in text
+        assert "invoicefdp.command" in text
+    assert views.shown("a\u200bb\u2066c") == "abc"
+
+
+def test_the_export_is_not_cut_at_the_pages_limit(
+    monkeypatch: pytest.MonkeyPatch, downloads: Path, cfg: Config, serve: list[Ui]
+) -> None:
+    fill(downloads, cfg, {f"bill{i}.pdf": answer("Finance", description="bill") for i in range(25)})
+    c = start(serve, cfg)
+    rows = search(c, "/search/export", q="bill", limit="20").text.splitlines()
+    assert len(rows) == 1 + 25
+    monkeypatch.setattr(views, "EXPORT_LIMIT", 10)
+    rows = search(c, "/search/export", q="bill").text.splitlines()
+    assert len(rows) == 1 + 10 + 1
+    assert rows[-1].startswith("# cut: more than 10 matches")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/activity?evil=%3Cscript%3E",
+        "/activity?days=7&x=",
+        "/due?issuer=Power+Co",
+        "/due?within=7d&x=1",
+        "/search?anything",
+    ],
+)
+def test_names_the_page_does_not_offer_are_refused(client: UiClient, path: str) -> None:
+    assert client.get(path).status == 400
+
+
+@pytest.mark.parametrize("fields", [{"by": "nope"}, {"limit": "7"}, {"limit": "5000"}])
+def test_the_forms_fixed_choices_are_enforced(client: UiClient, fields: dict[str, str]) -> None:
+    for route in ("/search", "/search/export"):
+        reply = search(client, route, q="power", **fields)
+        assert reply.status == 400, route
+
+
+def test_a_search_by_meaning_waits_a_few_seconds_at_most(
+    monkeypatch: pytest.MonkeyPatch, downloads: Path, tmp_path: Path
+) -> None:
+    cfg = fake_config(
+        downloads,
+        database=str(tmp_path / "l.db"),
+        search={"semantic": {"enabled": True, "timeout_seconds": 30}},
+    )
+    fill(downloads, cfg, {"power.pdf": answer("Finance")})
+    seen: list[float] = []
+    real = embeddings.Embedder
+
+    def spy(settings: Any) -> Any:
+        seen.append(settings.timeout_seconds)
+        return real(settings)
+
+    monkeypatch.setattr(views, "Embedder", spy)
+    views.find(cfg, views.SearchForm(q="power", semantic=True))
+    assert seen == [views.EMBED_TIMEOUT]
+
+
+def test_an_operation_on_a_file_now_sensitive_is_not_named(filled: int, cfg: Config) -> None:
+    with sqlite3.connect(cfg.database) as conn:
+        conn.execute(
+            "UPDATE files SET status = 'sensitive' WHERE id = ?", (file_id(cfg, "power.pdf"),)
+        )
+    page = views.activity_page(cfg, "t", "")[1].decode()
+    assert "power.pdf" not in page
+    assert "water.pdf" in page
+
+
+def test_every_open_and_reveal_form_carries_the_csrf_token(client: UiClient) -> None:
+    token = client.csrf("/search")
+    for text in (search(client, q="power").text, client.get("/due").text):
+        forms = re.findall(r'<form method="post" action="/files/[a-z]+"[^>]*>(.*?)</form>', text)
+        assert forms
+        for form in forms:
+            assert f'<input type="hidden" name="csrf" value="{token}">' in form
+
+
+def test_due_offers_no_buttons_for_a_missing_file(client: UiClient, cfg: Config) -> None:
+    with Store.open(cfg.database) as store:
+        for name in ("power.pdf", "water.pdf", EVIL_NAME, "unsure.pdf"):
+            store.file_by_id(file_id(cfg, name)).current_path.unlink()
+    text = client.get("/due?within=1m").text
+    assert "missing: moved by hand?" in text
+    assert "/files/" not in text

@@ -96,7 +96,7 @@ PAGES = ("status", "search", "activity", "due")
 VIEWS: dict[str, Callable[[Config, str, str], views.Page]] = {
     "activity": views.activity_page,
     "due": views.due_page,
-    "search": lambda config, csrf, query: views.search_page(config, csrf, None),
+    "search": views.search_get,
 }
 """Pages built on the server for each request (#114): config, CSRF token, query."""
 LAUNCH = "/launch"
@@ -1058,11 +1058,17 @@ class _Handler(BaseHTTPRequestHandler):
         return values[0] if len(values) == 1 else None
 
     def _search(self, session: Session) -> None:
-        code, body = views.search_page(self.server.ui.config, session.csrf, self._fields())
+        try:
+            code, body = views.search_page(self.server.ui.config, session.csrf, self._fields())
+        except views.BadRequest as exc:
+            raise _Reject(HTTPStatus.BAD_REQUEST) from exc
         self._reply(code, body, _HTML)
 
     def _export(self, session: Session) -> None:
-        code, body, kind = views.search_csv(self.server.ui.config, self._fields())
+        try:
+            code, body, kind = views.search_csv(self.server.ui.config, self._fields())
+        except views.BadRequest as exc:
+            raise _Reject(HTTPStatus.BAD_REQUEST) from exc
         headers = []
         if code == HTTPStatus.OK:
             headers.append(("Content-Disposition", 'attachment; filename="flib-search.csv"'))

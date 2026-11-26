@@ -380,17 +380,33 @@ log says about the Mac being locked (the lines `catchup.py` writes). Search
 takes its words and filters in a form body (`POST /search`, `POST
 /search/export`), never in the address, which would keep them in the
 browser's history; Due and Activity put only fixed choices in the address
-(`?within=2w`, `?days=30`, anything else is 400). Search never lists a
-sensitive file: it says how many matched. The CSV export is an attachment
-(`Content-Disposition: attachment`, `nosniff`), and a cell that starts like a
-formula (`=`, `+`, `-`, `@`, a tab) gets a leading apostrophe. Open and Show
-in Finder (`POST /files/open`, `POST /files/reveal`) take a file's index id,
-never a path: the server reads the path from the index and checks it again
-(organized, in review or a duplicate, never sensitive; under `output_root` or
-an input folder; there, and not a symbolic link) before it runs `open` (or
-`open -R`) with the path as one argument. Error pages say what went wrong in
-general words; no `OSError` or `sqlite3` text, which holds paths, reaches a
-page. None of these routes moves, renames or deletes anything.
+(`?within=2w`, `?days=30`); any other value or any other name is 400, and so
+is a query on `GET /search`. The search form's own fixed choices (`by`,
+`limit`) are enforced the same way. Search never lists a sensitive file: it
+says how many matched. Names on the pages lose their Unicode format
+characters (category `Cf`), so a right-to-left override cannot make
+`invoice\u202efdp.command` read as a PDF. The CSV export is an attachment
+(`Content-Disposition: attachment`, `nosniff`) of up to 5000 matches,
+whatever the page's limit, with a last row saying so when there were more;
+a cell that starts like a formula (`=`, `+`, `-`, `@`, a tab, a carriage
+return) gets a leading apostrophe. Open and Show in Finder (`POST
+/files/open`, `POST /files/reveal`) take a file's index id, never a path. The
+server reads the path from the index and checks it again: organized, in
+review or a duplicate, never sensitive; no `..`; its real path
+(`os.path.realpath`) inside `output_root` or an input folder, with no
+symbolic link below that folder (a link above it, such as `/var`, is the
+folder's own); still there. It then runs `open -- <real path>` (or `open -R
+--`). **Open** goes further, because opening a file in macOS can run it: only
+a regular file with no execute bit, without the Finder alias flag, and with
+an extension in `views.OPENABLE_EXTENSIONS` (PDF, images, plain text and
+CSV/JSON/Markdown, Office and iWork documents, mail, audio and video). A
+folder or bundle (an `.app`), a script or program (`.command`, `.terminal`,
+`.tool`, `.sh`), a location file (`.webloc`, `.fileloc`, `.inetloc`), an
+installer, disk image, profile, workflow or `.jar`, an HTML page, an alias
+or an unknown extension gets 403, and the pages show only Show in Finder for
+it. Error pages say what went wrong in general words; no `OSError` or
+`sqlite3` text, which holds paths, reaches a page. None of these routes
+moves, renames or deletes anything.
 
 **Session.** The server binds a free port and makes a random launch token
 (256 bits). The token never goes on a command line, where any account on the
@@ -480,8 +496,8 @@ browser's cookies). How each is handled:
 | A cookie planted on 127.0.0.1 | browsers share cookies across ports: any cookie of the name that holds the session counts, so a planted one cannot lock the user out; each is compared in constant time | `test_a_planted_cookie_of_the_same_name_does_not_lock_the_user_out`, `test_the_session_id_is_compared_in_constant_time` |
 | Guessing or replaying the link | 256-bit token, constant-time compare, single use; a wrong guess does not burn it; `Referrer-Policy: no-referrer` everywhere; never logged | `test_the_launch_token_works_once`, `test_a_wrong_or_missing_token_gets_the_ended_page`, `test_a_wrong_launch_post_gets_the_ended_page`, `test_the_token_is_compared_in_constant_time`, `test_nothing_is_logged` |
 | Script injection | `Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; require-trusted-types-for 'script'`; no inline script, style or handler; scripts put text in with `textContent` only; server-built pages escape every value from the index (names, descriptions, issuers, tags, search words) through `markup.el`; `nosniff` | `test_every_page_references_only_packaged_files_and_has_no_inline_code`, `test_the_policy_allows_no_inline_code`, `test_the_policy_requires_trusted_types`, `test_each_page_is_escaped_and_has_no_inline_code`, `test_search_finds_by_words_and_escapes_everything`, `test_el_escapes_text_and_attributes`, `test_the_layout_fills_its_slots_in_one_pass` |
-| Names and words in the history | search words and filters go in a POST body; the address holds only fixed choices; Open and Show in Finder post an index id | `test_a_search_in_the_address_is_never_run`, `test_due_refuses_choices_it_does_not_offer`, `test_activity_windows` |
-| Opening what the page names | the id is looked up in the index; the path is checked again (status, under the library or an input, exists, not a link) and passed to `open` as one argument; a path in the form is ignored; failures get a general message | `test_open_and_reveal_ask_macos_by_id`, `test_open_never_takes_a_path`, `test_open_refuses_a_sensitive_file`, `test_open_rechecks_the_path_from_the_index`, `test_when_macos_cannot_open_it_the_page_says_so_plainly` |
+| Names and words in the history | search words and filters go in a POST body; the address holds only fixed choices, any other name is 400; Open and Show in Finder post an index id | `test_a_search_in_the_address_is_never_run`, `test_due_refuses_choices_it_does_not_offer`, `test_activity_windows`, `test_names_the_page_does_not_offer_are_refused` |
+| Opening what the page names | the id is looked up in the index; the path is checked again (status; no `..`; real path inside the library or an input with no link below it; exists) and passed to `open` after `--`; a path in the form is ignored; Open takes documents only (allow-listed extension, regular file, no execute bit, not an alias), everything else gets Show in Finder only; names lose format characters; failures get a general message | `test_open_and_reveal_ask_macos_by_id`, `test_open_never_takes_a_path`, `test_open_refuses_a_sensitive_file`, `test_open_rechecks_the_path_from_the_index`, `test_a_dotdot_in_the_index_never_leaves_the_library`, `test_a_symlinked_folder_never_leaves_the_library`, `test_open_refuses_what_could_run_and_offers_show_in_finder`, `test_open_refuses_folders_bundles_executables_and_aliases`, `test_format_characters_never_reach_the_page`, `test_when_macos_cannot_open_it_the_page_says_so_plainly` |
 | A spreadsheet running the export | `Content-Disposition: attachment` with `nosniff`; cells that start like a formula get a leading apostrophe | `test_the_export_is_an_attachment_a_spreadsheet_cannot_run`, `test_cells_that_look_like_formulas_are_quoted` |
 | Clickjacking, cross-origin windows | `frame-ancestors 'none'`, `X-Frame-Options: DENY`, `Cross-Origin-Opener-Policy` and `-Resource-Policy: same-origin` | `test_every_reply_carries_the_security_headers` (all seven headers on every kind of reply, the 503 and malformed requests included), `test_the_turned_away_reply_carries_the_security_headers` |
 | Reading files through the server | static files from an in-memory map of packaged resources, looked up by exact path: no traversal, no directory listing; no file contents are ever served; Status serves counts only (suggested categories the model wrote are masked when not configured); sensitive files are never listed with details, only counted | `test_nothing_outside_the_packaged_files_is_served`, `test_status_holds_counts_and_never_a_file_name`, `test_sensitive_files_never_appear_in_search`, `test_activity_shows_each_run_and_what_it_moved` |
@@ -494,6 +510,10 @@ Many local connections that reconnect as soon as they are dropped can still
 crowd out the session's: with 200 of them, about 1 request in 10 from the
 session is dropped (with 16 or 100, none). A client that asks for a large
 reply and never reads it holds a request thread for up to 10 s per write.
+A search by meaning holds its request thread while it waits for the
+embeddings server, up to 5 s in the interface (`views.EMBED_TIMEOUT`, less
+when `search.semantic.timeout_seconds` is lower); a few at once can take the
+8 request threads for that long.
 With `--no-browser` the printed link stays in the terminal and, once opened,
 in the browser's history; it is useless once used. Anything running as the
 user can read the handoff file in the moment before the browser uses it, as
