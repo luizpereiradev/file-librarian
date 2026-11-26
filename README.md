@@ -319,7 +319,10 @@ Its menu is short: a line saying how things are ("2 files to review, 1
 failed", "Organizing…", "Nothing pending"), when the next run is, **Open
 flib** (the interface's Status page), **Review (n)** and **Due (n)** when
 there is something there, **Organize now** (exactly what the daily run does;
-greyed out while a run is going on), **Settings…** and **Quit**. Each
+with a run going on, it says so and does nothing), **Settings…** and **Quit**.
+If a run is killed (a crash, a power cut), the menu says "The last run did
+not finish" after three hours, and sooner as soon as you open `flib status`,
+the interface or **Organize now**. Each
 "open" entry is `flib ui --open PAGE`; when the interface is already open,
 it goes to that page in it.
 

@@ -31,7 +31,11 @@ All notable changes to this project are documented here. The format follows
   hostile file can only show the defaults), and a click runs only flib's own
   interpreter, fixed when it was built, with `-I`, the words of one action
   picked by its key inside the script, a fixed minimal environment and
-  output to `/dev/null`. The agent has no `KeepAlive`: off after Quit or a
+  output to `/dev/null`. Organize now is never greyed out; a "running" left
+  by a killed run shows as "The last run did not finish" after three hours,
+  and `flib status`, the interface and `flib doctor` (which ask launchd
+  anyway) rewrite the state with the live answer. A re-install that launchd
+  refuses puts the item that was there back. The agent has no `KeepAlive`: off after Quit or a
   crash until the next login, and nothing respawns if the app is gone. The
   interface's Settings page says whether the item is installed, with the
   command for it. **Organize now** starts the daily agent

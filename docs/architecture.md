@@ -728,9 +728,10 @@ signed ad hoc, with no compiler and nothing downloaded. Three parts:
   is started by the LaunchAgent `<label>.menu` (`RunAtLoad`, `Aqua`,
   `Interactive`, output to `/dev/null`; no `KeepAlive`, like flib's other
   agents, so nothing respawns if the app is gone), written through
-  `scheduler.install_agent`. `install` builds, writes the first state, loads
-  the agent and only then records `target.json`; a launchd refusal unloads
-  it again. `refresh` rebuilds when the stamp (version, script, icons) no
+  `scheduler.install_agent`. `install` builds the new app aside and swaps
+  it in whole, writes the first state, loads the agent and only then records
+  `target.json`; if launchd refuses, the app, agent and record that were
+  there are put back (or, on a first install, nothing is left loaded). `refresh` rebuilds when the stamp (version, script, icons) no
   longer matches and loads the agent again, so the new build runs.
 - **`menubar_state.py`** writes `state.json` in
   `~/Library/Application Support/file-librarian/menu/` (a folder of the
@@ -750,7 +751,8 @@ signed ad hoc, with no compiler and nothing downloaded. Three parts:
   CoreFoundation (`ctypes`): it reaches only a running applet and cannot
   start one. Measured with the test fakes: 58 ms per lock release before,
   0.6 ms after (0.7 ms when it writes).
-- **The applet** reads the state on that notification, on a 30 s idle timer
+- **The applet** reads the state on that notification (at most once a
+  second: a sooner one is put off, not dropped), on a 30 s idle timer
   (only when the file's date or size changed) and when its menu opens,
   checks it, shows it, and writes `seen.json` (what it shows and its pid) for
   `flib doctor`. A click runs `NSTask` with the fixed interpreter, `-I -m
@@ -775,7 +777,7 @@ itself.
 | Threat | Defence | Tested by |
 | --- | --- | --- |
 | A hostile state file runs something, or chooses what runs | the state is data: only text and counts are read from it, and nothing it holds reaches `launchAction`; the program and every argument are fixed in the source at build time (`ACTIONS`: fixed words, checked by a pattern before the source is written); no shell, no `do shell script`, no `PATH` lookup; `-I` keeps the working folder and `PYTHON*` variables off Python's path, the working folder is `/`, and the environment is fixed (no `DYLD_*`) | `test_the_actions_are_the_only_things_a_click_runs`, `test_an_action_with_other_words_is_refused`, `test_the_actions_open_pages_flib_ui_knows` |
-| Another program calls the applet's handlers (Apple events) | no handler takes words that reach `NSTask`: `launchAction` takes a key, `actionArguments` matches it exactly (case, width, punctuation) against the table and returns fixed words or nothing; `NSAppleScriptEnabled` off and no document or URL type; macOS asks the user before another app may send Apple events at all | `test_the_actions_are_the_only_things_a_click_runs`, `test_the_real_applet_runs_only_the_exact_keys_of_its_table` (opt-in), `test_build_makes_a_signed_stay_open_app` |
+| Another program calls the applet's handlers (Apple events) | no handler takes words that reach `NSTask`: `launchAction` takes a key, `actionArguments` matches it exactly (`isEqualToString:`, code unit by code unit) against the table and returns fixed words or nothing; `NSAppleScriptEnabled` off and no document or URL type; macOS asks the user before another app may send Apple events at all | `test_the_actions_are_the_only_things_a_click_runs`, `test_the_real_applet_runs_only_the_exact_keys_of_its_table` (opt-in), `test_build_makes_a_signed_stay_open_app` |
 | A path that breaks out of its literal | every fixed path is written by `literal`: only printable ASCII inside quotes, `\` and `"` escaped, anything else as `character id N`; checked by evaluating the result back, fuzzed, and against the real compiler | `test_literal_evaluates_to_exactly_the_text`, `test_literal_fuzzed`, `test_the_script_fixes_the_paths_as_literals`, `test_the_real_applet_gets_the_fixed_paths_exactly` (opt-in: `FLIB_TEST_MENU=1`) |
 | A malformed, oversized, ambiguous or future state file | a regular file of at most 4 KiB (a link is not followed), plain ASCII matching `FORM` as a whole (one flat object; values a printable string with only `\uXXXX` escapes, a whole number 0..9999, `true` or `false`), each key once, known keys only (exact), `version` 1, else the defaults; then the pose from the fixed set (exact), counts not booleans, texts at most 80 UTF-16 units with no control, format, bidi or line-break character, `running` a boolean. `menubar.sanitize` is the same contract in Python; anything either side would read differently (a key twice, a trailing comma, a lone surrogate, a long decimal, deep nesting, a full-width letter, a byte order mark) is outside `FORM` and gives the defaults on both. The opt-in test runs the compiled applet's parser on the same corpus | `test_sanitize_keeps_only_what_the_contract_allows`, `test_the_parser_constants_come_from_python`, `test_the_real_applet_parses_the_state_as_the_contract_says` (opt-in) |
 | File names on the screen | the state holds counts and fixed sentences only; no name, folder or category is ever written; `seen.json` likewise | `test_a_run_shows_busy_then_what_waits`, `test_read_seen_checks_what_the_applet_wrote` |
@@ -795,11 +797,16 @@ ad hoc identity changes when the applet is rebuilt. A pid left in a lock file
 by a process that died can be reused by an unrelated process, which shows as
 busy until the next change. The due counts change with the date, which
 flib writes only when something else happens (the daily run, at least).
-The menu's next-run line reads the schedule's plists, not launchd, so it
-does not say when an agent is installed but not loaded (`flib status` does).
-After a crash the item stays off until the next login or `flib menu`. Any
-program of the user's can post the notification; it only makes the applet
-read the file again. macOS may hide the item when the menu bar is crowded,
+The menu's next-run line, on the hot path, reads the schedule's plists, not
+launchd; `flib status`, the interface, `flib doctor` and `flib schedule`,
+which ask launchd anyway, rewrite it with the real answer (and drop a
+"running" left by a killed run, since running is the live lock holder).
+The applet itself shows a "running" older than three hours
+(`menubar.STALE_SECONDS`) as a run that did not finish, and never greys out
+Organize now, which heals it too. After a crash the item stays off until the
+next login or `flib menu`. Any program of the user's can post the
+notification; it only makes the applet read the file again, at most once a
+second. macOS may hide the item when the menu bar is crowded,
 or when the user turns it off under Menu Bar settings; flib cannot see that.
 
 ## The first run

@@ -186,7 +186,12 @@ The applet shipped as decided. Where it differs from the plan above:
   the time `open` runs); a notification reaches only a running applet. flib
   posts it through CoreFoundation with `ctypes`; the applet observes it with
   `NSNotificationSuspensionBehaviorDeliverImmediately`, since it is never the
-  active app.
+  active app, and refreshes at most once a second from it (a sooner one is
+  put off with `performSelector:afterDelay:`).
+- **A killed run** leaves "running" in the state. The applet shows a
+  "running" older than three hours as "The last run did not finish", never
+  greys out Organize now, and `flib status`, the interface and `flib doctor`
+  rewrite the state from the live lock holder.
 - **No `KeepAlive`.** Like flib's other agents, the item's agent only has
   `RunAtLoad`: after a crash it stays off until the next login or `flib
   menu`, and if flib is uninstalled without `flib menu --remove`, launchd
