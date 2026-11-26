@@ -168,9 +168,17 @@ def correction_examples(rows: Iterable[CorrectionRow], config: Config) -> tuple[
     """
     limit = config.provider.max_examples
     chosen: list[Correction] = []
+    batches: set[tuple[object, ...]] = set()
     for row in rows:
         if len(chosen) >= limit:
             break
+        if row.run_id is not None:
+            # One run that fixed many files the same way ("accept all" in the
+            # interface) teaches one thing: one example, not a window full of it.
+            same = (row.run_id, row.field, row.old_value, row.new_value, row.extension)
+            if same in batches:
+                continue
+            batches.add(same)
         names = {row.original_name, row.current_name}
         if row.field == "name" and row.old_value:
             names.add(row.old_value)

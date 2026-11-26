@@ -118,9 +118,16 @@ def run_undo_plan(
     return ops, changes
 
 
-def file_undo_plan(store: Store, path: Path) -> OperationRow:
-    """The move ``undo_file`` would revert for ``path``; raises ``NothingToUndoError``."""
-    row = store.file_by_current_path(path.expanduser().absolute())
+def file_undo_plan(store: Store, path: Path, *, file_id: int | None = None) -> OperationRow:
+    """The move ``undo_file`` would revert for ``path`` (or the row ``file_id``, as the
+    interface names it: several rows can share a path); raises ``NothingToUndoError``."""
+    if file_id is None:
+        row = store.file_by_current_path(path.expanduser().absolute())
+    else:
+        try:
+            row = store.file_by_id(file_id)
+        except LookupError:
+            row = None
     if row is None:
         raise NothingToUndoError(f"{path} is not a file flib moved")
     op = store.last_done_operation(row.id)
@@ -129,8 +136,10 @@ def file_undo_plan(store: Store, path: Path) -> OperationRow:
     return op
 
 
-def undo_file(store: Store, path: Path, *, config: Config | None = None) -> UndoReport:
-    op = file_undo_plan(store, path)
+def undo_file(
+    store: Store, path: Path, *, config: Config | None = None, file_id: int | None = None
+) -> UndoReport:
+    op = file_undo_plan(store, path, file_id=file_id)
     row = store.file_by_id(op.file_id)
     report = UndoReport()
     _undo_one(store, op, report, config)
@@ -147,7 +156,7 @@ def _undo_one(store: Store, op: OperationRow, report: UndoReport, config: Config
     src, dst = op.src_path, op.dst_path
     row = store.file_by_id(op.file_id)
     if not os.path.lexists(dst):
-        report.skipped.append((dst, "no longer there (moved or deleted by hand)"))
+        report.skipped.append((dst, gone_reason(store, op)))
         return
     same = check_content(dst, row.sha256)
     if same is None:
@@ -190,6 +199,15 @@ def _undo_one(store: Store, op: OperationRow, report: UndoReport, config: Config
     report.restored.append((dst, src))
 
 
+def gone_reason(store: Store, op: OperationRow) -> str:
+    """Why the item a move put at ``op.dst_path`` is not there: a later move of flib's
+    took it elsewhere, or it was moved or deleted by hand."""
+    later = store.last_done_operation(op.file_id)
+    if later is not None and later.id != op.id:
+        return f"moved again since, by run {later.run_id} (undo that first)"
+    return "no longer there (moved or deleted by hand)"
+
+
 def _journal(store: Store, op: OperationRow, key: str) -> Journal:
     """An undo's copy phases go on the entry it reverts, which keeps its paths.
 
@@ -219,6 +237,7 @@ def record_restored(store: Store, op: OperationRow, config: Config | None) -> li
     status, category = op.previous if op.previous is not None else _restored_place(config, src)
     with store.transaction():
         store.set_operation(op.id, OperationStatus.UNDONE)
+        store.drop_corrections(op.id)  # an undone fix teaches nothing
         if identity is not None:
             store.set_file_identity(op.file_id, identity)
         if status is FileStatus.SKIPPED:

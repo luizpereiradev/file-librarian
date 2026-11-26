@@ -744,10 +744,16 @@ def _settle_relocation(
 
 def _recover_rename(store: Store, op: OperationRow, row: FileRow, config: Config | None) -> None:
     # Done if the journaled destination is the very inode we moved (a rename keeps
-    # it, even if the file was edited since), or holds exactly the content we moved.
-    # Its exact name must be there: on a case-insensitive volume "A.pdf" opens "a.pdf".
+    # it, even if the file was edited since). The content is a fallback only when
+    # the inode cannot tell: an entry journaled without it, or a source that is gone.
+    # A name is journaled before the exclusive rename tries it, so a copy with the
+    # same bytes already there (the user's) must never pass for the moved file while
+    # the source is still in place (#115). Its exact name must be there: on a
+    # case-insensitive volume "A.pdf" opens "a.pdf".
+    by_content = op.src_identity is None or not os.path.lexists(op.src_path)
     moved = has_exact_name(op.dst_path) and (
-        _same_inode(op.dst_path, op.src_identity) or _holds_now(op.dst_path, row.sha256)
+        _same_inode(op.dst_path, op.src_identity)
+        or (by_content and _holds_now(op.dst_path, row.sha256))
     )
     if _reprocessed(store, op):
         _settle_relocation(store, op, config, op.dst_path if moved else None)
