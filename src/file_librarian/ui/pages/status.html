@@ -13,7 +13,7 @@
 <a class="skip" href="#main">Skip to content</a>
 <header class="top">
   <a class="brand" href="/status"><img src="/static/icon.png" alt="" width="28" height="28"><span>file-librarian</span></a>
-  <nav aria-label="Pages"><a href="/status" aria-current="page">Status</a><span class="soon" aria-disabled="true">Review<span class="sr-only"> (coming soon)</span></span><a href="/search">Search</a><a href="/activity">Activity</a><a href="/due">Due</a><span class="soon" aria-disabled="true">Settings<span class="sr-only"> (coming soon)</span></span></nav>
+  <nav aria-label="Pages"><a href="/status" aria-current="page">Status</a><a href="/review">Review</a><a href="/search">Search</a><a href="/activity">Activity</a><a href="/due">Due</a><span class="soon" aria-disabled="true">Settings<span class="sr-only"> (coming soon)</span></span></nav>
   <form class="end" method="post" action="/session/end"><input type="hidden" name="csrf" value="{{csrf}}"><button type="submit" class="quiet">End session</button></form>
 </header>
 <main id="main" tabindex="-1">
@@ -22,10 +22,11 @@
   <noscript><p class="lead">This page shows its counts with JavaScript. <code>flib status</code> in Terminal shows the same.</p></noscript>
   <section class="cards" id="cards" hidden>
     <article class="card">
-      <h2>Review</h2>
+      <h2><a href="/review">Review</a></h2>
       <p class="number" id="review-total">0</p>
       <p class="note" id="review-note"></p>
       <ul class="groups" id="review-groups"></ul>
+      <p class="note" id="review-go" hidden><a href="/review">Go through them</a></p>
     </article>
     <article class="card">
       <h2>Failed</h2>

@@ -103,6 +103,7 @@
       oldest === null ? "Nothing to review." : oldest === 0 ? "The oldest since today." :
       "The oldest for " + plural(oldest, "day") + ".";
     fillList($("review-groups"), reviewLines(data.review.groups));
+    $("review-go").hidden = data.review.total === 0;
 
     $("failed-total").textContent = data.failed.total;
     fillList(

@@ -80,8 +80,8 @@ NAV = (
     ("due", "Due"),
     ("settings", "Settings"),
 )
-SOON = frozenset({"review", "settings"})
-"""Pages not here yet (#115, #117): shown greyed out, never as a link."""
+SOON = frozenset({"settings"})
+"""Pages not here yet (#117): shown greyed out, never as a link."""
 
 
 def nav(current: str) -> Markup:

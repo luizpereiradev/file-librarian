@@ -29,7 +29,7 @@ from file_librarian import status as status_mod
 from file_librarian.cli import app
 from file_librarian.config import Config, load_config
 from file_librarian.db import store as store_mod
-from file_librarian.db.store import Store, day_start_utc
+from file_librarian.db.store import CorrectionRow, Store, day_start_utc
 from file_librarian.lock import AlreadyRunningError, instance_lock
 from file_librarian.models import Classification, FileStatus, RunMode, RunTrigger
 from file_librarian.providers.base import FatalProviderError, Usage
@@ -1220,6 +1220,31 @@ def _dump(database: Path) -> dict[str, list[tuple[object, ...]]]:
     return out
 
 
+def _code_before_0019(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Corrections as the code wrote and read them before 0019 (no ``operation_id``)."""
+
+    def add_correction(
+        self: Store, file_id: int, field: str, old: str | None, new: str, **_: object
+    ) -> None:
+        self.conn.execute(
+            "INSERT INTO corrections (file_id, field, old_value, new_value, created_at)"
+            " VALUES (?, ?, ?, ?, '2026-01-01T00:00:00+00:00')",
+            (file_id, field, old, new),
+        )
+
+    def current_corrections(self: Store) -> list[CorrectionRow]:
+        rows = self.conn.execute(
+            "SELECT c.field, c.old_value, c.new_value, f.extension, f.is_unit, f.description,"
+            " f.original_name, f.current_name, NULL AS run_id"
+            " FROM corrections c JOIN files f ON f.id = c.file_id"
+        )
+        return [CorrectionRow.from_row(r) for r in rows]
+
+    monkeypatch.setattr(Store, "add_correction", add_correction)
+    monkeypatch.setattr(Store, "current_corrections", current_corrections)
+    monkeypatch.setattr(Store, "drop_corrections", lambda self, operation_id: 0)
+
+
 def test_migration_0018_keeps_a_lived_in_index_unchanged(
     downloads: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1229,6 +1254,8 @@ def test_migration_0018_keeps_a_lived_in_index_unchanged(
     path = write_config(tmp_path, downloads, extra=cats)
     cfg = load_config(path)
     before = [m for m in store_mod.load_migrations() if m.version < 18]
+    upto = [m for m in store_mod.load_migrations() if m.version <= 18]
+    _code_before_0019(monkeypatch)  # the code this index was written with
     with monkeypatch.context() as patch:
         patch.setattr("file_librarian.db.store.load_migrations", lambda: before)
         put(downloads, "a.txt", b"aaa")
@@ -1261,6 +1288,7 @@ def test_migration_0018_keeps_a_lived_in_index_unchanged(
             assert store.schema_version == 17
             store.start_run(RunMode.RUN, RunTrigger.SCHEDULE)  # crashed, never finished
         snapshot = _dump(cfg.database)
+    monkeypatch.setattr("file_librarian.db.store.load_migrations", lambda: upto)
     with Store.open(cfg.database) as store:
         assert store.schema_version == 18
         assert store.conn.execute("PRAGMA foreign_key_check").fetchall() == []

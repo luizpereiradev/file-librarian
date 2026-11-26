@@ -4,7 +4,8 @@ Each page reads through the same modules as the command line and the MCP
 server (``activity``, ``search``, ``due``) and is built on the server with
 ``markup``, so it reads without JavaScript and every value from the index is
 escaped. Nothing here writes: the index is opened read-only, never created
-or migrated, and no route moves, renames or deletes anything.
+or migrated. The forms that change something (Due's Mark done, Activity's
+Undo links) go to ``actions`` through the server's route table (#115).
 
 - **Activity** (``GET /activity?days=7|30|90``): runs by day, what each moved
   where, duplicates set aside, sensitive files left in place (a count only),
@@ -125,12 +126,24 @@ def shown(name: str) -> str:
     return "".join(c for c in name if unicodedata.category(c) != "Cf")
 
 
+def filename(name: str) -> Markup:
+    """A file name on a page: as text (``shown``), isolated and left to right (``<bdi
+    dir="ltr">``), so a right-to-left name keeps its order and its neighbours theirs."""
+    return el("bdi", shown(name), class_="name", dir="ltr")
+
+
 def short(path: Path, config: Config) -> str:
     """``path`` from the library or an input folder, as ``flib`` prints it (``shown``)."""
     for root in (config.output_root, *config.input_paths):
         if path.is_relative_to(root):
             return shown(str(path.relative_to(root)))
     return shown(str(path))
+
+
+def folder(path: Path, config: Config) -> str:
+    """The folder ``path`` is in, as the pages show it: ``Images/``, ``Downloads/``."""
+    where = short(path.parent, config)
+    return (where + "/") if where != "." else (shown(path.parent.name) + "/")
 
 
 def local_time(instant: str | None) -> str:
@@ -344,11 +357,19 @@ def _run(item: activity_mod.RunActivity, config: Config) -> Markup:
     moves = [_move(move, config) for move in item.moves]
     if item.more:
         moves.append(el("li", f"and {item.more} more", class_="note"))
+    undo = None
+    if item.undoable:
+        undo = el(
+            "p",
+            el("a", "Undo this run…", href=f"/undo?run={run.id}", aria_label=f"Undo run {run.id}"),
+            class_="note",
+        )
     return el(
         "article",
         el("h3", title, " ", el("span", f"run {run.id}", class_="muted")),
         *facts,
         el("ul", *moves, class_="moves") if moves else None,
+        undo,
         class_="run",
     )
 
@@ -383,14 +404,20 @@ def _move(move: activity_mod.Move, config: Config) -> Markup:
         tags.append(el("span", "undone", class_="badge warn"))
     elif move.status is not OperationStatus.DONE:
         tags.append(el("span", move.status.value, class_="badge warn"))
+    undo = None
+    if move.last and move.status is OperationStatus.DONE:
+        name = shown(move.destination.name)
+        undo = el("a", "Undo…", href=f"/undo?file={move.file_id}", aria_label=f"Undo: {name}")
     return el(
         "li",
-        el("span", shown(move.source.name), class_="name"),
+        filename(move.source.name),
         el("span", " → ", aria_hidden="true"),
         el("span", "to ", class_="sr-only"),
         el("span", _destination(move, config), class_="where"),
         " ",
         *tags,
+        " " if undo else None,
+        undo,
     )
 
 
@@ -876,13 +903,11 @@ def _hit(hit: SearchHit, file_id: int | None, config: Config, csrf: str) -> Mark
         tags.append(el("span", "missing: moved by hand?", class_="badge warn"))
     where = short(path.parent, config)
     details: list[Markup | None] = [
-        el("div", el("strong", shown(path.name), class_="name"), " ", *tags, class_="hit-head"),
+        el("div", el("strong", filename(path.name)), " ", *tags, class_="hit-head"),
         el("div", where + "/" if where != "." else _input_of(path, config) + "/", class_="where"),
     ]
     if hit.original_name != path.name:
-        details.append(
-            el("div", "was ", el("span", shown(hit.original_name), class_="name"), class_="note")
-        )
+        details.append(el("div", "was ", filename(hit.original_name), class_="note"))
     if hit.duplicate_of is not None:
         details.append(
             el("div", "duplicate of ", short(Path(hit.duplicate_of), config), class_="note")
@@ -1038,8 +1063,25 @@ def _plain_error(code: int, text: str) -> tuple[int, bytes, str]:
 # --- Due -------------------------------------------------------------------------------
 
 
-def due_page(config: Config, csrf: str, query: str) -> Page:
-    params = query_params(query, frozenset({"within", "overdue", "all"}))
+DUE_PARAMS = frozenset({"within", "overdue", "all"})
+
+
+def due_window(fields: dict[str, list[str]]) -> str:
+    """The Due window a form came from (``within``, ``overdue``, ``all``), checked as
+    the page's address is, for the address to go back to; ``BadRequest`` otherwise."""
+    within = _choice(fields, "within", tuple(code for code, _ in WITHIN))
+    overdue = _choice(fields, "overdue", ("1",))
+    show_all = _choice(fields, "all", ("1",))
+    if overdue and within is not None:
+        raise BadRequest
+    parts = [("overdue", "1")] if overdue else [("within", within)] if within else []
+    parts += [("all", "1")] if show_all else []
+    return "&".join(f"{k}={v}" for k, v in parts)
+
+
+def due_page(config: Config, csrf: str, query: str, *, notice: Markup | None = None) -> Page:
+    """``notice``: what Mark done or Open again just did (``server`` keeps it)."""
+    params = query_params(query, DUE_PARAMS)
     within = _choice(params, "within", tuple(code for code, _ in WITHIN))
     overdue = _choice(params, "overdue", ("1",)) == "1"
     show_all = _choice(params, "all", ("1",)) == "1"
@@ -1050,6 +1092,8 @@ def due_page(config: Config, csrf: str, query: str) -> Page:
     links = [(text, f"/due?within={code}{extra}", code == chosen) for code, text in WITHIN]
     links.append(("Overdue", f"/due?overdue=1{extra}", overdue))
     window = "overdue=1" if overdue else f"within={chosen}"
+    keep = [("overdue", "1")] if overdue else [("within", chosen or "7d")]
+    keep += [("all", "1")] if show_all else []
     toggle = (
         el("a", "Hide those marked done", href=f"/due?{window}")
         if show_all
@@ -1062,6 +1106,7 @@ def due_page(config: Config, csrf: str, query: str) -> Page:
             "Bills and other documents with a due date the AI read in them; nothing is guessed.",
             class_="lead",
         ),
+        notice,
         chips(links, "Window"),
         el("p", toggle, class_="note"),
     ]
@@ -1083,7 +1128,7 @@ def due_page(config: Config, csrf: str, query: str) -> Page:
     if not found.items:
         parts.append(message("Nothing due in this window."))
     else:
-        parts.append(_due_table(found, config, csrf))
+        parts.append(_due_table(found, config, csrf, _pins(config, found), keep))
         if found.totals:
             parts.append(totals_table(found.totals, "Total open, per currency"))
         if found.without_amount:
@@ -1106,14 +1151,51 @@ def due_page(config: Config, csrf: str, query: str) -> Page:
     return HTTPStatus.OK, layout("Due", "due", join(parts), csrf)
 
 
-def _due_actions(item: due_mod.DueItem, csrf: str) -> Markup | None:
+def _pins(config: Config, found: due_mod.DueList) -> dict[int, str]:
+    """Each listed document's state, for Mark done and Open again (``actions.file_pin``)."""
+    from file_librarian.ui.actions import file_pin
+
+    try:
+        with read_index(config) as store:
+            rows = store.files_by_ids([item.file_id for item in found.items])
+    except Unreadable:
+        return {}
+    return {file_id: file_pin(row) for file_id, row in rows.items()}
+
+
+def _due_actions(
+    item: due_mod.DueItem, csrf: str, pin: str | None, keep: list[tuple[str, str]]
+) -> Markup | None:
+    """Open, Show in Finder, and Mark done (or Open again, for one marked done here):
+    ``flib fix --done`` / ``--not-done``, journaled; Undo reverts it."""
     if not item.exists:
         return None
     name = shown(item.path.name)
-    return file_actions(item.file_id, name, csrf, can_open=openable(item.path))
+    settle = None
+    if pin is not None and item.done_by != "tag":
+        label = "Open again" if item.done else "Mark done"
+        settle = el(
+            "form",
+            csrf_field(csrf),
+            el("input", type="hidden", name="id", value=item.file_id),
+            el("input", type="hidden", name="pin", value=pin),
+            el("input", type="hidden", name="done", value="0" if item.done else "1"),
+            *(el("input", type="hidden", name=k, value=v) for k, v in keep),  # the window
+            el("button", label, type="submit", class_="small quiet", aria_label=f"{label}: {name}"),
+            method="post",
+            action="/due/settle",
+            class_="inline",
+        )
+    return join(file_actions(item.file_id, name, csrf, can_open=openable(item.path)), settle)
 
 
-def _due_table(found: due_mod.DueList, config: Config, csrf: str) -> Markup:
+def _due_table(
+    found: due_mod.DueList,
+    config: Config,
+    csrf: str,
+    pins: dict[int, str],
+    keep: list[tuple[str, str]],
+) -> Markup:
     rows = []
     for item in found.items:
         when = due_mod.relative(item.days)
@@ -1144,12 +1226,12 @@ def _due_table(found: due_mod.DueList, config: Config, csrf: str) -> Markup:
                 el("td", item.kind or "-", data_label="Kind"),
                 el(
                     "td",
-                    el("span", shown(item.path.name), class_="name"),
+                    filename(item.path.name),
                     el("div", short(item.path.parent, config) + "/", class_="where"),
                     class_="file",
                     data_label="File",
                 ),
-                el("td", _due_actions(item, csrf), class_="buttons"),
+                el("td", _due_actions(item, csrf, pins.get(item.file_id), keep), class_="buttons"),
                 class_="overdue" if item.overdue else None,
             )
         )

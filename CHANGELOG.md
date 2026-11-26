@@ -8,6 +8,48 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `flib ui` has a **Review** page with **Undo** (#115), the first part of the
+  interface that moves files. Review lists the files waiting in the review
+  folder, by reason and suggested category, the biggest group first; each
+  has Accept (its suggestion), another category and/or a new name (`flib
+  fix`: flib learns from it), Put back where it was (`flib undo` for that
+  file) and Open / Show in Finder. A group with a configured suggestion has
+  Accept all, which lists the files first (at most 100) and moves them as one
+  run (new `fix.fix_files`) that one Undo reverts. Undo, for a run or a file,
+  from Review's outcome or from Activity, shows what it puts back and where
+  before it does anything, and refuses what `flib undo` refuses, in its
+  words. Due has Mark done / Open again (`flib fix --done` / `--not-done`).
+  Every action is a POST through the route table (cookie, exact origin,
+  CSRF), takes the instance lock for that action (a run in progress is said,
+  and nothing is done), names files by index id with a pin of the state the
+  page showed (a file changed, undone or handled in another tab since is
+  refused, never acted on), and ends in a redirect, so reload, Back and
+  Forward never repeat it. Categories come only from the configuration;
+  names go through `flib fix`'s sanitiser; nothing is overwritten; sensitive
+  files are never listed or acted on. The Status page and the menu link
+  Review; `flib ui --open review`. A run's counts after `flib fix` now come
+  from its journal.
+- After the review of #115: undoing a `flib fix` now deletes the corrections
+  that fix recorded (new column `corrections.operation_id`, migration 0019),
+  so an undone fix is never sent to the classifier as an example and never
+  hides an older correction; a number added only because a name was taken
+  (`a-2.pdf`) is no longer learned as a name; the corrections of one run
+  that fixed many files the same way are sent as one example. `flib undo`
+  says "moved again since, by run N (undo that first)" instead of blaming a
+  move by hand when a later run took the file elsewhere. Recovery no longer
+  takes a copy with the same bytes, already at the name a crashed move had
+  journaled, for the moved file while the source is still in place. The
+  interface's undo pages list what will be skipped and why before anything
+  is done, and Activity offers Undo only where something can go back. File
+  names are isolated (`<bdi dir="ltr">`), and on a phone the menu wraps
+  instead of widening the page.
+  The undo pages and `flib undo` now share one judgement of what would be
+  skipped and why (`undo.skip_reason`): a file back where a move put it, with
+  the same content, can go back whatever moved it in between; a move a
+  failure left half-recorded is judged as recovery will leave it; a missing
+  original folder outside the library and a file locked right now are said
+  before anything is done. Recovery finds a moved file that was saved anew
+  (new inode, same bytes) even when a new file took its old name.
 - `flib ui` has Search, Activity and Due pages (#114), read-only and
   readable without JavaScript. **Search** is `flib search` in a form:
   category and kind chips, the other filters under "More filters", each

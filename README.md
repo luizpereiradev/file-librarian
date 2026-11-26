@@ -211,6 +211,19 @@ see [Troubleshooting](docs/troubleshooting.md#no-notification-appears).
 Mac. It reads the same index as the command line:
 
 - **Status**: the counts of `flib status`.
+- **Review**: the files waiting in the review folder, grouped by why they
+  are there and what the AI suggested. For each one: **Accept** the
+  suggestion, pick **another category** or a **new name** (the same as
+  `flib fix`, so flib learns from it), **Put back where it was** (`flib undo`
+  for that file: back in Downloads, where later runs leave it), and Open or
+  Show in Finder to look first. A group with a suggestion has **Accept all**,
+  which lists the files before moving them (at most 100 at a time, never one
+  missing on disk), as one run that one Undo reverts.
+- **Undo**: after each action, and for each run and move on Activity. It
+  shows what will be put back, and where, and what will be skipped and why
+  (moved again by a later run, edited since, its old place taken), before
+  doing anything; it refuses what `flib undo` refuses, with the same reason.
+  Undoing a correction also makes flib forget what it learned from it.
 - **Search**: `flib search` with its filters (category and kind chips, the
   dates, the issuer, amounts, the due date, the period), Open and Show in
   Finder for each match, totals per currency as `flib search --sum` adds them
@@ -220,15 +233,22 @@ Mac. It reads the same index as the command line:
   moved where, duplicates set aside, sensitive files left in place (counted,
   never named), a wait for the Mac to be unlocked, and the cost.
 - **Due**: `flib due`, with its window (7 days to 3 months, or overdue) and
-  totals per currency.
+  totals per currency, and **Mark done** / **Open again** (`flib fix --done`
+  / `--not-done`).
 
-These pages only read, and work without JavaScript. A search goes in the
-form, not the address, and Back and Forward work. Review and Settings are
-in the menu, greyed out, until they arrive.
+The pages work without JavaScript. A search goes in the form, not the
+address, and Back and Forward work: they never repeat an action. Every
+change goes through the same code, lock and journal as the command line,
+so `flib undo` reverts it too. If a run is going on, an action says so and
+does nothing; if a file changed since the page was shown (moved, undone,
+handled in another tab), it is refused, never acted on. Nothing is ever
+overwritten: a taken name gets the next free number. Sensitive files are
+never listed or acted on. Settings is in the menu, greyed out, until it
+arrives.
 
 ```sh
 flib ui                  # opens the default browser
-flib ui --open due       # starts on another page: status, search, activity, due
+flib ui --open review    # starts on another page: status, review, search, activity, due
 flib ui --no-browser     # prints a one-time link instead
 flib ui --port 8765      # a fixed port (default: a free one)
 ```
@@ -379,7 +399,7 @@ Every command takes `--config PATH` (`-c`); without it, flib reads
 | `flib schedule [--at HH:MM] [--mode daily\|watch\|both] [--status \| --remove \| --refresh] [--no-save-key] [--no-check]` | Run every day, or as files arrive, via launchd, with an access check ([Run it every day](#run-it-every-day)) |
 | `flib inspect FILE... [--json]` | Show hash, size and download origin (no hash for a file only in iCloud), and for an indexed file its status, category, why it is in review, the name choice and what the AI read in it (kind, issuer, amount, dates, period) |
 | `flib mcp` | Local MCP server for AI assistants ([Use it from Claude](#use-it-from-claude)) |
-| `flib ui [--open PAGE] [--no-browser] [--port N]` | The interface in your browser, served on 127.0.0.1 while in use: Status, Search, Activity and Due ([Interface](#interface)) |
+| `flib ui [--open PAGE] [--no-browser] [--port N]` | The interface in your browser, served on 127.0.0.1 while in use: Status, Review (with undo), Search, Activity and Due ([Interface](#interface)) |
 | `flib eval [--provider NAME] [--model M] [--language en\|pt-BR] [--limit N] [--json] [--out FILE] [--compare FILE]` | Measure classification quality on a built-in synthetic corpus, never touching your files ([Measuring quality](#measuring-quality)) |
 | `flib doctor [--stdout \| -o PATH] [--format markdown] [--logs N]` | A redacted diagnostics report for bug reports ([Troubleshooting](#troubleshooting)) |
 | `flib --version` | Print the version |

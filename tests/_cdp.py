@@ -159,8 +159,17 @@ class Tab:
         return result["result"].get("value")
 
     def wait_for(self, condition: Callable[[], bool], timeout: float = 15.0) -> None:
+        """Until ``condition`` holds. A script run while the tab is between two documents
+        fails ("Inspected target navigated or closed"): that is "not yet", not an error."""
+
+        def holds() -> bool:
+            try:
+                return condition()
+            except RuntimeError:
+                return False
+
         deadline = time.monotonic() + timeout
-        while not condition():
+        while not holds():
             if time.monotonic() > deadline:
                 raise TimeoutError("the page never got there")
             time.sleep(0.05)

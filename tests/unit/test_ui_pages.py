@@ -222,11 +222,11 @@ def test_each_page_is_escaped_and_has_no_inline_code(client: UiClient, path: str
 def test_the_navigation_links_the_pages_that_exist(client: UiClient) -> None:
     for path in ["/status", *PAGES]:
         page = client.get(path).text
-        for name in ("search", "activity", "due"):
+        for name in ("review", "search", "activity", "due"):
             assert f'href="/{name}"' in page, (path, name)
         parser = _Collector()
         parser.feed(page)
-        assert parser.disabled == ["Review", "Settings"], path
+        assert parser.disabled == ["Settings"], path
     assert 'aria-current="page"' in client.get("/due").text
 
 
@@ -334,7 +334,7 @@ def test_sensitive_files_never_appear_in_search(client: UiClient) -> None:
 
 def test_a_hit_says_its_old_name_its_tags_and_review(client: UiClient) -> None:
     text = search(client, q="meeting").text
-    assert 'was <span class="name">notes.txt</span>' in text
+    assert 'was <bdi class="name" dir="ltr">notes.txt</bdi>' in text
     assert "<li>&lt;tag&gt;</li>" in text
     assert "in review" in search(client, q="unsure").text
 
@@ -522,7 +522,7 @@ def test_activity_shows_each_run_and_what_it_moved(client: UiClient) -> None:
     text = client.get("/activity").text
     assert_safe(text)
     assert "by hand" in text and "run 1" in text
-    assert "power.pdf</span>" in text and ">Finance/</span>" in text  # the move's folder
+    assert "power.pdf</bdi>" in text and ">Finance/</span>" in text  # the move's folder
     assert "1 sensitive file left in place" in text
     assert "id_rsa" not in text
     assert 'aria-current="true">7 days' in text.replace('href="/activity?days=7" ', "")
@@ -1582,7 +1582,7 @@ def test_the_frame_has_a_skip_link_and_says_what_is_coming(client: UiClient) -> 
         text = client.get(path).text
         assert '<a class="skip" href="#main">Skip to content</a>' in text
         assert '<main id="main" tabindex="-1">' in text
-        assert text.count('<span class="sr-only"> (coming soon)</span>') == 2
+        assert text.count('<span class="sr-only"> (coming soon)</span>') == 1
         assert '<button type="submit" class="quiet">End session</button>' in text
 
 

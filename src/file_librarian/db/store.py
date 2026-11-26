@@ -325,6 +325,8 @@ class CorrectionRow:
     description: str | None
     original_name: str
     current_name: str
+    run_id: int | None = None
+    """The run of the fix that recorded it; ``None`` for one ``flib reconcile`` found."""
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> CorrectionRow:
@@ -337,6 +339,7 @@ class CorrectionRow:
             description=row["description"],
             original_name=str(row["original_name"]),
             current_name=str(row["current_name"]),
+            run_id=None if row["run_id"] is None else int(row["run_id"]),
         )
 
 
@@ -795,18 +798,34 @@ class Store:
         )
         return [(Path(r[0]), r[1]) for r in rows]
 
-    def add_correction(self, file_id: int, field: str, old: str | None, new: str) -> None:
+    def add_correction(
+        self,
+        file_id: int,
+        field: str,
+        old: str | None,
+        new: str,
+        *,
+        operation_id: int | None = None,
+    ) -> None:
         """A change the user made by hand; the classifier learns from these (RF-29).
 
-        The file is no longer one an input rule filed (#89): the user chose for it,
-        so ``flib reprocess`` treats it like any corrected file from now on.
+        ``operation_id``: the ``flib fix`` move that made it; undoing that move
+        deletes it (``drop_corrections``). The file is no longer one an input rule
+        filed (#89): the user chose for it, so ``flib reprocess`` treats it like any
+        corrected file from now on.
         """
         self.conn.execute(
-            """INSERT INTO corrections (file_id, field, old_value, new_value, created_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (file_id, field, old, new, _now()),
+            """INSERT INTO corrections (file_id, field, old_value, new_value, created_at,
+                                        operation_id)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (file_id, field, old, new, _now(), operation_id),
         )
         self.conn.execute("UPDATE files SET filed_by_rule = 0 WHERE id = ?", (file_id,))
+
+    def drop_corrections(self, operation_id: int) -> int:
+        """Forget what an undone move taught (#115); how many corrections went."""
+        cur = self.conn.execute("DELETE FROM corrections WHERE operation_id = ?", (operation_id,))
+        return cur.rowcount
 
     def current_corrections(self) -> list[CorrectionRow]:
         """Corrections still in effect, newest first: the last one per file and field,
@@ -814,8 +833,9 @@ class Store:
         Sensitive files are left out here; ``never_send`` is the classifier's to apply."""
         rows = self.conn.execute(
             """SELECT c.field, c.old_value, c.new_value, f.extension, f.is_unit,
-                      f.description, f.original_name, f.current_name
+                      f.description, f.original_name, f.current_name, o.run_id
                FROM corrections c JOIN files f ON f.id = c.file_id
+                    LEFT JOIN operations o ON o.id = c.operation_id
                WHERE f.status != 'sensitive'
                  AND c.id = (SELECT MAX(id) FROM corrections
                              WHERE file_id = c.file_id AND field = c.field)
@@ -1154,6 +1174,27 @@ class Store:
                 tuple(chunk),
             )
             found.update((int(r["id"]), FileRow.from_row(r)) for r in rows)
+        return found
+
+    def review_files(self, *, limit: int) -> list[FileRow]:
+        """Files in review, oldest first (the interface's Review page, #115)."""
+        rows = self.conn.execute(
+            "SELECT * FROM files WHERE status = 'review' ORDER BY processed_at, id LIMIT ?",
+            (limit,),
+        )
+        return [FileRow.from_row(r) for r in rows]
+
+    def last_done_operations(self, file_ids: Sequence[int]) -> dict[int, int]:
+        """Each file's last ``done`` operation (the one ``flib undo --file`` reverts), by id."""
+        found: dict[int, int] = {}
+        for start in range(0, len(file_ids), 500):
+            chunk = file_ids[start : start + 500]
+            rows = self.conn.execute(
+                "SELECT file_id, MAX(id) FROM operations WHERE status = 'done' "  # noqa: S608
+                f"AND file_id IN ({', '.join('?' * len(chunk))}) GROUP BY file_id",
+                tuple(chunk),
+            )
+            found.update((int(r[0]), int(r[1])) for r in rows)
         return found
 
     # --- embeddings (semantic search) -------------------------------------------------

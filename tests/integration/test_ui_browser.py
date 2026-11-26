@@ -21,6 +21,7 @@ import pytest
 
 from file_librarian import pipeline
 from file_librarian.config import Config
+from file_librarian.db.store import Store
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.ui.server import Ui
 from tests._cdp import find_browser, headless
@@ -102,6 +103,79 @@ def test_a_session_in_a_real_browser(
                 )
             )
         assert ui.wait(10) == "ended"
+    finally:
+        ui.close()
+        shutil.rmtree(profile, ignore_errors=True)
+
+
+def test_review_and_undo_in_a_real_browser(
+    loopback_network: None, downloads: Path, cfg: Config, tmp_path: Path
+) -> None:
+    """Accept a file by a real click (#115): it moves on disk; Back and Forward are
+    plain GETs that do nothing again; Undo, confirmed by a click, puts it back."""
+    assert BROWSER is not None
+    put(downloads, "shot.png", b"pixels")
+    put(downloads, "other.png", b"more pixels")
+    unsure = answer("Images", confidence=0.3)
+    pipeline.run(cfg, FakeProvider({"shot.png": unsure, "other.png": unsure}), simulate=False)
+    in_review = cfg.output_root / cfg.review_folder / "shot.png"
+    filed = cfg.output_root / "Images" / "shot.png"
+    assert in_review.exists()
+    with Store.open(cfg.database) as store:
+        shot = store.file_by_current_path(in_review).id  # type: ignore[union-attr]
+    ui = Ui(cfg, poll_seconds=0.05)
+    ui.start()
+    profile = tmp_path / "profile"
+    try:
+        handoff = ui.write_handoff()
+        with headless(BROWSER, profile) as (tab, _):
+            tab.call("Page.navigate", {"url": handoff.as_uri()})
+            tab.wait_for(lambda: tab.url() == f"{ui.origin}/status" and tab.ready())
+            tab.goto(f"{ui.origin}/review")
+            assert "2 files in review" in tab.text()
+            # Accept, by a click on the first file's button: post, redirect, get.
+            tab.click(f"form[action='/review/file']:has(input[name=id][value='{shot}']) button")
+            tab.wait_for(lambda: "/review?n=" in tab.url() and tab.ready())
+            after = tab.url()
+            assert "is now in Images." in tab.text()
+            assert filed.read_bytes() == b"pixels" and not in_review.exists()
+            # Back and Forward: no resubmission, nothing moves again.
+            tab.evaluate("history.back()")
+            tab.wait_for(lambda: tab.url() == f"{ui.origin}/review" and tab.ready())
+            # (the page may come back as it was shown; its forms carry the pin, so a
+            # second click on that old Accept would be refused, not repeated)
+            assert "in review" in tab.text() and filed.read_bytes() == b"pixels"
+            tab.evaluate("history.forward()")
+            tab.wait_for(lambda: tab.url() == after and tab.ready())
+            assert filed.read_bytes() == b"pixels"
+            # Undo: the confirmation page (a GET), then a click.
+            tab.click(".outcome a")
+            tab.wait_for(lambda: "/undo?run=" in tab.url() and tab.ready())
+            assert "shot.png" in tab.text() and filed.exists()  # nothing undone yet
+            tab.click("form.confirm button")
+            tab.wait_for(lambda: "/undo?n=" in tab.url() and tab.ready())
+            assert "1 restored" in tab.text()
+            assert in_review.read_bytes() == b"pixels" and not filed.exists()
+            tab.evaluate("location.reload()")
+            tab.wait_for(lambda: "/undo?n=" in tab.url() and tab.ready())
+            assert in_review.exists() and not filed.exists()
+            # At 390 px no page scrolls sideways, and every menu item is in view.
+            tab.call(
+                "Emulation.setDeviceMetricsOverride",
+                {"width": 390, "height": 844, "deviceScaleFactor": 2, "mobile": True},
+            )
+            for page in ("status", "review", "search", "activity", "due", f"undo?file={shot}"):
+                tab.goto(f"{ui.origin}/{page}")
+                # A phone widens its layout to fit what overflows: measure against 390.
+                wide = tab.evaluate(
+                    "Math.max(window.innerWidth, document.documentElement.scrollWidth) - 390"
+                )
+                assert wide <= 0, (page, wide)
+                hidden = tab.evaluate(
+                    "[...document.querySelectorAll('nav[aria-label=Pages] > *')]"
+                    ".filter(e => e.getBoundingClientRect().right > 390).length"
+                )
+                assert hidden == 0, (page, hidden)
     finally:
         ui.close()
         shutil.rmtree(profile, ignore_errors=True)

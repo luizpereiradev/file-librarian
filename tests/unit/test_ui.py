@@ -587,6 +587,10 @@ def test_the_launch_exchange_is_the_only_post_outside_the_route_table() -> None:
         "/search/export",
         "/files/open",
         "/files/reveal",
+        "/review/file",
+        "/review/accept",
+        "/undo",
+        "/due/settle",
     }
 
 
@@ -1831,4 +1835,4 @@ def test_the_policy_allows_no_inline_code() -> None:
 def test_the_navigation_lists_what_comes_next_disabled() -> None:
     parser = _Collector()
     parser.feed(load_pages()["status"])
-    assert parser.disabled == ["Review", "Settings"]
+    assert parser.disabled == ["Settings"]
