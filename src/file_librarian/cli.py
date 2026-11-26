@@ -1660,15 +1660,7 @@ def _install_schedule(
         )
     _ensure_key_for_schedule(cfg, save_key)
     _ensure_claude_for_schedule(cfg)
-    installed = scheduler.install(
-        when,
-        path.resolve(),
-        logs_dir(cfg.database),
-        mode=mode,
-        inputs=cfg.input_paths,
-        watch_interval_minutes=cfg.schedule.watch_min_interval_minutes,
-        watch_fallback_minutes=cfg.schedule.watch_fallback_minutes,
-    )
+    installed = scheduler.install_for(path, cfg, when, mode)
     if mode in ("daily", "both"):
         typer.echo(f"Daily run scheduled at {when} ({installed[0]}).")
         typer.echo("If the Mac is asleep then, it runs on wake.")
@@ -2457,7 +2449,8 @@ def ui(
     ] = 0,
     config: ConfigOption = None,
 ) -> None:
-    """Open the local interface in your browser: Status, Review, Search, Activity and Due.
+    """Open the local interface in your browser: Status, Review, Search, Activity, Due and
+    Settings.
 
     A server on 127.0.0.1 only, for this Mac. The browser gets a one-time
     token through a file only you can read (`--no-browser` prints a link that
@@ -2473,6 +2466,7 @@ def ui(
             browser=not no_browser,
             echo=typer.echo,
             warn=lambda line: typer.echo(line, err=True),
+            config_path=config or default_config_path(),
         )
     except ui_server.UiError as exc:
         _fatal(str(exc))

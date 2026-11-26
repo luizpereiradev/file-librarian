@@ -13,14 +13,15 @@ referrer policies. Nothing goes beyond 127.0.0.1.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from pathlib import Path
 
 import pytest
 
-from file_librarian import pipeline
-from file_librarian.config import Config
+from file_librarian import config_edit, pipeline
+from file_librarian.config import Category, Config, load_config
 from file_librarian.db.store import Store
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.ui.server import Ui
@@ -123,6 +124,11 @@ def test_review_and_undo_in_a_real_browser(
     assert in_review.exists()
     with Store.open(cfg.database) as store:
         shot = store.file_by_current_path(in_review).id  # type: ignore[union-attr]
+    # A category with the longest name a configuration takes (64 characters): its chip
+    # on Search must wrap, not widen the page (#117 browser testing).
+    long_name = Category(name=("Householdstatements" * 4)[:64])  # one word: it must break
+    assert len(long_name.name) == 64
+    cfg = cfg.model_copy(update={"categories": [*cfg.categories, long_name]})
     ui = Ui(cfg, poll_seconds=0.05)
     ui.start()
     profile = tmp_path / "profile"
@@ -164,7 +170,15 @@ def test_review_and_undo_in_a_real_browser(
                 "Emulation.setDeviceMetricsOverride",
                 {"width": 390, "height": 844, "deviceScaleFactor": 2, "mobile": True},
             )
-            for page in ("status", "review", "search", "activity", "due", f"undo?file={shot}"):
+            for page in (
+                "status",
+                "review",
+                "search",
+                "activity",
+                "due",
+                "settings",
+                f"undo?file={shot}",
+            ):
                 tab.goto(f"{ui.origin}/{page}")
                 # A phone widens its layout to fit what overflows: measure against 390.
                 wide = tab.evaluate(
@@ -176,6 +190,73 @@ def test_review_and_undo_in_a_real_browser(
                     ".filter(e => e.getBoundingClientRect().right > 390).length"
                 )
                 assert hidden == 0, (page, hidden)
+    finally:
+        ui.close()
+        shutil.rmtree(profile, ignore_errors=True)
+
+
+def test_settings_in_a_real_browser(
+    loopback_network: None, downloads: Path, tmp_path: Path, fake_launchd: Path
+) -> None:
+    """Change a setting by a real click (#117): it is in the file on disk, with its
+    comment; Back and Forward change nothing again; Restore, confirmed by a click, puts
+    the file back byte for byte."""
+    assert BROWSER is not None
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        f"inputs: [{json.dumps(str(downloads))}]\n"
+        "provider: {name: fake, model: x}\n"
+        "vision:\n  enabled: false  # images stay here\n",
+        encoding="utf-8",
+    )
+    original = path.read_bytes()
+    ui = Ui(load_config(path), poll_seconds=0.05, config_path=path)
+    ui.start()
+    profile = tmp_path / "profile"
+    try:
+        handoff = ui.write_handoff()
+        with headless(BROWSER, profile) as (tab, _):
+            tab.call("Page.navigate", {"url": handoff.as_uri()})
+            tab.wait_for(lambda: tab.url() == f"{ui.origin}/status" and tab.ready())
+            tab.click("nav a[href='/settings']")
+            tab.wait_for(lambda: tab.url() == f"{ui.origin}/settings" and tab.ready())
+            # Vision on, by a click on its box and on the section's Save.
+            tab.click("#s-reading input[name=vision]")
+            tab.click("#s-reading button[type=submit]")
+            tab.wait_for(lambda: "/settings?n=" in tab.url() and tab.ready())
+            after = tab.url()
+            assert "Saved." in tab.text() and "off → on" in tab.text()
+            assert "  enabled: true  # images stay here" in path.read_text(encoding="utf-8")
+            changed = path.read_bytes()
+            assert len(config_edit.backups(path)) == 1
+            # Back and Forward: plain GETs, nothing written again.
+            tab.evaluate("history.back()")
+            tab.wait_for(lambda: tab.url() == f"{ui.origin}/settings" and tab.ready())
+            tab.evaluate("history.forward()")
+            tab.wait_for(lambda: tab.url() == after and tab.ready())
+            assert path.read_bytes() == changed and len(config_edit.backups(path)) == 1
+            # Restore: the confirmation page (a GET), then a click.
+            tab.click(".outcome a[href='/settings/restore']")
+            tab.wait_for(lambda: tab.url() == f"{ui.origin}/settings/restore" and tab.ready())
+            assert "on → off" in tab.text() and path.read_bytes() == changed
+            tab.click("form.confirm button")
+            tab.wait_for(lambda: "/settings?n=" in tab.url() and tab.ready())
+            assert "The previous settings are back" in tab.text()
+            assert path.read_bytes() == original
+            tab.evaluate("location.reload()")
+            tab.wait_for(lambda: "/settings?n=" in tab.url() and tab.ready())
+            assert path.read_bytes() == original
+            # At 390 px neither page scrolls sideways.
+            tab.call(
+                "Emulation.setDeviceMetricsOverride",
+                {"width": 390, "height": 844, "deviceScaleFactor": 2, "mobile": True},
+            )
+            for page in ("settings", "settings/restore"):
+                tab.goto(f"{ui.origin}/{page}")
+                wide = tab.evaluate(
+                    "Math.max(window.innerWidth, document.documentElement.scrollWidth) - 390"
+                )
+                assert wide <= 0, (page, wide)
     finally:
         ui.close()
         shutil.rmtree(profile, ignore_errors=True)

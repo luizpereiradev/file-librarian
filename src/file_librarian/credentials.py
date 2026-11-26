@@ -141,6 +141,25 @@ def resolve_embeddings(semantic: SemanticConfig) -> ResolvedKey:
     return resolve_spec(spec, "auto", None)
 
 
+def key_source(config: ProviderConfig, spec: KeySpec) -> str:
+    """Where ``resolve`` would find ``spec``'s key ("environment", "keychain", "env_file"
+    or "none"), without reading it from the Keychain: for pages that only say whether a
+    key is set (#117)."""
+    source = config.api_key_source
+    if source in ("auto", "environment") and os.environ.get(spec.env_var, "").strip():
+        return "environment"
+    if source in ("auto", "keychain"):
+        try:
+            if keychain.exists(spec.account):
+                return "keychain"
+        except keychain.KeychainError:
+            pass
+    env_file = config.env_file if source in ("auto", "env_file") else None
+    if env_file is not None and read_env_file(env_file, spec.env_var):
+        return "env_file"
+    return "none"
+
+
 def resolve_spec(spec: KeySpec, source: str, env_file: Path | None) -> ResolvedKey:
     """``spec``'s key from the places ``source`` allows, in order."""
     if source in ("auto", "environment"):

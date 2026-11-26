@@ -235,6 +235,27 @@ Mac. It reads the same index as the command line:
 - **Due**: `flib due`, with its window (7 days to 3 months, or overdue) and
   totals per currency, and **Mark done** / **Open again** (`flib fix --done`
   / `--not-done`).
+- **Settings**: the essentials, without opening the file. When to organize
+  (off, daily at a time, as files arrive, or both: `flib schedule` from the
+  page), who classifies (a choice among the providers the file already
+  allows, with what each one sends; the API key is shown only as set or not
+  set), vision, text recognition and search by meaning (each says what
+  leaves the Mac), Downloads and the Desktop as input folders (the Desktop
+  with `flib init`'s careful rules), duplicates, categories (add, rename,
+  remove, hint, sub-folders), the cost caps, the summary notification and
+  what is due, and the language. Each change is checked as `flib
+  check-config` checks it **before** it is written; a value it refuses is
+  shown with its field and why, and nothing is written. Only the keys you
+  changed are touched: your comments and the order of the file stay. The
+  old file is kept as a backup next to it (`config.yaml.backup-<time>Z`, the
+  latest 10), and **Restore the previous settings** puts it back after
+  showing what changes. A category that holds files is renamed or removed
+  with `flib reprocess --rename-category` / `--remove-category`, which move
+  them: the page says so instead. Everything else (another folder or
+  server, folder rules, the library's place) stays in the file; the page
+  names it, opens it in a text editor, and points to `flib check-config` and
+  `flib doctor`. If the file changed since the page was shown (edited by
+  hand, another tab), nothing is saved and the page shows it as it is.
 
 The pages work without JavaScript. A search goes in the form, not the
 address, and Back and Forward work: they never repeat an action. Every
@@ -243,12 +264,11 @@ so `flib undo` reverts it too. If a run is going on, an action says so and
 does nothing; if a file changed since the page was shown (moved, undone,
 handled in another tab), it is refused, never acted on. Nothing is ever
 overwritten: a taken name gets the next free number. Sensitive files are
-never listed or acted on. Settings is in the menu, greyed out, until it
-arrives.
+never listed or acted on.
 
 ```sh
 flib ui                  # opens the default browser
-flib ui --open review    # starts on another page: status, review, search, activity, due
+flib ui --open review    # starts on another page: status, review, search, activity, due, settings
 flib ui --no-browser     # prints a one-time link instead
 flib ui --port 8765      # a fixed port (default: a free one)
 ```
@@ -399,7 +419,7 @@ Every command takes `--config PATH` (`-c`); without it, flib reads
 | `flib schedule [--at HH:MM] [--mode daily\|watch\|both] [--status \| --remove \| --refresh] [--no-save-key] [--no-check]` | Run every day, or as files arrive, via launchd, with an access check ([Run it every day](#run-it-every-day)) |
 | `flib inspect FILE... [--json]` | Show hash, size and download origin (no hash for a file only in iCloud), and for an indexed file its status, category, why it is in review, the name choice and what the AI read in it (kind, issuer, amount, dates, period) |
 | `flib mcp` | Local MCP server for AI assistants ([Use it from Claude](#use-it-from-claude)) |
-| `flib ui [--open PAGE] [--no-browser] [--port N]` | The interface in your browser, served on 127.0.0.1 while in use: Status, Review (with undo), Search, Activity and Due ([Interface](#interface)) |
+| `flib ui [--open PAGE] [--no-browser] [--port N]` | The interface in your browser, served on 127.0.0.1 while in use: Status, Review (with undo), Search, Activity, Due and Settings ([Interface](#interface)) |
 | `flib eval [--provider NAME] [--model M] [--language en\|pt-BR] [--limit N] [--json] [--out FILE] [--compare FILE]` | Measure classification quality on a built-in synthetic corpus, never touching your files ([Measuring quality](#measuring-quality)) |
 | `flib doctor [--stdout \| -o PATH] [--format markdown] [--logs N]` | A redacted diagnostics report for bug reports ([Troubleshooting](#troubleshooting)) |
 | `flib --version` | Print the version |

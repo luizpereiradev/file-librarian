@@ -8,6 +8,40 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `flib ui` has a **Settings** page (#117): when to organize (off, daily at
+  a time, as files arrive or both, installed in launchd by the same function
+  as `flib schedule`), who classifies (a fixed choice among the providers the
+  file already allows, never a typed address; the API key only as set or not
+  set), vision, OCR and search by meaning, Downloads and the Desktop as input
+  folders (from a fixed list, checked again on the server), duplicates,
+  categories (add, rename, remove, hint, sub-folders; one that holds files
+  is left to `flib reprocess --rename-category` / `--remove-category`, and
+  the page says how), the cost caps, the summary notification, what is due
+  and the language (which never moves the library: what it brought is
+  written in the file first). Each section's form carries a pin of the
+  file's bytes: a file changed since the page (by hand, another tab) is
+  never overwritten. Each change takes the instance lock (a run in progress
+  is said, nothing done), is made in the text by the new `config_edit`
+  module (only the keys asked for; comments and order kept; checked by
+  parsing the result), validated by `parse_config` before anything is
+  written, backed up (`config.yaml.backup-<time>`, 0600, the latest 10) and
+  written atomically (0600; a file that is a symbolic link is refused).
+  **Restore the previous settings** puts the latest backup back after a
+  confirmation page. The menu's Settings item is now a link; `flib ui --open
+  settings`. `scheduler.install_for` is shared by `flib schedule` and the
+  page. After the review of #130: a field left untouched is never rewritten
+  (a multi-line hint is shown, not edited; cost caps keep every digit;
+  `due.kinds` keeps its order); what changed is said field by field, inside
+  the section that was sent, with what was typed kept on a refusal; a section
+  index, folded long rules, and a confirmation before removing an input
+  folder (whose comment goes with it); a schedule installed for another
+  configuration file is never taken over without an explicit tick; commands
+  in refusals are shell-quoted and name the file with `-c`; backups are named
+  in UTC with a sequence (`<time>Z[-NN]`) and nothing else is ever listed or
+  pruned; the file is checked again just before the rename, and hard links
+  are refused; the Keychain is asked whether a key exists, never for it;
+  `schedule.time` takes ASCII digits only (also in the file); long category
+  names wrap on Search.
 - `flib ui` has a **Review** page with **Undo** (#115), the first part of the
   interface that moves files. Review lists the files waiting in the review
   folder, by reason and suggested category, the biggest group first; each

@@ -47,7 +47,10 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from file_librarian.config import Config
 
 LABEL = "io.github.luizpereiradev.file-librarian"
 CHECK_LABEL = f"{LABEL}.check"
@@ -237,6 +240,22 @@ def install(
     else:
         _remove(WATCH_LABEL)
     return installed
+
+
+def install_for(config_path: Path, config: Config, at: str, mode: str) -> list[Path]:
+    """``install`` for the configuration at ``config_path``, as ``flib schedule`` and the
+    interface's Settings page (#117) both do it; raises ``ScheduleError``."""
+    from file_librarian.runlog import logs_dir
+
+    return install(
+        at,
+        config_path.resolve(),
+        logs_dir(config.database),
+        mode=mode,
+        inputs=config.input_paths,
+        watch_interval_minutes=config.schedule.watch_min_interval_minutes,
+        watch_fallback_minutes=config.schedule.watch_fallback_minutes,
+    )
 
 
 def remove() -> bool:

@@ -1252,7 +1252,7 @@ def _due_table(
 Opener = Callable[[list[str]], int]
 
 
-def _run_open(argv: list[str]) -> int:
+def run_open(argv: list[str]) -> int:
     # A fixed binary; the path is one argument, never parsed by a shell.
     result = subprocess.run(  # noqa: S603
         argv, capture_output=True, timeout=OPEN_TIMEOUT, check=False
@@ -1308,7 +1308,7 @@ def open_by_id(
     *,
     reveal: bool,
     program: str,
-    runner: Opener = _run_open,
+    runner: Opener = run_open,
 ) -> tuple[int, str | None]:
     """Ask macOS to open (or show in Finder) the file with this index id.
 

@@ -80,19 +80,13 @@ NAV = (
     ("due", "Due"),
     ("settings", "Settings"),
 )
-SOON = frozenset({"settings"})
-"""Pages not here yet (#117): shown greyed out, never as a link."""
 
 
 def nav(current: str) -> Markup:
-    items = []
-    for name, label in NAV:
-        if name in SOON:
-            soon = el("span", " (coming soon)", class_="sr-only")
-            items.append(el("span", label, soon, class_="soon", aria_disabled="true"))
-        else:
-            here = "page" if name == current else None
-            items.append(el("a", label, href=f"/{name}", aria_current=here))
+    items = [
+        el("a", label, href=f"/{name}", aria_current="page" if name == current else None)
+        for name, label in NAV
+    ]
     return el("nav", *items, aria_label="Pages")
 
 

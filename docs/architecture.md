@@ -487,6 +487,88 @@ for each run with something to revert, and for each move that is its
 file's last one (what `flib undo --file` reverts). The pages have no
 JavaScript: the Move form folds under a `<details>`.
 
+**Settings** (#117, `ui/settings.py`, `config_edit.py`) is the one page that
+changes the configuration and launchd. `flib ui` passes it the path of the
+file it loaded (`Ui.config_path`); `GET /settings` reads that file, the index
+(read-only, for the categories' file counts) and launchd's state, and changes
+nothing. Each section is a form posted to `POST /settings/save` (with a
+`section` field), `/settings/schedule` or `/settings/restore`, all in
+`POST_ROUTES`, answered 303 to `GET /settings?n=<id>` like the actions. Each
+form carries a *pin*, a digest of the file's bytes as the page read them.
+Under `instance_lock` (a run in progress: said, nothing done) the file is read
+again; a different pin (edited by hand, another tab, flib itself) is refused
+and nothing is written. The change is then made **in the text**:
+PyYAML, the only YAML library, cannot write a file back with its comments, so
+`config_edit` splices new text at the positions PyYAML's composer reports for
+each node (a scalar replaced where it stands, a missing key added at the end
+of its section, a key's or item's lines removed, an item appended in the
+list's style; an inline `{...}`/`[...]` collection is written again inline
+as a whole). Comments, blank lines and key order around the edit stay byte
+for byte, and every edit is checked: the new text must parse to exactly the
+old data with that change, else nothing is written (anchors, aliases and odd
+layouts end there, with "change it in the file"). The result is validated by
+`config.parse_config`, the parser every command uses, **before** it is
+written; its refusal is shown with the field and why. Then a backup of the
+old bytes (`config.yaml.backup-<YYYYmmdd-HHMMSS>Z[-NN]`, UTC with a sequence number, so a clock or time-zone change cannot reorder them; only names of exactly that form are backups, so a file of the user's that starts the same way is never offered or deleted; created `O_EXCL |
+O_NOFOLLOW`, 0600, the latest 10 kept) and an atomic write (a new temporary
+file in the same folder, 0600, fsynced, renamed over the file). The file is read once more right before the backup and again right before
+the rename: anything else there (an editor saved it meanwhile) refuses the
+change and stays as it is. A file that is a symbolic link or a hard link, or
+not the user's own plain file, is refused: replacing it would cut the link. A change whose file names another `database` than the
+running server's is refused. The server goes on with the configuration it
+saved. Restore (`GET /settings/restore`, then its button) shows what the
+latest backup changes back and writes it the same way, after backing up the
+current file, so a restore is undone the same way.
+
+A field the user did not touch is left alone: each posted value is compared
+with what the page showed after the clean-up a browser gives a one-line text
+field (line breaks dropped) and the page's own (ends trimmed, NFC), so saving
+one field of a category never rewrites another; a hint a text field cannot
+hold (line breaks, tabs, longer than 300 characters) is shown as text, not
+offered for editing. A cost cap is shown with every digit the file has (never
+`1e-05`), and a value posted as shown is not written again; `due.kinds`
+keeps the file's order. What changed is said field by field ("Category Work
+hint: old → new", "Category Taxes: added"). The outcome, or the refusal with
+what was typed, is shown inside the section that was sent, where the
+redirect's anchor lands. Removing an input folder has a confirmation page
+(`GET /settings/input-remove?index=<i>`), and the comment lines right above a
+removed list item, at its indentation, go with it. A command the page
+suggests in a refusal (`flib reprocess --rename-category ...`) is quoted with
+`shlex.quote` and carries `-c <file>` when this is not the default
+configuration file; text from the file or the user is never turned into
+`<code>`. When the installed agents belong to another configuration file, the
+page says so: Save the schedule changes nothing in launchd unless "Use this
+file for the schedule" is ticked, and a change of input folders never
+refreshes them. A refused install reports what launchd has loaded, or that
+the agent is written but not loaded.
+
+What the page takes is fixed: the provider and model from
+`settings.provider_choices` (the current pair, Anthropic, Claude Code, Ollama
+only when the file names no address or one on this Mac, an OpenAI-compatible
+server only when the file already names it; an index into that list, never an
+address); input folders from `settings.candidates` (Downloads, and the
+Desktop with `flib init`'s rules), each checked again on the server at the
+moment of the change by `folder_problem` (an existing folder of the user's,
+under the home folder, not a link, not hidden, not `~/Library`, `/` or the
+home folder itself, not the library or inside it, not already an input) and
+then by the parser (overlaps); layouts, kinds, modes and the language from
+their lists (anything else is 400); amounts and days by pattern; category
+names and hints by the parser's own rules (hints: one line, at most 300
+characters). A category that holds files (in the index, or a non-empty
+folder, or an input's fixed category) is not renamed or removed: the page
+gives the `flib reprocess --rename-category` / `--remove-category` command,
+the one path that moves them. Changing the language writes what it brought
+(`output_root`, the folder names, the categories, `ocr.languages`) into the
+file first, so the library never moves. The schedule is installed by
+`scheduler.install_for`, the function `flib schedule` uses (with the fake
+launchctl in tests), after the mode and time are written; launchd's refusal
+is reported with what is installed now; a change of input folders refreshes
+an installed watch agent of this file. Secrets never reach a page: an API
+key is only "set (in the Keychain)" or "not set" (`settings.key_state` asks
+`keychain.exists`, which never reads the secret), and web addresses show their host only (`settings.host_of`); YAML
+errors give a line and column, never the file's text. `POST /settings/open`
+runs `open -t -- <the server's own path>`, never one from the form.
+
 **Session.** The server binds a free port and makes a random launch token
 (256 bits). The token never goes on a command line, where any account on the
 Mac could read it with `ps`. `flib ui` writes a *handoff file*, an HTML page
@@ -567,7 +649,8 @@ connection carries one request (HTTP/1.0, closed after the reply), so idle
 keep-alive connections cannot hold the threads.
 
 **Threat model.** What is protected: the index (names, descriptions,
-amounts) and the files, which Review and Undo move. Who might attack: a web page
+amounts), the files, which Review and Undo move, and the configuration file,
+launchd agents and API keys, which Settings changes or names. Who might attack: a web page
 open in any browser on the Mac (cross-site requests, DNS rebinding,
 clickjacking), another machine on the network, other accounts on the same
 Mac (they can list processes and connect to 127.0.0.1), other programs that
@@ -589,6 +672,9 @@ browser's cookies). How each is handled:
 | Opening what the page names | the id is looked up in the index; the path is checked again (status; no `..`; real path inside the library or an input with no link below it; exists) and passed to `open` after `--`; a path in the form is ignored; Open takes documents only (allow-listed extension, regular file, no execute bit, not an alias), everything else gets Show in Finder only; names lose format characters; failures get a general message | `test_open_and_reveal_ask_macos_by_id`, `test_open_never_takes_a_path`, `test_open_refuses_a_sensitive_file`, `test_open_rechecks_the_path_from_the_index`, `test_a_dotdot_in_the_index_never_leaves_the_library`, `test_a_symlinked_folder_never_leaves_the_library`, `test_open_refuses_what_could_run_and_offers_show_in_finder`, `test_open_refuses_folders_bundles_executables_and_aliases`, `test_format_characters_never_reach_the_page`, `test_when_macos_cannot_open_it_the_page_says_so_plainly` |
 | Moving the wrong file, or the same one twice | actions take an index id and a pin of the state the page showed, checked again under the instance lock; a stale pin, a double submit, a second tab or a run in between is refused and nothing moves; post, redirect, get, so reload and Back never act again; categories only from the configuration, names through `fix`'s sanitiser; never overwritten; sensitive files neither listed nor acted on; a run holding the lock is said and nothing is done; only `fix`/`undo`/`due.settle` move or change anything | `tests/unit/test_ui_review.py`: `test_a_stale_row_is_refused`, `test_a_double_submit_moves_once`, `test_two_tabs_one_wins`, `test_a_run_in_progress_holds_everything`, `test_a_taken_name_gets_the_next_number_and_nothing_is_overwritten`, `test_a_sensitive_file_cannot_be_acted_on`, `test_a_form_the_page_never_sends_is_refused`, `test_a_path_in_the_form_is_ignored`, `test_reload_back_and_forward_never_act_again`, `test_getting_every_page_changes_nothing`, `test_each_action_refuses_a_forged_post_and_moves_nothing`, `test_accept_all_is_refused_when_the_group_changed`, `test_a_stale_undo_is_refused`, `tests/integration/test_ui_browser.py::test_review_and_undo_in_a_real_browser` |
 | A spreadsheet running the export | `Content-Disposition: attachment` with `nosniff`; cells that start like a formula get a leading apostrophe | `test_the_export_is_an_attachment_a_spreadsheet_cannot_run`, `test_cells_that_look_like_formulas_are_quoted` |
+| Changing the configuration behind the user's back, or wrongly | every change is a POST in the route table (cookie, exact origin, CSRF) with a pin of the file's bytes, checked again under the instance lock: a file changed since the page (by hand, another tab, a run) is never overwritten; validated by `parse_config` before writing; written in place (`config_edit`: only the keys asked for, comments kept, the result checked by parsing it), atomically (temporary file in the same folder, rename), 0600, after a 0600 backup; a link is never replaced; a run holding the lock is said and nothing is done; post, redirect, get, so reload and Back never write again; Restore only after a confirmation page | `tests/unit/test_ui_settings.py`: `test_a_file_changed_since_the_page_is_never_overwritten`, `test_two_tabs_the_second_is_refused`, `test_a_run_in_progress_holds_every_change`, `test_reload_back_and_forward_never_change_again`, `test_getting_every_page_changes_nothing`, `test_a_forged_post_changes_nothing`, `test_a_bad_amount_is_said_and_nothing_is_written`, `test_a_bad_category_name_is_said_with_its_field`, `test_a_linked_file_is_never_replaced`, `test_aliases_are_refused_not_half_done`, `test_restore_the_previous_settings`; `tests/unit/test_config_edit.py`; `tests/integration/test_ui_browser.py::test_settings_in_a_real_browser` |
+| A secret, a path or an address from the Settings page | API keys only as set / not set, never read into a page; addresses by host only; no field takes a path, an address or a command: folders, providers, layouts and modes are fixed choices checked again on the server (`folder_problem` refuses `/`, the home folder, `~/Library`, hidden folders, links, the library); a provider choice is an index into what the file allows (no new address, Ollama only on this Mac); `open -t` gets the server's own path; YAML errors never quote the file | `test_the_api_key_never_reaches_any_byte`, `test_addresses_show_their_host_only`, `test_a_provider_choice_the_page_never_offered_is_refused`, `test_ollama_is_offered_only_on_this_mac_and_a_server_only_as_the_file_has_it`, `test_a_folder_is_never_taken_from_the_form`, `test_what_may_be_an_input`, `test_a_desktop_that_is_a_link_is_refused`, `test_open_in_a_text_editor_opens_the_servers_own_path`, `test_a_yaml_error_names_the_place_and_never_quotes_the_file` |
+| Renaming or removing a category that holds files | refused, with the `flib reprocess --rename-category` / `--remove-category` command (the one path that moves its files); the language change writes its defaults into the file first, so the library never moves | `test_a_category_that_holds_files_is_renamed_only_by_reprocess`, `test_a_category_whose_folder_has_files_is_not_renamed`, `test_a_category_an_input_files_into_is_kept`, `test_the_language_never_moves_the_library` |
 | Clickjacking, cross-origin windows | `frame-ancestors 'none'`, `X-Frame-Options: DENY`, `Cross-Origin-Opener-Policy` and `-Resource-Policy: same-origin` | `test_every_reply_carries_the_security_headers` (all seven headers on every kind of reply, the 503 and malformed requests included), `test_the_turned_away_reply_carries_the_security_headers` |
 | Reading files through the server | static files from an in-memory map of packaged resources, looked up by exact path: no traversal, no directory listing; no file contents are ever served; Status serves counts only (suggested categories the model wrote are masked when not configured); sensitive files are never listed with details, only counted | `test_nothing_outside_the_packaged_files_is_served`, `test_status_holds_counts_and_never_a_file_name`, `test_sensitive_files_never_appear_in_search`, `test_activity_shows_each_run_and_what_it_moved` |
 | Exhausting it | request line ≤ 4 KiB, headers ≤ 16 KiB (and at most 100), POST body ≤ 16 KiB with one `Content-Length` of 1 to 5 ASCII digits, no `Transfer-Encoding`; requests read in the accepting thread, so idle or trickling connections hold no request thread; 5 s for the whole request (then 408), at most 128 waiting connections (the oldest dropped), one request per connection, at most 8 requests at once (one more gets 503), 10 s per write | `test_clients_that_never_finish_their_request_hold_no_thread`, `test_past_the_pending_cap_the_oldest_connection_is_dropped`, `test_a_head_too_long_is_refused_without_a_thread`, `test_a_body_that_never_arrives_gets_a_timeout`, `test_a_body_shorter_than_its_length_gets_a_reply`, `test_long_request_lines_and_headers_are_refused`, `test_a_large_body_is_refused_before_it_is_read`, `test_a_post_needs_a_plain_length`, `test_a_slow_client_is_dropped`, `test_a_client_that_trickles_its_request_is_cut_off_at_the_deadline`, `test_a_keep_alive_connection_gets_one_reply_and_is_closed`, `test_requests_beyond_the_thread_cap_are_turned_away` |
@@ -695,7 +781,7 @@ Everything is in `src/file_librarian/`:
 | Module | What it does |
 | --- | --- |
 | `cli.py`, `__main__.py` | the `flib` command (Typer); prompts and output only, the work is in the modules below |
-| `config.py`, `locales.py` | the YAML configuration, validated at startup; the defaults each `language` brings |
+| `config.py`, `locales.py`, `config_edit.py` | the YAML configuration, validated at startup; the defaults each `language` brings; changing the file in place, comments kept, with a backup (the Settings page) |
 | `models.py` | typed values passed between stages (`FileContext`, `Classification`, `Decision`...) |
 | `pipeline.py` | one run or simulation, stage by stage |
 | `scanner.py`, `hashing.py`, `globs.py` | stage 1; content identity (SHA-256, folder manifests, iCloud-only check); glob matching as the Mac compares names |
@@ -715,7 +801,7 @@ Everything is in `src/file_librarian/`:
 | `notifier.py`, `assets/` | the notifier app that posts notifications as "file-librarian", and its icon |
 | `credentials.py`, `keychain.py` | where an API key comes from; the macOS Keychain through `/usr/bin/security` |
 | `mcp_server.py` | `flib mcp` (optional `mcp` extra) |
-| `ui/` | `flib ui`: the loopback server and its session (`server.py`), the JSON API (`api.py`), the pages built on the server (`views.py`, `review.py`, escaped by `markup.py`), the actions that move files (`actions.py`: review, undo, mark done, through `fix`/`undo`/`due`), the static pages (`pages/`, `static/`) |
+| `ui/` | `flib ui`: the loopback server and its session (`server.py`), the JSON API (`api.py`), the pages built on the server (`views.py`, `review.py`, escaped by `markup.py`), the actions that move files (`actions.py`: review, undo, mark done, through `fix`/`undo`/`due`), the Settings page and its changes (`settings.py`, with `config_edit.py`), the static pages (`pages/`, `static/`) |
 | `activity.py` | the runs of the last days, what each moved and what its log says about the Mac being locked (the interface's Activity page) |
 | `evals/` | `flib eval`: the synthetic corpus and its gold labels, the isolated simulate-mode harness and the scoring ([quality.md](quality.md)) |
 
