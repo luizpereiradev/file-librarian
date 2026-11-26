@@ -136,30 +136,97 @@ def client(ui: Ui) -> UiClient:
     return c
 
 
+FAILURE_SECONDS = 10
+"""How long a test waits for a signal before it fails; never what it waits on.
+Under ``HANG_GUARD_SECONDS``, so the failure says what never happened."""
+
+
+class CountedSlots(threading.BoundedSemaphore):
+    """The server's request slots, counted, so a test can wait until each is free.
+
+    A client has its whole reply before the request thread gives its slot back;
+    the next request can come in between and be turned away with 503 (#129).
+    """
+
+    def __init__(self, value: int) -> None:
+        super().__init__(value)
+        self._changed = threading.Condition()
+        self._taken = 0
+
+    def acquire(self, blocking: bool = True, timeout: float | None = None) -> bool:
+        got = super().acquire(blocking, timeout)
+        if got:
+            with self._changed:
+                self._taken += 1
+        return got
+
+    def release(self, n: int = 1) -> None:
+        with self._changed:
+            super().release(n)
+            self._taken -= n
+            self._changed.notify_all()
+
+    def wait_all_free(self) -> None:
+        with self._changed:
+            free = self._changed.wait_for(lambda: self._taken == 0, FAILURE_SECONDS)
+        assert free, "a request thread never gave its slot back"
+
+
+@pytest.fixture
+def counted_slots(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every server made from here on counts its request slots (``all_slots_free``)."""
+
+    class Counted(ui_server._HttpServer):  # the recording one of ``nothing_left_behind``
+        def __init__(self, ui: Ui, port: int, max_threads: int) -> None:
+            super().__init__(ui, port, max_threads)
+            self._slots = CountedSlots(max_threads)
+
+    monkeypatch.setattr(ui_server, "_HttpServer", Counted)
+
+
+def all_slots_free(ui: Ui) -> None:
+    """Wait until every request before now has given its thread back."""
+    slots = ui._server._slots
+    assert isinstance(slots, CountedSlots), "the test needs the counted_slots fixture"
+    slots.wait_all_free()
+
+
 class Busy:
-    """Makes ``/api/v1/status`` wait until ``release``: a request thread in use."""
+    """Makes ``/api/v1/status`` wait until ``release``: a request thread in use.
+
+    Needs the ``counted_slots`` fixture. Nothing here is timed: ``hold`` returns
+    once the held request is inside its handler, holding its slot."""
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self.go = threading.Event()
+        self.inside = threading.Event()
+        self.statuses: list[int] = []
         real = api.status
 
         def held(config: Config) -> object:
-            assert self.go.wait(10), "never released"
+            self.inside.set()
+            assert self.go.wait(FAILURE_SECONDS), "never released"
             return real(config)
 
         monkeypatch.setattr(api, "status", held)
 
     def hold(self, ui: Ui, client: UiClient) -> threading.Thread:
-        thread = threading.Thread(target=client.get, args=("/api/v1/status",), daemon=True)
-        before = len(ui._server._active)
+        all_slots_free(ui)  # or the held request could be the one turned away
+        self.inside.clear()
+
+        def get() -> None:
+            self.statuses.append(client.get("/api/v1/status").status)
+
+        thread = threading.Thread(target=get, daemon=True)
         thread.start()
-        wait_for(lambda: len(ui._server._active) > before)
+        assert self.inside.wait(FAILURE_SECONDS), "the held request never reached its handler"
         return thread
 
     def release(self, *threads: threading.Thread) -> None:
         self.go.set()
         for thread in threads:
-            thread.join(5)
+            thread.join(FAILURE_SECONDS)
+            assert not thread.is_alive(), "a held request never ended"
 
 
 def token_of(ui: Ui) -> str:
@@ -811,20 +878,21 @@ def test_a_body_that_never_arrives_gets_a_timeout(loopback_network: None, cfg: C
 
 
 def test_a_client_that_trickles_its_request_is_cut_off_at_the_deadline(
-    loopback_network: None, cfg: Config
+    loopback_network: None, cfg: Config, counted_slots: None
 ) -> None:
     """A byte at a time, each well within the read timeout, never gets past the
     deadline for the whole request; and the threads come back for everyone else."""
     ui = Ui(cfg, poll_seconds=0.01, max_threads=2, request_timeout=5, request_deadline=0.2)
     ui.start()
     try:
+        # Before connecting: the server's deadline starts no earlier than this.
+        started = time.monotonic()
         slow = [socket.create_connection(("127.0.0.1", ui.port), timeout=5) for _ in range(2)]
         for sock in slow:
             sock.sendall(f"GET /static/app.css HTTP/1.1\r\nHost: 127.0.0.1:{ui.port}\r\n".encode())
-        started = time.monotonic()
         cut: set[int] = set()
         while len(cut) < len(slow):
-            assert time.monotonic() - started < 3, "the trickling clients were never cut off"
+            assert time.monotonic() - started < FAILURE_SECONDS, "never cut off"
             for i, sock in enumerate(slow):
                 if i in cut:
                     continue
@@ -840,7 +908,8 @@ def test_a_client_that_trickles_its_request_is_cut_off_at_the_deadline(
         for sock in slow:
             sock.close()
         assert time.monotonic() - started >= 0.2
-        wait_for(lambda: UiClient(ui.port).get("/static/app.css").status == 200)
+        all_slots_free(ui)
+        assert UiClient(ui.port).get("/static/app.css").status == 200
     finally:
         ui.close()
 
@@ -867,7 +936,7 @@ def test_the_deadline_does_not_cut_a_reply_in_progress(
 
 
 def test_requests_beyond_the_thread_cap_are_turned_away(
-    monkeypatch: pytest.MonkeyPatch, loopback_network: None, cfg: Config
+    monkeypatch: pytest.MonkeyPatch, loopback_network: None, cfg: Config, counted_slots: None
 ) -> None:
     ui = Ui(cfg, poll_seconds=0.01, max_threads=1)
     ui.start()
@@ -878,15 +947,17 @@ def test_requests_beyond_the_thread_cap_are_turned_away(
         held = busy.hold(ui, c)  # holds the only thread
         assert UiClient(ui.port).get("/static/app.css").status == 503
         busy.release(held)
+        assert busy.statuses == [200]  # the held request was served in full
         # The slot comes back once the request is done.
-        wait_for(lambda: UiClient(ui.port).get("/static/app.css").status == 200)
+        all_slots_free(ui)
+        assert UiClient(ui.port).get("/static/app.css").status == 200
     finally:
         busy.release()
         ui.close()
 
 
 def test_clients_that_never_finish_their_request_hold_no_thread(
-    loopback_network: None, cfg: Config
+    loopback_network: None, cfg: Config, counted_slots: None
 ) -> None:
     """Idle and trickling connections wait in the accepting thread, not in a
     request thread: with every one of them open, the session is still served."""
@@ -894,6 +965,7 @@ def test_clients_that_never_finish_their_request_hold_no_thread(
     ui.start()
     c = UiClient(ui.port)
     c.launch(ui.launch_url)
+    all_slots_free(ui)
     hogs = [socket.create_connection(("127.0.0.1", ui.port), timeout=5) for _ in range(20)]
     try:
         for i, hog in enumerate(hogs):
@@ -905,6 +977,7 @@ def test_clients_that_never_finish_their_request_hold_no_thread(
         assert ui._server._active == {}
         for _ in range(5):
             assert c.get("/api/v1/status").status == 200
+            all_slots_free(ui)  # the one thread, back before the next request
     finally:
         for hog in hogs:
             hog.close()
@@ -919,11 +992,12 @@ def test_past_the_pending_cap_the_oldest_connection_is_dropped(
     ui.start()
     socks = []
     try:
-        for _ in range(3):
-            socks.append(socket.create_connection(("127.0.0.1", ui.port), timeout=1))
-            wait_for(lambda: ui._heads is not None and len(ui._heads.pending) == len(socks))
-        socks.append(socket.create_connection(("127.0.0.1", ui.port), timeout=1))
+        for _ in range(4):
+            socks.append(socket.create_connection(("127.0.0.1", ui.port), timeout=FAILURE_SECONDS))
+            if len(socks) < 4:
+                wait_for(lambda: ui._heads is not None and len(ui._heads.pending) == len(socks))
         assert socks[0].recv(10) == b""  # the oldest, closed to make room
+        socks[1].settimeout(1)
         with pytest.raises(TimeoutError):
             socks[1].recv(10)  # the others wait on
         wait_for(lambda: ui._heads is not None and len(ui._heads.pending) == 3)
@@ -1065,7 +1139,7 @@ def test_every_reply_carries_the_security_headers(client: UiClient, ui: Ui) -> N
 
 
 def test_the_turned_away_reply_carries_the_security_headers(
-    monkeypatch: pytest.MonkeyPatch, loopback_network: None, cfg: Config
+    monkeypatch: pytest.MonkeyPatch, loopback_network: None, cfg: Config, counted_slots: None
 ) -> None:
     ui = Ui(cfg, poll_seconds=0.01, max_threads=1)
     ui.start()
@@ -1081,6 +1155,7 @@ def test_the_turned_away_reply_carries_the_security_headers(
         for name, value in SECURITY_HEADERS.items():
             assert reply.get(name) == value, name
         busy.release(held)
+        assert busy.statuses == [200]
     finally:
         busy.release()
         ui.close()
