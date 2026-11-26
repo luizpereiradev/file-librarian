@@ -118,7 +118,7 @@ nav .soon { position: relative; color: var(--bar-muted); cursor: default; }
 @media (max-width: 640px) {
   .top { flex-wrap: wrap; gap: 0.25rem 0.75rem; padding: 0.5rem 0.75rem; }
   .brand > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-  .end { margin-left: auto; }
+  .top .end { margin-left: auto; }
   nav[aria-label="Pages"] { order: 3; flex: 1 1 100%; flex-wrap: wrap; gap: 0.1rem 1rem; overflow: visible; }
   .top button.quiet { padding: 0.25rem 0.6rem; font-size: 0.85rem; }
 }
