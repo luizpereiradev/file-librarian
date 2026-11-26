@@ -152,27 +152,62 @@ def undo_file(
     return report
 
 
-def _undo_one(store: Store, op: OperationRow, report: UndoReport, config: Config | None) -> None:
+def skip_reason(store: Store, op: OperationRow, config: Config | None) -> str | None:
+    """Why undo would skip this move now, in the words it reports; ``None`` when it can
+    go back. The one judgement ``_undo_one`` acts on and the interface's undo pages
+    show (#115), so the page never says one thing and the button do another. Reads
+    only (a missing library folder is made again by the undo, so it does not count).
+
+    The file must be where this move put it with the content it had: then it can
+    go back, whatever moved it in between (away and back again). Otherwise, if a
+    later move of flib's took it, that is the reason given. An entry still
+    ``planned`` (a move a failure left half-recorded) is judged as recovery will
+    leave it: done if the file got there.
+    """
     src, dst = op.src_path, op.dst_path
     row = store.file_by_id(op.file_id)
     if not os.path.lexists(dst):
-        report.skipped.append((dst, gone_reason(store, op)))
-        return
+        return gone_reason(store, op)
     same = check_content(dst, row.sha256)
     if same is None:
-        report.skipped.append((dst, LOCKED_NOW))
-        return
+        return LOCKED_NOW
     if not same:
-        report.skipped.append((dst, "changed since it was moved"))
-        return
+        later = _later_move(store, op)
+        if later is not None:
+            return _moved_again(later)
+        return "changed since it was moved"
     if not src.parent.is_dir():
         # A folder of the library (an emptied category folder deleted since)
         # is made again; any other missing folder is not flib's to create.
         root = config.output_root if config is not None else None
+        if root is None or not src.parent.is_relative_to(root):
+            return f"original folder is gone: {src.parent}"
+    elif os.path.lexists(src) and not _same_entry(src, dst):
+        return f"original path is taken: {src}"
+    return None
+
+
+def _same_entry(a: Path, b: Path) -> bool:
+    """One directory entry under two spellings (a case-only rename on a volume that
+    ignores case)."""
+    try:
+        first, second = os.lstat(a), os.lstat(b)
+    except OSError:
+        return False
+    return (first.st_dev, first.st_ino) == (second.st_dev, second.st_ino)
+
+
+def _undo_one(store: Store, op: OperationRow, report: UndoReport, config: Config | None) -> None:
+    src, dst = op.src_path, op.dst_path
+    row = store.file_by_id(op.file_id)
+    reason = skip_reason(store, op, config)
+    if reason is not None:
+        report.skipped.append((dst, reason))
+        return
+    if not src.parent.is_dir() and config is not None:
+        # skip_reason let it through: a library folder, emptied and deleted since.
         try:
-            if root is None or not src.parent.is_relative_to(root):
-                raise FileNotFoundError(src.parent)
-            ensure_folder(src.parent, inside=root)
+            ensure_folder(src.parent, inside=config.output_root)
         except (OSError, ValueError):
             report.skipped.append((dst, f"original folder is gone: {src.parent}"))
             return
@@ -202,10 +237,21 @@ def _undo_one(store: Store, op: OperationRow, report: UndoReport, config: Config
 def gone_reason(store: Store, op: OperationRow) -> str:
     """Why the item a move put at ``op.dst_path`` is not there: a later move of flib's
     took it elsewhere, or it was moved or deleted by hand."""
-    later = store.last_done_operation(op.file_id)
-    if later is not None and later.id != op.id:
-        return f"moved again since, by run {later.run_id} (undo that first)"
+    later = _later_move(store, op)
+    if later is not None:
+        return _moved_again(later)
     return "no longer there (moved or deleted by hand)"
+
+
+def _later_move(store: Store, op: OperationRow) -> OperationRow | None:
+    """A move of the same file made after this one and still in effect. For an entry
+    still ``planned``, the file's last done move is an earlier one: never "later"."""
+    later = store.last_done_operation(op.file_id)
+    return later if later is not None and later.id > op.id else None
+
+
+def _moved_again(later: OperationRow) -> str:
+    return f"moved again since, by run {later.run_id} (undo that first)"
 
 
 def _journal(store: Store, op: OperationRow, key: str) -> Journal:

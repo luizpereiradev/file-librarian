@@ -45,15 +45,14 @@ from file_librarian.config import Config
 from file_librarian.db.store import FileRow, IndexChange, OperationRow, Store, load_migrations
 from file_librarian.executor import recover
 from file_librarian.fix import NOT_WRITTEN, FixError, FixItem, fix_file, fix_files
-from file_librarian.hashing import check_content
 from file_librarian.lock import AlreadyRunningError, instance_lock
 from file_librarian.models import FileStatus, OperationStatus, ReviewReason, RunTrigger
 from file_librarian.undo import (
     NothingToUndoError,
     UndoReport,
     file_undo_plan,
-    gone_reason,
     run_undo_plan,
+    skip_reason,
     undo_file,
     undo_run,
 )
@@ -477,17 +476,11 @@ def _fix_reason(text: str, path: Path) -> str:
 # --- undo ------------------------------------------------------------------------------
 
 
-def blocked(store: Store, op: OperationRow, row: FileRow, *, by_content: bool = True) -> str | None:
-    """Why undo would skip this move, in ``undo``'s words; ``None`` if it can be put back.
-    ``by_content``: also hash the file (the confirmation pages do)."""
-    later = store.last_done_operation(op.file_id)
-    if not os.path.lexists(op.dst_path) or (later is not None and later.id != op.id):
-        return gone_reason(store, op)
-    if by_content and check_content(op.dst_path, row.sha256) is False:
-        return _undo_reason("changed since it was moved")
-    if os.path.lexists(op.src_path):
-        return _undo_reason("original path is taken")
-    return None
+def blocked(store: Store, op: OperationRow, config: Config) -> str | None:
+    """Why undo would skip this move, in the page's words; ``None`` if it can go back.
+    The same judgement the undo itself acts on (``undo.skip_reason``)."""
+    reason = skip_reason(store, op, config)
+    return None if reason is None else _undo_reason(reason)
 
 
 @dataclass(frozen=True, slots=True)
@@ -508,7 +501,7 @@ class RunPlan:
         return len(self.ops) - len(self.blocked)
 
 
-def plan_run(store: Store, run_id: int) -> RunPlan:
+def plan_run(store: Store, run_id: int, config: Config) -> RunPlan:
     """What undoing run ``run_id`` reverts; ``Refused`` with ``flib undo``'s words when
     it reverts nothing, and for a run that moved a file now sensitive."""
     try:
@@ -527,7 +520,7 @@ def plan_run(store: Store, run_id: int) -> RunPlan:
     rows = store.files_by_ids(sorted({op.file_id for op in ops} | {c.row_id for c in settle}))
     if any(row.status is FileStatus.SENSITIVE for row in rows.values()):
         raise Refused(SENSITIVE)
-    reasons = {op.id: why for op in ops if (why := blocked(store, op, rows[op.file_id]))}
+    reasons = {op.id: why for op in ops if (why := blocked(store, op, config))}
     settled = [(rows[c.row_id].current_name, c.old_value is None) for c in settle]
     return RunPlan(run_id, ops, changes, rows, run_pin(ops, changes), reasons, settled)
 
@@ -540,7 +533,7 @@ class FilePlan:
     blocked: str | None
 
 
-def plan_file(store: Store, file_id: int) -> FilePlan:
+def plan_file(store: Store, file_id: int, config: Config) -> FilePlan:
     """The move undoing this one file reverts (its last); ``Refused`` as ``flib undo``."""
     row = _row(store, file_id)
     if row.status is FileStatus.SENSITIVE:
@@ -549,13 +542,13 @@ def plan_file(store: Store, file_id: int) -> FilePlan:
         op = file_undo_plan(store, row.current_path, file_id=row.id)
     except NothingToUndoError as exc:
         raise Refused(stop(without_path(str(exc), row.current_path))) from exc
-    return FilePlan(row, op, undo_file_pin(row, op), blocked(store, op, row))
+    return FilePlan(row, op, undo_file_pin(row, op), blocked(store, op, config))
 
 
 def undo_one_run(config: Config, run_id: int, pin: str) -> Outcome:
     """``flib undo --run``, refused unless it still reverts what the page showed."""
     with writing(config) as store:
-        plan = plan_run(store, run_id)
+        plan = plan_run(store, run_id, config)
         if plan.pin != pin:
             raise Refused(STALE_UNDO)
         report = undo_run(store, run_id, config=config)
@@ -569,7 +562,7 @@ def undo_one_run(config: Config, run_id: int, pin: str) -> Outcome:
 def undo_one_file(config: Config, file_id: int, pin: str) -> Outcome:
     """``flib undo --file``, refused unless the file and its last move are as shown."""
     with writing(config) as store:
-        plan = plan_file(store, file_id)
+        plan = plan_file(store, file_id, config)
         if plan.pin != pin:
             raise Refused(STALE_UNDO)
         report = undo_file(store, plan.row.current_path, config=config, file_id=plan.row.id)

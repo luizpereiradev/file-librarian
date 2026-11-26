@@ -43,6 +43,13 @@ All notable changes to this project are documented here. The format follows
   is done, and Activity offers Undo only where something can go back. File
   names are isolated (`<bdi dir="ltr">`), and on a phone the menu wraps
   instead of widening the page.
+  The undo pages and `flib undo` now share one judgement of what would be
+  skipped and why (`undo.skip_reason`): a file back where a move put it, with
+  the same content, can go back whatever moved it in between; a move a
+  failure left half-recorded is judged as recovery will leave it; a missing
+  original folder outside the library and a file locked right now are said
+  before anything is done. Recovery finds a moved file that was saved anew
+  (new inode, same bytes) even when a new file took its old name.
 - `flib ui` has Search, Activity and Due pages (#114), read-only and
   readable without JavaScript. **Search** is `flib search` in a form:
   category and kind chips, the other filters under "More filters", each

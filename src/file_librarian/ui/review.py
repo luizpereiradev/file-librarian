@@ -418,10 +418,10 @@ def undo_page(
     try:
         with read_index(config) as store:
             if run is not None:
-                plan = actions.plan_run(store, number)
+                plan = actions.plan_run(store, number, config)
                 body = _run_plan(plan, config, csrf)
             else:
-                file_plan = actions.plan_file(store, number)
+                file_plan = actions.plan_file(store, number, config)
                 body = _file_plan(file_plan, config, csrf)
     except actions.Refused as exc:
         parts.append(message(exc.outcome.text, error=True))

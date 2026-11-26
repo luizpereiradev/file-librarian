@@ -459,9 +459,10 @@ a crash cut off. Each action:
 
 A review group in an address (`?g=`) is an HMAC of its reason and
 suggestion keyed with a secret of the session, so the model's words cannot
-be guessed back from the browser's history. The undo pages check each move
-as `undo` will (moved again since by a later run, gone, edited since, its
-old place taken) and list what will be skipped and why; with nothing to put
+be guessed back from the browser's history. The undo pages ask `undo.skip_reason`, the
+same function `undo` acts on (gone, moved again since by a later run, edited
+since, locked now, original folder gone outside the library, old place
+taken), and list what will be skipped and why; with nothing to put
 back there is no button, and Activity offers Undo only for runs and moves
 where something can still go back (a cheap look, no hashing). Undoing a fix
 deletes the corrections it recorded (`corrections.operation_id`, 0019); a
@@ -469,8 +470,9 @@ run that fixed many files the same way is one example for the classifier
 (`classifier.correction_examples`), while every correction is kept for
 `flib reprocess`, which protects each corrected file. Recovery trusts a
 file's content at a journaled destination only when the inode cannot tell
-(no recorded identity, or the source is gone), never while the source is
-still in place: a name is journaled before the exclusive rename tries it.
+and the source no longer holds the indexed content (gone, or something else
+there now), never while the source still holds it: a name is journaled
+before the exclusive rename tries it.
 
 Undo is always two steps: `GET /undo?run=<id>` or `?file=<id>` shows what it
 would put back and where (from `undo.run_undo_plan` / `file_undo_plan`,
