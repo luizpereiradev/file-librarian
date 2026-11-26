@@ -142,7 +142,7 @@ def test_due_text_output(filed: Path) -> None:
     assert lines[5] == "  2026-11-25  (in 5 days)  -  Fabrikam Mobile  invoice"
     assert lines[6].endswith("unsure.txt  (in review)")
     assert "Total open: BRL 1,217.50 (2 documents); USD 96.74 (1 document)" in lines
-    assert "1 document state no amount; not counted." in lines
+    assert "1 document states no amount; not counted." in lines
     assert lines[-1] == "1 document marked done or of another kind not shown (--all shows them)."
 
 

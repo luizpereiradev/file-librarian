@@ -205,15 +205,70 @@ cannot be built, notifications still come, shown as Script Editor;
 `flib status` says which one is in use. If you never see the notification,
 see [Troubleshooting](docs/troubleshooting.md#no-notification-appears).
 
-### Interface (early)
+### Interface
 
-`flib ui` opens a small interface in your browser. For now it has one page,
-Status: the same counts as `flib status`, light or dark like your Mac.
-Review, Search, Activity, Due and Settings are in the menu, greyed out,
-until they arrive.
+`flib ui` opens a small interface in your browser, light or dark like your
+Mac. It reads the same index as the command line:
+
+- **Status**: the counts of `flib status`.
+- **Review**: the files waiting in the review folder, grouped by why they
+  are there and what the AI suggested. For each one: **Accept** the
+  suggestion, pick **another category** or a **new name** (the same as
+  `flib fix`, so flib learns from it), **Put back where it was** (`flib undo`
+  for that file: back in Downloads, where later runs leave it), and Open or
+  Show in Finder to look first. A group with a suggestion has **Accept all**,
+  which lists the files before moving them (at most 100 at a time, never one
+  missing on disk), as one run that one Undo reverts.
+- **Undo**: after each action, and for each run and move on Activity. It
+  shows what will be put back, and where, and what will be skipped and why
+  (moved again by a later run, edited since, its old place taken), before
+  doing anything; it refuses what `flib undo` refuses, with the same reason.
+  Undoing a correction also makes flib forget what it learned from it.
+- **Search**: `flib search` with its filters (category and kind chips, the
+  dates, the issuer, amounts, the due date, the period), Open and Show in
+  Finder for each match, totals per currency as `flib search --sum` adds them
+  up, and Export CSV. Sensitive files are never listed there; they are
+  counted.
+- **Activity**: the runs of the last 7, 30 or 90 days, by day: what each one
+  moved where, duplicates set aside, sensitive files left in place (counted,
+  never named), a wait for the Mac to be unlocked, and the cost.
+- **Due**: `flib due`, with its window (7 days to 3 months, or overdue) and
+  totals per currency, and **Mark done** / **Open again** (`flib fix --done`
+  / `--not-done`).
+- **Settings**: the essentials, without opening the file. When to organize
+  (off, daily at a time, as files arrive, or both: `flib schedule` from the
+  page), who classifies (a choice among the providers the file already
+  allows, with what each one sends; the API key is shown only as set or not
+  set), vision, text recognition and search by meaning (each says what
+  leaves the Mac), Downloads and the Desktop as input folders (the Desktop
+  with `flib init`'s careful rules), duplicates, categories (add, rename,
+  remove, hint, sub-folders), the cost caps, the summary notification and
+  what is due, and the language. Each change is checked as `flib
+  check-config` checks it **before** it is written; a value it refuses is
+  shown with its field and why, and nothing is written. Only the keys you
+  changed are touched: your comments and the order of the file stay. The
+  old file is kept as a backup next to it (`config.yaml.backup-<time>Z`, the
+  latest 10), and **Restore the previous settings** puts it back after
+  showing what changes. A category that holds files is renamed or removed
+  with `flib reprocess --rename-category` / `--remove-category`, which move
+  them: the page says so instead. Everything else (another folder or
+  server, folder rules, the library's place) stays in the file; the page
+  names it, opens it in a text editor, and points to `flib check-config` and
+  `flib doctor`. If the file changed since the page was shown (edited by
+  hand, another tab), nothing is saved and the page shows it as it is.
+
+The pages work without JavaScript. A search goes in the form, not the
+address, and Back and Forward work: they never repeat an action. Every
+change goes through the same code, lock and journal as the command line,
+so `flib undo` reverts it too. If a run is going on, an action says so and
+does nothing; if a file changed since the page was shown (moved, undone,
+handled in another tab), it is refused, never acted on. Nothing is ever
+overwritten: a taken name gets the next free number. Sensitive files are
+never listed or acted on.
 
 ```sh
 flib ui                  # opens the default browser
+flib ui --open review    # starts on another page: status, review, search, activity, due, settings
 flib ui --no-browser     # prints a one-time link instead
 flib ui --port 8765      # a fixed port (default: a free one)
 ```
@@ -224,8 +279,13 @@ with Ctrl-C. Nothing else on the network can reach it. The browser gets a
 one-time key through a file only you can read, never through the command
 line where other accounts on the Mac could see it, and the terminal says
 "session started" when it is used. If the key is used a second time, by
-anything without your session, `flib ui` ends and warns you. The page shows
-counts only, never a file name. One runs at a time: a second `flib ui` says
+anything without your session, `flib ui` ends and warns you. Search and its
+CSV export go in the form, never in the address, so your words do not stay in
+the browser's history; Open and Show in Finder send the file's number in the
+index, never a path. Open is for documents only (PDFs, images, text, modern office
+documents, media): anything that could run a program or go somewhere, such
+as an app, a script, an installer, a web location, a legacy `.doc`/`.xls`/`.ppt`
+or a file set to open with an app of its own, gets only Show in Finder. One runs at a time: a second `flib ui` says
 so and exits.
 
 `--no-browser` prints the key itself, in a link: it stays in the terminal's
@@ -359,7 +419,7 @@ Every command takes `--config PATH` (`-c`); without it, flib reads
 | `flib schedule [--at HH:MM] [--mode daily\|watch\|both] [--status \| --remove \| --refresh] [--no-save-key] [--no-check]` | Run every day, or as files arrive, via launchd, with an access check ([Run it every day](#run-it-every-day)) |
 | `flib inspect FILE... [--json]` | Show hash, size and download origin (no hash for a file only in iCloud), and for an indexed file its status, category, why it is in review, the name choice and what the AI read in it (kind, issuer, amount, dates, period) |
 | `flib mcp` | Local MCP server for AI assistants ([Use it from Claude](#use-it-from-claude)) |
-| `flib ui [--open PAGE] [--no-browser] [--port N]` | The interface in your browser, served on 127.0.0.1 while in use; early: a status page ([Interface](#interface-early)) |
+| `flib ui [--open PAGE] [--no-browser] [--port N]` | The interface in your browser, served on 127.0.0.1 while in use: Status, Review (with undo), Search, Activity, Due and Settings ([Interface](#interface)) |
 | `flib eval [--provider NAME] [--model M] [--language en\|pt-BR] [--limit N] [--json] [--out FILE] [--compare FILE]` | Measure classification quality on a built-in synthetic corpus, never touching your files ([Measuring quality](#measuring-quality)) |
 | `flib doctor [--stdout \| -o PATH] [--format markdown] [--logs N]` | A redacted diagnostics report for bug reports ([Troubleshooting](#troubleshooting)) |
 | `flib --version` | Print the version |

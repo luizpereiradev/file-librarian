@@ -8,6 +8,120 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `flib ui` has a **Settings** page (#117): when to organize (off, daily at
+  a time, as files arrive or both, installed in launchd by the same function
+  as `flib schedule`), who classifies (a fixed choice among the providers the
+  file already allows, never a typed address; the API key only as set or not
+  set), vision, OCR and search by meaning, Downloads and the Desktop as input
+  folders (from a fixed list, checked again on the server), duplicates,
+  categories (add, rename, remove, hint, sub-folders; one that holds files
+  is left to `flib reprocess --rename-category` / `--remove-category`, and
+  the page says how), the cost caps, the summary notification, what is due
+  and the language (which never moves the library: what it brought is
+  written in the file first). Each section's form carries a pin of the
+  file's bytes: a file changed since the page (by hand, another tab) is
+  never overwritten. Each change takes the instance lock (a run in progress
+  is said, nothing done), is made in the text by the new `config_edit`
+  module (only the keys asked for; comments and order kept; checked by
+  parsing the result), validated by `parse_config` before anything is
+  written, backed up (`config.yaml.backup-<time>`, 0600, the latest 10) and
+  written atomically (0600; a file that is a symbolic link is refused).
+  **Restore the previous settings** puts the latest backup back after a
+  confirmation page. The menu's Settings item is now a link; `flib ui --open
+  settings`. `scheduler.install_for` is shared by `flib schedule` and the
+  page. After the review of #130: a field left untouched is never rewritten
+  (a multi-line hint is shown, not edited; cost caps keep every digit;
+  `due.kinds` keeps its order); what changed is said field by field, inside
+  the section that was sent, with what was typed kept on a refusal; a section
+  index, folded long rules, and a confirmation before removing an input
+  folder (whose comment goes with it); a schedule installed for another
+  configuration file is never taken over without an explicit tick; commands
+  in refusals are shell-quoted and name the file with `-c`; backups are named
+  in UTC with a sequence (`<time>Z[-NN]`) and nothing else is ever listed or
+  pruned; the file is checked again just before the rename, and hard links
+  are refused; the Keychain is asked whether a key exists, never for it;
+  `schedule.time` takes ASCII digits only (also in the file); long category
+  names wrap on Search.
+- `flib ui` has a **Review** page with **Undo** (#115), the first part of the
+  interface that moves files. Review lists the files waiting in the review
+  folder, by reason and suggested category, the biggest group first; each
+  has Accept (its suggestion), another category and/or a new name (`flib
+  fix`: flib learns from it), Put back where it was (`flib undo` for that
+  file) and Open / Show in Finder. A group with a configured suggestion has
+  Accept all, which lists the files first (at most 100) and moves them as one
+  run (new `fix.fix_files`) that one Undo reverts. Undo, for a run or a file,
+  from Review's outcome or from Activity, shows what it puts back and where
+  before it does anything, and refuses what `flib undo` refuses, in its
+  words. Due has Mark done / Open again (`flib fix --done` / `--not-done`).
+  Every action is a POST through the route table (cookie, exact origin,
+  CSRF), takes the instance lock for that action (a run in progress is said,
+  and nothing is done), names files by index id with a pin of the state the
+  page showed (a file changed, undone or handled in another tab since is
+  refused, never acted on), and ends in a redirect, so reload, Back and
+  Forward never repeat it. Categories come only from the configuration;
+  names go through `flib fix`'s sanitiser; nothing is overwritten; sensitive
+  files are never listed or acted on. The Status page and the menu link
+  Review; `flib ui --open review`. A run's counts after `flib fix` now come
+  from its journal.
+- After the review of #115: undoing a `flib fix` now deletes the corrections
+  that fix recorded (new column `corrections.operation_id`, migration 0019),
+  so an undone fix is never sent to the classifier as an example and never
+  hides an older correction; a number added only because a name was taken
+  (`a-2.pdf`) is no longer learned as a name; the corrections of one run
+  that fixed many files the same way are sent as one example. `flib undo`
+  says "moved again since, by run N (undo that first)" instead of blaming a
+  move by hand when a later run took the file elsewhere. Recovery no longer
+  takes a copy with the same bytes, already at the name a crashed move had
+  journaled, for the moved file while the source is still in place. The
+  interface's undo pages list what will be skipped and why before anything
+  is done, and Activity offers Undo only where something can go back. File
+  names are isolated (`<bdi dir="ltr">`), and on a phone the menu wraps
+  instead of widening the page.
+  The undo pages and `flib undo` now share one judgement of what would be
+  skipped and why (`undo.skip_reason`): a file back where a move put it, with
+  the same content, can go back whatever moved it in between; a move a
+  failure left half-recorded is judged as recovery will leave it; a missing
+  original folder outside the library and a file locked right now are said
+  before anything is done. Recovery finds a moved file that was saved anew
+  (new inode, same bytes) even when a new file took its old name.
+- `flib ui` has Search, Activity and Due pages (#114), read-only and
+  readable without JavaScript. **Search** is `flib search` in a form:
+  category and kind chips, the other filters under "More filters", each
+  match with Open and Show in Finder, totals per currency over every match
+  as `flib search --sum` adds them up (optionally by issuer, month, year,
+  kind or category), and Export CSV. **Activity** lists the runs of the last
+  7, 30 or 90 days by day: what each moved where, duplicates set aside,
+  moves undone, sensitive files left in place (a count), files skipped while
+  the Mac was locked and the wait for the unlock (from the run logs), and
+  the cost. **Due** is `flib due`, with its window (7 days, 2 weeks, 1 or 3
+  months, overdue) and totals per currency. `flib ui --open` takes
+  `search`, `activity` and `due`. The pages are built on the server with
+  every value from the index escaped; search words go in a form body, never
+  in the address, so they stay out of the browser's history; sensitive
+  files are never listed, only counted; Open and Show in Finder post the
+  file's index id and the server checks its real path again (inside the
+  library or an input folder, no `..`, no symbolic link) before asking
+  macOS; Open takes documents only (an allow-list of extensions without the
+  macro-capable `.doc`, `.xls` and `.ppt`; no execute bit; no alias; no
+  per-file "Open With" or Finder type/creator picking an app), so an app,
+  script, installer or web location gets only Show in Finder; names lose Unicode format characters (no right-to-left
+  tricks); the CSV is an attachment of up to 5000 matches whose cells cannot
+  run as spreadsheet formulas; a search by meaning waits at most 5 s per socket
+  operation for the embeddings server, and falls back to words if its client
+  cannot be made; any address choice the page does not offer is 400.
+  The Content-Security-Policy now also requires Trusted Types.
+  Driven in real browsers before release: every form post (Search, Export,
+  Open, Show in Finder and End session, which `flib ui` from #113 had too)
+  was refused in Chromium, because `Referrer-Policy: no-referrer` makes a
+  browser send `Origin: null`; the policy is now `same-origin`, and a
+  headless-Chrome test (`FLIB_TEST_BROWSER=1`, run in CI) drives a whole
+  session. Search results survive Back and Forward (post, redirect, get, the
+  words never in the address); the "session ended" page keeps its style;
+  refusals are pages with the menu and what to do; a window without the
+  session is told when it is open elsewhere; another `flib ui`'s handoff
+  folder is no longer swept; Status shows review reasons compactly, dates
+  and costs as the other pages do; narrow screens get a Due card layout,
+  a skip link and stronger contrast.
 - The cat's poses for the coming menu bar item (#112): five monochrome
   template icons, hand-written SVG in `assets/menu/` (18 pt, black on
   transparent, nothing external), each a silhouette of the app icon's cat:

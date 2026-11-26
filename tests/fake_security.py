@@ -22,7 +22,10 @@ def main(argv: list[str]) -> int:
     if command == "find-generic-password":
         if key not in items:
             return 44
-        print(items[key])
+        # Like the real tool: the secret only with -w; otherwise its attributes.
+        print(
+            items[key] if "-w" in args else f'keychain: "fake"\n    "acct"<blob>="{opts.get("-a")}"'
+        )
         return 0
     if command == "add-generic-password":
         first, second = sys.stdin.readline().rstrip("\n"), sys.stdin.readline().rstrip("\n")

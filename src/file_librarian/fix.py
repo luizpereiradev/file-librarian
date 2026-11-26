@@ -3,7 +3,9 @@
 The user names a file in the library and the category and/or name it should
 have. The move goes through the same journal as a run: it is recorded as its
 own run, ``planned`` before the move and ``done`` after, so ``flib undo``
-reverts it like any other. The index row follows the file (and with it the
+reverts it like any other. ``fix_files`` does several in one run (the
+interface's "accept all", #115), so one undo reverts them together; the
+run's counts always come from its journal. The index row follows the file (and with it the
 search index), and each change is recorded in ``corrections``, the same way
 ``flib reconcile`` records moves made by hand. The classifier then sends it
 as an example in later requests. A file fixed out of review loses its review
@@ -30,9 +32,13 @@ file's row as it was, if it did not.
 from __future__ import annotations
 
 import os
+import sqlite3
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from itertools import islice
 from pathlib import Path
+from typing import NamedTuple
 
 from file_librarian.config import Config
 from file_librarian.db.store import FileRow, OperationRow, Store
@@ -45,6 +51,7 @@ from file_librarian.protection import LOCKED_NOW
 
 _FIXABLE = {FileStatus.ORGANIZED, FileStatus.REVIEW}
 _MAX_NAME_BYTES = 255
+_MAX_NUMBERED = 1000
 
 
 class FixError(ValueError):
@@ -72,11 +79,43 @@ def fix_file(
     category: str | None = None,
     name: str | None = None,
     trigger: RunTrigger = RunTrigger.MANUAL,
+    file_id: int | None = None,
 ) -> FixReport:
-    """Move one indexed file to ``category`` and/or rename it to ``name``."""
+    """Move one indexed file to ``category`` and/or rename it to ``name``.
+
+    ``file_id``: the index row to fix, as the interface names it; ``path`` is then
+    only used in messages (several rows can share a path, #115)."""
+    planned = plan_fix(config, store, path, category=category, name=name, file_id=file_id)
+    run_id = store.start_run(RunMode.RUN, trigger)
+    return _apply(config, store, planned, run_id)
+
+
+@dataclass(frozen=True, slots=True)
+class PlannedFix:
+    """A fix checked and ready to apply: the file is the one indexed, the name is free
+    of '/' and the category is configured. Nothing has changed yet."""
+
+    row: FileRow
+    destination: Path
+    status: FileStatus
+    category: str | None
+
+
+def plan_fix(
+    config: Config,
+    store: Store,
+    path: Path,
+    *,
+    category: str | None = None,
+    name: str | None = None,
+    file_id: int | None = None,
+) -> PlannedFix:
+    """Check a fix without doing it; raises ``FixError`` with what is wrong.
+
+    ``file_id`` names the row by id instead of looking ``path`` up."""
     if category is None and name is None:
         raise FixError("say what to change: a category, a name, or both")
-    row = store.file_by_current_path(path.expanduser().absolute())
+    row = _lookup(store, path, file_id)
     if row is None:
         raise FixError(f"{path} is not a file flib organized (see `flib search`)")
     if row.status not in _FIXABLE:
@@ -96,32 +135,137 @@ def fix_file(
         destination = source.parent / new_name
     if destination == source:
         raise FixError(f"{path} is already there with that name")
-
     status = FileStatus.REVIEW if new_category is None else FileStatus.ORGANIZED
-    st = os.lstat(source)
+    return PlannedFix(row, destination, status, new_category)
+
+
+def _lookup(store: Store, path: Path, file_id: int | None) -> FileRow | None:
+    if file_id is None:
+        return store.file_by_current_path(path.expanduser().absolute())
+    try:
+        return store.file_by_id(file_id)
+    except LookupError:
+        return None
+
+
+@dataclass(slots=True)
+class BatchReport:
+    """``fix_files``: one run, what it fixed and what it left as it was."""
+
+    run_id: int
+    fixed: list[FixReport] = field(default_factory=list)
+    skipped: list[tuple[Path, str]] = field(default_factory=list)
+    """A file left as it was, and why (``FixError``'s words)."""
+    broken: bool = False
+    """The index could not be written mid-way: the batch stopped there. A file
+    already moved whose entry is still ``planned`` is finished by recovery."""
+
+
+class FixItem(NamedTuple):
+    """One fix of a batch; ``file_id`` names the row by id (see ``fix_file``)."""
+
+    path: Path
+    category: str | None = None
+    name: str | None = None
+    file_id: int | None = None
+
+
+NOT_WRITTEN = "the index could not be written"
+
+
+def fix_files(
+    config: Config,
+    store: Store,
+    items: Sequence[FixItem],
+    *,
+    trigger: RunTrigger = RunTrigger.MANUAL,
+) -> BatchReport:
+    """Several fixes journaled as **one** run: a single ``flib undo --run`` reverts
+    them all. Each is checked and done as ``fix_file`` does it; one that cannot
+    be done is skipped and listed, and the others go on. If the index cannot be
+    written, the batch stops there (``broken``): what moved stays journaled, an
+    entry still ``planned`` is finished by recovery, and the run is finished with
+    the counts its journal holds, when it can be."""
     run_id = store.start_run(RunMode.RUN, trigger)
+    report = BatchReport(run_id)
+    unplanned = 0  # skipped before a journal entry was made
+    for index, item in enumerate(items):
+        try:
+            planned = plan_fix(
+                config, store, item.path, category=item.category, name=item.name,
+                file_id=item.file_id,
+            )  # fmt: skip
+        except FixError as exc:
+            report.skipped.append((item.path, str(exc)))
+            unplanned += 1
+            continue
+        except sqlite3.Error:
+            report.broken = True
+            unplanned += 1  # no journal entry for it either
+        else:
+            try:
+                report.fixed.append(_apply(config, store, planned, run_id, finish=False))
+            except FixError as exc:
+                report.skipped.append((item.path, str(exc)))
+            except sqlite3.Error:
+                report.broken = True
+        if report.broken:
+            report.skipped += [(rest.path, NOT_WRITTEN) for rest in items[index:]]
+            unplanned += len(items) - index - 1
+            break
+    try:
+        with store.transaction():
+            _finish(store, run_id, extra_seen=unplanned)
+    except sqlite3.Error:
+        report.broken = True  # recovery or the next run finishes it
+    return report
+
+
+def _apply(
+    config: Config, store: Store, planned: PlannedFix, run_id: int, *, finish: bool = True
+) -> FixReport:
+    """Journal, move and record one checked fix in run ``run_id``."""
+    row = planned.row
+    source = row.current_path
+    st = os.lstat(source)
     with store.transaction():
         op_id = store.add_operation(
             run_id,
             row.id,
             source,
-            destination,
+            planned.destination,
             identity=(st.st_dev, st.st_ino),
-            fix=(status, new_category),
+            fix=(planned.status, planned.category),
         )
     try:
-        ensure_folder(destination.parent, inside=config.output_root)
-        destination = _move(source, destination, store, op_id)
+        ensure_folder(planned.destination.parent, inside=config.output_root)
+        destination = _move(source, planned.destination, store, op_id)
     except (OSError, ValueError) as exc:
         with store.transaction():
             store.set_operation(op_id, OperationStatus.FAILED)
-            store.finish_run(run_id, seen=1, moved=0, review=0, errors=1, cost_usd=0.0)
-        raise FixError(f"could not move {path}: {exc}") from exc
+            if finish:
+                _finish(store, run_id)
+        raise FixError(f"could not move {source}: {exc}") from exc
 
     category_change, name_change, warnings = _complete(
-        config, store, row, run_id, op_id, destination, status, new_category
-    )
+        config, store, row, run_id, op_id, destination, planned.status, planned.category,
+        finish=finish,
+    )  # fmt: skip
     return FixReport(run_id, source, destination, category_change, name_change, warnings)
+
+
+def _finish(store: Store, run_id: int, *, extra_seen: int = 0) -> None:
+    """The run's counts, from its journal: one fix, or a batch of them."""
+    ops = store.operations(run_id=run_id)
+    done = [op for op in ops if op.status is not OperationStatus.FAILED]
+    store.finish_run(
+        run_id,
+        seen=len(ops) + extra_seen,
+        moved=sum(1 for op in done if op.fix is not None and op.fix[0] is FileStatus.ORGANIZED),
+        review=sum(1 for op in done if op.fix is not None and op.fix[0] is FileStatus.REVIEW),
+        errors=len(ops) - len(done),
+        cost_usd=0.0,  # nothing is sent to the provider
+    )
 
 
 def complete_interrupted(
@@ -140,7 +284,7 @@ def complete_interrupted(
     if not moved:
         with store.transaction():
             store.set_operation(op.id, OperationStatus.FAILED)
-            store.finish_run(op.run_id, seen=1, moved=0, review=0, errors=1, cost_usd=0.0)
+            _finish(store, op.run_id)
         return
     row = store.file_by_id(op.file_id)
     status, category = op.fix
@@ -156,6 +300,8 @@ def _complete(
     destination: Path,
     status: FileStatus,
     category: str | None,
+    *,
+    finish: bool = True,
 ) -> tuple[tuple[str | None, str] | None, tuple[str, str] | None, list[str]]:
     """Everything after the move. ``row`` is the file as indexed before the fix.
 
@@ -168,7 +314,7 @@ def _complete(
     if category is not None and category != row.category:
         category_change = (row.category, category)
     name_change = None
-    if destination.name != row.current_name:
+    if destination.name != row.current_name and not _only_numbered(destination.name, row):
         name_change = (row.current_name, destination.name)
     warnings: list[str] = []
     if category_change is not None and config is not None:
@@ -180,18 +326,18 @@ def _complete(
             # Out of review: the reason goes, journaled so undo gives it back.
             store.set_review(run_id, row.id, (None, None), old=row.review)
         if category_change is not None:
-            store.add_correction(row.id, "category", *category_change)
+            store.add_correction(row.id, "category", *category_change, operation_id=op_id)
         if name_change is not None:
-            store.add_correction(row.id, "name", *name_change)
-        store.finish_run(
-            run_id,
-            seen=1,
-            moved=int(status is FileStatus.ORGANIZED),
-            review=int(status is FileStatus.REVIEW),
-            errors=0,
-            cost_usd=0.0,  # nothing is sent to the provider
-        )
+            store.add_correction(row.id, "name", *name_change, operation_id=op_id)
+        if finish:
+            _finish(store, run_id)
     return category_change, name_change, warnings
+
+
+def _only_numbered(name: str, row: FileRow) -> bool:
+    """``name`` is the file's own name with a number a taken name forced on it
+    (``a-2.pdf`` for ``a.pdf``): nothing the user chose, so nothing to learn."""
+    return name in set(islice(candidate_names(row.current_name), 1, _MAX_NUMBERED))
 
 
 def swap_tag(

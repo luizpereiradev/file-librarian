@@ -35,13 +35,8 @@ def status(config: Config, *, now: datetime | None = None) -> dict[str, Any]:
                 {
                     "reason": None if g.reason is None else g.reason.value,
                     "count": g.count,
-                    "explanation": explain_review(
-                        g.reason,
-                        g.suggested
-                        if g.suggested in configured or g.suggested is None
-                        else "<other>",
-                        None,
-                    ),
+                    "suggested": _masked(g.suggested, configured),
+                    "explanation": explain_review(g.reason, _masked(g.suggested, configured), None),
                 }
                 for g in state.review
             ],
@@ -88,3 +83,9 @@ def status(config: Config, *, now: datetime | None = None) -> dict[str, Any]:
             "runs_without_cost": state.month_unpriced_runs,
         },
     }
+
+
+def _masked(suggested: str | None, configured: set[str]) -> str | None:
+    """A category the model suggested, or ``<other>`` when it is not configured: text
+    the model wrote never reaches the page (as in ``flib doctor``)."""
+    return suggested if suggested is None or suggested in configured else "<other>"

@@ -773,7 +773,7 @@ def _pipeline(
         if notice:
             summary.insert(0, notice)
         if catch_up:
-            summary.insert(0, "Catch-up run, after the Mac was unlocked.")
+            summary.insert(0, catchup.CATCH_UP_LINE)
         if trigger is RunTrigger.WATCH and not catch_up:
             summary.insert(0, "Watch run: something arrived in an input folder.")
         if outcome.day_cap_reached:
@@ -790,10 +790,7 @@ def _pipeline(
                 f"{left_to} (this watch run does not wait for the unlock)."
             )
         if will_wait:
-            summary.append(
-                f"Waiting up to {hours} h for the Mac to be unlocked to read "
-                f"{len(locked)} file(s) protected while it is locked; then it runs once more."
-            )
+            summary.append(catchup.WAITING_LINE.format(hours=hours, count=len(locked)))
         _print_report(
             outcome.report, cfg, skipped, cost, hint, summary, watch=trigger is RunTrigger.WATCH
         )
@@ -931,22 +928,16 @@ def _wait_and_catch_up(
 
     with catchup.waiter(cfg.database) as held:
         if not held:
-            note(
-                "Not waiting for an unlock: an earlier run is waiting already "
-                "and runs once more after it."
-            )
+            note(catchup.NOT_WAITING_LINE)
             return
         _say(f"Waiting up to {hours} h for the Mac to be unlocked (checking every minute).")
         waited = catchup.wait_for_unlock(hours, partial(catchup.unlocked, locked))
     if waited is catchup.Waited.TIMED_OUT:
-        note(
-            f"The Mac was not unlocked within {hours} h; the next scheduled run "
-            "(or `flib run`) gets the files protected while it is locked."
-        )
+        note(catchup.TIMED_OUT_LINE.format(hours=hours))
     elif waited is catchup.Waited.STOPPED:
-        note("Stopped while waiting for an unlock (SIGTERM); the next run gets those files.")
+        note(catchup.STOPPED_LINE)
     else:
-        note("The Mac was unlocked; running once more for the files skipped while it was locked.")
+        note(catchup.UNLOCKED_LINE)
         _pipeline(config_path, simulate=False, trigger=trigger, catch_up=True)
 
 
@@ -1669,15 +1660,7 @@ def _install_schedule(
         )
     _ensure_key_for_schedule(cfg, save_key)
     _ensure_claude_for_schedule(cfg)
-    installed = scheduler.install(
-        when,
-        path.resolve(),
-        logs_dir(cfg.database),
-        mode=mode,
-        inputs=cfg.input_paths,
-        watch_interval_minutes=cfg.schedule.watch_min_interval_minutes,
-        watch_fallback_minutes=cfg.schedule.watch_fallback_minutes,
-    )
+    installed = scheduler.install_for(path, cfg, when, mode)
     if mode in ("daily", "both"):
         typer.echo(f"Daily run scheduled at {when} ({installed[0]}).")
         typer.echo("If the Mac is asleep then, it runs on wake.")
@@ -2466,7 +2449,8 @@ def ui(
     ] = 0,
     config: ConfigOption = None,
 ) -> None:
-    """Open the local interface in your browser (early: a status page for now).
+    """Open the local interface in your browser: Status, Review, Search, Activity, Due and
+    Settings.
 
     A server on 127.0.0.1 only, for this Mac. The browser gets a one-time
     token through a file only you can read (`--no-browser` prints a link that
@@ -2482,6 +2466,7 @@ def ui(
             browser=not no_browser,
             echo=typer.echo,
             warn=lambda line: typer.echo(line, err=True),
+            config_path=config or default_config_path(),
         )
     except ui_server.UiError as exc:
         _fatal(str(exc))

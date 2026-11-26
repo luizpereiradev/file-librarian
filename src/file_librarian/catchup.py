@@ -43,6 +43,24 @@ from file_librarian import protection
 
 POLL_SECONDS = 60.0
 """How often the waiter asks whether the Mac is unlocked."""
+
+# What the run logs say about a wait; ``activity`` reads them back (#114).
+CATCH_UP_LINE = "Catch-up run, after the Mac was unlocked."
+"""First summary line of the run made after the unlock."""
+WAITING_LINE = (
+    "Waiting up to {hours} h for the Mac to be unlocked to read {count} file(s) "
+    "protected while it is locked; then it runs once more."
+)
+"""In the log of a run that is going to wait."""
+UNLOCKED_LINE = "The Mac was unlocked; running once more for the files skipped while it was locked."
+TIMED_OUT_LINE = (
+    "The Mac was not unlocked within {hours} h; the next scheduled run "
+    "(or `flib run`) gets the files protected while it is locked."
+)
+STOPPED_LINE = "Stopped while waiting for an unlock (SIGTERM); the next run gets those files."
+NOT_WAITING_LINE = (
+    "Not waiting for an unlock: an earlier run is waiting already and runs once more after it."
+)
 WAITER_LOCK_NAME = "flib-waiter.lock"
 
 Sleep = Callable[[float], None]

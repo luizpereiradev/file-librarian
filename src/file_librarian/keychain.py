@@ -54,6 +54,16 @@ def read(account: str = ACCOUNT) -> str | None:
     return value or None
 
 
+def exists(account: str = ACCOUNT) -> bool:
+    """Whether a secret is stored, without reading it (no ``-w``: only its attributes)."""
+    result = _security("find-generic-password", "-s", SERVICE, "-a", account)
+    if result.returncode == _NOT_FOUND:
+        return False
+    if result.returncode != 0:
+        raise KeychainError(f"Keychain lookup failed (code {result.returncode})")
+    return True
+
+
 def write(value: str, account: str = ACCOUNT) -> None:
     """Store or replace the secret."""
     if not value or "\n" in value:

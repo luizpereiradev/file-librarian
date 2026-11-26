@@ -471,14 +471,26 @@ class SettleReport:
 
 
 def settle(
-    store: Store, path: Path, *, done: bool, trigger: RunTrigger = RunTrigger.MANUAL
+    store: Store,
+    path: Path,
+    *,
+    done: bool,
+    trigger: RunTrigger = RunTrigger.MANUAL,
+    file_id: int | None = None,
 ) -> SettleReport:
     """Mark one filed document paid or done (``done``), or open again.
 
     Journaled as its own run (``index_changes``), so ``flib undo`` reverts it.
-    Raises ``DueError`` when there is nothing to change.
+    Raises ``DueError`` when there is nothing to change. ``file_id`` names the row
+    by id, as the interface does (several rows can share a path).
     """
-    row = store.file_by_current_path(path.expanduser().absolute())
+    if file_id is None:
+        row = store.file_by_current_path(path.expanduser().absolute())
+    else:
+        try:
+            row = store.file_by_id(file_id)
+        except LookupError:
+            row = None
     if row is None:
         raise DueError(f"{path} is not a file flib organized (see `flib search`)")
     if row.status not in _SETTLEABLE:
@@ -519,7 +531,8 @@ def render(found: DueList, *, show: Callable[[Path], str] = str) -> list[str]:
             )
             lines.append(f"Total open: {overall}")
         if found.without_amount:
-            lines.append(f"{_documents(found.without_amount)} state no amount; not counted.")
+            verb = "states" if found.without_amount == 1 else "state"
+            lines.append(f"{_documents(found.without_amount)} {verb} no amount; not counted.")
     if found.hidden:
         lines.append(
             f"{_documents(found.hidden)} marked done or of another kind not shown "
