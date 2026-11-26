@@ -778,21 +778,26 @@ def test_a_failed_reinstall_never_mixes_two_configurations(
     assert kept is not None and kept.config != other.resolve()  # B was never recorded
 
 
-def test_a_note_without_the_item_writes_nothing(cfg: Config) -> None:
+def test_a_record_without_the_agent_writes_nothing(config_file: Path, cfg: Config) -> None:
     menubar.write_private(
         menubar.folder() / menubar.TARGET_NAME,
-        json.dumps({"config": "/nowhere.yaml", "database": str(cfg.database)}).encode(),
+        json.dumps({"config": str(config_file), "database": str(cfg.database)}).encode(),
     )
     menubar_state.note_problem(cfg.database, "run_failed")
     assert menubar_state.read_problem() is None  # no agent: not installed
+    with instance_lock(cfg.database):
+        pass
+    menubar_state.changed()
+    assert not menubar.state_path().exists()
 
 
 def test_summary_never_raises_on_a_hostile_seen_file(installed: Config) -> None:
     seen = menubar.folder() / menubar.SEEN_NAME
     for raw in (b"[" * 3000 + b"]" * 3000, b'{"pid": 1e999}', b"\xff\xfe", b"{" * 5000):
         menubar.write_private(seen, raw)
+        assert menubar.read_seen() is None
         found = menubar.summary(full=True)
-        assert found.installed and found.seen is None
+        assert found.installed and found.seen is None and found.problem is None
     big = json.dumps({"pid": 5, "line": "x" * 20000}).encode()
     menubar.write_private(seen, big)
     assert menubar.read_seen() is None  # more than it ever reads
@@ -915,3 +920,19 @@ def test_the_running_record_is_private_and_never_follows_a_link(
     ui_server.write_running(cfg.database, 4242)
     assert victim.read_text() == "keep"
     assert not path.exists()
+
+
+def test_a_removal_goes_on_after_a_step_that_failed(
+    installed: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = menubar._delete
+
+    def stuck(path: Path) -> bool:
+        if path == menubar.app_path():
+            raise PermissionError(13, "Permission denied")
+        return real(path)
+
+    monkeypatch.setattr(menubar, "_delete", stuck)
+    with pytest.raises(menubar.MenuError, match=r"file-librarian-menu\.app"):
+        menubar.remove()
+    assert not menubar.installed() and not menubar.folder().exists()
