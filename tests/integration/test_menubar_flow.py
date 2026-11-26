@@ -109,11 +109,8 @@ def test_flib_menu_builds_installs_and_starts_it(
         "due": 0,
         "running": False,
     }
-    # Not nudged: it was not running yet, and reads the state as it starts. Once it runs
-    # (the fake launchd says so), every change nudges it.
+    # The nudge is a distributed notification, never `open`: it cannot start the app.
     assert nudges(fake_notifier_tools) == []
-    menubar_state.changed()
-    assert nudges(fake_notifier_tools) == [["open", "-g", str(menubar.app_path())]]
 
 
 def test_flib_menu_status_and_remove(installed: Config, fake_notifier_tools: Path) -> None:
@@ -204,7 +201,7 @@ def test_refresh_rebuilds_only_when_needed(
     result = runner.invoke(app, ["menu", "--refresh"])
     assert result.stdout.strip() == "The menu bar item is up to date."
     builds = len([c for c in calls(fake_notifier_tools) if c[0] == "osacompile"])
-    monkeypatch.setattr(menubar, "APP_VERSION", "2")
+    monkeypatch.setattr(menubar, "APP_VERSION", "test")
     result = runner.invoke(app, ["menu", "--refresh"])
     assert result.stdout.strip() == "Menu bar item rebuilt and restarted."
     assert len([c for c in calls(fake_notifier_tools) if c[0] == "osacompile"]) == builds + 1
@@ -226,7 +223,7 @@ def test_refresh_without_the_item(fake_notifier_tools: Path) -> None:
 
 
 def test_a_failed_refresh_is_a_warning(installed: Config, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(menubar, "APP_VERSION", "2")
+    monkeypatch.setattr(menubar, "APP_VERSION", "test")
     monkeypatch.setenv("FAKE_NOTIFIER_FAIL", "osacompile")
     result = runner.invoke(app, ["menu", "--refresh"])
     assert result.exit_code == 0
@@ -363,20 +360,78 @@ def test_an_unexpected_error_is_swallowed(
     assert "RuntimeError: surprise" in caplog.text
 
 
-def test_nudged_only_while_running(
-    installed: Config, fake_notifier_tools: Path, monkeypatch: pytest.MonkeyPatch
+def test_nudged_only_when_the_state_changed(
+    installed: Config, menu_nudges: list[str], fake_notifier_tools: Path
 ) -> None:
-    before = len(nudges(fake_notifier_tools))
-    monkeypatch.setenv("FAKE_LAUNCHD_STOPPED", scheduler.MENU_LABEL)
+    menu_nudges.clear()
+    menubar_state.changed()  # nothing changed: no write, no nudge
+    assert menu_nudges == []
+    menubar.state_path().unlink()
     menubar_state.changed()
-    assert len(nudges(fake_notifier_tools)) == before  # `open` would start what was quit
-    monkeypatch.delenv("FAKE_LAUNCHD_STOPPED")
-    menubar_state.changed()
-    assert len(nudges(fake_notifier_tools)) == before + 1
-    monkeypatch.setenv("FAKE_NOTIFIER_FAIL", "open")
+    assert menu_nudges == [menubar.NOTE_NAME]
+    assert nudges(fake_notifier_tools) == []  # never `open`, which could start the app
+
+
+def test_a_nudge_that_cannot_be_posted_is_ignored(
+    installed: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(name: str) -> bool:
+        raise OSError("no CoreFoundation")
+
+    monkeypatch.setattr(menubar_state, "POST", broken)
     assert menubar_state.nudge() is False
-    monkeypatch.setattr(notifier, "OPEN", "/nonexistent/open")
-    assert menubar_state.nudge() is False
+
+
+def test_the_real_nudge_is_a_distributed_notification(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls_made: list[tuple[str, tuple[object, ...]]] = []
+
+    class FakeCF:
+        def __getattr__(self, name: str) -> Any:
+            def call(*args: object) -> int:
+                calls_made.append((name, args))
+                return 7
+
+            return type("F", (), {"__call__": staticmethod(call)})()
+
+    monkeypatch.setattr("ctypes.CDLL", lambda path: FakeCF())
+    assert menubar_state._post_distributed(menubar.NOTE_NAME) is True
+    names = [name for name, _ in calls_made]
+    assert names == [
+        "CFStringCreateWithCString",
+        "CFNotificationCenterGetDistributedCenter",
+        "CFNotificationCenterPostNotification",
+        "CFRelease",
+    ]
+    assert calls_made[0][1][1] == menubar.NOTE_NAME.encode()
+    assert calls_made[2][1][1:] == (7, None, None, True)
+
+
+def test_no_launchctl_and_no_subprocess_on_the_hot_path(
+    installed: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("a subprocess on the hot path")
+
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    menubar.state_path().unlink()
+    with instance_lock(installed.database):
+        pass
+    assert shown()["pose"] == "asleep"
+
+
+def test_a_ctrl_c_in_the_hook_never_replaces_the_callers_exception(
+    installed: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def interrupted(database: Path | None = None) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(menubar_state, "changed", interrupted)
+    with pytest.raises(ValueError, match="the caller's"), instance_lock(installed.database):
+        raise ValueError("the caller's")
+    with pytest.raises(KeyboardInterrupt), instance_lock(installed.database):
+        pass  # with nothing else on its way, a Ctrl-C is a Ctrl-C
 
 
 def test_the_schedule_shows_as_the_next_run(installed: Config, config_file: Path) -> None:
@@ -579,8 +634,12 @@ def test_status_and_doctor_say_how_it_is(
     report = build_report(Options(config_path=config_file))
     assert "last shown: asleep (count 0, review 0, due 0), " in report
     monkeypatch.setattr(menubar, "APP_VERSION", "9")
+    # flib status stays cheap (the source is not regenerated); doctor and --status check.
     status = runner.invoke(app, ["status", "-c", str(config_file)])
-    assert "Menu bar: the menu bar app is out of date; `flib menu` fixes it." in status.stdout
+    assert "Menu bar: shown" in status.stdout
+    shown_status = runner.invoke(app, ["menu", "--status"])
+    assert "the menu bar app is out of date; `flib menu` fixes it." in shown_status.stdout
+    assert "app: the menu bar app is out of date" in build_report(Options(config_path=config_file))
     monkeypatch.setenv("FAKE_LAUNCHD_FAIL", "print")
     found = menubar.summary()
     assert found.installed and not found.loaded and not found.running
@@ -680,3 +739,179 @@ def test_install_script_refreshes_the_item() -> None:
     script = (Path(__file__).parents[2] / "scripts" / "install.sh").read_text(encoding="utf-8")
     assert '"$agents.menu.plist"' in script and "menu --refresh" in script
     assert scheduler.MENU_LABEL == scheduler.LABEL + ".menu"  # what "$agents.menu" names
+
+
+# --- after the review of #132 ---------------------------------------------------------------
+
+
+def test_a_failed_install_leaves_no_target_and_no_writes(
+    config_file: Path, monkeypatch: pytest.MonkeyPatch, cfg: Config
+) -> None:
+    monkeypatch.setenv("FAKE_LAUNCHD_FAIL", "bootstrap")
+    result = runner.invoke(app, ["menu", "-c", str(config_file)])
+    assert result.exit_code == 1
+    assert "the menu bar item is not installed" in result.stderr
+    assert not menubar.installed() and menubar.read_target() is None
+    monkeypatch.delenv("FAKE_LAUNCHD_FAIL")
+    if menubar.state_path().exists():
+        menubar.state_path().unlink()
+    with instance_lock(cfg.database):
+        pass
+    assert not menubar.state_path().exists()  # nothing installed: nothing written
+
+
+def test_a_failed_reinstall_never_mixes_two_configurations(
+    installed: Config, tmp_path: Path, downloads: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    other = write_config(tmp_path, downloads)
+    monkeypatch.setenv("FAKE_NOTIFIER_FAIL", "osacompile")  # B's build fails
+    result = runner.invoke(app, ["menu", "-c", str(other)])
+    assert result.exit_code == 1
+    target = menubar.read_target()
+    assert target is not None and target.config != other.resolve()  # still A, as the app
+    monkeypatch.delenv("FAKE_NOTIFIER_FAIL")
+    monkeypatch.setenv("FAKE_LAUNCHD_FAIL", "bootstrap")  # B builds, launchd refuses
+    result = runner.invoke(app, ["menu", "-c", str(other)])
+    assert result.exit_code == 1
+    assert not menubar.installed()  # rolled back: nothing half-installed keeps writing
+    kept = menubar.read_target()
+    assert kept is not None and kept.config != other.resolve()  # B was never recorded
+
+
+def test_a_note_without_the_item_writes_nothing(cfg: Config) -> None:
+    menubar.write_private(
+        menubar.folder() / menubar.TARGET_NAME,
+        json.dumps({"config": "/nowhere.yaml", "database": str(cfg.database)}).encode(),
+    )
+    menubar_state.note_problem(cfg.database, "run_failed")
+    assert menubar_state.read_problem() is None  # no agent: not installed
+
+
+def test_summary_never_raises_on_a_hostile_seen_file(installed: Config) -> None:
+    seen = menubar.folder() / menubar.SEEN_NAME
+    for raw in (b"[" * 3000 + b"]" * 3000, b'{"pid": 1e999}', b"\xff\xfe", b"{" * 5000):
+        menubar.write_private(seen, raw)
+        found = menubar.summary(full=True)
+        assert found.installed and found.seen is None
+    big = json.dumps({"pid": 5, "line": "x" * 20000}).encode()
+    menubar.write_private(seen, big)
+    assert menubar.read_seen() is None  # more than it ever reads
+    (menubar.folder() / menubar.TARGET_NAME).write_bytes(b"[" * 5000)
+    assert menubar.summary().problem == "flib menu was not set up completely"
+
+
+def test_summary_never_raises_at_all(installed: Config, monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom() -> None:
+        raise RecursionError
+
+    monkeypatch.setattr(menubar, "read_target", boom)
+    found = menubar.summary()
+    assert found.installed and found.problem == "its state cannot be read (RecursionError)"
+    status = runner.invoke(app, ["menu", "--status"])
+    assert status.exit_code == 0
+
+
+def test_status_asks_launchd_once(installed: Config, monkeypatch: pytest.MonkeyPatch) -> None:
+    asked: list[tuple[str, ...]] = []
+    real = scheduler._launchctl
+
+    def counting(*args: str) -> Any:
+        asked.append(args)
+        return real(*args)
+
+    monkeypatch.setattr(scheduler, "_launchctl", counting)
+    monkeypatch.setattr(menubar, "source_for", lambda config: pytest.fail("regenerated"))
+    menubar.summary()
+    assert len(asked) == 1
+
+
+def test_a_linked_menu_folder_is_never_written_through(installed: Config, tmp_path: Path) -> None:
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    shutil.rmtree(menubar.folder())
+    menubar.folder().symlink_to(elsewhere)
+    with pytest.raises(OSError, match="not a folder of this user's"):
+        menubar.write_private(menubar.state_path(), b"x")
+    menubar_state.changed()  # swallowed
+    assert list(elsewhere.iterdir()) == []
+    assert runner.invoke(app, ["menu", "--remove"]).exit_code == 0
+    assert not menubar.folder().is_symlink() and not menubar.folder().exists()
+    assert elsewhere.is_dir()  # the link went, not what it points to
+
+
+def test_a_partial_removal_says_what_is_left(
+    installed: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = menubar._delete
+
+    def stuck(path: Path) -> bool:
+        if path == menubar.folder():
+            raise PermissionError(13, "Permission denied")
+        return real(path)
+
+    monkeypatch.setattr(menubar, "_delete", stuck)
+    result = runner.invoke(app, ["menu", "--remove"])
+    assert result.exit_code == 1 and result.exception is not None
+    assert isinstance(result.exception, SystemExit)  # said, not a traceback
+    assert "could not remove" in result.stderr and "Permission denied" in result.stderr
+    assert not menubar.installed() and not menubar.app_path().exists()  # the rest went
+
+
+def test_an_app_path_that_is_a_link_is_unlinked(installed: Config, tmp_path: Path) -> None:
+    elsewhere = tmp_path / "real.app"
+    elsewhere.mkdir()
+    shutil.rmtree(menubar.app_path())
+    menubar.app_path().symlink_to(elsewhere)
+    assert menubar.remove() is True
+    assert elsewhere.is_dir() and not menubar.app_path().is_symlink()
+
+
+def test_the_settings_page_says_whether_it_is_installed(config_file: Path) -> None:
+    from file_librarian.ui import settings
+
+    assert "`flib menu` puts the cat there" in settings.menu_bar_note()
+    assert runner.invoke(app, ["menu", "-c", str(config_file)]).exit_code == 0
+    assert "`flib menu --remove` takes it away" in settings.menu_bar_note()
+
+
+def test_a_page_not_in_the_table_never_reaches_an_address(cfg: Config, fake_browser: Path) -> None:
+    with ui_lock(cfg.database):
+        ui_server.write_running(cfg.database, 54321)
+        for page in ("../../etc", "launch?token=abc", "review/accept?id=1", "Review"):
+            with pytest.raises(ui_server.UiError, match="no page"):
+                ui_server.run(cfg, page=page, echo=lambda line: None)
+    assert calls(fake_browser) == []
+    assert {page: f"/{page}" for page in ui_server.PAGES} == ui_server.PAGE_PATHS
+
+
+def test_flib_ui_open_is_a_fixed_choice(config_file: Path, fake_browser: Path) -> None:
+    result = runner.invoke(app, ["ui", "--open", "../../etc", "-c", str(config_file)])
+    assert result.exit_code == 2
+    assert calls(fake_browser) == []
+
+
+def test_a_boolean_port_is_not_believed_even_from_the_holder(cfg: Config) -> None:
+    with ui_lock(cfg.database):
+        record = {"pid": os.getpid(), "port": True}
+        ui_server.running_path(cfg.database).write_text(json.dumps(record))
+        assert ui_server.running_port(cfg.database) is None
+        record = {"pid": os.getpid(), "port": 5}
+        ui_server.running_path(cfg.database).write_text(json.dumps(record))
+        assert ui_server.running_port(cfg.database) == 5
+
+
+def test_the_running_record_is_private_and_never_follows_a_link(
+    cfg: Config, tmp_path: Path
+) -> None:
+    cfg.database.parent.mkdir(parents=True, exist_ok=True)
+    ui_server.write_running(cfg.database, 4242)
+    path = ui_server.running_path(cfg.database)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    path.unlink()
+    victim = tmp_path / "victim"
+    victim.write_text("keep")
+    tmp = path.with_name(f".{ui_server.RUNNING_NAME}.{os.getpid()}")
+    tmp.symlink_to(victim)
+    ui_server.write_running(cfg.database, 4242)
+    assert victim.read_text() == "keep"
+    assert not path.exists()

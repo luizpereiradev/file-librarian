@@ -12,36 +12,40 @@ and checks it. ``changed`` is the one hook, and it is called:
 - by ``note_problem``, when a run could not work (no key, no access) or worked
   again, for the trouble pose.
 
-It does nothing unless the item is installed (one ``stat``), and only for the
-library it was installed for: a hook from another configuration's database
-is ignored. It never raises and never runs inside a database transaction (the
-lock is released after the index is closed); anything that goes wrong is
-logged at debug level and the item heals on the next change. After writing,
-it nudges the applet with ``open -g`` only while launchd says it runs (an
-``open`` would start an app the user quit); the applet also re-reads on a
-30-second timer and when its menu opens, so a missed nudge costs little.
+It does nothing unless the item is installed (one ``stat`` of its agent's
+plist), and only for the library it was installed for: a hook from another
+configuration's database is ignored. It never raises (not even a Ctrl-C over
+another exception: see ``lock``) and never runs inside a database transaction
+(the lock is released after the index is closed). It reads the status in its
+cheap form (``status.collect(probe=False)``: no ``launchctl``, no subprocess at
+all), writes only when the content differs from the file, and then nudges the
+applet with a distributed notification (``NOTE_NAME``), which reaches only a
+running applet and can never start one, unlike ``open``. The applet also
+re-reads on a 30-second timer and when its menu opens, so a missed nudge costs
+little.
 
-``state.json`` (``menubar.STATE_KEYS``): ``version``, ``pose`` (one of
-``poses.Pose``), ``count`` (next to the icon), ``line`` (the state in words),
-``next`` (the next run), ``review`` and ``due`` (for the menu's direct
-entries) and ``running``. Counts only: the menu bar is visible to anyone
-looking at the screen, and in screen sharing, so no file name ever goes in.
+``state.json`` (``menubar.STATE_KEYS``, in ``menubar.FORM``): ``version``,
+``pose`` (one of ``poses.Pose``), ``count`` (next to the icon), ``line`` (the
+state in words), ``next`` (the next run), ``review`` and ``due`` (for the
+menu's direct entries) and ``running``. ASCII with ``\\uXXXX`` escapes. Counts
+only: the menu bar is visible to anyone looking at the screen, and in screen
+sharing, so no file name ever goes in.
 """
 
 from __future__ import annotations
 
+import ctypes
 import json
 import logging
 import os
-import sqlite3
-import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from file_librarian import lock, menubar, notifier, poses, scheduler
+from file_librarian import lock, menubar, poses
 from file_librarian import status as status_mod
-from file_librarian.config import ConfigError, load_config
+from file_librarian.config import Config, load_config
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +54,6 @@ PROBLEMS = {
     "no_access": "macOS denied a folder (`flib doctor`)",
 }
 """What ``note_problem`` records, in words for the menu's first line."""
-NUDGE_TIMEOUT = 5.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +77,8 @@ class View:
             "due": _bounded(self.due),
             "running": self.running,
         }
-        return json.dumps(data, ensure_ascii=False).encode("utf-8") + b"\n"
+        # ASCII, compact, flat: exactly ``menubar.FORM``.
+        return json.dumps(data, separators=(",", ":")).encode("ascii") + b"\n"
 
 
 def _bounded(count: int) -> int:
@@ -82,9 +86,18 @@ def _bounded(count: int) -> int:
 
 
 def _fit(text: str) -> str:
-    if len(text) <= menubar.MAX_TEXT:
+    """At most ``MAX_TEXT`` UTF-16 units, with no ``"`` or ``\\`` (``FORM`` has no
+    escape for them) and no character the applet refuses."""
+    text = "".join(
+        "'" if char in '"\\' else char
+        for char in text
+        if char.isprintable() and not 0xD800 <= ord(char) <= 0xDFFF
+    )
+    if menubar._utf16_length(text) <= menubar.MAX_TEXT:
         return text
-    return text[: menubar.MAX_TEXT - 1] + "…"
+    while menubar._utf16_length(text) > menubar.MAX_TEXT - 1:
+        text = text[:-1]
+    return text + "…"
 
 
 def _files(count: int, what: str) -> str:
@@ -129,12 +142,29 @@ def next_line(schedule: status_mod.NextRun) -> str:
     return f"Next run {when}, and as files arrive" if watching else f"Next run {when}"
 
 
+_CONFIGS: dict[tuple[str, int, int], Config] = {}
+"""Configurations already read, by path, modification time and size: a long-lived
+process (the interface, the MCP server) does not parse the file on every write."""
+
+
+def _config(path: Path) -> Config:
+    info = path.stat()
+    key = (str(path), info.st_mtime_ns, info.st_size)
+    config = _CONFIGS.get(key)
+    if config is None:
+        _CONFIGS.clear()
+        config = _CONFIGS[key] = load_config(path)
+    return config
+
+
 def view(database: Path, config_path: Path, *, now: datetime | None = None) -> View:
     """What the item should show now, for the configuration at ``config_path``."""
-    config = load_config(config_path)
+    config = _config(config_path)
     try:
-        status: status_mod.Status | None = status_mod.collect(config, now=now, menu_bar=False)
-    except (status_mod.StatusError, sqlite3.Error, OSError):
+        status: status_mod.Status | None = status_mod.collect(
+            config, now=now, menu_bar=False, probe=False
+        )
+    except Exception:  # an index it cannot read, whatever the reason: trouble
         status = None
     running = lock.holder(database) is not None
     problem = read_problem()
@@ -155,55 +185,82 @@ def _same(a: Path, b: Path) -> bool:
     return os.path.realpath(a) == os.path.realpath(b)
 
 
+def write_state(database: Path, config_path: Path) -> bool:
+    """Write the state for this library if it differs from the file, and nudge the
+    applet; ``True`` when written. Raises what it meets (``changed`` swallows it)."""
+    data = view(database, config_path).to_json()
+    if menubar.read_small(menubar.state_path()) == data:
+        return False
+    menubar.write_private(menubar.state_path(), data)
+    nudge()
+    return True
+
+
 def changed(database: Path | None = None) -> None:
     """Write the state and nudge the applet, if the item is installed (for ``database``,
-    when given). Never raises; never slows a run by more than reading the status."""
+    when given). Never raises; with no item installed, costs one ``stat``."""
     try:
+        if not menubar.installed():
+            return
         target = menubar.read_target()
         if target is None or (database is not None and not _same(database, target.database)):
             return
-        menubar.write_private(menubar.state_path(), view(target.database, target.config).to_json())
-        nudge()
-    except (OSError, ValueError, ConfigError, sqlite3.Error, scheduler.ScheduleError) as exc:
-        log.debug("menu bar state not written: %s", exc)
+        write_state(target.database, target.config)
     except Exception as exc:  # the item is a convenience: it must never break flib
         log.debug("menu bar state not written: %s: %s", type(exc).__name__, exc)
 
 
-def nudge() -> bool:
-    """Tell a running applet to read the state now (``open -g``: a reopen event, no
-    Automation permission). Not when launchd says it is not running: ``open`` would
-    start an app the user quit. ``True`` when nudged."""
-    app = menubar.app_path()
-    if not app.exists() or not scheduler.agent_running(menubar.LABEL):
+def _post_distributed(name: str) -> bool:
+    """Post the distributed notification ``name`` to this login session, through
+    CoreFoundation (no Apple event, no permission; it starts nothing)."""
+    cf = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+    cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+    cf.CFStringCreateWithCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+    cf.CFNotificationCenterGetDistributedCenter.restype = ctypes.c_void_p
+    cf.CFNotificationCenterPostNotification.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool,
+    ]  # fmt: skip
+    cf.CFRelease.argtypes = [ctypes.c_void_p]
+    utf8 = 0x08000100  # kCFStringEncodingUTF8
+    ref = cf.CFStringCreateWithCString(None, name.encode("ascii"), utf8)
+    if not ref:
         return False
     try:
-        # A fixed binary and flib's own app path.
-        result = subprocess.run(  # noqa: S603
-            [notifier.OPEN, "-g", str(app)],
-            capture_output=True,
-            timeout=NUDGE_TIMEOUT,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
+        center = cf.CFNotificationCenterGetDistributedCenter()
+        cf.CFNotificationCenterPostNotification(center, ref, None, None, True)
+    finally:
+        cf.CFRelease(ref)
+    return True
+
+
+POST: Callable[[str], bool] = _post_distributed
+"""How the nudge is posted; tests swap in a recorder."""
+
+
+def nudge() -> bool:
+    """Tell a running applet to read the state now. ``True`` when posted."""
+    try:
+        return POST(menubar.NOTE_NAME)
+    except (OSError, AttributeError) as exc:
         log.debug("menu bar app not nudged: %s", exc)
         return False
-    return result.returncode == 0
 
 
 def read_problem() -> str | None:
     try:
-        value = json.loads((menubar.folder() / menubar.PROBLEM_NAME).read_text("utf-8"))
-    except (OSError, ValueError):
+        value = json.loads(menubar.read_small(menubar.folder() / menubar.PROBLEM_NAME) or b"")
+    except Exception:
         return None
-    return value if value in PROBLEMS else None
+    return value if isinstance(value, str) and value in PROBLEMS else None
 
 
 def note_problem(database: Path, problem: str | None) -> None:
     """Remember why the last run could not work (a key of ``PROBLEMS``), or that it
     worked (``None``), for the trouble pose; then update the state if that changed.
-    Only for the library the item was installed for. Never raises."""
+    Only while the item is installed, for its library. Never raises."""
     try:
+        if not menubar.installed():
+            return
         target = menubar.read_target()
         if target is None or not _same(database, target.database):
             return
@@ -214,7 +271,7 @@ def note_problem(database: Path, problem: str | None) -> None:
             path.unlink(missing_ok=True)
         else:
             menubar.write_private(path, json.dumps(problem).encode() + b"\n")
-    except OSError as exc:
-        log.debug("menu bar problem not noted: %s", exc)
+    except Exception as exc:
+        log.debug("menu bar problem not noted: %s: %s", type(exc).__name__, exc)
         return
     changed(database)

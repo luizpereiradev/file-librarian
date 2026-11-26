@@ -36,6 +36,7 @@ def _osacompile(argv: list[str]) -> None:
         "CFBundleExecutable": "applet",
         "CFBundleIconFile": "applet",
         "CFBundleIconName": "applet",
+        "CFBundleDocumentTypes": [{"CFBundleTypeName": "x"}],
         "CFBundleName": app.stem,
         "CFBundlePackageType": "APPL",
         "NSCameraUsageDescription": "This script needs access to your camera to run.",

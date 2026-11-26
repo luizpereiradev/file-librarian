@@ -2458,9 +2458,8 @@ def mcp(config: ConfigOption = None) -> None:
 @app.command()
 def ui(
     open_page: Annotated[
-        str,
-        typer.Option("--open", metavar="PAGE", help=f"Page to open: {', '.join(ui_server.PAGES)}."),
-    ] = "status",
+        ui_server.Page, typer.Option("--open", help="Page to open.")
+    ] = ui_server.Page.STATUS,
     no_browser: Annotated[
         bool, typer.Option("--no-browser", help="Print the link without opening a browser.")
     ] = False,
@@ -2482,7 +2481,7 @@ def ui(
     try:
         reason = ui_server.run(
             cfg,
-            page=open_page,
+            page=str(open_page),
             port=port,
             browser=not no_browser,
             echo=typer.echo,
@@ -2525,7 +2524,10 @@ def menu(
     if sum((install, remove, show, refresh, organize)) > 1:
         _fatal("choose one of --install, --remove, --status and --refresh")
     if remove:
-        found = menubar.remove()
+        try:
+            found = menubar.remove()
+        except menubar.MenuError as exc:
+            _fatal(f"{exc}; remove it by hand or run `flib menu --remove` again")
         typer.echo(
             "Removed from the menu bar." if found else "The menu bar item was not installed."
         )
@@ -2595,7 +2597,7 @@ def _refresh_menu(*, quiet: bool) -> None:
 
 
 def _print_menu_status() -> None:
-    found = menubar.summary()
+    found = menubar.summary(full=True)
     line = menubar.status_line(found)
     if line is None:
         typer.echo("The menu bar item is not installed. `flib menu` puts flib in the menu bar.")

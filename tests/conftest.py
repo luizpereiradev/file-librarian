@@ -200,6 +200,20 @@ def fake_notifier_tools(
 
 
 @pytest.fixture(autouse=True)
+def menu_nudges(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The menu bar item's nudge (a distributed notification) is recorded, never posted;
+    returns the names posted."""
+    posted: list[str] = []
+
+    def record(name: str) -> bool:
+        posted.append(name)
+        return True
+
+    monkeypatch.setattr("file_librarian.menubar_state.POST", record)
+    return posted
+
+
+@pytest.fixture(autouse=True)
 def fake_browser(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
     """``flib ui`` opens its handoff file with a fake ``open``; no test opens a real browser.
 

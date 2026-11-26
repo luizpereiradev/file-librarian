@@ -1461,8 +1461,8 @@ def test_flib_ui_with_a_bad_page_or_port(
 ) -> None:
     path = write_config(tmp_path, downloads)
     result = runner.invoke(app, ["ui", "--open", "nope", "-c", str(path)])
-    assert result.exit_code == 1
-    assert "no page 'nope'; one of: status" in result.stderr
+    assert result.exit_code == 2  # a fixed choice: refused before anything starts
+    assert "'nope' is not one of" in result.stderr
     result = runner.invoke(app, ["ui", "--port", str(ui.port), "-c", str(path)])
     assert result.exit_code == 1
     assert f"cannot listen on 127.0.0.1:{ui.port}" in result.stderr

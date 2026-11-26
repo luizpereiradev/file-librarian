@@ -566,7 +566,7 @@ def _schedule(section: Section, r: Redactor, config_path: Path) -> None:
 def _menu_bar(section: Section, config_path: Path) -> None:
     """The menu bar item (#116): no path, no text but its pose and counts."""
     missing = menubar.missing_tools()
-    found = menubar.summary()
+    found = menubar.summary(full=True)
     if not found.installed:
         section.lines.append("installed: no")
         if missing:

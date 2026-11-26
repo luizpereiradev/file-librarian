@@ -305,17 +305,15 @@ def read_agent(label: str) -> dict[str, Any] | None:
         return None
 
 
-def agent_loaded(label: str) -> bool:
-    return _is_loaded(label)
-
-
 _RUNNING = re.compile(r"^\s*state = running\s*$", re.MULTILINE)
 
 
-def agent_running(label: str) -> bool:
-    """launchd has the agent loaded and its process is running now."""
+def agent_state(label: str) -> tuple[bool, bool]:
+    """Whether launchd has the agent loaded, and whether its process runs now: one
+    ``launchctl print``."""
     result = _launchctl("print", f"{_domain()}/{label}")
-    return result.returncode == 0 and _RUNNING.search(result.stdout) is not None
+    loaded = result.returncode == 0
+    return loaded, loaded and _RUNNING.search(result.stdout) is not None
 
 
 def kickstart(label: str, *, restart: bool = False) -> None:
@@ -354,12 +352,15 @@ def daily_agent_loaded() -> bool:
     return plist_path().exists() and _is_loaded(LABEL)
 
 
-def status() -> Status:
+def status(*, probe: bool = True) -> Status:
+    """The installed agents. ``probe=False`` reads their plists only: no ``launchctl``
+    (``loaded`` is then assumed) and no comparison of the interpreter copy, for the
+    menu bar item's state, which is computed on every write to the library."""
     daily, watching = _read(LABEL), _read(WATCH_LABEL)
     if daily is None and watching is None:
         return Status(False, False, None, [], mode=None)
     agents = [(LABEL, daily), (WATCH_LABEL, watching)]
-    loaded = all(_is_loaded(label) for label, data in agents if data is not None)
+    loaded = not probe or all(_is_loaded(label) for label, data in agents if data is not None)
     at = None
     if daily is not None:
         interval = daily.get("StartCalendarInterval", {})
@@ -378,7 +379,7 @@ def status() -> Status:
         loaded,
         at,
         list(main.get("ProgramArguments", [])),
-        interpreter_is_current(),
+        interpreter_is_current() if probe else True,
         mode,
         paths,
         interval_minutes,

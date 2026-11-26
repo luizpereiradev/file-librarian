@@ -192,15 +192,19 @@ class Status:
 # --- reading ---------------------------------------------------------------------------
 
 
-def collect(config: Config, *, now: datetime | None = None, menu_bar: bool = True) -> Status:
+def collect(
+    config: Config, *, now: datetime | None = None, menu_bar: bool = True, probe: bool = True
+) -> Status:
     """What waits for the user. Read-only and lock-free; raises ``StatusError``.
     ``menu_bar=False`` leaves out the menu bar item's own state (what it shows is
-    computed from the rest)."""
+    computed from the rest). ``probe=False`` is the cheap form the menu bar item's
+    state uses on every write: the schedule from its plists only (no ``launchctl``),
+    and no notifier check."""
     # "Today" for due dates comes from the same clock `flib due` uses, so the two agree.
     due_today = due_mod.local_today(now or due_mod.clock())
     now = now or datetime.now(UTC)
-    schedule = next_run(now, config.input_paths)
-    posting = notifier.choice() if config.summary.notify else None
+    schedule = next_run(now, config.input_paths, probe=probe)
+    posting = notifier.choice() if config.summary.notify and probe else None
     menu_line = _menu_bar_line() if menu_bar else None
     if not config.database.exists():
         return Status(
@@ -422,10 +426,10 @@ def count_skips(lines: Iterable[str]) -> dict[str, int]:
     return counts
 
 
-def next_run(now: datetime, inputs: list[Path] | None = None) -> NextRun:
+def next_run(now: datetime, inputs: list[Path] | None = None, *, probe: bool = True) -> NextRun:
     """The daily run's next start, from the installed agent (``None`` if not active)."""
     try:
-        state = scheduler.status()
+        state = scheduler.status(probe=probe)
     except (scheduler.ScheduleError, OSError, ValueError) as exc:
         return NextRun(False, False, None, None, str(exc))
     at = None

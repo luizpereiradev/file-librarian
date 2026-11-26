@@ -82,6 +82,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
+from enum import StrEnum
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from importlib import resources
@@ -98,8 +99,22 @@ from file_librarian.ui import actions, api, review, settings, views
 OPEN = "/usr/bin/open"
 """Opens the handoff file in the default browser; tests swap in a fake."""
 HOST = "127.0.0.1"
-PAGES = ("status", "review", "search", "activity", "due", "settings")
-"""Pages ``--open`` can name."""
+
+
+class Page(StrEnum):
+    """Pages ``--open`` can name (a fixed choice on the command line too)."""
+
+    STATUS = "status"
+    REVIEW = "review"
+    SEARCH = "search"
+    ACTIVITY = "activity"
+    DUE = "due"
+    SETTINGS = "settings"
+
+
+PAGES = tuple(str(page) for page in Page)
+PAGE_PATHS = {page: f"/{page}" for page in PAGES}
+"""Each page's address on the server; an address is only ever taken from here."""
 VIEWS: dict[str, Callable[[Config, str, str], views.Page]] = {
     "activity": views.activity_page,
 }
@@ -1613,6 +1628,8 @@ def run(
         elif event == "stolen":
             warn(STOLEN_WARNING)
 
+    if page not in PAGES:
+        raise UiError(f"no page {page!r}; one of: {', '.join(PAGES)}")
     minutes = _minutes(config.ui.idle_minutes)
     ending = f"It ends after {minutes} without use, with End session, or with Ctrl-C."
     try:
@@ -1645,7 +1662,7 @@ def run(
             return reason
     except AlreadyRunningError as exc:
         running = running_port(config.database) if browser else None
-        if running is not None and open_file(f"http://{HOST}:{running}/{page}") is None:
+        if running is not None and open_file(f"http://{HOST}:{running}{PAGE_PATHS[page]}") is None:
             # The page of the session already open (the menu bar's "Review", say): an
             # address with no secret in it, for the browser that holds the cookie.
             echo(

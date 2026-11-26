@@ -64,7 +64,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from file_librarian import config_edit, credentials, notifier, scheduler
+from file_librarian import config_edit, credentials, menubar, notifier, scheduler
 from file_librarian import status as status_mod
 from file_librarian.config import (
     Category,
@@ -872,7 +872,16 @@ def _schedule_section(view: _View, config: Config) -> Markup:
         ),
         *notes,
         form,
+        _help(menu_bar_note()),
     )
+
+
+def menu_bar_note() -> str:
+    """Whether flib is in the menu bar (#116), and the command that changes it: a line,
+    not a toggle (installing it builds an app and a LaunchAgent; that stays a command)."""
+    if menubar.installed():
+        return "Menu bar: the cat is there. `flib menu --remove` takes it away."
+    return "Menu bar: not shown. `flib menu` puts the cat there, with what needs you."
 
 
 def _provider_section(view: _View, config: Config) -> Markup:

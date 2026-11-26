@@ -19,6 +19,7 @@ for the item's "busy" pose.
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import os
 import time
@@ -50,7 +51,7 @@ def instance_lock(
 ) -> Iterator[None]:
     """Hold the lock for the duration of the block; if it is held, ask again for up
     to ``wait`` seconds, then fail. Once released, the menu bar item is told."""
-    held = False
+    held = failed = False
     try:
         with _flock(
             lock_path(database),
@@ -60,12 +61,27 @@ def instance_lock(
             sleep=sleep,
         ):
             held = True
-            yield
+            try:
+                yield
+            except BaseException:
+                failed = True
+                raise
     finally:
         if held:
-            from file_librarian import menubar_state
+            _tell_menu_bar(database, quiet=failed)
 
-            menubar_state.changed(database)
+
+def _tell_menu_bar(database: Path, *, quiet: bool) -> None:
+    """``menubar_state.changed``, which never raises an ``Exception``. ``quiet`` while
+    the caller's own exception is on its way: then not even a Ctrl-C during the hook
+    may replace it."""
+    from file_librarian import menubar_state
+
+    if not quiet:
+        menubar_state.changed(database)
+        return
+    with contextlib.suppress(BaseException):  # the caller's exception matters more
+        menubar_state.changed(database)
 
 
 def holder(database: Path) -> int | None:

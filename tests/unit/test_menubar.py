@@ -96,8 +96,8 @@ def test_the_script_fixes_the_paths_as_literals(path: str) -> None:
     source = menubar.script(program, config, state)
     assert evaluate(_returned(source, "stateDir")) == str(state)
     assert evaluate(_returned(source, "flibProgram")) == str(program)
-    arguments = _handler_body(source, "flibArguments")
-    config_expr = arguments.split('{"--config", ', 1)[1].rsplit("}", 1)[0]
+    arguments = _handler_body(source, "actionArguments")
+    config_expr = arguments.split('{"--config", ', 1)[1].rstrip().removesuffix("}")
     assert evaluate(config_expr) == str(config)
 
 
@@ -114,23 +114,41 @@ def test_every_placeholder_is_filled() -> None:
 
 def test_the_actions_are_the_only_things_a_click_runs() -> None:
     source = menubar.script(Path("/env/bin/flib-python"), Path("/c.yaml"), Path("/s"))
-    # One NSTask, in launchFlib, for the fixed program; no shell anywhere.
+    # One NSTask, in launchAction, for the fixed program; no shell anywhere.
     assert source.count("NSTask") == 1
     assert "do shell script" not in source and "/bin/sh" not in source
-    assert "setExecutableURL:(ca's NSURL's fileURLWithPath:program)" in source
-    assert "set program to my flibProgram()" in source
-    launches = re.findall(r"my launchFlib\((\{.*?\})\)", source)
-    assert len(launches) == len(menubar.ACTIONS)
-    for action, words in zip(menubar.ACTIONS, launches, strict=True):
-        assert f"on {action.selector}sender" in source
-        assert words == "{" + ", ".join(f'"{w}"' for w in action.arguments) + "}"
-    # Output to /dev/null; the working folder is /, never inherited.
+    launch = _handler_body(source, "launchAction")
+    assert "setExecutableURL:(ca's NSURL's fileURLWithPath:program)" in launch
+    assert "set program to my flibProgram()" in launch
+    # The program is checked to be there and executable before anything is started.
+    assert launch.index("isExecutableFileAtPath:program") < launch.index("NSTask")
+    # Each menu item passes a key; the words come from the table inside the script.
+    for action in menubar.ACTIONS:
+        handler = source.split(f"on {action.selector}sender", 1)[1].split("end", 1)[0]
+        assert f'my launchAction("{action.key}")' in handler
+    table = _handler_body(source, "actionArguments")
+    branches = re.findall(r'if key is "(\w+)" then\n\t+set chosen to (\{.*?\})', table)
+    assert branches == [
+        (a.key, "{" + ", ".join(f'"{w}"' for w in a.arguments) + "}") for a in menubar.ACTIONS
+    ]
+    assert "considering case, diacriticals, hyphens, punctuation and white space" in table
+    # No other handler takes words that reach NSTask: launchAction takes a key, and the
+    # only list it runs is what actionArguments returns.
+    assert "task's setArguments:args" in launch
+    assert "set args to my actionArguments(key)" in launch
+    assert "launchFlib" not in source and "flibArguments" not in source
+    # Output to /dev/null; the working folder is /, never inherited; a fixed environment.
     for stream in ("Input", "Output", "Error"):
-        assert f"task's setStandard{stream}:nothing" in source
-    assert "setCurrentDirectoryURL:(ca's NSURL's fileURLWithPath:\"/\")" in source
-    assert 'return ({"-I", "-m", "file_librarian"} & args)' in source
-    # Nothing read from the state file reaches launchFlib.
-    assert "objectForKey" not in _handler_body(source, "launchFlib")
+        assert f"task's setStandard{stream}:nothing" in launch
+    assert "setCurrentDirectoryURL:(ca's NSURL's fileURLWithPath:\"/\")" in launch
+    assert "task's setEnvironment:(my childEnvironment())" in launch
+    environment = _handler_body(source, "childEnvironment")
+    assert f'env\'s setObject:"{scheduler.SAFE_PATH}" forKey:"PATH"' in environment
+    assert '{"HOME", "TMPDIR", "USER", "LOGNAME", "LANG"}' in environment
+    assert "DYLD" not in environment and "PYTHON" not in environment
+    assert '({"-I", "-m", "file_librarian"} & chosen)' in table
+    # Nothing read from the state file reaches launchAction.
+    assert "objectForKey" not in launch
 
 
 def test_the_actions_open_pages_flib_ui_knows() -> None:
@@ -142,7 +160,7 @@ def test_the_actions_open_pages_flib_ui_knows() -> None:
 
 
 def test_an_action_with_other_words_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    bad = menubar.Action("openStatus:", "Open", ("ui", '"; do shell script "x'))
+    bad = menubar.Action("openStatus", "Open", ("ui", '"; do shell script "x'))
     monkeypatch.setattr(menubar, "ACTIONS", (bad, *menubar.ACTIONS[1:]))
     with pytest.raises(MenuError, match="unexpected words"):
         menubar.script(Path("/p"), Path("/c"), Path("/s"))
@@ -158,8 +176,13 @@ def test_the_parser_constants_come_from_python() -> None:
     assert f"return {known}" in _handler_body(source, "knownPoses")
     keys = "{" + ", ".join(f'"{k}"' for k in sorted(menubar.STATE_KEYS)) + "}"
     assert f"return {keys}" in _handler_body(source, "knownKeys")
-    # Comparisons of keys and poses are case-sensitive (AppleScript's are not by default).
-    assert _handler_body(source, "readState").count("considering case") == 2
+    # Keys and poses are compared exactly (NSArray containsObject:), never with
+    # AppleScript's "contains", which ignores case and width.
+    read = _handler_body(source, "readState")
+    assert read.count("containsObject:") == 2 and " contains " not in read
+    # The whole file must be the plain form, and each key once.
+    assert menubar.literal(r"\A" + menubar.FORM + r"\z") in source
+    assert menubar.literal(menubar.KEY_FORM) in source
     # Mutable state in globals: a stay-open applet would try to save changed properties.
     assert re.search(r"^property (statusItem|tasks|lastStamp)", source, re.M) is None
 
@@ -195,12 +218,39 @@ CORPUS: list[tuple[str, bytes | None, dict[str, Any]]] = [
     ("pose in capitals", json.dumps({"version": 1, "pose": "BUSY"}).encode(), {"pose": None}),
     ("pose not text", json.dumps({"version": 1, "pose": 3}).encode(), {"pose": None}),
     (
-        "counts of every kind",
-        json.dumps({"version": 1, "count": "3", "review": True, "due": 2.0, "running": 1}).encode(),
+        "counts of the wrong kind",
+        json.dumps({"version": 1, "count": "3", "review": True, "due": 2, "running": 1}).encode(),
         {"due": 2},
     ),
-    ("negative", json.dumps({"version": 1, "count": -1, "review": 10000}).encode(), {}),
-    ("fraction", json.dumps({"version": 1, "count": 2.5, "due": 9999}).encode(), {"due": 9999}),
+    ("a float is not plain", json.dumps({"version": 1, "due": 2.0}).encode(), {}),
+    ("negative", json.dumps({"version": 1, "count": -1}).encode(), {}),
+    ("above the cap", json.dumps({"version": 1, "review": 10000, "due": 9999}).encode(), {}),
+    ("the cap", json.dumps({"version": 1, "due": 9999}).encode(), {"due": 9999}),
+    ("fraction", json.dumps({"version": 1, "count": 2.5, "due": 9999}).encode(), {}),
+    ("leading zero", b'{"version":1,"count":07}', {}),
+    # The reviewer's cases (#132): each side used to read them differently.
+    ("key given twice", b'{"version":1,"count":3,"count":5}', {}),
+    ("key given twice, bad last", b'{"version":1,"count":3,"count":"x"}', {}),
+    ("trailing comma", b'{"version":1,"count":9,}', {}),
+    ("lone surrogate", b'{"version":1,"line":"a\\ud800b"}', {}),
+    ("surrogate pair", b'{"version":1,"line":"a\\ud83d\\udc08"}', {"line": "a\U0001f408"}),
+    ("30-digit decimal", b'{"version":1,"count":3.00000000000000000000000000001}', {}),
+    ("deep nesting", b'{"version":1,"line":' + b"[" * 1500 + b"]" * 1500 + b"}", {}),
+    ("deep at the top", b"[" * 2000 + b"]" * 2000, {}),
+    ("full-width pose", '{"version":1,"pose":"\uff42usy"}'.encode(), {}),
+    ("full-width pose, escaped", b'{"version":1,"pose":"\\uff42usy"}', {}),
+    ("pose with a space", b'{"version":1,"pose":"busy "}', {}),
+    ("byte order mark", b'\xef\xbb\xbf{"version":1,"count":7}', {}),
+    ("UTF-16", '{"version":1,"count":8}'.encode("utf-16"), {}),
+    ("raw UTF-8", '{"version":1,"line":"caf\u00e9"}'.encode(), {}),
+    ("an escaped quote", b'{"version":1,"line":"a\\"b"}', {}),
+    ("an escaped slash", b'{"version":1,"line":"a\\/b"}', {}),
+    ("upper-case escape", b'{"version":1,"line":"a\\u00E9"}', {}),
+    ("nested object", b'{"version":1,"line":{"a":1}}', {}),
+    ("trailing garbage", b'{"version":1,"count":9} x', {}),
+    ("two spaces", b'{"version":1,  "count":9}', {}),
+    ("compact, with a newline", b'{"version":1,"running":true}\n', {"running": True}),
+    ("exactly 4096 bytes", b'{"version":1,"next":"' + b"a" * (4096 - 23) + b'"}', {}),
     ("running", json.dumps({"version": 1, "running": True}).encode(), {"running": True}),
     (
         "control and bidi characters",
@@ -272,6 +322,9 @@ def test_build_makes_a_signed_stay_open_app(
     info = plistlib.loads((contents / "Info.plist").read_bytes())
     assert info["CFBundleIdentifier"] == "io.github.luizpereiradev.file-librarian.menu"
     assert info["CFBundleName"] == "file-librarian" and info["LSUIElement"] is True
+    # No scripting dictionary, no document or URL type: nothing invites events or files.
+    assert info["NSAppleScriptEnabled"] is False
+    assert "CFBundleDocumentTypes" not in info and "CFBundleURLTypes" not in info
     assert not any(key.endswith("UsageDescription") for key in info)
     assert "CFBundleIconName" not in info
     assert not (contents / "Resources" / "Assets.car").exists()
@@ -297,7 +350,7 @@ def test_a_change_of_configuration_icons_or_version_means_a_rebuild(
     menubar.build(config)
     assert menubar.problem(config) is None
     assert menubar.problem(tmp_path / "other.yaml") == "the menu bar app is out of date"
-    monkeypatch.setattr(menubar, "APP_VERSION", "2")
+    monkeypatch.setattr(menubar, "APP_VERSION", "test")
     assert menubar.problem(config) == "the menu bar app is out of date"
     menubar.build(config)
     assert menubar.problem(config) is None
@@ -391,7 +444,7 @@ def test_the_agent_starts_at_login_and_stays_off_after_quit(tmp_path: Path) -> N
     assert data["Program"] == str(menubar.executable())
     assert data["ProgramArguments"] == [str(menubar.executable())]
     assert data["RunAtLoad"] is True
-    assert data["KeepAlive"] == {"SuccessfulExit": False}
+    assert "KeepAlive" not in data  # no respawn, not even when the app is gone
     assert data["LimitLoadToSessionType"] == "Aqua"
     assert data["ProcessType"] == "Interactive"
     # Its output (and that of what it starts) is nobody's to read.
@@ -437,7 +490,7 @@ end run
 VALUES = """on run argv
 	set s to load script (POSIX file (item 1 of argv))
 	set out to {}
-	repeat with t in ({s's stateDir(), s's flibProgram()} & s's flibArguments({"ui"}))
+	repeat with t in ({s's stateDir(), s's flibProgram()} & s's actionArguments("openStatus"))
 		set AppleScript's text item delimiters to ","
 		set end of out to ((id of (contents of t)) as list) as text
 	end repeat
@@ -513,5 +566,37 @@ def test_the_real_applet_gets_the_fixed_paths_exactly(path: str, tmp_path: Path)
     assert result.returncode == 0, result.stderr
     values = _osascript(VALUES, str(compiled)).split("\n")
     expected_values = [path, f"{path}/flib-python", "-I", "-m", "file_librarian", "ui",
-                       "--config", f"{path}/c.yaml"]  # fmt: skip
+                       "--open", "status", "--config", f"{path}/c.yaml"]  # fmt: skip
     assert values == [",".join(str(ord(c)) for c in value) for value in expected_values]
+
+
+KEYS = """on run argv
+	set s to load script (POSIX file (item 1 of argv))
+	set out to {}
+	repeat with k in {"organize", "ORGANIZE", "organize ", "openReview", "openreview", "rm", ""}
+		set a to s's actionArguments(contents of k)
+		if a is missing value then
+			set end of out to "-"
+		else
+			set AppleScript's text item delimiters to " "
+			set end of out to (items 4 thru 5 of a) as text
+		end if
+	end repeat
+	set AppleScript's text item delimiters to linefeed
+	return out as text
+end run
+"""
+
+
+@pytest.mark.menu
+@real
+def test_the_real_applet_runs_only_the_exact_keys_of_its_table(tmp_path: Path) -> None:
+    source = menubar.script(Path("/env/bin/flib-python"), Path("/c.yaml"), tmp_path)
+    (tmp_path / "menu.applescript").write_text(source, encoding="utf-8")
+    compiled = tmp_path / "menu.scpt"
+    subprocess.run(  # noqa: S603
+        [REAL_OSACOMPILE, "-o", str(compiled), str(tmp_path / "menu.applescript")], check=True
+    )
+    assert _osascript(KEYS, str(compiled)).split("\n") == [
+        "menu --organize", "-", "-", "ui --open", "-", "-", "-",
+    ]  # fmt: skip
