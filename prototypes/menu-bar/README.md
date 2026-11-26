@@ -9,7 +9,7 @@ measured alternative, kept as the fallback the ADR describes.
 | --- | --- |
 | `applet/menu.applescript` | AppleScriptObjC stay-open applet: status item, template icon per pose, count, menu with actions, idle re-read and a reopen nudge |
 | `swift/main.swift` | The same item in Swift (needs the Command Line Tools): kqueue on the state folder, wake observer, single-instance guard |
-| `icons/*.svg` | Placeholder template icons, one per pose (#112 draws the real ones) |
+| `icons/*.svg` | Placeholder template icons, one per pose; the real ones (#112) are in `src/file_librarian/assets/menu/`, same names |
 | `build.sh` | Builds either into `~/Library/Application Support/io.flibtest.menu/` |
 | `agent.plist` | The LaunchAgent that was measured (`APP` is replaced with the executable) |
 | `measure.sh` | Idle CPU time and memory footprint of a running pid |

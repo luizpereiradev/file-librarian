@@ -122,6 +122,16 @@ All notable changes to this project are documented here. The format follows
   folder is no longer swept; Status shows review reasons compactly, dates
   and costs as the other pages do; narrow screens get a Due card layout,
   a skip link and stronger contrast.
+- The cat's poses for the coming menu bar item (#112): five monochrome
+  template icons, hand-written SVG in `assets/menu/` (18 pt, black on
+  transparent, nothing external), each a silhouette of the app icon's cat:
+  carrying a sheet (a run is in progress), a paw raised (something is due),
+  ruffled with its back arched (flib cannot run), sitting and looking at you
+  (files in review or failed) and curled up asleep (nothing pending).
+  `poses.menu_state` picks the pose from `flib status`'s counts in that order
+  of priority, with the count the pose is about. `scripts/menu-icons-sheet.js`
+  renders them with AppKit into `docs/images/menu-poses.png`. Nothing shows in
+  the menu bar yet: that is #116.
 - `flib ui`, an early local interface (#113): a web server on 127.0.0.1
   that exists only while in use, with a Status page (the counts of `flib
   status`, light and dark, in the icon's colours) and greyed-out places for
