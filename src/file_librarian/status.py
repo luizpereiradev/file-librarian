@@ -195,6 +195,22 @@ class Status:
 def collect(
     config: Config, *, now: datetime | None = None, menu_bar: bool = True, probe: bool = True
 ) -> Status:
+    """What waits for the user (see ``_collect``). A full look (``menu_bar`` and
+    ``probe``: ``flib status``, the interface, ``flib doctor``) also hands what it
+    found to the menu bar item, which then shows launchd's real answer and drops a
+    "running" left by a run that was killed; that writes only the item's own state
+    file, and only when it is installed."""
+    found = _collect(config, now=now, menu_bar=menu_bar, probe=probe)
+    if menu_bar and probe:
+        from file_librarian import menubar_state  # it builds on this module
+
+        menubar_state.changed(config.database, status=found)
+    return found
+
+
+def _collect(
+    config: Config, *, now: datetime | None = None, menu_bar: bool = True, probe: bool = True
+) -> Status:
     """What waits for the user. Read-only and lock-free; raises ``StatusError``.
     ``menu_bar=False`` leaves out the menu bar item's own state (what it shows is
     computed from the rest). ``probe=False`` is the cheap form the menu bar item's

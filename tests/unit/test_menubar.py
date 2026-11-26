@@ -13,6 +13,7 @@ import re
 import shutil
 import stat
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -127,11 +128,16 @@ def test_the_actions_are_the_only_things_a_click_runs() -> None:
         handler = source.split(f"on {action.selector}sender", 1)[1].split("end", 1)[0]
         assert f'my launchAction("{action.key}")' in handler
     table = _handler_body(source, "actionArguments")
-    branches = re.findall(r'if key is "(\w+)" then\n\t+set chosen to (\{.*?\})', table)
+    branches = re.findall(
+        r'if \(k\'s isEqualToString:"(\w+)"\) as boolean then\n\t+set chosen to (\{.*?\})',
+        table,
+    )
     assert branches == [
         (a.key, "{" + ", ".join(f'"{w}"' for w in a.arguments) + "}") for a in menubar.ACTIONS
     ]
-    assert "considering case, diacriticals, hyphens, punctuation and white space" in table
+    # Exact: NSString isEqualToString:, never AppleScript's "is" (which ignores width).
+    assert "set k to ca's NSString's stringWithString:key" in table
+    assert ' is "' not in table.replace('is "busy"', "")
     # No other handler takes words that reach NSTask: launchAction takes a key, and the
     # only list it runs is what actionArguments returns.
     assert "task's setArguments:args" in launch
@@ -147,6 +153,8 @@ def test_the_actions_are_the_only_things_a_click_runs() -> None:
     assert '{"HOME", "TMPDIR", "USER", "LOGNAME", "LANG"}' in environment
     assert "DYLD" not in environment and "PYTHON" not in environment
     assert '({"-I", "-m", "file_librarian"} & chosen)' in table
+    # Organize now is never greyed out: it is what heals a state a killed run left.
+    assert "setEnabled" not in _handler_body(source, "show")
     # Nothing read from the state file reaches launchAction.
     assert "objectForKey" not in launch
 
@@ -602,3 +610,105 @@ def test_the_real_applet_runs_only_the_exact_keys_of_its_table(tmp_path: Path) -
     assert _osascript(KEYS, str(compiled)).split("\n") == [
         "menu --organize", "-", "-", "ui --open", "-", "-", "-",
     ]  # fmt: skip
+
+
+# --- after the second review of #132 -------------------------------------------------------
+
+
+RUNNING = b'{"version":1,"pose":"busy","line":"Organizing\\u2026","running":true}'
+
+
+def test_a_stale_running_is_shown_as_a_run_that_did_not_finish() -> None:
+    fresh = menubar.sanitize(RUNNING, age=60)
+    assert fresh["running"] is True and fresh["pose"] == "busy"
+    old = menubar.sanitize(RUNNING, age=menubar.STALE_SECONDS + 1)
+    assert old["running"] is False and old["pose"] == "trouble"
+    assert old["line"] == menubar.STALE_LINE
+    due = RUNNING.replace(b'"busy"', b'"due"')
+    assert menubar.sanitize(due, age=menubar.STALE_SECONDS + 1)["pose"] == "due"
+
+
+def test_the_nudge_is_rate_limited_in_the_applet() -> None:
+    source = menubar.script(Path("/p"), Path("/c"), Path("/s"))
+    handler = source.split("on stateChanged:aNotification", 1)[1].split("end stateChanged:", 1)[0]
+    assert "if waited >= nudgeSeconds then" in handler
+    assert 'performSelector:"deferredRefresh:"' in handler  # put off, not dropped
+    assert "if not pendingRefresh then" in handler
+    assert "property nudgeSeconds : 1" in source
+    assert f"property staleSeconds : {menubar.STALE_SECONDS}" in source
+    assert menubar.literal(menubar.STALE_LINE) in _handler_body(source, "readState")
+
+
+def test_read_small_refuses_a_link(tmp_path: Path) -> None:
+    real = tmp_path / "real.json"
+    real.write_bytes(b"{}")
+    link = tmp_path / "link.json"
+    link.symlink_to(real)
+    assert menubar.read_small(real) == b"{}"
+    assert menubar.read_small(link) is None
+
+
+def test_read_small_never_waits_on_a_fifo(tmp_path: Path) -> None:
+    import threading
+
+    fifo = tmp_path / "state.json"
+    os.mkfifo(fifo)
+    result: list[bytes | None] = []
+    reader = threading.Thread(target=lambda: result.append(menubar.read_small(fifo)))
+    reader.start()
+    reader.join(3)
+    blocked = reader.is_alive()
+    if blocked:  # let it go: a writer opening the FIFO unblocks the reader
+        fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+        os.close(fd)
+        reader.join(3)
+    assert not blocked and result == [None]
+
+
+def test_read_small_refuses_what_is_not_a_regular_file() -> None:
+    assert menubar.read_small(Path("/dev/null")) is None  # readable, empty, a device
+
+
+def test_read_small_has_a_byte_limit(tmp_path: Path) -> None:
+    path = tmp_path / "f"
+    path.write_bytes(b"x" * 10)
+    assert menubar.read_small(path, limit=10) == b"x" * 10
+    assert menubar.read_small(path, limit=9) is None
+
+
+def test_a_folder_of_another_user_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folder = tmp_path / "menu"
+    assert menubar.private_folder(folder) == folder
+    monkeypatch.setattr(os, "getuid", lambda: folder.stat().st_uid + 1)
+    with pytest.raises(OSError, match="not a folder of this user's"):
+        menubar.private_folder(folder)
+
+
+def test_a_file_where_the_folder_should_be_is_refused(tmp_path: Path) -> None:
+    file = tmp_path / "file"
+    file.write_text("x")
+    with pytest.raises(OSError):
+        menubar.private_folder(file)
+
+
+@pytest.mark.menu
+@real
+def test_the_real_applet_drops_a_stale_running(
+    interpreter: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(notifier, "OSACOMPILE", REAL_OSACOMPILE)
+    monkeypatch.setattr(notifier, "CODESIGN", REAL_CODESIGN)
+    monkeypatch.setattr(notifier, "LSREGISTER", "/nonexistent/lsregister")
+    built = menubar.build(tmp_path / "config.yaml")
+    compiled = built / "Contents" / "Resources" / "Scripts" / "main.scpt"
+    fresh, old = tmp_path / "fresh.json", tmp_path / "old.json"
+    for path in (fresh, old):
+        path.write_bytes(RUNNING)
+    long_ago = time.time() - menubar.STALE_SECONDS - 60
+    os.utime(old, (long_ago, long_ago))
+    out = _osascript(CALL, str(compiled), str(fresh), str(old)).split("\n")
+    assert json.loads(out[0]) == menubar.sanitize(RUNNING, age=1)
+    assert json.loads(out[1]) == menubar.sanitize(RUNNING, age=menubar.STALE_SECONDS + 60)
+    assert json.loads(out[1])["line"] == menubar.STALE_LINE

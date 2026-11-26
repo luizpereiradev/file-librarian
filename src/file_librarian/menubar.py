@@ -94,6 +94,11 @@ STATE_TEXTS = ("line", "next")
 STATE_COUNTS = ("count", "review", "due")
 STATE_KEYS = frozenset({"version", "pose", "running", *STATE_TEXTS, *STATE_COUNTS})
 DEFAULT_LINE = "No word from flib yet"
+STALE_SECONDS = 3 * 3600
+"""A state that says a run is going on, written longer ago than this, is from a run
+that was killed (flib writes the state again when a run ends): the applet shows
+``STALE_LINE`` instead, and flib rewrites it whenever someone looks (``flib status``)."""
+STALE_LINE = "The last run did not finish (`flib status`)"
 DEFAULT_POSE = poses.Pose.TROUBLE
 TEXT_PATTERN = r"[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]"
 """Characters that make a text refused (controls, format and bidi marks, line breaks)."""
@@ -276,13 +281,14 @@ def _checked_actions() -> tuple[Action, ...]:
 
 
 def _action_table() -> str:
-    """The branches of ``actionArguments``: one fixed key, one fixed list of words."""
+    """The branches of ``actionArguments``: one fixed key, compared exactly, one fixed
+    list of words."""
     lines = []
     for index, action in enumerate(_checked_actions()):
         keyword = "if" if index == 0 else "else if"
-        lines.append(f"\t\t{keyword} key is {literal(action.key)} then")
-        lines.append(f"\t\t\tset chosen to {_list(action.arguments)}")
-    lines.append("\t\tend if")
+        lines.append(f"\t{keyword} (k's isEqualToString:{literal(action.key)}) as boolean then")
+        lines.append(f"\t\tset chosen to {_list(action.arguments)}")
+    lines.append("\tend if")
     return "\n".join(lines)
 
 
@@ -314,6 +320,8 @@ def script(program: Path, config: Path, state_dir: Path) -> str:
         "MAX_TEXT": str(MAX_TEXT),
         "MAX_COUNT": str(MAX_COUNT),
         "VERSION": str(STATE_VERSION),
+        "STALE": str(STALE_SECONDS),
+        "STALE_LINE": literal(STALE_LINE),
         "POSES": _list([str(pose) for pose in poses.Pose]),
         "KEYS": _list(sorted(STATE_KEYS)),
         "FORM": literal(r"\A" + FORM + r"\z"),
@@ -432,14 +440,15 @@ def _edit_info(app: Path) -> None:
     (app / "Contents" / "Resources" / "Assets.car").unlink(missing_ok=True)
 
 
-def build(config: Path) -> Path:
-    """Build (or rebuild) the app for ``config``; returns its path. Raises ``MenuError``."""
+def build(config: Path, *, into: Path | None = None) -> Path:
+    """Build (or rebuild) the app for ``config`` at ``into`` (by default where it lives,
+    and registered there); returns its path. Raises ``MenuError``."""
     missing = missing_tools()
     if missing:
         raise MenuError(f"{', '.join(missing)} not found (the menu bar app is built with it)")
     program = validate_program(scheduler.dedicated_interpreter())
     source = script(program, config, folder())
-    target = app_path()
+    target = into or app_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
         with tempfile.TemporaryDirectory(prefix=".menu-", dir=target.parent) as tmp:
@@ -462,7 +471,8 @@ def build(config: Path) -> Path:
             app.rename(target)
     except (notifier.NotifierError, OSError) as exc:
         raise MenuError(str(exc)) from exc
-    notifier.lsregister("-f", target)
+    if into is None:
+        notifier.lsregister("-f", target)
     return target
 
 
@@ -497,7 +507,9 @@ def install(config: Path, database: Path) -> Path:
     """Build the app for ``config`` (resolved), write its first state, load its agent
     (which starts it) and only then record what it is for (``target.json``), so a
     failure never leaves flib writing state for an item that is not there or that acts
-    on another configuration. Raises ``MenuError``."""
+    on another configuration. A new build is made aside and swapped in whole; if
+    launchd then refuses it, the item that was there (app, agent, record) is put back
+    as it was. Raises ``MenuError``, saying which."""
     from file_librarian import menubar_state
 
     config = config.resolve()
@@ -505,21 +517,61 @@ def install(config: Path, database: Path) -> Path:
         scheduler.prepare_interpreter()
     except (scheduler.ScheduleError, OSError) as exc:
         raise MenuError(str(exc)) from exc
+    before = scheduler.read_agent(LABEL) if installed() else None
+    app = app_path()
+    kept = app.with_name(f".{APP_NAME}.previous.app")
+    swapped = False
     if problem(config) is not None:
-        build(config)
+        staged = build(config, into=app.with_name(f".{APP_NAME}.next.app"))
+        try:
+            _delete(kept)
+            if app.exists() or app.is_symlink():
+                app.rename(kept)
+            staged.rename(app)
+        except OSError as exc:
+            _restore_app(app, kept)
+            raise MenuError(f"cannot put the new app in place: {exc}") from exc
+        swapped = True
     try:
         menubar_state.write_state(database, config)
-    except Exception as exc:
-        raise MenuError(f"cannot write its state: {exc}") from exc
-    try:
         plist = scheduler.install_agent(LABEL, build_plist(config))
-    except scheduler.ScheduleError as exc:
-        with contextlib.suppress(scheduler.ScheduleError, OSError):
-            scheduler.remove_agent(LABEL)
-        raise MenuError(f"{exc}; the menu bar item is not installed") from exc
+    except (scheduler.ScheduleError, OSError, ValueError) as exc:
+        raise MenuError(_put_back(exc, before, kept if swapped else None)) from exc
+    if swapped:
+        with contextlib.suppress(OSError):
+            _delete(kept)
+        notifier.lsregister("-f", app)
     target = json.dumps({"config": str(config), "database": str(database)}, indent=2)
     write_private(folder() / TARGET_NAME, target.encode() + b"\n")
     return plist
+
+
+def _restore_app(app: Path, kept: Path) -> None:
+    if kept.exists():
+        with contextlib.suppress(OSError):
+            _delete(app)
+            kept.rename(app)
+
+
+def _put_back(exc: Exception, before: dict[str, Any] | None, kept: Path | None) -> str:
+    """After a failed install: the agent of the new one out, the item that was there
+    back (its app, then its agent); what happened, in words."""
+    from file_librarian import menubar_state
+
+    with contextlib.suppress(scheduler.ScheduleError, OSError):
+        scheduler.remove_agent(LABEL)
+    if kept is not None:
+        _restore_app(app_path(), kept)
+    if before is None:
+        return f"{exc}; the menu bar item is not installed"
+    try:
+        scheduler.install_agent(LABEL, before)
+    except (scheduler.ScheduleError, OSError) as again:
+        return f"{exc}; the menu bar item that was there could not be loaded again ({again})"
+    menubar_state.changed()  # its own state again, from the record that never changed
+    old = read_target()
+    what = f" for {old.config}" if old is not None else ""
+    return f"{exc}; the menu bar item{what} is back as it was"
 
 
 def refresh() -> str | None:
@@ -731,10 +783,20 @@ def _checked(data: dict[str, Any]) -> dict[str, Any]:
     return clean
 
 
-def sanitize(raw: bytes | None) -> dict[str, Any]:
-    """What the applet shows for a state file's bytes (``None``: no file): the reference
-    for its ``readState``, which the opt-in test compares against the real applet.
-    Anything that is not plain ``FORM`` (and each key once) gives the defaults."""
+def sanitize(raw: bytes | None, age: float = 0.0) -> dict[str, Any]:
+    """What the applet shows for a state file's bytes (``None``: no file), written
+    ``age`` seconds ago: the reference for its ``readState``, which the opt-in test
+    compares against the real applet. Anything that is not plain ``FORM`` (and each
+    key once) gives the defaults; a stale "running" is shown as ``STALE_LINE``."""
+    clean = _sanitize(raw)
+    if clean["running"] and age > STALE_SECONDS:
+        clean.update(running=False, line=STALE_LINE)
+        if clean["pose"] == str(poses.Pose.BUSY):
+            clean["pose"] = str(poses.Pose.TROUBLE)
+    return clean
+
+
+def _sanitize(raw: bytes | None) -> dict[str, Any]:
     if raw is None or len(raw) > MAX_STATE_BYTES:
         return defaults()
     try:

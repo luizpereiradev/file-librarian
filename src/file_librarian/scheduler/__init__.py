@@ -278,7 +278,7 @@ def _schedule_changed() -> None:
     """The menu bar item shows the next run: tell it (never fails, see ``menubar_state``)."""
     from file_librarian import menubar_state
 
-    menubar_state.changed()
+    menubar_state.changed(probe=True)  # whether the agents are loaded, really
 
 
 # --- one agent, for the menu bar item (#116) ----------------------------------------------

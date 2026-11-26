@@ -13,9 +13,11 @@ property maxStateBytes : @MAX_BYTES@
 property maxText : @MAX_TEXT@
 property maxCount : @MAX_COUNT@
 property stateVersion : @VERSION@
+property staleSeconds : @STALE@
+property nudgeSeconds : 1
 -- Globals, not properties: an applet would try to save changed properties into itself.
 global statusItem, theMenu, lineItem, nextItem, reviewItem, dueItem, organizeItem
-global lastStamp, tasks
+global lastStamp, tasks, lastRefresh, pendingRefresh
 
 on stateDir()
 	return @STATE_DIR@
@@ -26,12 +28,17 @@ on flibProgram()
 end flibProgram
 
 -- The whole argument list of one action, from its key; missing value for any other key.
--- Every word is fixed here: nothing a caller passes but the key, and the key only picks.
+-- Every word is fixed here: nothing a caller passes but the key, and the key only picks,
+-- compared exactly (isEqualToString:, code unit by code unit).
 on actionArguments(key)
+	set ca to current application
+	try
+		set k to ca's NSString's stringWithString:key
+	on error
+		return missing value
+	end try
 	set chosen to missing value
-	considering case, diacriticals, hyphens, punctuation and white space
 @ACTION_TABLE@
-	end considering
 	if chosen is missing value then return missing value
 	return (@PREFIX@ & chosen) & {"--config", @CONFIG@}
 end actionArguments
@@ -56,6 +63,8 @@ on setUp()
 	set ca to current application
 	set lastStamp to missing value
 	set tasks to {}
+	set lastRefresh to 0
+	set pendingRefresh to false
 	set statusItem to ca's NSStatusBar's systemStatusBar()'s statusItemWithLength:(ca's NSVariableStatusItemLength)
 	statusItem's setAutosaveName:@AUTOSAVE@
 	statusItem's |button|()'s setImagePosition:(ca's NSImageLeading)
@@ -100,11 +109,27 @@ on idle
 	return idleSeconds
 end idle
 
+-- Any program of the user's can post the nudge: at most one refresh a second from it.
+-- One that comes sooner is put off to a second after the last (not dropped), once.
 on stateChanged:aNotification
 	try
-		my refresh(true)
+		set ca to current application
+		set waited to ((ca's NSDate's |date|()'s timeIntervalSince1970()) as real) - lastRefresh
+		if waited >= nudgeSeconds then
+			my refresh(true)
+		else if not pendingRefresh then
+			set pendingRefresh to true
+			me's performSelector:"deferredRefresh:" withObject:(missing value) afterDelay:(nudgeSeconds - waited)
+		end if
 	end try
 end stateChanged:
+
+on deferredRefresh:sender
+	try
+		set pendingRefresh to false
+		my refresh(true)
+	end try
+end deferredRefresh:
 
 on reopen
 	try
@@ -123,9 +148,10 @@ on refresh(force)
 	set statePath to my stateDir() & "/state.json"
 	set attrs to ca's NSFileManager's defaultManager()'s attributesOfItemAtPath:statePath |error|:(missing value)
 	set stamp to "none"
-	if attrs is not missing value then set stamp to (((attrs's fileModificationDate()'s timeIntervalSince1970()) as real) as text) & "/" & ((attrs's fileSize()) as text)
+	if attrs is not missing value then set stamp to (((attrs's fileModificationDate()'s timeIntervalSince1970()) as real) as text) & "/" & ((attrs's fileSize()) as text) & "/" & ((my ageOf(attrs)) > staleSeconds)
 	if (not force) and stamp = lastStamp then return
 	set lastStamp to stamp
+	set lastRefresh to (ca's NSDate's |date|()'s timeIntervalSince1970()) as real
 	set clean to my readState(statePath)
 	my show(clean)
 	my writeSeen(clean)
@@ -185,8 +211,20 @@ on readState(statePath)
 	end repeat
 	set r to parsed's objectForKey:"running"
 	if my isBoolean(r) then clean's setObject:(r as boolean) forKey:"running"
+	-- A run that was killed never says it ended: past staleSeconds, "running" is old news.
+	if ((clean's objectForKey:"running") as boolean) and (my ageOf(attrs)) > staleSeconds then
+		clean's setObject:false forKey:"running"
+		clean's setObject:@STALE_LINE@ forKey:"line"
+		if ((clean's objectForKey:"pose") as text) is "busy" then clean's setObject:"trouble" forKey:"pose"
+	end if
 	return clean
 end readState
+
+-- Seconds since the file was last written.
+on ageOf(attrs)
+	set ca to current application
+	return (ca's NSDate's |date|()'s timeIntervalSinceDate:(attrs's fileModificationDate())) as real
+end ageOf
 
 on isBoolean(value)
 	set ca to current application
@@ -252,8 +290,8 @@ on show(clean)
 	set d to (clean's objectForKey:"due") as integer
 	dueItem's setTitle:(@TITLE_DUE@ & " (" & d & ")")
 	dueItem's setHidden:(d is 0)
-	-- While a run is going on, Organize now is greyed out: the first line says so.
-	organizeItem's setEnabled:(not ((clean's objectForKey:"running") as boolean))
+	-- Organize now is never greyed out: flib checks for a run going on itself, and it is
+	-- the one click that heals a state left by a run that was killed.
 end show
 
 -- What it shows and its pid, for `flib doctor`: counts only, like state.json.

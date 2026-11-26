@@ -157,15 +157,23 @@ def _config(path: Path) -> Config:
     return config
 
 
-def view(database: Path, config_path: Path, *, now: datetime | None = None) -> View:
-    """What the item should show now, for the configuration at ``config_path``."""
-    config = _config(config_path)
-    try:
-        status: status_mod.Status | None = status_mod.collect(
-            config, now=now, menu_bar=False, probe=False
-        )
-    except Exception:  # an index it cannot read, whatever the reason: trouble
-        status = None
+def view(
+    database: Path,
+    config_path: Path,
+    *,
+    now: datetime | None = None,
+    status: status_mod.Status | None = None,
+    probe: bool = False,
+) -> View:
+    """What the item should show now, for the configuration at ``config_path``:
+    from ``status`` when the caller has just collected it (``flib status``, which
+    asked launchd), else collected here, cheaply unless ``probe``."""
+    if status is None:
+        config = _config(config_path)
+        try:
+            status = status_mod.collect(config, now=now, menu_bar=False, probe=probe)
+        except Exception:  # an index it cannot read, whatever the reason: trouble
+            status = None
     running = lock.holder(database) is not None
     problem = read_problem()
     shown = poses.menu_state(status, running=running, blocked=problem is not None)
@@ -185,10 +193,16 @@ def _same(a: Path, b: Path) -> bool:
     return os.path.realpath(a) == os.path.realpath(b)
 
 
-def write_state(database: Path, config_path: Path) -> bool:
+def write_state(
+    database: Path,
+    config_path: Path,
+    *,
+    status: status_mod.Status | None = None,
+    probe: bool = False,
+) -> bool:
     """Write the state for this library if it differs from the file, and nudge the
     applet; ``True`` when written. Raises what it meets (``changed`` swallows it)."""
-    data = view(database, config_path).to_json()
+    data = view(database, config_path, status=status, probe=probe).to_json()
     if menubar.read_small(menubar.state_path()) == data:
         return False
     menubar.write_private(menubar.state_path(), data)
@@ -196,16 +210,28 @@ def write_state(database: Path, config_path: Path) -> bool:
     return True
 
 
-def changed(database: Path | None = None) -> None:
+def changed(
+    database: Path | None = None,
+    *,
+    status: status_mod.Status | None = None,
+    probe: bool = False,
+) -> None:
     """Write the state and nudge the applet, if the item is installed (for ``database``,
-    when given). Never raises; with no item installed, costs one ``stat``."""
+    when given). Never raises; with no item installed, costs one ``stat``.
+
+    The hot path (every lock release) leaves ``probe`` off: no ``launchctl``, so the
+    next-run line assumes the agents it finds are loaded. Where flib asks launchd
+    anyway, it passes the real answer: ``flib status``, the interface's status and
+    ``flib doctor`` (``status``, just collected) and ``flib schedule`` (``probe``).
+    That also heals a "running" left by a run that was killed: running is the
+    live lock holder, never the old file."""
     try:
         if not menubar.installed():
             return
         target = menubar.read_target()
         if target is None or (database is not None and not _same(database, target.database)):
             return
-        write_state(target.database, target.config)
+        write_state(target.database, target.config, status=status, probe=probe)
     except Exception as exc:  # the item is a convenience: it must never break flib
         log.debug("menu bar state not written: %s: %s", type(exc).__name__, exc)
 

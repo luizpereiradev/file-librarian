@@ -763,19 +763,60 @@ def test_a_failed_install_leaves_no_target_and_no_writes(
 def test_a_failed_reinstall_never_mixes_two_configurations(
     installed: Config, tmp_path: Path, downloads: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    first = menubar.read_target()
     other = write_config(tmp_path, downloads)
     monkeypatch.setenv("FAKE_NOTIFIER_FAIL", "osacompile")  # B's build fails
     result = runner.invoke(app, ["menu", "-c", str(other)])
     assert result.exit_code == 1
-    target = menubar.read_target()
-    assert target is not None and target.config != other.resolve()  # still A, as the app
-    monkeypatch.delenv("FAKE_NOTIFIER_FAIL")
-    monkeypatch.setenv("FAKE_LAUNCHD_FAIL", "bootstrap")  # B builds, launchd refuses
+    assert first is not None
+    assert menubar.read_target() == first and menubar.installed()
+    assert menubar.problem(first.config) is None  # A's app untouched
+
+
+def test_a_reinstall_launchd_refuses_puts_the_working_item_back(
+    installed: Config,
+    config_file: Path,
+    tmp_path: Path,
+    downloads: Path,
+    fake_launchd: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = menubar.read_target()
+    assert first is not None
+    plist_before = scheduler.read_agent(scheduler.MENU_LABEL)
+    other = write_config(tmp_path, downloads)
+    real = scheduler.install_agent
+    calls_made: list[dict[str, object]] = []
+
+    def refuse_b(label: str, data: dict[str, object]) -> Path:
+        calls_made.append(data)
+        if len(calls_made) == 1:
+            raise scheduler.ScheduleError("launchctl could not load it: simulated")
+        return real(label, data)
+
+    monkeypatch.setattr(scheduler, "install_agent", refuse_b)
     result = runner.invoke(app, ["menu", "-c", str(other)])
     assert result.exit_code == 1
-    assert not menubar.installed()  # rolled back: nothing half-installed keeps writing
-    kept = menubar.read_target()
-    assert kept is not None and kept.config != other.resolve()  # B was never recorded
+    assert f"the menu bar item for {first.config} is back as it was" in result.stderr
+    # A again: its record, its agent (loaded), its app (built for A, not B).
+    assert menubar.read_target() == first
+    assert scheduler.read_agent(scheduler.MENU_LABEL) == plist_before
+    assert scheduler.MENU_LABEL in loaded(fake_launchd)
+    assert menubar.problem(first.config) is None
+    assert menubar.problem(other.resolve()) == "the menu bar app is out of date"
+    leftovers = [p.name for p in menubar.app_path().parent.iterdir() if p.name.startswith(".")]
+    assert leftovers == []
+
+
+def test_a_reinstall_that_cannot_reload_the_old_item_says_so(
+    installed: Config, tmp_path: Path, downloads: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    other = write_config(tmp_path, downloads)
+    monkeypatch.setenv("FAKE_LAUNCHD_FAIL", "bootstrap")  # B and then A refused
+    result = runner.invoke(app, ["menu", "-c", str(other)])
+    assert result.exit_code == 1
+    assert "the menu bar item that was there could not be loaded again" in result.stderr
+    assert menubar.problem(menubar.read_target().config) is None  # type: ignore[union-attr]
 
 
 def test_a_record_without_the_agent_writes_nothing(config_file: Path, cfg: Config) -> None:
@@ -936,3 +977,70 @@ def test_a_removal_goes_on_after_a_step_that_failed(
     with pytest.raises(menubar.MenuError, match=r"file-librarian-menu\.app"):
         menubar.remove()
     assert not menubar.installed() and not menubar.folder().exists()
+
+
+# --- after the second review of #132 -------------------------------------------------------
+
+
+def test_a_killed_run_is_healed_by_a_look(
+    installed: Config, config_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A run that died under SIGKILL: its pid is in the lock file, its "running" in the state.
+    lock_file = lock.lock_path(installed.database)
+    lock_file.write_text("99999999")
+    view = menubar_state.View(poses.Pose.BUSY, 0, "Organizing" + ELLIPSIS, "", 0, 0, True)
+    menubar.write_private(menubar.state_path(), view.to_json())
+    assert shown()["running"] is True
+    result = runner.invoke(app, ["status", "-c", str(config_file)])
+    assert result.exit_code == 0
+    assert shown()["running"] is False and shown()["pose"] == "asleep"
+    # The interface's status asks the same way.
+    menubar.write_private(menubar.state_path(), view.to_json())
+    from file_librarian.ui import api
+
+    api.status(installed)
+    assert shown()["running"] is False
+
+
+def test_organize_now_heals_a_killed_run(installed: Config, config_file: Path) -> None:
+    view = menubar_state.View(poses.Pose.BUSY, 0, "Organizing" + ELLIPSIS, "", 0, 0, True)
+    menubar.write_private(menubar.state_path(), view.to_json())
+    result = runner.invoke(app, ["menu", "--organize", "-c", str(config_file)])
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert shown()["running"] is False
+
+
+def test_a_look_shows_an_agent_that_is_not_loaded(
+    installed: Config, config_file: Path, fake_launchd: Path
+) -> None:
+    assert runner.invoke(app, ["schedule", "-c", str(config_file), "--no-check"]).exit_code == 0
+    assert shown()["next"].startswith("Next run ")
+    agents = loaded(fake_launchd)
+    del agents[scheduler.LABEL]  # launchd lost it (a reboot, a bootout by hand)
+    fake_launchd.write_text(json.dumps(agents))
+    with instance_lock(installed.database):
+        pass
+    assert shown()["next"].startswith("Next run ")  # the hot path does not ask launchd
+    runner.invoke(app, ["status", "-c", str(config_file)])
+    assert shown()["next"] == "Schedule not active (`flib schedule`)"
+    runner.invoke(app, ["schedule", "-c", str(config_file), "--no-check"])
+    assert shown()["next"].startswith("Next run ")
+
+
+def test_a_look_at_another_library_leaves_the_item_alone(installed: Config, tmp_path: Path) -> None:
+    from tests._helpers import fake_config
+
+    before = menubar.state_path().read_bytes()
+    other = fake_config(tmp_path / "elsewhere", database=str(tmp_path / "other.db"))
+    from file_librarian import status as st_mod
+
+    st_mod.collect(other)
+    assert menubar.state_path().read_bytes() == before
+
+
+def test_texts_lose_quotes_backslashes_and_what_is_not_printable() -> None:
+    line = 'a"b\\c\x07d' + chr(0x200E) + "e" + chr(0xD800) + "f"
+    data = json.loads(menubar_state.View(poses.Pose.ASLEEP, 0, line, "", 0, 0, False).to_json())
+    assert data["line"] == "a'b'cdef"
+    raw = menubar_state.View(poses.Pose.ASLEEP, 0, line, "", 0, 0, False).to_json()
+    assert menubar.sanitize(raw)["line"] == "a'b'cdef"
