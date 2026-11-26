@@ -77,10 +77,7 @@ def undo_run(
             )
         if run_id is None:
             raise NothingToUndoError("no run has moved anything yet")
-    ops = store.operations(run_id=run_id, status=OperationStatus.DONE)
-    changes = store.index_changes(run_id)
-    if not ops and not changes:
-        raise NothingToUndoError(f"run {run_id} has nothing left to undo{hint}")
+    ops, changes = run_undo_plan(store, run_id, hint=hint)
     report = UndoReport()
     for op in reversed(ops):
         _undo_one(store, op, report, config)
@@ -108,13 +105,33 @@ def _revert(store: Store, change: IndexChange, report: UndoReport) -> None:
             report.warnings.append((path, warning))
 
 
-def undo_file(store: Store, path: Path, *, config: Config | None = None) -> UndoReport:
+def run_undo_plan(
+    store: Store, run_id: int, *, hint: str = ""
+) -> tuple[list[OperationRow], list[IndexChange]]:
+    """What ``undo_run`` would revert of run ``run_id``: its moves still in effect and
+    its index changes; raises ``NothingToUndoError`` (the words ``flib undo`` uses)
+    when there is nothing. The interface shows this before it asks (#115)."""
+    ops = store.operations(run_id=run_id, status=OperationStatus.DONE)
+    changes = store.index_changes(run_id)
+    if not ops and not changes:
+        raise NothingToUndoError(f"run {run_id} has nothing left to undo{hint}")
+    return ops, changes
+
+
+def file_undo_plan(store: Store, path: Path) -> OperationRow:
+    """The move ``undo_file`` would revert for ``path``; raises ``NothingToUndoError``."""
     row = store.file_by_current_path(path.expanduser().absolute())
     if row is None:
         raise NothingToUndoError(f"{path} is not a file flib moved")
     op = store.last_done_operation(row.id)
     if op is None:
         raise NothingToUndoError(f"{path} has no move to undo")
+    return op
+
+
+def undo_file(store: Store, path: Path, *, config: Config | None = None) -> UndoReport:
+    op = file_undo_plan(store, path)
+    row = store.file_by_id(op.file_id)
     report = UndoReport()
     _undo_one(store, op, report, config)
     if report.restored:

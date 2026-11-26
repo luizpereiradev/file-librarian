@@ -3,7 +3,9 @@
 The user names a file in the library and the category and/or name it should
 have. The move goes through the same journal as a run: it is recorded as its
 own run, ``planned`` before the move and ``done`` after, so ``flib undo``
-reverts it like any other. The index row follows the file (and with it the
+reverts it like any other. ``fix_files`` does several in one run (the
+interface's "accept all", #115), so one undo reverts them together; the
+run's counts always come from its journal. The index row follows the file (and with it the
 search index), and each change is recorded in ``corrections``, the same way
 ``flib reconcile`` records moves made by hand. The classifier then sends it
 as an example in later requests. A file fixed out of review loses its review
@@ -74,6 +76,31 @@ def fix_file(
     trigger: RunTrigger = RunTrigger.MANUAL,
 ) -> FixReport:
     """Move one indexed file to ``category`` and/or rename it to ``name``."""
+    planned = plan_fix(config, store, path, category=category, name=name)
+    run_id = store.start_run(RunMode.RUN, trigger)
+    return _apply(config, store, planned, run_id)
+
+
+@dataclass(frozen=True, slots=True)
+class PlannedFix:
+    """A fix checked and ready to apply: the file is the one indexed, the name is free
+    of '/' and the category is configured. Nothing has changed yet."""
+
+    row: FileRow
+    destination: Path
+    status: FileStatus
+    category: str | None
+
+
+def plan_fix(
+    config: Config,
+    store: Store,
+    path: Path,
+    *,
+    category: str | None = None,
+    name: str | None = None,
+) -> PlannedFix:
+    """Check a fix without doing it; raises ``FixError`` with what is wrong."""
     if category is None and name is None:
         raise FixError("say what to change: a category, a name, or both")
     row = store.file_by_current_path(path.expanduser().absolute())
@@ -96,32 +123,95 @@ def fix_file(
         destination = source.parent / new_name
     if destination == source:
         raise FixError(f"{path} is already there with that name")
-
     status = FileStatus.REVIEW if new_category is None else FileStatus.ORGANIZED
-    st = os.lstat(source)
+    return PlannedFix(row, destination, status, new_category)
+
+
+@dataclass(slots=True)
+class BatchReport:
+    """``fix_files``: one run, what it fixed and what it left as it was."""
+
+    run_id: int
+    fixed: list[FixReport] = field(default_factory=list)
+    skipped: list[tuple[Path, str]] = field(default_factory=list)
+    """A file left as it was, and why (``FixError``'s words)."""
+
+
+def fix_files(
+    config: Config,
+    store: Store,
+    items: list[tuple[Path, str | None, str | None]],
+    *,
+    trigger: RunTrigger = RunTrigger.MANUAL,
+) -> BatchReport:
+    """Several fixes, ``(path, category, name)`` each, journaled as **one** run: a
+    single ``flib undo --run`` reverts them all. Each is checked and done as
+    ``fix_file`` does it; one that cannot be done is skipped and listed, and
+    the others go on."""
     run_id = store.start_run(RunMode.RUN, trigger)
+    report = BatchReport(run_id)
+    unplanned = 0  # skipped before a journal entry was made
+    for path, category, name in items:
+        try:
+            planned = plan_fix(config, store, path, category=category, name=name)
+        except FixError as exc:
+            report.skipped.append((path, str(exc)))
+            unplanned += 1
+            continue
+        try:
+            report.fixed.append(_apply(config, store, planned, run_id, finish=False))
+        except FixError as exc:
+            report.skipped.append((path, str(exc)))
+    with store.transaction():
+        _finish(store, run_id, extra_seen=unplanned)
+    return report
+
+
+def _apply(
+    config: Config, store: Store, planned: PlannedFix, run_id: int, *, finish: bool = True
+) -> FixReport:
+    """Journal, move and record one checked fix in run ``run_id``."""
+    row = planned.row
+    source = row.current_path
+    st = os.lstat(source)
     with store.transaction():
         op_id = store.add_operation(
             run_id,
             row.id,
             source,
-            destination,
+            planned.destination,
             identity=(st.st_dev, st.st_ino),
-            fix=(status, new_category),
+            fix=(planned.status, planned.category),
         )
     try:
-        ensure_folder(destination.parent, inside=config.output_root)
-        destination = _move(source, destination, store, op_id)
+        ensure_folder(planned.destination.parent, inside=config.output_root)
+        destination = _move(source, planned.destination, store, op_id)
     except (OSError, ValueError) as exc:
         with store.transaction():
             store.set_operation(op_id, OperationStatus.FAILED)
-            store.finish_run(run_id, seen=1, moved=0, review=0, errors=1, cost_usd=0.0)
-        raise FixError(f"could not move {path}: {exc}") from exc
+            if finish:
+                _finish(store, run_id)
+        raise FixError(f"could not move {source}: {exc}") from exc
 
     category_change, name_change, warnings = _complete(
-        config, store, row, run_id, op_id, destination, status, new_category
-    )
+        config, store, row, run_id, op_id, destination, planned.status, planned.category,
+        finish=finish,
+    )  # fmt: skip
     return FixReport(run_id, source, destination, category_change, name_change, warnings)
+
+
+def _finish(store: Store, run_id: int, *, extra_seen: int = 0) -> None:
+    """The run's counts, from its journal: one fix, or a batch of them."""
+    ops = store.operations(run_id=run_id)
+    done = [op for op in ops if op.status is not OperationStatus.FAILED]
+    store.finish_run(
+        run_id,
+        seen=len(ops) + extra_seen,
+        moved=sum(1 for op in done if op.fix is not None and op.fix[0] is FileStatus.ORGANIZED),
+        review=sum(1 for op in done if op.fix is not None and op.fix[0] is FileStatus.REVIEW),
+        errors=len(ops) - len(done),
+        cost_usd=0.0,  # nothing is sent to the provider
+    )
 
 
 def complete_interrupted(
@@ -140,7 +230,7 @@ def complete_interrupted(
     if not moved:
         with store.transaction():
             store.set_operation(op.id, OperationStatus.FAILED)
-            store.finish_run(op.run_id, seen=1, moved=0, review=0, errors=1, cost_usd=0.0)
+            _finish(store, op.run_id)
         return
     row = store.file_by_id(op.file_id)
     status, category = op.fix
@@ -156,6 +246,8 @@ def _complete(
     destination: Path,
     status: FileStatus,
     category: str | None,
+    *,
+    finish: bool = True,
 ) -> tuple[tuple[str | None, str] | None, tuple[str, str] | None, list[str]]:
     """Everything after the move. ``row`` is the file as indexed before the fix.
 
@@ -183,14 +275,8 @@ def _complete(
             store.add_correction(row.id, "category", *category_change)
         if name_change is not None:
             store.add_correction(row.id, "name", *name_change)
-        store.finish_run(
-            run_id,
-            seen=1,
-            moved=int(status is FileStatus.ORGANIZED),
-            review=int(status is FileStatus.REVIEW),
-            errors=0,
-            cost_usd=0.0,  # nothing is sent to the provider
-        )
+        if finish:
+            _finish(store, run_id)
     return category_change, name_change, warnings
 
 

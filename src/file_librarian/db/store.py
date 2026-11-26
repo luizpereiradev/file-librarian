@@ -1156,6 +1156,27 @@ class Store:
             found.update((int(r["id"]), FileRow.from_row(r)) for r in rows)
         return found
 
+    def review_files(self, *, limit: int) -> list[FileRow]:
+        """Files in review, oldest first (the interface's Review page, #115)."""
+        rows = self.conn.execute(
+            "SELECT * FROM files WHERE status = 'review' ORDER BY processed_at, id LIMIT ?",
+            (limit,),
+        )
+        return [FileRow.from_row(r) for r in rows]
+
+    def last_done_operations(self, file_ids: Sequence[int]) -> dict[int, int]:
+        """Each file's last ``done`` operation (the one ``flib undo --file`` reverts), by id."""
+        found: dict[int, int] = {}
+        for start in range(0, len(file_ids), 500):
+            chunk = file_ids[start : start + 500]
+            rows = self.conn.execute(
+                "SELECT file_id, MAX(id) FROM operations WHERE status = 'done' "  # noqa: S608
+                f"AND file_id IN ({', '.join('?' * len(chunk))}) GROUP BY file_id",
+                tuple(chunk),
+            )
+            found.update((int(r[0]), int(r[1])) for r in rows)
+        return found
+
     # --- embeddings (semantic search) -------------------------------------------------
 
     def embedding_keys(self) -> dict[int, tuple[str, str]]:
