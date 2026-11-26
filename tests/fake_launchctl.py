@@ -2,7 +2,10 @@
 
 Records loaded labels in a JSON file (FAKE_LAUNCHD). ``bootstrap`` of a plist
 with ``RunAtLoad`` runs its program right away, with the plist's environment,
-so the access check can be tested end to end. FAKE_LAUNCHD_FAIL=<command>
+so the access check can be tested end to end. ``print`` of a loaded label says
+``state = running`` unless the label is in FAKE_LAUNCHD_STOPPED (comma
+separated). ``kickstart`` of a loaded label appends ``[label, restart]`` as a
+JSON line to ``kicks.jsonl`` next to FAKE_LAUNCHD. FAKE_LAUNCHD_FAIL=<command>
 makes that command fail. Nothing reaches the real launchd.
 """
 
@@ -40,7 +43,20 @@ def main(argv: list[str]) -> int:
         state.write_text(json.dumps(loaded))
         return 0
     if command == "print":
-        return 0 if args[0].rsplit("/", 1)[-1] in loaded else 113
+        label = args[0].rsplit("/", 1)[-1]
+        if label not in loaded:
+            return 113
+        stopped = os.environ.get("FAKE_LAUNCHD_STOPPED", "").split(",")
+        print(f"{args[0]} = {{\n\tstate = {'not running' if label in stopped else 'running'}\n}}")
+        return 0
+    if command == "kickstart":
+        label = args[-1].rsplit("/", 1)[-1]
+        if label not in loaded:
+            print("Could not find service", file=sys.stderr)
+            return 113
+        with state.with_name("kicks.jsonl").open("a", encoding="utf-8") as kicks:
+            kicks.write(json.dumps([label, "-k" in args]) + "\n")
+        return 0
     return 2
 
 

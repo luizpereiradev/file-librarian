@@ -22,7 +22,8 @@ A watch run (#90) takes only items quiet for ``schedule.watch_quiet_seconds``
 (``Config.for_watch``) and, when more are ready than ``max_files_per_run``,
 new arrivals before items an earlier watch run left behind.
 
-An automatic run waits up to ``lock_wait`` seconds for the instance lock.
+An automatic run waits up to ``lock_wait`` seconds for the instance lock. Once
+it holds it, the menu bar item is told a run started (``menubar_state``).
 
 With ``search.semantic.enabled``, a real run ends by embedding the rows that
 are new or changed (``embeddings.refresh``). That step never fails the run: a
@@ -36,6 +37,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
+from file_librarian import menubar_state
 from file_librarian.classifier import (
     CACHE_DAYS,
     classify_all,
@@ -116,10 +118,13 @@ def run(
             return _run(
                 config, provider, store, simulate=True, trigger=trigger, now=now, memory=memory
             )
-    with instance_lock(config.database, wait=lock_wait), Store.open(config.database) as store:
-        return _run(
-            config, provider, store, simulate=False, trigger=trigger, now=now, memory=memory
-        )
+    with instance_lock(config.database, wait=lock_wait):
+        # The menu bar item turns busy; it is told again when the lock is released.
+        menubar_state.changed(config.database)
+        with Store.open(config.database) as store:
+            return _run(
+                config, provider, store, simulate=False, trigger=trigger, now=now, memory=memory
+            )
 
 
 def _run(

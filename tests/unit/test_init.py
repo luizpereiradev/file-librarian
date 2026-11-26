@@ -20,6 +20,8 @@ from file_librarian.providers.fake import FakeProvider
 from tests._helpers import OLD, FakeClaude, answer, fake_config, planned, put, write_config
 
 runner = CliRunner()
+MENU_NO = "n\n"
+"""The answer to init's last question, the menu bar item (#116)."""
 KEY = "sk-ant-" + "init-" + "k" * 24
 
 
@@ -125,7 +127,7 @@ def test_overwrite_when_confirmed(downloads: Path, tmp_path: Path) -> None:
     path = write_config(tmp_path, downloads, extra="# my own settings\n")
     # Replace? y, then Enter for every question; decline the schedule.
     answers = "y\n" + "\n" * 5 + "n\n"
-    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers)
+    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers + MENU_NO)
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "my own settings" not in path.read_text(encoding="utf-8")
     assert load_config(path).provider.name == "claude-code"
@@ -149,7 +151,7 @@ def test_anthropic_with_the_key_prompt_and_vision(
     # language, folder, output, review, provider: Enter; vision: y;
     # store a key: Enter (yes), the key; schedule: n.
     answers = "\n\n\n\n\ny\n\n" + KEY + "\nn\n"
-    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers)
+    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers + MENU_NO)
 
     assert result.exit_code == 0, result.stdout + result.stderr
     cfg = load_config(path)
@@ -204,7 +206,7 @@ def test_claude_code_not_found(
     path = tmp_path / "config.yaml"
     # Pick claude-code anyway.
     answers = "\n\n\n\nclaude-code\nn\n"
-    result = runner.invoke(app, ["init", "-c", str(path)], input=answers)
+    result = runner.invoke(app, ["init", "-c", str(path)], input=answers + MENU_NO)
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "claude-code    your Claude subscription through Claude Code (not found)" in (
         result.stdout
@@ -235,7 +237,7 @@ def test_tiny_downloads_and_a_declined_trial(
     put(downloads, "only.txt", b"just one")
     path = tmp_path / "c.yaml"
     answers = "\n" * 5 + "n\n" + "n\n"  # questions, decline the trial, decline the schedule
-    result = runner.invoke(app, ["init", "-c", str(path)], input=answers)
+    result = runner.invoke(app, ["init", "-c", str(path)], input=answers + MENU_NO)
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "Try it on copies of your 1 most recent item(s)?" in result.stdout
     assert classifications(fake_claude) == []
@@ -255,7 +257,7 @@ def test_a_failed_trial_does_not_stop_the_setup(
 def test_missing_folder_is_asked_again(downloads: Path, tmp_path: Path) -> None:
     path = tmp_path / "c.yaml"
     answers = "\n~/Nowhere\n\n\n\n\nn\n"
-    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers)
+    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers + MENU_NO)
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "is not a folder" in result.stderr
     assert load_config(path).input_paths == [downloads]
@@ -265,7 +267,7 @@ def test_invalid_folders_are_asked_again(downloads: Path, tmp_path: Path) -> Non
     path = tmp_path / "c.yaml"
     # An output root that contains the input is rejected; the second try is the default.
     answers = "\n\n~\n\n" + "\n\n\n" + "\n" + "n\n"
-    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers)
+    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers + MENU_NO)
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "Let's try the folders again" in result.stderr
     assert load_config(path).output_root == downloads / "Organized"
@@ -430,7 +432,7 @@ def test_display_path(fake_home: Path) -> None:
 def test_an_unknown_choice_is_asked_again(downloads: Path, tmp_path: Path) -> None:
     path = tmp_path / "c.yaml"
     answers = "fr\n\n" + "\n" * 4 + "n\n"
-    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers)
+    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers + MENU_NO)
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "choose one of en, pt-BR" in result.stderr
     assert load_config(path).language == "en"
@@ -490,7 +492,7 @@ def test_a_keychain_failure_is_reported(
     path = write_config(tmp_path, downloads, "{name: anthropic, model: m}")
     # Keep the config (Enter), store a key (Enter), the key, then no schedule.
     answers = "\n\n" + KEY + "\nn\n"
-    result = runner.invoke(app, ["init", "-c", str(path)], input=answers)
+    result = runner.invoke(app, ["init", "-c", str(path)], input=answers + MENU_NO)
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "cannot run" in result.stderr
     assert "run `flib key set`" in result.stderr
@@ -503,7 +505,7 @@ def test_init_asks_the_mode_and_keeps_it_in_the_config(
     path = tmp_path / "config.yaml"
     # Enter for every question, yes to the schedule, then watch mode.
     answers = "\n" * 5 + "y\n" + "watch\n"
-    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers)
+    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers + MENU_NO)
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "Watch mode organizes files a few minutes after they arrive" in result.stdout
     assert "Watch mode on" in result.stdout
@@ -542,7 +544,7 @@ def test_a_kept_config_without_room_for_the_mode_gets_a_hint(
 ) -> None:
     path = write_config(tmp_path, downloads, extra="schedule: {time: '12:30'}\n")
     answers = "n\n" + "y\n" + "both\n"
-    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers)
+    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers + MENU_NO)
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "Set schedule.mode: both" in result.stderr
     assert scheduler.status().mode == "both"

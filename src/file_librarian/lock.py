@@ -9,6 +9,12 @@ Runs started by hand fail at once when the lock is held. Automatic runs (the
 daily run, watch mode) ask again every ``LOCK_POLL_SECONDS`` for up to
 ``wait`` seconds first, so the daily run is not lost to a watch run that
 happens to be going on. Nothing is ever done to the process holding it.
+
+Every write to the library takes the instance lock, so its release is where
+what waits for the user may have changed: ``instance_lock`` then tells the
+menu bar item (``menubar_state.changed``, which does nothing unless the item
+is installed and never fails). ``holder`` says who holds it without taking it,
+for the item's "busy" pose.
 """
 
 from __future__ import annotations
@@ -43,15 +49,56 @@ def instance_lock(
     sleep: Callable[[float], None] = time.sleep,
 ) -> Iterator[None]:
     """Hold the lock for the duration of the block; if it is held, ask again for up
-    to ``wait`` seconds, then fail."""
-    with _flock(
-        lock_path(database),
-        "another flib process (pid {pid}) is running; try again when it finishes",
-        wait=wait,
-        clock=clock,
-        sleep=sleep,
-    ):
-        yield
+    to ``wait`` seconds, then fail. Once released, the menu bar item is told."""
+    held = False
+    try:
+        with _flock(
+            lock_path(database),
+            "another flib process (pid {pid}) is running; try again when it finishes",
+            wait=wait,
+            clock=clock,
+            sleep=sleep,
+        ):
+            held = True
+            yield
+    finally:
+        if held:
+            from file_librarian import menubar_state
+
+            menubar_state.changed(database)
+
+
+def holder(database: Path) -> int | None:
+    """The process holding the instance lock, if one is alive; never takes the lock.
+
+    It reads the pid the holder wrote (and empties on release); a process that
+    died holding it left its pid behind, so the pid must also be alive. Taking
+    the lock to test it, however briefly, could make a run that starts at that
+    moment fail as "already running"."""
+    return _holder(lock_path(database))
+
+
+def ui_holder(database: Path) -> int | None:
+    """The ``flib ui`` holding ``ui_lock``, if one is alive (as ``holder``)."""
+    return _holder(database.parent / UI_LOCK_NAME)
+
+
+def _holder(path: Path) -> int | None:
+    try:
+        with path.open("rb") as fh:
+            text = fh.read(32).decode("ascii", errors="replace").strip()
+    except OSError:
+        return None
+    if not text.isdigit() or int(text) <= 0:
+        return None
+    pid = int(text)
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return pid  # alive, another account's
+    except (OSError, OverflowError):
+        return None
+    return pid
 
 
 @contextmanager

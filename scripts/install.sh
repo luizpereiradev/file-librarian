@@ -70,11 +70,18 @@ fi
 # interpreter: re-install an existing daily run or watch mode so it keeps working.
 flib_bin="$(uv tool dir --bin)/flib"
 agents="$HOME/Library/LaunchAgents/io.github.luizpereiradev.file-librarian"
+# The menu bar item lives in that environment too: `schedule --refresh` rebuilds and
+# restarts it as well, and `menu --refresh` does it alone.
 if [ -f "$agents.plist" ] || [ -f "$agents.watch.plist" ]; then
   "$flib_bin" schedule --refresh
+elif [ -f "$agents.menu.plist" ]; then
+  "$flib_bin" menu --refresh
 fi
 echo
 echo "Installed: $(uv tool dir --bin)/flib"
+if [ ! -f "$agents.menu.plist" ]; then
+  echo "To see what needs you in the menu bar: flib menu"
+fi
 if [ "$with_mcp" = yes ]; then
   echo "MCP server included: see \"Use it from Claude\" in the README."
 fi

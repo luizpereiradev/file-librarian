@@ -117,6 +117,7 @@ def fake_launchd(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.M
     folder = tmp_path_factory.mktemp("launchd")
     script = _shim(folder, "launchctl", "fake_launchctl.py")
     monkeypatch.setenv("FAKE_LAUNCHD", str(folder / "loaded.json"))
+    monkeypatch.delenv("FAKE_LAUNCHD_STOPPED", raising=False)
     monkeypatch.setattr("file_librarian.scheduler.LAUNCHCTL", str(script))
     # The dedicated interpreter goes into a throwaway environment that reuses this
     # one's packages, never into the developer's .venv.

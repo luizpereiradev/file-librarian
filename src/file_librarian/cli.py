@@ -31,6 +31,8 @@ from file_librarian import (
     embeddings,
     keychain,
     locality,
+    menubar,
+    menubar_state,
     notifier,
     onboarding,
     pipeline,
@@ -59,7 +61,7 @@ from file_librarian.fields import KINDS, format_amount, format_decimal
 from file_librarian.fix import FixError, fix_file
 from file_librarian.hashing import file_sha256, unit_manifest
 from file_librarian.locales import LOCALES, Language
-from file_librarian.lock import AlreadyRunningError, instance_lock, reprocess_lock
+from file_librarian.lock import AlreadyRunningError, holder, instance_lock, reprocess_lock
 from file_librarian.models import FileStatus, RunTrigger, explain_review
 from file_librarian.planner import Plan
 from file_librarian.providers import PLANNED, ProviderError, get_provider, is_implemented
@@ -750,6 +752,8 @@ def _pipeline(
             return None
         _fatal(str(exc))
     except (ProviderError, ScanError) as exc:
+        if not simulate:
+            menubar_state.note_problem(cfg.database, "run_failed")
         _fatal(str(exc))
     if outcome.recovered:
         typer.echo(f"Recovered {outcome.recovered} move(s) interrupted by an earlier crash.")
@@ -766,6 +770,7 @@ def _pipeline(
         if cost:
             typer.echo(cost)
     elif outcome.report is not None:
+        menubar_state.note_problem(cfg.database, "no_access" if hint else None)
         # The periodic summary (and its reminders) stays with the daily run: watch runs
         # are many and short, and a reminder after a download would be noise.
         summary = _periodic_summary(cfg, outcome.scan) if trigger is RunTrigger.SCHEDULE else []
@@ -1620,6 +1625,7 @@ def schedule(
     except scheduler.ScheduleError as exc:
         _fatal(str(exc))
     if refresh:
+        _refresh_menu(quiet=True)
         if not current.installed:
             typer.echo("Nothing is scheduled; nothing to refresh.")
             return
@@ -2004,6 +2010,7 @@ def init(
         typer.echo(onboarding.LOCAL_QUALITY)
     typer.echo("")
     _offer_schedule(path, cfg, ask)
+    _offer_menu(path, cfg, ask)
     typer.echo(
         "\nNext:\n"
         "  flib simulate   the plan for your real folders; nothing moves\n"
@@ -2419,6 +2426,20 @@ def _offer_schedule(path: Path, cfg: Config, ask: _Asker) -> None:
     _report_access(path.resolve())
 
 
+def _offer_menu(path: Path, cfg: Config, ask: _Asker) -> None:
+    """Offer the menu bar item (#116), on unless declined; quiet where it cannot be built."""
+    if menubar.missing_tools():
+        return
+    if menubar.installed():
+        typer.echo("flib is already in the menu bar; `flib menu --remove` takes it away.")
+        return
+    question = "Show flib in the menu bar (what needs you, and a menu that opens flib)?"
+    if not ask.confirm(question, default=True):
+        typer.echo("You can add it later with `flib menu`.")
+        return
+    _install_menu(path, cfg)
+
+
 @app.command()
 def mcp(config: ConfigOption = None) -> None:
     """Serve the library to AI assistants: a local MCP server over stdio."""
@@ -2472,6 +2493,143 @@ def ui(
         _fatal(str(exc))
     if reason == "stolen":
         raise typer.Exit(EXIT_ERROR)
+
+
+@app.command()
+def menu(
+    config: ConfigOption = None,
+    install: Annotated[
+        bool,
+        typer.Option("--install", help="Install it and show it (what plain `flib menu` does)."),
+    ] = False,
+    remove: Annotated[
+        bool, typer.Option("--remove", help="Take it out of the menu bar and uninstall it.")
+    ] = False,
+    show: Annotated[
+        bool, typer.Option("--status", help="Say whether it is installed and running.")
+    ] = False,
+    refresh: Annotated[
+        bool, typer.Option("--refresh", help="Rebuild it if an update needs it (install.sh).")
+    ] = False,
+    organize: Annotated[
+        bool, typer.Option("--organize", hidden=True, help="What its Organize now runs.")
+    ] = False,
+) -> None:
+    """Show flib in the menu bar: the cat's pose says what needs you, and its menu opens
+    `flib ui` on the right page.
+
+    Built from tools that ship with macOS and started at login; nothing is
+    downloaded. The menu shows counts only, never a file name. `--remove` takes
+    it away again.
+    """
+    if sum((install, remove, show, refresh, organize)) > 1:
+        _fatal("choose one of --install, --remove, --status and --refresh")
+    if remove:
+        found = menubar.remove()
+        typer.echo(
+            "Removed from the menu bar." if found else "The menu bar item was not installed."
+        )
+        return
+    if show:
+        _print_menu_status()
+        return
+    if refresh:
+        _refresh_menu(quiet=False)
+        return
+    if organize:
+        _organize_from_menu(config)
+        return
+    path = config or default_config_path()
+    if not _install_menu(path, _load(path)):
+        raise typer.Exit(EXIT_ERROR)
+
+
+MENU_NEEDS_TOOLS = (
+    "the menu bar item cannot be built on this Mac ({missing}); `flib status` and the "
+    "notifications keep working without it"
+)
+
+
+def _install_menu(path: Path, cfg: Config) -> bool:
+    """Build, install and start the menu bar item for the configuration at ``path``."""
+    missing = menubar.missing_tools()
+    if missing:
+        problem = MENU_NEEDS_TOOLS.format(missing=", ".join(missing) + " missing")
+        typer.echo(f"error: {problem}.", err=True)
+        return False
+    if not scheduler.is_installed_tool():
+        typer.echo(
+            "warning: flib is running from a development environment; the menu bar item "
+            "will depend on this folder. Install it with ./scripts/install.sh and run "
+            "`flib menu` again from the installed command.",
+            err=True,
+        )
+    try:
+        plist = menubar.install(path, cfg.database)
+    except menubar.MenuError as exc:
+        typer.echo(f"error: could not set up the menu bar item: {exc}", err=True)
+        return False
+    typer.echo(
+        "The cat is in the menu bar now (it can take a few seconds to show). Its pose says "
+        "what needs you; its menu opens flib on the right page."
+    )
+    typer.echo(f"It starts at login ({plist}). `flib menu --remove` takes it away.")
+    return True
+
+
+def _refresh_menu(*, quiet: bool) -> None:
+    """Rebuild the menu bar item after an update when it needs it; never fails."""
+    try:
+        done = menubar.refresh()
+    except menubar.MenuError as exc:
+        typer.echo(f"warning: could not rebuild the menu bar item: {exc}", err=True)
+        return
+    if done is not None:
+        typer.echo(f"Menu bar item {done}.")
+    elif not quiet:
+        typer.echo(
+            "The menu bar item is up to date."
+            if menubar.installed()
+            else "The menu bar item is not installed; nothing to refresh."
+        )
+
+
+def _print_menu_status() -> None:
+    found = menubar.summary()
+    line = menubar.status_line(found)
+    if line is None:
+        typer.echo("The menu bar item is not installed. `flib menu` puts flib in the menu bar.")
+        return
+    typer.echo(line)
+    if found.config is not None:
+        typer.echo(f"  for: {found.config}")
+    if found.seen is not None:
+        typer.echo(f"  it shows: {found.seen['pose']}, {found.seen['line']!r}")
+
+
+def _organize_from_menu(config: Path | None) -> None:
+    """Organize now, from the menu: exactly what the daily agent does when it is the
+    agent of this configuration (``launchctl kickstart``), else a run here. Never a
+    second run: with one going on, it says so (the menu shows it too)."""
+    cfg = _load(config, warn_orphans=False)
+    if holder(cfg.database) is not None:
+        menubar_state.changed(cfg.database)
+        typer.echo("A run is in progress; it organizes what is there.")
+        return
+    scheduled = scheduler.scheduled_config()
+    path = config or default_config_path()
+    if (
+        scheduled is not None
+        and os.path.realpath(scheduled) == os.path.realpath(path)
+        and scheduler.daily_agent_loaded()
+    ):
+        try:
+            scheduler.kickstart(scheduler.LABEL)
+        except scheduler.ScheduleError as exc:
+            _fatal(str(exc))
+        typer.echo("Started the daily run now, as launchd starts it.")
+        return
+    _pipeline(config, simulate=False, trigger=RunTrigger.MANUAL)
 
 
 @app.command()

@@ -33,6 +33,11 @@ only. ``prepare_interpreter`` refreshes the copy when the interpreter changes;
 reinstalling flib recreates the environment, so ``scripts/install.sh`` runs
 ``flib schedule --refresh`` afterwards.
 
+The menu bar item (#116, ``menubar``) is one more agent, ``<MENU_LABEL>.plist``,
+installed and removed on its own through ``install_agent`` and ``remove_agent``;
+``install`` and ``remove`` never touch it. They do tell it the schedule changed
+(``menubar_state.changed``), since its menu says when the next run is.
+
 All ``launchctl`` calls go through ``LAUNCHCTL`` (tests swap in a fake).
 """
 
@@ -41,6 +46,7 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -55,6 +61,7 @@ if TYPE_CHECKING:
 LABEL = "io.github.luizpereiradev.file-librarian"
 CHECK_LABEL = f"{LABEL}.check"
 WATCH_LABEL = f"{LABEL}.watch"
+MENU_LABEL = f"{LABEL}.menu"
 MODES = ("daily", "watch", "both")
 LAUNCHCTL = "/bin/launchctl"
 SAFE_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
@@ -239,6 +246,7 @@ def install(
         installed.append(path)
     else:
         _remove(WATCH_LABEL)
+    _schedule_changed()
     return installed
 
 
@@ -262,7 +270,62 @@ def remove() -> bool:
     """Unload and delete every agent. ``False`` if none was installed."""
     daily = _remove(LABEL)
     watching = _remove(WATCH_LABEL)
+    _schedule_changed()
     return daily or watching
+
+
+def _schedule_changed() -> None:
+    """The menu bar item shows the next run: tell it (never fails, see ``menubar_state``)."""
+    from file_librarian import menubar_state
+
+    menubar_state.changed()
+
+
+# --- one agent, for the menu bar item (#116) ----------------------------------------------
+
+
+def install_agent(label: str, data: dict[str, object]) -> Path:
+    """Write the agent ``label`` and (re)load it; returns its plist. Raises ``ScheduleError``."""
+    path = plist_path(label)
+    _write_plist(path, data)
+    _load(path, label)
+    return path
+
+
+def remove_agent(label: str) -> bool:
+    """Unload and delete the agent ``label``. ``False`` if it was not installed."""
+    return _remove(label)
+
+
+def read_agent(label: str) -> dict[str, Any] | None:
+    """The agent's plist as installed; ``None`` without one (or one that cannot be read)."""
+    try:
+        return _read(label)
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        return None
+
+
+def agent_loaded(label: str) -> bool:
+    return _is_loaded(label)
+
+
+_RUNNING = re.compile(r"^\s*state = running\s*$", re.MULTILINE)
+
+
+def agent_running(label: str) -> bool:
+    """launchd has the agent loaded and its process is running now."""
+    result = _launchctl("print", f"{_domain()}/{label}")
+    return result.returncode == 0 and _RUNNING.search(result.stdout) is not None
+
+
+def kickstart(label: str, *, restart: bool = False) -> None:
+    """Start the loaded agent ``label`` now (``restart``: kill a running one first, so it
+    starts again from a rebuilt bundle). Raises ``ScheduleError``."""
+    args = ["kickstart", *(["-k"] if restart else []), f"{_domain()}/{label}"]
+    result = _launchctl(*args)
+    if result.returncode != 0:
+        detail = result.stderr.strip() or f"exit code {result.returncode}"
+        raise ScheduleError(f"launchctl could not start {label}: {detail}")
 
 
 def _remove(label: str) -> bool:

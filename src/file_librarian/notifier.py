@@ -181,7 +181,7 @@ def missing_tools() -> list[str]:
     return [tool for tool in (OSACOMPILE, CODESIGN, SIPS, ICONUTIL) if not Path(tool).exists()]
 
 
-def _run(*args: str) -> None:
+def run_tool(*args: str) -> None:
     try:
         # Fixed system tools; the arguments are flib's own paths.
         result = subprocess.run(  # noqa: S603
@@ -220,9 +220,9 @@ def _make_icon(work: Path, target: Path) -> None:
     iconset = work / f"{APP_NAME}.iconset"
     iconset.mkdir()
     for name, size in ICON_SIZES:
-        _run(SIPS, "-s", "format", "png", "-z", str(size), str(size), str(source),
+        run_tool(SIPS, "-s", "format", "png", "-z", str(size), str(size), str(source),
              "--out", str(iconset / name))  # fmt: skip
-    _run(ICONUTIL, "-c", "icns", "-o", str(target), str(iconset))
+    run_tool(ICONUTIL, "-c", "icns", "-o", str(target), str(iconset))
 
 
 def build() -> Path:
@@ -237,23 +237,23 @@ def build() -> Path:
         source = work / "notifier.applescript"
         source.write_text(SCRIPT, encoding="utf-8")
         app = work / target.name
-        _run(OSACOMPILE, "-o", str(app), str(source))
+        run_tool(OSACOMPILE, "-o", str(app), str(source))
         if not (app / "Contents" / "Info.plist").is_file():
             raise NotifierError("osacompile made no app bundle")
         _edit_info(app)
         _make_icon(work, app / "Contents" / "Resources" / "applet.icns")
         stamp = app / "Contents" / "Resources" / STAMP
         stamp.write_text(json.dumps(expected_stamp(), indent=2) + "\n", encoding="utf-8")
-        _run(CODESIGN, "--force", "--deep", "--sign", "-", str(app))
-        _run(CODESIGN, "--verify", "--deep", "--strict", str(app))
+        run_tool(CODESIGN, "--force", "--deep", "--sign", "-", str(app))
+        run_tool(CODESIGN, "--verify", "--deep", "--strict", str(app))
         if target.exists():
             shutil.rmtree(target)
         app.rename(target)
-    _lsregister("-f", target)
+    lsregister("-f", target)
     return target
 
 
-def _lsregister(flag: str, app: Path) -> None:
+def lsregister(flag: str, app: Path) -> None:
     """Register (``-f``: so a rebuilt app's new icon shows) or unregister (``-u``) the
     app with Launch Services. Best effort: macOS also does it on the next launch."""
     if not Path(LSREGISTER).exists():
@@ -304,7 +304,7 @@ def remove() -> bool:
     target = app_path()
     if not target.exists():
         return False
-    _lsregister("-u", target)
+    lsregister("-u", target)
     shutil.rmtree(target)
     return True
 
