@@ -8,6 +8,32 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **flib in the menu bar** (#116): `flib menu` builds a small AppleScriptObjC
+  stay-open applet with `osacompile` (no Xcode, nothing downloaded), signs it
+  ad hoc, puts it next to the notifier in flib's environment and starts it
+  at login with the LaunchAgent `io.github.luizpereiradev.file-librarian.menu`
+  (back after a crash, off after Quit until the next login); `--remove`
+  takes everything away, `--status` and `flib status`/`flib doctor` say how
+  it is, `--refresh` (also run by `flib schedule --refresh` and
+  `scripts/install.sh`) rebuilds it when it is out of date, and `flib init`
+  offers it. It shows the cat's pose for flib's state (#112) and a count,
+  and a short menu: the state in words, the next run, Open flib, Review (n)
+  and Due (n) when there is something there, Organize now, Settings… and
+  Quit. flib writes `~/Library/Application Support/file-librarian/menu/state.json`
+  (atomic, 0600, counts only, never a file name) whenever the instance lock
+  is released (every run, undo, fix, review action, due settlement, MCP
+  write), when a run starts, when the schedule changes and when a run could
+  not work; writing never fails or slows a run, and nudges the applet with
+  `open -g` only while it runs. The applet checks the file key by key (a
+  hostile file can only show the defaults), and a click runs only flib's own
+  interpreter, fixed when it was built, with `-I` and one fixed list of
+  arguments, output to `/dev/null`. **Organize now** starts the daily agent
+  (`launchctl kickstart`) when it is this configuration's, and otherwise runs
+  here; with a run going on it does nothing and says so.
+- `flib ui --open PAGE` while an interface is already running opens that
+  page in it (`http://127.0.0.1:<port>/PAGE`, no secret in it), instead of
+  only saying one runs. The running server records its pid and port
+  (`flib-ui.json`, 0600, next to the database).
 - `flib ui` has a **Settings** page (#117): when to organize (off, daily at
   a time, as files arrive or both, installed in launchd by the same function
   as `flib schedule`), who classifies (a fixed choice among the providers the

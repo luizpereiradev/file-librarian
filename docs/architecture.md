@@ -705,6 +705,75 @@ in the browser's history; it is useless once used. Anything running as the
 user can read the handoff file in the moment before the browser uses it, as
 it can read everything else of the user's.
 
+## The menu bar item (`flib menu`)
+
+[ADR 0004](decisions/0004-menu-bar-item.md) chose the mechanism: an
+AppleScriptObjC stay-open applet, compiled on the user's Mac by `osacompile`,
+signed ad hoc, with no compiler and nothing downloaded. Three parts:
+
+- **`menubar.py`** builds and installs it. The source is
+  `assets/menubar.applescript` with placeholders that `script` fills in at
+  build time: the state folder, flib's own interpreter and the configuration
+  path, as AppleScript literals (`literal`: printable ASCII with `\` and `"`
+  escaped, every other character as `character id N`), and one handler per
+  entry of `ACTIONS`, whose arguments must be fixed words. `osacompile -s`,
+  `Info.plist` (bundle `io.github.luizpereiradev.file-librarian.menu`,
+  `LSUIElement`), the five pose SVGs, a stamp, `codesign --sign -` and
+  `--verify`, built in a temporary folder and moved in whole, then
+  `lsregister -f`: the notifier's machinery (`notifier.run_tool`). It lives
+  in `<env>/bin/file-librarian-menu.app` and is started by the LaunchAgent
+  `<label>.menu` (`RunAtLoad`, `KeepAlive = {SuccessfulExit = false}`,
+  `Aqua`, `Interactive`, output to `/dev/null`), written through
+  `scheduler.install_agent`. `refresh` rebuilds when the stamp (version,
+  script, icons) no longer matches and loads the agent again, so the new
+  build runs.
+- **`menubar_state.py`** writes `state.json` in
+  `~/Library/Application Support/file-librarian/menu/` (0700; the file 0600,
+  written to a temporary file and renamed): `version`, `pose`, `count`,
+  `line`, `next`, `review`, `due`, `running`, computed from `status.collect`
+  (read-only), the lock's holder (`lock.holder`, which reads the pid without
+  taking the lock) and the last run's problem, if any (`problem.json`).
+  `changed` is called when the instance lock is released (every write to the
+  library, from any front end), when a run starts, when the schedule changes
+  and by `note_problem`. It does nothing unless `target.json` (written by
+  `flib menu`) exists and names this database, never raises, and nudges the
+  applet with `open -g` only while launchd says it runs.
+- **The applet** reads the state on a 30 s idle timer (only when the file's
+  date or size changed), on the nudge (`reopen`) and when its menu opens,
+  checks it, shows it, and writes `seen.json` (what it shows and its pid) for
+  `flib doctor`. A click runs `NSTask` with the fixed interpreter, `-I -m
+  file_librarian`, the action's words and `--config <fixed path>`, in `/`,
+  with `/dev/null` for input and output, and never waits.
+
+**Threat model.** What is protected: what the applet runs, and the names of
+the user's files. Who might attack: whoever can write the state file (in
+practice only the user's own processes: the folder is 0700), anyone who can
+see the screen or a screen share, and a malformed or future state file. Out
+of scope, as for the interface: a process running as the user, which can
+rebuild the applet itself.
+
+| Threat | Defence | Tested by |
+| --- | --- | --- |
+| A hostile state file runs something, or chooses what runs | the state is data: only text and counts are read from it, and nothing it holds reaches `launchFlib`; the program and every argument are fixed in the source at build time (`ACTIONS`: fixed words, checked by a pattern before the source is written); no shell, no `do shell script`, no `PATH` lookup; `-I` keeps the working folder and `PYTHON*` variables off Python's path, and the working folder is `/` | `test_the_actions_are_the_only_things_a_click_runs`, `test_an_action_with_other_words_is_refused`, `test_the_actions_open_pages_flib_ui_knows` |
+| A path that breaks out of its literal | every fixed path is written by `literal`: only printable ASCII inside quotes, `\` and `"` escaped, anything else as `character id N`; checked by evaluating the result back, fuzzed, and against the real compiler | `test_literal_evaluates_to_exactly_the_text`, `test_literal_fuzzed`, `test_the_script_fixes_the_paths_as_literals`, `test_the_real_applet_gets_the_fixed_paths_exactly` (opt-in: `FLIB_TEST_MENU=1`) |
+| A malformed, oversized or future state file | strict JSON (`NSJSONSerialization`), a regular file of at most 4 KiB (a link is not followed), a dictionary of known keys only (case-sensitive) and `version` 1, else the defaults; the pose from the fixed set (case-sensitive); counts whole numbers 0 to 9999, not booleans; texts at most 80 UTF-16 units with no control, format, bidi or line-break character; `running` a boolean. `menubar.sanitize` is the same contract in Python, and the opt-in test runs the compiled applet's parser on the same corpus | `test_sanitize_keeps_only_what_the_contract_allows`, `test_the_parser_constants_come_from_python`, `test_the_real_applet_parses_the_state_as_the_contract_says` (opt-in) |
+| File names on the screen | the state holds counts and fixed sentences only; no name, folder or category is ever written; `seen.json` likewise | `test_a_run_shows_busy_then_what_waits`, `test_read_seen_checks_what_the_applet_wrote` |
+| A secret in a log | the agent's output and the output of everything the applet starts (`flib ui` among them) go to `/dev/null`; `flib ui` puts its launch token in the handoff file, never in output | `test_the_agent_starts_at_login_and_stays_off_after_quit`, `test_the_actions_are_the_only_things_a_click_runs` |
+| The interface's launch weakened | the applet runs `flib ui --open PAGE` like the terminal does: the token still goes through the handoff file; when an interface already runs, the second one opens `http://127.0.0.1:<port>/PAGE`, which holds no secret and works only in the browser that has the session's cookie; the port comes from `flib-ui.json` only when its pid is the holder of the interface's lock | `test_open_goes_to_the_page_of_the_interface_already_running`, `test_a_record_that_does_not_match_the_holder_is_not_believed` |
+| The state write slowing or breaking a run | done after the lock is released (outside any transaction) or right after it is taken; any error is logged at debug level and swallowed; nothing at all without `target.json` | `test_a_broken_hook_never_breaks_flib`, `test_an_unexpected_error_is_swallowed`, `test_nothing_is_written_without_the_item` |
+| Two runs at once from Organize now | it checks the lock's holder first and says a run is going on; it kickstarts the daily agent (one process per agent) or runs under the instance lock like `flib run` | `test_organize_now_says_so_when_a_run_is_going_on`, `test_organize_now_starts_the_daily_agent_of_this_configuration` |
+| Starting an app the user quit | the nudge (`open -g`) only while launchd says the agent runs; after Quit (exit 0) launchd leaves it off | `test_nudged_only_while_running` |
+
+Known limits: an action taken in an interface the menu opened, or Organize
+now without a daily agent, is made by a child of the applet, so macOS
+attributes folder access to the applet's identity, and may ask for it; the
+ad hoc identity changes when the applet is rebuilt. A pid left in a lock file
+by a process that died can be reused by an unrelated process, which shows as
+busy until the next change. The due counts change with the date, which
+flib writes only when something else happens (the daily run, at least). macOS
+may hide the item when the menu bar is crowded, or when the user turns it off
+under Menu Bar settings; flib cannot see that.
+
 ## The first run
 
 `flib init` (prompts in `cli.py`, the rest in `onboarding.py`) writes the
@@ -800,6 +869,7 @@ Everything is in `src/file_librarian/`:
 | `scheduler/` | the launchd agent behind `flib schedule` |
 | `notifier.py`, `assets/` | the notifier app that posts notifications as "file-librarian", and its icon |
 | `poses.py`, `assets/menu/` | the cat's pose for flib's state, and one template icon per pose, for the menu bar item (#112) |
+| `menubar.py`, `menubar_state.py`, `assets/menubar.applescript` | the menu bar item (#116): the applet's source and build, its LaunchAgent, `flib menu`'s install, refresh and removal; the state file it reads and the hook that writes it ([The menu bar item](#the-menu-bar-item-flib-menu)) |
 | `credentials.py`, `keychain.py` | where an API key comes from; the macOS Keychain through `/usr/bin/security` |
 | `mcp_server.py` | `flib mcp` (optional `mcp` extra) |
 | `ui/` | `flib ui`: the loopback server and its session (`server.py`), the JSON API (`api.py`), the pages built on the server (`views.py`, `review.py`, escaped by `markup.py`), the actions that move files (`actions.py`: review, undo, mark done, through `fix`/`undo`/`due`), the Settings page and its changes (`settings.py`, with `config_edit.py`), the static pages (`pages/`, `static/`) |

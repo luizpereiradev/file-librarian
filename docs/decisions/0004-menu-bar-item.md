@@ -154,3 +154,52 @@ catches up.
   agents already do.
 - If Apple deprecates AppleScriptObjC, the Swift fallback is ready, at the
   price of requiring the Command Line Tools.
+
+## As built (#116)
+
+The applet shipped as decided. Where it differs from the plan above:
+
+- **The fixed paths are in the script, not in `Info.plist`.** The state
+  folder, flib's interpreter and the configuration are AppleScript literals
+  written at build time (`menubar.literal`: printable ASCII with `\` and `"`
+  escaped, anything else as `character id N`), with the menu's actions
+  generated from one Python table. A new configuration path means a new
+  stamp, so a rebuild.
+- **The state file** is `state.json` in
+  `~/Library/Application Support/file-librarian/menu/` (a fixed place, so it
+  can be built in; the database may live elsewhere), next to `target.json`
+  (the configuration and database it is for: hooks for another library are
+  ignored). It carries `version`, `pose`, `count`, `line`, `next` (the next
+  run), `review`, `due` and `running`; the applet checks every key against
+  the same contract as `menubar.sanitize`.
+- **Where flib writes it**: when the instance lock is released (every write,
+  from any front end), when a run starts, when the schedule changes, and when
+  a run could not work or works again. "Is it running" for the nudge is
+  `launchctl print` saying `state = running`.
+- **The applet writes one file**, `seen.json` (what it shows, and its pid),
+  for `flib doctor`; mutable state is in AppleScript globals, not properties,
+  so the applet never tries to save itself (its signature still verifies
+  after a run).
+- **A click** runs `flib-python -I -m file_librarian <fixed words> --config
+  <fixed path>` with `NSTask`, in `/`, output to `/dev/null`: `ui --open
+  PAGE` for the pages, `menu --organize` for Organize now (which kickstarts
+  the daily agent when it is this configuration's, and otherwise runs in
+  place). `flib ui --open PAGE` with an interface already running opens that
+  page in it.
+- **Update** (`flib menu --refresh`, also run by `flib schedule --refresh`
+  and `scripts/install.sh`) rebuilds when the stamp differs and loads the
+  agent again (bootout, bootstrap), which starts the new build, rather than
+  `kickstart -k`.
+
+Checked on macOS 27.2.1 (Apple silicon) with the real tools, in throwaway
+folders, with no LaunchAgent: the bundle builds, verifies (`adhoc`, the
+bundle identifier, `LSUIElement`, `OSAAppletStayOpen`), and its compiled
+parser gives what `menubar.sanitize` gives on a corpus of hostile files (also
+an opt-in test in CI, `FLIB_TEST_MENU=1`); its `launchFlib`, called through
+`osascript`, ran `menu --organize` and a run happened; started directly, the
+applet wrote `seen.json` matching the state, picked up a change on its idle
+tick (30.7 s) and on an `open -g` nudge (0.14 s, the same process), showed the
+defaults for a hostile file, and was gone once killed. Still not verified: a
+physical click, `menuWillOpen:` (the menu's delegate), a real login, and
+whether macOS asks for folder access for actions the menu starts (they are
+children of the applet, so it is their responsible process).
