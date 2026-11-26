@@ -644,13 +644,15 @@ def test_accept_all_skips_a_file_that_cannot_be_moved(
     client: UiClient, cfg: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     form = accept_all_form(client)
-    real = actions.fix_files
+    real = fix_files
 
-    def tamper(config: Config, store: Store, items: list, **kw: object) -> object:
+    def tamper(
+        config: Config, store: Store, items: list[tuple[Path, str | None, str | None]], **kw: object
+    ) -> object:
         items[0][0].write_bytes(b"changed on disk")  # after the checks, before the move
-        return real(config, store, items, **kw)  # type: ignore[arg-type]
+        return real(config, store, items)
 
-    monkeypatch.setattr(actions, "fix_files", tamper)
+    monkeypatch.setattr("file_librarian.ui.actions.fix_files", tamper)
     page = act(client, "/review/accept", **form)
     assert "Moved 2 files to Images" in page.text
     assert "1 file could not be moved and stay in review" in page.text
@@ -662,14 +664,16 @@ def test_accept_all_that_moves_nothing_says_so(
     client: UiClient, cfg: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     form = accept_all_form(client)
-    real = actions.fix_files
+    real = fix_files
 
-    def tamper(config: Config, store: Store, items: list, **kw: object) -> object:
+    def tamper(
+        config: Config, store: Store, items: list[tuple[Path, str | None, str | None]], **kw: object
+    ) -> object:
         for path, _, _ in items:
             path.write_bytes(b"changed")
-        return real(config, store, items, **kw)  # type: ignore[arg-type]
+        return real(config, store, items)
 
-    monkeypatch.setattr(actions, "fix_files", tamper)
+    monkeypatch.setattr("file_librarian.ui.actions.fix_files", tamper)
     page = act(client, "/review/accept", **form)
     assert "Nothing was moved." in page.text and "Undo this" not in page.text
 
@@ -1008,17 +1012,16 @@ def test_undoing_a_run_that_only_changed_the_index(
 def test_a_move_that_fails_in_a_batch_is_skipped(
     cfg: Config, seeded: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import file_librarian.fix as fix_mod
 
     paths = [row(cfg, f"shot-{i}.png").current_path for i in (1, 2)]
-    real = fix_mod.move_no_replace
+    from file_librarian.fsops import move_no_replace as real
 
     def refuse(src: Path, dst: Path) -> None:
         if src == paths[0]:
             raise PermissionError(1, "denied", str(dst))
         real(src, dst)
 
-    monkeypatch.setattr(fix_mod, "move_no_replace", refuse)
+    monkeypatch.setattr("file_librarian.fix.move_no_replace", refuse)
     with Store.open(cfg.database) as store:
         report = fix_files(cfg, store, [(p, "Images", None) for p in paths])
         run = store.conn.execute(
