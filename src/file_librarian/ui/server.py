@@ -82,21 +82,20 @@ from importlib import resources
 from pathlib import Path
 from types import FrameType
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from file_librarian import status as status_mod
 from file_librarian.config import Config
 from file_librarian.lock import AlreadyRunningError, ui_lock
-from file_librarian.ui import api, views
+from file_librarian.ui import actions, api, review, views
 
 OPEN = "/usr/bin/open"
 """Opens the handoff file in the default browser; tests swap in a fake."""
 HOST = "127.0.0.1"
-PAGES = ("status", "search", "activity", "due")
-"""Pages ``--open`` can name; Review and Settings come later."""
+PAGES = ("status", "review", "search", "activity", "due")
+"""Pages ``--open`` can name; Settings comes later."""
 VIEWS: dict[str, Callable[[Config, str, str], views.Page]] = {
     "activity": views.activity_page,
-    "due": views.due_page,
 }
 """Pages built on the server for each request (#114): config, CSRF token, query."""
 LAUNCH = "/launch"
@@ -365,6 +364,7 @@ class Ui:
         self._grace = min(close_grace, request_timeout)
         self.end_linger = end_linger
         self._searches: OrderedDict[str, tuple[str, dict[str, list[str]]]] = OrderedDict()
+        self._outcomes: OrderedDict[str, tuple[str, actions.Outcome]] = OrderedDict()
         self.assets = load_assets()
         self.pages = load_pages()
         self.reason: str | None = None
@@ -573,6 +573,7 @@ class Ui:
         with self._lock:
             self._session = None
             self._searches.clear()
+            self._outcomes.clear()
 
     def live(self) -> bool:
         """Whether a session is going on (in some browser)."""
@@ -595,6 +596,23 @@ class Ui:
             if found is None or not same(found[0], session.id):
                 return None
             self._searches.move_to_end(key)
+            return found[1]
+
+    def keep_outcome(self, session: Session, outcome: actions.Outcome) -> str:
+        """Keep what an action did for the page it redirects to (``?n=<id>``)."""
+        key = secrets.token_urlsafe(12)
+        with self._lock:
+            self._outcomes[key] = (session.id, outcome)
+            while len(self._outcomes) > MAX_SAVED_SEARCHES:
+                self._outcomes.popitem(last=False)
+        return key
+
+    def kept_outcome(self, session: Session, key: str) -> actions.Outcome | None:
+        """An outcome this session kept, or ``None`` (unknown, dropped, another session)."""
+        with self._lock:
+            found = self._outcomes.get(key)
+            if found is None or not same(found[0], session.id):
+                return None
             return found[1]
 
     def session(self, session_id: str) -> Session | None:
@@ -1078,6 +1096,12 @@ class _Handler(BaseHTTPRequestHandler):
             else:
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
+        if path in ACTION_PAGES:
+            if session is None:
+                self._ended(HTTPStatus.FORBIDDEN)
+            else:
+                self._action_page(session, path, urlsplit(self.path).query)
+            return
         if path == "/" or path[1:] in PAGES:
             query = urlsplit(self.path).query
             if session is None:
@@ -1086,6 +1110,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._redirect(f"/{ui.page}")
             elif path == "/search":
                 self._search_page(session, query)
+            elif path == "/due":
+                self._due_page(session, query)
             elif path[1:] in VIEWS:
                 try:
                     code, body = VIEWS[path[1:]](ui.config, session.csrf, urlsplit(self.path).query)
@@ -1110,6 +1136,43 @@ class _Handler(BaseHTTPRequestHandler):
             fields = None if key is None else ui.saved_search(session, key)
             notice = views.SEARCH_GONE if key is not None and fields is None else None
             code, body = views.search_page(ui.config, session.csrf, fields, notice=notice)
+        except views.BadRequest as exc:
+            raise _Reject(HTTPStatus.BAD_REQUEST) from exc
+        self._reply(code, body, _HTML)
+
+    def _due_page(self, session: Session, query: str) -> None:
+        """``GET /due``, and with ``?n=<id>`` what Mark done or Open again did."""
+        ui = self.server.ui
+        try:
+            params = views.query_params(query, frozenset({*views.DUE_PARAMS, "n"}))
+            key = views.one_choice(params, "n")
+            params.pop("n", None)
+            outcome = None if key is None else ui.kept_outcome(session, key)
+            notice = review.outcome_notice(outcome, key is not None and outcome is None)
+            rest = urlencode(params, doseq=True)
+            code, body = views.due_page(ui.config, session.csrf, rest, notice=notice)
+        except views.BadRequest as exc:
+            raise _Reject(HTTPStatus.BAD_REQUEST) from exc
+        self._reply(code, body, _HTML)
+
+    def _action_page(self, session: Session, path: str, query: str) -> None:
+        """Review, Accept all and Undo: pages that read only, whose forms post the
+        actions. ``?n=<id>`` shows what the last one did (kept on the server)."""
+        ui = self.server.ui
+        try:
+            if path == "/review/accept":
+                code, body = review.accept_page(ui.config, session.csrf, query)
+            else:
+                known = frozenset({"n"}) if path == "/review" else frozenset({"run", "file", "n"})
+                key = views.one_choice(views.query_params(query, known), "n")
+                outcome = None if key is None else ui.kept_outcome(session, key)
+                gone = key is not None and outcome is None
+                if path == "/review":
+                    code, body = review.review_page(ui.config, session.csrf, outcome, gone=gone)
+                else:
+                    code, body = review.undo_page(
+                        ui.config, session.csrf, query, outcome, gone=gone
+                    )
         except views.BadRequest as exc:
             raise _Reject(HTTPStatus.BAD_REQUEST) from exc
         self._reply(code, body, _HTML)
@@ -1217,6 +1280,78 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             self._reply(*views.problem_page(code, text, session.csrf), _HTML)
 
+    # --- actions (#115): each one ends in a redirect to a page that says what it did ---
+
+    def _act(self, session: Session, back: str, do: Callable[[], actions.Outcome]) -> None:
+        """Run one action and send the browser to ``back`` with what happened (post,
+        redirect, get): reload, Back and Forward never do it again. A form the pages
+        never send is a 400; a refusal is an outcome like any other."""
+        try:
+            outcome = do()
+        except actions.Malformed as exc:
+            raise _Reject(HTTPStatus.BAD_REQUEST) from exc
+        except actions.Refused as exc:
+            outcome = exc.outcome
+        key = self.server.ui.keep_outcome(session, outcome)
+        self._redirect(f"{back}{'&' if '?' in back else '?'}n={key}")
+
+    def _review_file(self, session: Session) -> None:
+        fields = self._fields()
+
+        def do() -> actions.Outcome:
+            file_id, pin = actions.an_id(fields), actions.a_pin(fields)
+            category = actions.one(fields, "category", required=False) or None
+            name = (actions.one(fields, "name", required=False) or "").strip() or None
+            if name is not None and len(name) > actions.MAX_NAME_CHARS:
+                raise actions.Malformed("name")
+            if category is None and name is None:
+                raise actions.Refused("Pick a category or type a new name; nothing was done.")
+            ui = self.server.ui
+            return actions.fix_one(ui.config, file_id, pin, category=category, name=name)
+
+        self._act(session, "/review", do)
+
+    def _review_accept(self, session: Session) -> None:
+        fields = self._fields()
+
+        def do() -> actions.Outcome:
+            key = actions.one(fields, "g")
+            if key is None or len(key) != 16 or not all(c in "0123456789abcdef" for c in key):
+                raise actions.Malformed("g")
+            confirmed = actions.ids(actions.one(fields, "ids") or "")
+            pin = actions.a_pin(fields)
+            return actions.accept_group(self.server.ui.config, key, confirmed, pin)
+
+        self._act(session, "/review", do)
+
+    def _undo(self, session: Session) -> None:
+        fields = self._fields()
+
+        def do() -> actions.Outcome:
+            run, file = fields.get("run"), fields.get("file")
+            if (run is None) == (file is None):
+                raise actions.Malformed("run or file")
+            pin = actions.a_pin(fields)
+            config = self.server.ui.config
+            if run is not None:
+                return actions.undo_one_run(config, actions.an_id(fields, "run"), pin)
+            return actions.undo_one_file(config, actions.an_id(fields, "file"), pin)
+
+        self._act(session, "/undo", do)
+
+    def _settle(self, session: Session) -> None:
+        fields = self._fields()
+
+        def do() -> actions.Outcome:
+            file_id, pin = actions.an_id(fields), actions.a_pin(fields)
+            done = actions.one(fields, "done")
+            if done not in ("1", "0"):
+                raise actions.Malformed("done")
+            config = self.server.ui.config
+            return actions.settle_one(config, file_id, pin, done=done == "1")
+
+        self._act(session, "/due", do)
+
     def _fields(self) -> dict[str, list[str]]:
         """The form ``_post`` already read (and found the CSRF token in)."""
         return self._form(self._posted) or {}
@@ -1272,6 +1407,9 @@ STALE_SESSION = (
     "`flib ui` in Terminal for a new one."
 )
 
+ACTION_PAGES = frozenset({"/review", "/review/accept", "/undo"})
+"""Pages whose forms post actions (#115); built per request, they only read."""
+
 PostRoute = Callable[[_Handler, Session], None]
 POST_ROUTES: dict[str, PostRoute] = {
     "/session/end": _Handler._end_session,
@@ -1279,6 +1417,10 @@ POST_ROUTES: dict[str, PostRoute] = {
     "/search/export": _Handler._export,
     "/files/open": _Handler._open,
     "/files/reveal": _Handler._reveal,
+    "/review/file": _Handler._review_file,
+    "/review/accept": _Handler._review_accept,
+    "/undo": _Handler._undo,
+    "/due/settle": _Handler._settle,
 }
 """Every POST route. Each one is reached only through ``_Handler._post``, after
 the exact origin, the session cookie and the CSRF token; ``POST /launch`` is the

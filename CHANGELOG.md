@@ -8,6 +8,27 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `flib ui` has a **Review** page with **Undo** (#115), the first part of the
+  interface that moves files. Review lists the files waiting in the review
+  folder, by reason and suggested category, the biggest group first; each
+  has Accept (its suggestion), another category and/or a new name (`flib
+  fix`: flib learns from it), Put back where it was (`flib undo` for that
+  file) and Open / Show in Finder. A group with a configured suggestion has
+  Accept all, which lists the files first (at most 100) and moves them as one
+  run (new `fix.fix_files`) that one Undo reverts. Undo, for a run or a file,
+  from Review's outcome or from Activity, shows what it puts back and where
+  before it does anything, and refuses what `flib undo` refuses, in its
+  words. Due has Mark done / Open again (`flib fix --done` / `--not-done`).
+  Every action is a POST through the route table (cookie, exact origin,
+  CSRF), takes the instance lock for that action (a run in progress is said,
+  and nothing is done), names files by index id with a pin of the state the
+  page showed (a file changed, undone or handled in another tab since is
+  refused, never acted on), and ends in a redirect, so reload, Back and
+  Forward never repeat it. Categories come only from the configuration;
+  names go through `flib fix`'s sanitiser; nothing is overwritten; sensitive
+  files are never listed or acted on. The Status page and the menu link
+  Review; `flib ui --open review`. A run's counts after `flib fix` now come
+  from its journal.
 - `flib ui` has Search, Activity and Due pages (#114), read-only and
   readable without JavaScript. **Search** is `flib search` in a form:
   category and kind chips, the other filters under "More filters", each

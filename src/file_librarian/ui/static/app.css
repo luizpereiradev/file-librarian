@@ -388,3 +388,66 @@ tr.overdue td:first-child { border-left: 3px solid var(--accent-text); }
   table.due .file { min-width: 0; }
   table.due .buttons .acts { flex-wrap: wrap; margin-top: 0.3rem; }
 }
+
+/* --- Review and Undo --- */
+
+.count { margin: 1rem 0 0.5rem; font-size: 1.05rem; color: var(--text); }
+
+.group { margin: 1.5rem 0; scroll-margin-top: 1rem; }
+
+.group > h2 { font-size: 1.1rem; color: var(--text); }
+
+.group > .note { margin: 0.2rem 0 0.6rem; }
+
+.review-files { list-style: none; margin: 0.6rem 0 0; padding: 0; }
+
+a.button {
+  display: inline-block;
+  padding: 0.35rem 0.9rem;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--on-accent);
+  text-decoration: none;
+}
+
+.bulk { margin: 0.4rem 0 0.8rem; }
+
+.decide { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.5rem 1rem; margin-top: 0.6rem; }
+
+details.other { margin: 0; }
+
+details.other > summary { padding: 0.35rem 0; }
+
+details.other[open] { flex-basis: 100%; }
+
+details.other form.move { margin-top: 0.4rem; }
+
+form.move { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin: 0; }
+
+form.move input[type="text"] { width: 14rem; max-width: 100%; }
+
+form.move select { max-width: 100%; }
+
+.tools { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1rem; margin-top: 0.4rem; }
+
+.tools .acts { margin: 0; }
+
+.small-link { font-size: 0.9rem; }
+
+.confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin: 1rem 0; }
+
+.outcome .notice { margin-bottom: 0.3rem; }
+
+.outcome .moves { margin: 0 0 0.3rem; }
+
+@media (max-width: 640px) {
+  .decide, form.move { align-items: stretch; flex-direction: column; }
+  .decide > form, form.move > label, form.move input[type="text"], form.move select { width: 100%; }
+  .decide button { width: 100%; }
+}
+
+.tools button.small {
+  background: transparent;
+  color: var(--accent-text);
+  border: 1px solid var(--control);
+}

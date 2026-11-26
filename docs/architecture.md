@@ -416,6 +416,56 @@ it. Error pages say what went wrong in general words; no `OSError` or
 `sqlite3` text, which holds paths, reaches a page. None of these routes
 moves, renames or deletes anything.
 
+**Review and undo** (#115, `ui/review.py` for the pages, `ui/actions.py` for
+the actions) are the first routes that move files. They never move a file
+by a path of their own: each action calls what the command line calls,
+`fix.fix_file` (`flib fix`), `undo.undo_run` / `undo.undo_file` (`flib
+undo`) and `due.settle` (`flib fix --done`), plus `fix.fix_files`, which
+does several fixes as **one** run, so one undo reverts an "Accept all";
+the run's counts come from its journal, also when recovery finishes a batch
+a crash cut off. Each action:
+
+- is a POST in `POST_ROUTES` (`/review/file`, `/review/accept`, `/undo`,
+  `/due/settle`), so it gets the cookie, exact-origin and CSRF checks, and
+  answers 303 to a GET page with `?n=<id>`: what happened is kept on the
+  server for the session (the latest 32, like searches), so no name goes in
+  the address and reload, Back and Forward never act again;
+- names files by index id, never a path (a `path` field is ignored), and
+  carries a *pin*: a digest of the state the page showed (id, status, path,
+  content hash, category, review reason and suggestion, done date; for an
+  undo, the journal entries it would revert; for Accept all, the ids and
+  pins of every file listed). Under the lock the pin is computed again from
+  the index; a file moved, renamed, undone, deleted or handled in another tab
+  or by a run since is refused ("no longer as the page showed it"), so a
+  double submit, a second tab or a page left open never acts on a stale row;
+- takes `lock.instance_lock` for that action only, finishes an interrupted
+  journal first (`executor.recover`), as `flib fix` does, and when a run
+  holds the lock says so and does nothing; it never creates the index, and
+  writes only to one of exactly this flib's schema (an older one is left
+  for the next `flib run` to migrate);
+- validates every choice: the category must be configured (an exact name
+  from the page's list, else 400); a new name goes through `fix`'s
+  sanitiser (no `/`, `:` or leading `.`, at most 255 bytes); ids are ASCII
+  digits; collisions follow the mover's rule (the next free `-N`, never
+  overwritten);
+- refuses a sensitive file without naming it, and undo of a run that moved
+  a file now sensitive (`flib undo` in Terminal does it);
+- reports with `flib`'s own words, the path taken out (`This file has no
+  move to undo`), and general words for anything that carries an `OSError`.
+
+Undo is always two steps: `GET /undo?run=<id>` or `?file=<id>` shows what it
+would put back and where (from `undo.run_undo_plan` / `file_undo_plan`,
+which `undo_run` and `undo_file` use too, so the page refuses exactly what
+the command line refuses, in its words), and its button posts it. Accept all
+works the same way: `GET /review/accept?g=<group>` (a digest of the reason
+and suggestion, never the model's words) lists the oldest
+`actions.BULK_CAP` (100) files of the group, and its button posts their
+ids. Review lists at most 500 files, by reason and suggestion, the biggest
+group first; a missing file is shown with no buttons. Activity links Undo
+for each run with something to revert, and for each move that is its
+file's last one (what `flib undo --file` reverts). The pages have no
+JavaScript: the Move form folds under a `<details>`.
+
 **Session.** The server binds a free port and makes a random launch token
 (256 bits). The token never goes on a command line, where any account on the
 Mac could read it with `ps`. `flib ui` writes a *handoff file*, an HTML page
@@ -496,7 +546,7 @@ connection carries one request (HTTP/1.0, closed after the reply), so idle
 keep-alive connections cannot hold the threads.
 
 **Threat model.** What is protected: the index (names, descriptions,
-amounts) and, later, actions that move files. Who might attack: a web page
+amounts) and the files, which Review and Undo move. Who might attack: a web page
 open in any browser on the Mac (cross-site requests, DNS rebinding,
 clickjacking), another machine on the network, other accounts on the same
 Mac (they can list processes and connect to 127.0.0.1), other programs that
@@ -516,6 +566,7 @@ browser's cookies). How each is handled:
 | Script injection | `Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; require-trusted-types-for 'script'`; no inline script, style or handler; scripts put text in with `textContent` only; server-built pages escape every value from the index (names, descriptions, issuers, tags, search words) through `markup.el`; `nosniff` | `test_every_page_references_only_packaged_files_and_has_no_inline_code`, `test_the_policy_allows_no_inline_code`, `test_the_policy_requires_trusted_types`, `test_each_page_is_escaped_and_has_no_inline_code`, `test_search_finds_by_words_and_escapes_everything`, `test_el_escapes_text_and_attributes`, `test_the_layout_fills_its_slots_in_one_pass` |
 | Names and words in the history | search words and filters go in a POST body; the address holds only fixed choices, any other name is 400; Open and Show in Finder post an index id | `test_a_search_in_the_address_is_never_run`, `test_due_refuses_choices_it_does_not_offer`, `test_activity_windows`, `test_names_the_page_does_not_offer_are_refused` |
 | Opening what the page names | the id is looked up in the index; the path is checked again (status; no `..`; real path inside the library or an input with no link below it; exists) and passed to `open` after `--`; a path in the form is ignored; Open takes documents only (allow-listed extension, regular file, no execute bit, not an alias), everything else gets Show in Finder only; names lose format characters; failures get a general message | `test_open_and_reveal_ask_macos_by_id`, `test_open_never_takes_a_path`, `test_open_refuses_a_sensitive_file`, `test_open_rechecks_the_path_from_the_index`, `test_a_dotdot_in_the_index_never_leaves_the_library`, `test_a_symlinked_folder_never_leaves_the_library`, `test_open_refuses_what_could_run_and_offers_show_in_finder`, `test_open_refuses_folders_bundles_executables_and_aliases`, `test_format_characters_never_reach_the_page`, `test_when_macos_cannot_open_it_the_page_says_so_plainly` |
+| Moving the wrong file, or the same one twice | actions take an index id and a pin of the state the page showed, checked again under the instance lock; a stale pin, a double submit, a second tab or a run in between is refused and nothing moves; post, redirect, get, so reload and Back never act again; categories only from the configuration, names through `fix`'s sanitiser; never overwritten; sensitive files neither listed nor acted on; a run holding the lock is said and nothing is done; only `fix`/`undo`/`due.settle` move or change anything | `tests/unit/test_ui_review.py`: `test_a_stale_row_is_refused`, `test_a_double_submit_moves_once`, `test_two_tabs_one_wins`, `test_a_run_in_progress_holds_everything`, `test_a_taken_name_gets_the_next_number_and_nothing_is_overwritten`, `test_a_sensitive_file_cannot_be_acted_on`, `test_a_form_the_page_never_sends_is_refused`, `test_a_path_in_the_form_is_ignored`, `test_reload_back_and_forward_never_act_again`, `test_getting_every_page_changes_nothing`, `test_each_action_refuses_a_forged_post_and_moves_nothing`, `test_accept_all_is_refused_when_the_group_changed`, `test_a_stale_undo_is_refused`, `tests/integration/test_ui_browser.py::test_review_and_undo_in_a_real_browser` |
 | A spreadsheet running the export | `Content-Disposition: attachment` with `nosniff`; cells that start like a formula get a leading apostrophe | `test_the_export_is_an_attachment_a_spreadsheet_cannot_run`, `test_cells_that_look_like_formulas_are_quoted` |
 | Clickjacking, cross-origin windows | `frame-ancestors 'none'`, `X-Frame-Options: DENY`, `Cross-Origin-Opener-Policy` and `-Resource-Policy: same-origin` | `test_every_reply_carries_the_security_headers` (all seven headers on every kind of reply, the 503 and malformed requests included), `test_the_turned_away_reply_carries_the_security_headers` |
 | Reading files through the server | static files from an in-memory map of packaged resources, looked up by exact path: no traversal, no directory listing; no file contents are ever served; Status serves counts only (suggested categories the model wrote are masked when not configured); sensitive files are never listed with details, only counted | `test_nothing_outside_the_packaged_files_is_served`, `test_status_holds_counts_and_never_a_file_name`, `test_sensitive_files_never_appear_in_search`, `test_activity_shows_each_run_and_what_it_moved` |
@@ -643,7 +694,7 @@ Everything is in `src/file_librarian/`:
 | `notifier.py`, `assets/` | the notifier app that posts notifications as "file-librarian", and its icon |
 | `credentials.py`, `keychain.py` | where an API key comes from; the macOS Keychain through `/usr/bin/security` |
 | `mcp_server.py` | `flib mcp` (optional `mcp` extra) |
-| `ui/` | `flib ui`: the loopback server and its session (`server.py`), the JSON API (`api.py`), the pages built on the server (`views.py`, escaped by `markup.py`), the static pages (`pages/`, `static/`) |
+| `ui/` | `flib ui`: the loopback server and its session (`server.py`), the JSON API (`api.py`), the pages built on the server (`views.py`, `review.py`, escaped by `markup.py`), the actions that move files (`actions.py`: review, undo, mark done, through `fix`/`undo`/`due`), the static pages (`pages/`, `static/`) |
 | `activity.py` | the runs of the last days, what each moved and what its log says about the Mac being locked (the interface's Activity page) |
 | `evals/` | `flib eval`: the synthetic corpus and its gold labels, the isolated simulate-mode harness and the scoring ([quality.md](quality.md)) |
 

@@ -56,6 +56,8 @@ class Move:
     category: str | None
     fix: bool
     """A correction by hand (``flib fix``)."""
+    last: bool = False
+    """The file's last move still in effect: the one ``flib undo --file`` reverts."""
 
     @property
     def duplicate(self) -> bool:
@@ -87,6 +89,8 @@ class RunActivity:
     index_changes: int = 0
     """Other changes to the index that moved nothing."""
     unlock: Unlock = Unlock()
+    undoable: bool = False
+    """``flib undo --run`` has something to revert: a move or index change in effect."""
 
     @property
     def duplicates(self) -> int:
@@ -166,12 +170,17 @@ def check_schema(store: Store) -> None:
 def _run(store: Store, config: Config, run: RunRow, sensitive: int) -> RunActivity:
     operations = store.operations(run_id=run.id)
     files = store.files_by_ids(sorted({op.file_id for op in operations}))
+    last = store.last_done_operations(sorted(files))
     moves = [
-        _move(op, files[op.file_id])
+        _move(op, files[op.file_id], last=last.get(op.file_id) == op.id)
         for op in operations
         if op.file_id in files and files[op.file_id].status is not FileStatus.SENSITIVE
     ]
     changes = store.index_changes(run.id)
+    sensitive_moved = any(
+        files[op.file_id].status is FileStatus.SENSITIVE for op in operations if op.file_id in files
+    )
+    in_effect = any(op.status is OperationStatus.DONE for op in operations) or bool(changes)
     settled = sum(1 for c in changes if c.target == "files.settled_at")
     return RunActivity(
         run=run,
@@ -181,10 +190,11 @@ def _run(store: Store, config: Config, run: RunRow, sensitive: int) -> RunActivi
         settled=settled,
         index_changes=len(changes) - settled,
         unlock=read_unlock(config.database, run.id),
+        undoable=in_effect and not sensitive_moved,
     )
 
 
-def _move(op: OperationRow, row: FileRow) -> Move:
+def _move(op: OperationRow, row: FileRow, *, last: bool = False) -> Move:
     return Move(
         file_id=op.file_id,
         source=op.src_path,
@@ -193,6 +203,7 @@ def _move(op: OperationRow, row: FileRow) -> Move:
         file_status=row.status,
         category=row.category,
         fix=op.fix is not None,
+        last=last,
     )
 
 
