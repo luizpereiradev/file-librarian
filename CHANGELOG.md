@@ -571,6 +571,31 @@ All notable changes to this project are documented here. The format follows
   a note in the run log; right before a move, a file up to 32 MB is hashed
   again and left for the next run if its content changed. Today's and this
   month's start no longer shift by an hour on a daylight-saving day.
+- `flib ui`, leftovers of the real-browser retest (#127):
+  - A refused Open or Show in Finder (the file moved, went away, may run a
+    program...) sends the browser back to the page it was on (Search with the
+    same search, Due in the same window, Review), which says why: post,
+    redirect, get, so Back and Forward no longer ask to "Confirm Form
+    Resubmission". Asked, they still leave the page and its history as they
+    are. Scripts (no `Accept: text/html`) get the status, as before.
+  - Search's title and count say how many matched: "Search: 50 of 111
+    matches", never just the limit; a search that only uses filters says its
+    totals are over every match, not "by words"; "1 sensitive file also
+    matched; it is never shown"; the index's and the search's messages from
+    flib end with a full stop. In Portuguese too.
+  - A renamed file's new name in Activity and the original's path in Search's
+    "duplicate of" are isolated left to right too, like every other name.
+  - A browser that reaches `flib ui` before its link was opened is told so
+    ("This session has not started yet", and which page or link to use),
+    not that the session ended.
+  - After a theft of the launch link, every page says the session was ended
+    because its link was opened twice, for a minute (Ctrl-C ends it at once),
+    so the rightful tab learns why instead of finding the server gone; the
+    thief gets that page and nothing else.
+- `tests/unit/test_ui_pages.py::test_closing_does_not_wait_out_the_linger` no
+  longer fails on busy runners (#134): End session asked the server to stop
+  only after its reply, so a close right after it could take the reason's
+  place. The server now asks before it replies.
 
 ### Security
 
