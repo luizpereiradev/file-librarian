@@ -416,6 +416,46 @@ it. Error pages say what went wrong in general words; no `OSError` or
 `sqlite3` text, which holds paths, reaches a page. None of these routes
 moves, renames or deletes anything.
 
+**Languages** (#126, `i18n/`). The interface and the menu bar item speak the
+configuration's `language`: English, the source and the fallback, or
+Brazilian Portuguese. One catalogue, `i18n/messages/` (a module per part of
+the interface, merged at import with a check that no id is in two), maps
+message ids to text per language; no gettext, nothing compiled. `t(id,
+**params)` is a `Msg`, a `str` whose value is the text in the language in
+use when it was made and which keeps its id and parameters, so a kept
+outcome or a module constant is rendered again in the language of the page
+that shows it. Sentences are whole, with named placeholders; a `Plural`
+picks `one` or `other` from one whole number (English: 1; pt-BR, after CLDR
+and formal grammar: 0 and 1), and its `zero` form for exactly 0 when it has one:
+every pt-BR plural that shows its number does ("nenhum arquivo", never "0
+arquivo"; a test checks), while English keeps "0 files". `ui/markup.render` escapes the translation and
+every parameter alike: only the catalogue's own backticks become `<code>`, a
+value's backticks stay text, and a hostile translation or value cannot add
+markup. The language is a context variable the server sets at the start of
+each request from the running configuration, so a change on the Settings
+page applies from the next page, the outcome of that change included; an
+unknown value is English. The packaged pages fill `{{t:<id>}}` slots
+(`markup.page`); Status's script gets its messages and formats in a
+`<meta>` element and fills them with `textContent`. `i18n/formats.py`
+writes dates, times and money for display (`25/11/2026 22:48`, `R$ 1.234,56`
+in pt-BR; English as before) without the process locale, which is not
+thread-safe; CSV exports, addresses and the file keep machine formats. A
+typed amount (`formats.parse_amount`, the one rule for Settings' cost caps and
+Search's amount filters) takes `.` or `,` as the decimal point
+and refuses a lone thousands-like group (`1.234` in pt-BR, `1,234` in
+English) rather than guess. Texts of flib's core that the pages show
+(search filter errors, fix and undo refusals) are put in the catalogue's
+words when `i18n/core.py` recognises them, else shown in English. The menu
+bar's fixed entries are put in the applet when it is built, so a change of
+language rebuilds it (`menubar.refresh`, as `--refresh` does), after the server
+already uses the saved configuration, and a failed rebuild is said on the page,
+never a failed save; its two
+lines are written in `state.json` in the language of the moment, still
+ASCII with `\uXXXX` escapes. The command line, logs and notifications stay
+English. Tests check every id is in both languages with the same
+placeholders, every id is used, and no word of the interface is left
+outside the catalogue (`tests/unit/test_i18n.py`).
+
 **Review and undo** (#115, `ui/review.py` for the pages, `ui/actions.py` for
 the actions) are the first routes that move files. They never move a file
 by a path of their own: each action calls what the command line calls,
@@ -886,6 +926,7 @@ Everything is in `src/file_librarian/`:
 | --- | --- |
 | `cli.py`, `__main__.py` | the `flib` command (Typer); prompts and output only, the work is in the modules below |
 | `config.py`, `locales.py`, `config_edit.py` | the YAML configuration, validated at startup; the defaults each `language` brings; changing the file in place, comments kept, with a backup (the Settings page) |
+| `i18n/` | the interface's words per language (`messages/`), dates, numbers and money for display (`formats.py`), flib's core texts in the catalogue's words (`core.py`) |
 | `models.py` | typed values passed between stages (`FileContext`, `Classification`, `Decision`...) |
 | `pipeline.py` | one run or simulation, stage by stage |
 | `scanner.py`, `hashing.py`, `globs.py` | stage 1; content identity (SHA-256, folder manifests, iCloud-only check); glob matching as the Mac compares names |

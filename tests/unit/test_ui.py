@@ -33,7 +33,7 @@ from file_librarian.config import Config, ConfigError, parse_config
 from file_librarian.lock import ui_lock
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.status import StatusError
-from file_librarian.ui import api
+from file_librarian.ui import api, markup
 from file_librarian.ui import server as ui_server
 from file_librarian.ui.server import CSP, Ui, UiError, check_bind, load_assets, load_pages
 from file_librarian.ui.server import handoff_root as real_handoff_root  # before conftest
@@ -1652,7 +1652,7 @@ def test_a_used_token_posted_again_without_the_session_ends_everything(
 def test_the_handoff_page_posts_the_token_once_and_keeps_nothing() -> None:
     """Back, forward, a bfcache restore or a double submit must not post the used
     token again: that would look like theft and end the session."""
-    page = ui_server.HANDOFF
+    page = ui_server.handoff_text("en", "http://127.0.0.1:1/launch", "token")
     script = page[page.index("<script>") : page.index("</script>")]
     submit = script.index("form.submit();")
     assert script.index('form.elements.token.value = "";', submit) > submit  # cleared at once
@@ -1915,4 +1915,4 @@ def test_the_navigation_has_no_disabled_item_left() -> None:
     parser = _Collector()
     parser.feed(load_pages()["status"])
     assert parser.disabled == []
-    assert '<a href="/settings">Settings</a>' in load_pages()["status"]
+    assert '<a href="/settings">Settings</a>' in markup.page(load_pages()["status"])

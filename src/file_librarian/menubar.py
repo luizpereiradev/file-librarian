@@ -58,8 +58,9 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from file_librarian import notifier, poses, scheduler
+from file_librarian import i18n, notifier, poses, scheduler
 from file_librarian.config import APP_NAME as SUPPORT_NAME
+from file_librarian.i18n import t
 
 APP_NAME = "file-librarian-menu"
 DISPLAY_NAME = "file-librarian"
@@ -122,6 +123,7 @@ class Action:
     """The action's name; ``key + ":"`` is the handler (an Objective-C selector) the
     menu item calls."""
     title: str
+    """The message id of its label (``i18n.messages.menu``), put in when the app is built."""
     arguments: tuple[str, ...]
     """After ``<interpreter> -I -m file_librarian``; ``--config <path>`` follows."""
 
@@ -131,11 +133,11 @@ class Action:
 
 
 ACTIONS = (
-    Action("openStatus", "Open flib", ("ui", "--open", "status")),
-    Action("openReview", "Review", ("ui", "--open", "review")),
-    Action("openDue", "Due", ("ui", "--open", "due")),
-    Action("organize", "Organize now", ("menu", "--organize")),
-    Action("openSettings", "Settings" + chr(0x2026), ("ui", "--open", "settings")),
+    Action("openStatus", "menu.open_status", ("ui", "--open", "status")),
+    Action("openReview", "menu.review", ("ui", "--open", "review")),
+    Action("openDue", "menu.due", ("ui", "--open", "due")),
+    Action("organize", "menu.organize", ("menu", "--organize")),
+    Action("openSettings", "menu.settings", ("ui", "--open", "settings")),
 )
 """Everything a click can run. Fixed words only (checked by ``script``)."""
 PREFIX = ("-I", "-m", "file_librarian")
@@ -304,11 +306,29 @@ def _handlers() -> str:
 
 
 def _title(key: str) -> str:
-    return next(action.title for action in ACTIONS if action.key == key)
+    """An entry's label in the language in use."""
+    return t(next(action.title for action in ACTIONS if action.key == key)).text()
 
 
-def script(program: Path, config: Path, state_dir: Path) -> str:
-    """The applet's source for these fixed paths (see ``TEMPLATE_NAME``)."""
+def language_of(config: Path) -> str:
+    """The language the configuration at ``config`` names; English when it cannot be read."""
+    from file_librarian.config import load_config
+
+    try:
+        return i18n.resolve(load_config(config).language)
+    except Exception:  # the app is still built, in English
+        return i18n.DEFAULT
+
+
+def script(program: Path, config: Path, state_dir: Path, *, language: str | None = None) -> str:
+    """The applet's source for these fixed paths (see ``TEMPLATE_NAME``), its menu's
+    words in ``language`` (by default the configuration's, #126): a change of language
+    changes the source, so the stamp no longer matches and ``refresh`` rebuilds it."""
+    with i18n.using(language_of(config) if language is None else language):
+        return _script(program, config, state_dir)
+
+
+def _script(program: Path, config: Path, state_dir: Path) -> str:
     values = {
         "STATE_DIR": literal(str(state_dir)),
         "PROGRAM": literal(str(program)),
@@ -321,19 +341,20 @@ def script(program: Path, config: Path, state_dir: Path) -> str:
         "MAX_COUNT": str(MAX_COUNT),
         "VERSION": str(STATE_VERSION),
         "STALE": str(STALE_SECONDS),
-        "STALE_LINE": literal(STALE_LINE),
+        "STALE_LINE": literal(t("menu.stale_line").text()),
         "POSES": _list([str(pose) for pose in poses.Pose]),
         "KEYS": _list(sorted(STATE_KEYS)),
         "FORM": literal(r"\A" + FORM + r"\z"),
         "KEY_FORM": literal(KEY_FORM),
         "TEXT_PATTERN": literal(TEXT_PATTERN),
         "DEFAULT_POSE": literal(str(DEFAULT_POSE)),
-        "DEFAULT_LINE": literal(DEFAULT_LINE),
+        "DEFAULT_LINE": literal(t("menu.default_line").text()),
         "TITLE_STATUS": literal(_title("openStatus")),
         "TITLE_REVIEW": literal(_title("openReview")),
         "TITLE_DUE": literal(_title("openDue")),
         "TITLE_ORGANIZE": literal(_title("organize")),
         "TITLE_SETTINGS": literal(_title("openSettings")),
+        "TITLE_QUIT": literal(t("menu.quit").text()),
         "AUTOSAVE": literal(BUNDLE_ID),
         "NOTE": literal(NOTE_NAME),
         "SAFE_PATH": literal(scheduler.SAFE_PATH),
