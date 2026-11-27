@@ -29,7 +29,8 @@ little.
 state in words), ``next`` (the next run), ``review`` and ``due`` (for the
 menu's direct entries) and ``running``. ASCII with ``\\uXXXX`` escapes. Counts
 only: the menu bar is visible to anyone looking at the screen, and in screen
-sharing, so no file name ever goes in.
+sharing, so no file name ever goes in. The two lines are in the configuration's
+language (#126, ``i18n.messages.menu``).
 """
 
 from __future__ import annotations
@@ -43,15 +44,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from file_librarian import lock, menubar, poses
+from file_librarian import i18n, lock, menubar, poses
 from file_librarian import status as status_mod
 from file_librarian.config import Config, load_config
+from file_librarian.i18n import formats, t
 
 log = logging.getLogger(__name__)
 
 PROBLEMS = {
-    "run_failed": "flib could not run (`flib doctor` says why)",
-    "no_access": "macOS denied a folder (`flib doctor`)",
+    "run_failed": t("menu.problem.run_failed"),
+    "no_access": t("menu.problem.no_access"),
 }
 """What ``note_problem`` records, in words for the menu's first line."""
 
@@ -100,46 +102,42 @@ def _fit(text: str) -> str:
     return text + "…"
 
 
-def _files(count: int, what: str) -> str:
-    return f"{count} file{'s' if count != 1 else ''} {what}"
-
-
 def describe(
     status: status_mod.Status | None, *, running: bool, problem: str | None
 ) -> tuple[str, str]:
     """The menu's two lines: the state in words, and the next run."""
     upcoming = "" if status is None else next_line(status.schedule)
     if running:
-        return "Organizing…", upcoming
+        return t("menu.organizing").text(), upcoming
     if status is None:
-        return "Cannot read flib's index (`flib doctor`)", upcoming
+        return t("menu.unreadable").text(), upcoming
     parts = []
     if problem is not None:
-        parts.append(PROBLEMS.get(problem, PROBLEMS["run_failed"]))
+        parts.append(PROBLEMS.get(problem, PROBLEMS["run_failed"]).text())
     if status.review_total:
-        parts.append(_files(status.review_total, "to review"))
+        parts.append(t("menu.to_review", count=status.review_total).text())
     if status.failed_total:
-        parts.append(f"{status.failed_total} failed")
+        parts.append(t("menu.failed", count=status.failed_total).text())
     if status.due is not None:
         if status.due.overdue:
-            parts.append(f"{status.due.overdue} overdue")
+            parts.append(t("menu.overdue", count=status.due.overdue).text())
         if status.due.upcoming:
-            parts.append(f"{status.due.upcoming} due soon")
-    return (", ".join(parts) or "Nothing pending"), upcoming
+            parts.append(t("menu.due_soon", count=status.due.upcoming).text())
+    return (", ".join(parts) or t("menu.nothing").text()), upcoming
 
 
 def next_line(schedule: status_mod.NextRun) -> str:
     if schedule.error is not None:
         return ""
     if not schedule.installed:
-        return "Not scheduled"
+        return t("menu.not_scheduled").text()
     if not schedule.loaded:
-        return "Schedule not active (`flib schedule`)"
+        return t("menu.not_active").text()
     watching = schedule.mode in ("watch", "both")
     if schedule.at is None:
-        return "Runs as files arrive" if watching else ""
-    when = schedule.at.strftime("%a %H:%M")
-    return f"Next run {when}, and as files arrive" if watching else f"Next run {when}"
+        return t("menu.on_arrival").text() if watching else ""
+    when = formats.weekday_clock(schedule.at)
+    return t("menu.next_and_watch" if watching else "menu.next", when=when).text()
 
 
 _CONFIGS: dict[tuple[str, int, int], Config] = {}
@@ -168,8 +166,8 @@ def view(
     """What the item should show now, for the configuration at ``config_path``:
     from ``status`` when the caller has just collected it (``flib status``, which
     asked launchd), else collected here, cheaply unless ``probe``."""
+    config = _config(config_path)
     if status is None:
-        config = _config(config_path)
         try:
             status = status_mod.collect(config, now=now, menu_bar=False, probe=probe)
         except Exception:  # an index it cannot read, whatever the reason: trouble
@@ -177,7 +175,8 @@ def view(
     running = lock.holder(database) is not None
     problem = read_problem()
     shown = poses.menu_state(status, running=running, blocked=problem is not None)
-    line, upcoming = describe(status, running=running, problem=problem)
+    with i18n.using(config.language):
+        line, upcoming = describe(status, running=running, problem=problem)
     return View(
         shown.pose,
         shown.count,

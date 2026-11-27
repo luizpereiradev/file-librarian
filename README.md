@@ -243,7 +243,8 @@ Mac. It reads the same index as the command line:
   leaves the Mac), Downloads and the Desktop as input folders (the Desktop
   with `flib init`'s careful rules), duplicates, categories (add, rename,
   remove, hint, sub-folders), the cost caps, the summary notification and
-  what is due, and the language. Each change is checked as `flib
+  what is due, and the language (which is also the interface's: English or
+  Brazilian Portuguese, from the next page on). Each change is checked as `flib
   check-config` checks it **before** it is written; a value it refuses is
   shown with its field and why, and nothing is written. Only the keys you
   changed are touched: your comments and the order of the file stay. The
@@ -825,7 +826,7 @@ The options you are most likely to change:
 
 | Option | Default | What it does |
 | --- | --- | --- |
-| `language` | `en` | `en` or `pt-BR`: the language of generated names and descriptions, and of the default folders (`Organized`/`_Review` or `Organizado`/`_Revisar`) and categories |
+| `language` | `en` | `en` or `pt-BR`: the language of generated names and descriptions, of the default folders (`Organized`/`_Review` or `Organizado`/`_Revisar`) and categories, and of the web interface (`flib ui`) and the menu bar item; the command line stays English |
 | `inputs` | `[~/Downloads]` | The folders to keep organized; each can have its own rules ([More than one inbox](#more-than-one-inbox)) |
 | `output_root` | `~/Downloads/Organized` | Where category folders are created |
 | `categories` | 5 in `en`, 15 in `pt-BR` | The closed list the AI chooses from; each `hint` steers it, `rename: false` keeps original names, `layout` files into sub-folders ([Sub-folders](#sub-folders-by-year-or-issuer)) |

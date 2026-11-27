@@ -98,7 +98,7 @@ a { color: var(--accent-text); }
 
 .brand img { border-radius: 6px; }
 
-nav[aria-label="Pages"] {
+nav.pages {
   display: flex;
   flex: 1;
   gap: 0.25rem 1rem;
@@ -117,7 +117,7 @@ nav a[aria-current="page"] { border-bottom: 2px solid var(--accent); }
   .top { flex-wrap: wrap; gap: 0.25rem 0.75rem; padding: 0.5rem 0.75rem; }
   .brand > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   .top .end { margin-left: auto; }
-  nav[aria-label="Pages"] { order: 3; flex: 1 1 100%; flex-wrap: wrap; gap: 0.1rem 1rem; overflow: visible; }
+  nav.pages { order: 3; flex: 1 1 100%; flex-wrap: wrap; gap: 0.1rem 1rem; overflow: visible; }
   .top button.quiet { padding: 0.25rem 0.6rem; font-size: 0.85rem; }
 }
 

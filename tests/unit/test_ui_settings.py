@@ -439,7 +439,8 @@ def test_duplicates(client: UiClient, path: Path) -> None:
 def test_the_language_never_moves_the_library(client: UiClient, path: Path) -> None:
     old = load_config(path)
     text = change(client, "language", language="pt-BR")
-    assert "Language" in text and "en → pt-BR" in text
+    # The page after the change already speaks the new language (#126).
+    assert '<html lang="pt-BR">' in text and "Idioma" in text and "en → pt-BR" in text
     new = load_config(path)
     assert new.language == "pt-BR"
     assert new.output_root == old.output_root and new.review_folder == old.review_folder

@@ -8,6 +8,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **The interface speaks the configured language** (#126): with `language:
+  pt-BR`, every page of `flib ui` (including confirmations, outcomes, error
+  and ended pages and the handoff page) and the menu bar item's menu and
+  state line are in Brazilian Portuguese, with dates as `25/11/2026 22:48`,
+  a decimal comma and `R$ 1.234,56`; English stays as it was and is the
+  fallback. Changing the language on the Settings page switches the
+  interface from the next page and rebuilds the menu bar item. A cost cap
+  may be typed as `3,00` or `3.00`; `1.234` (in pt-BR) is refused as
+  ambiguous rather than guessed. One catalogue (`i18n/messages/`), checked
+  by tests. The command line, logs, notifications and docs stay English.
+
 - **flib in the menu bar** (#116): `flib menu` builds a small AppleScriptObjC
   stay-open applet with `osacompile` (no Xcode, nothing downloaded), signs it
   ad hoc, puts it next to the notifier in flib's environment and starts it

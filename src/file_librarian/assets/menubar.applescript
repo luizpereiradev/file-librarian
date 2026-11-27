@@ -86,7 +86,7 @@ on setUp()
 	set organizeItem to my addItem(@TITLE_ORGANIZE@, "organize:")
 	my addItem(@TITLE_SETTINGS@, "openSettings:")
 	theMenu's addItem:(ca's NSMenuItem's separatorItem())
-	my addItem("Quit", "quitApp:")
+	my addItem(@TITLE_QUIT@, "quitApp:")
 	statusItem's setMenu:theMenu
 	-- flib's nudge: a distributed notification, which reaches only a running applet and
 	-- can never start one. Delivered at once, though the applet is never the active app.

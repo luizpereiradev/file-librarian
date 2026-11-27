@@ -64,8 +64,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from file_librarian import config_edit, credentials, menubar, notifier, scheduler
-from file_librarian import status as status_mod
+from file_librarian import config_edit, credentials, i18n, menubar, notifier, scheduler
 from file_librarian.config import (
     Category,
     Config,
@@ -81,6 +80,7 @@ from file_librarian.config import (
 )
 from file_librarian.config_edit import Append, Delete, Edit, EditError, Set
 from file_librarian.fields import KINDS
+from file_librarian.i18n import Msg, formats, t
 from file_librarian.locales import LOCALES
 from file_librarian.lock import AlreadyRunningError, instance_lock
 from file_librarian.onboarding import (
@@ -91,12 +91,12 @@ from file_librarian.onboarding import (
     display_path,
 )
 from file_librarian.ui.actions import BUSY, Item, Malformed, Outcome, Refused, a_pin, one, stop
-from file_librarian.ui.markup import Markup, csrf_field, el, join, layout
+from file_librarian.ui.markup import Markup, csrf_field, el, join, layout, render
 from file_librarian.ui.views import (
     BadRequest,
     Page,
     Unreadable,
-    plural,
+    kind_label,
     query_params,
     read_index,
     sentence,
@@ -108,80 +108,67 @@ MAX_HINT = 300
 MAX_NAME = 64
 MAX_AMOUNT = 1000.0
 """The highest cost cap the page takes, in US$; more goes in the file."""
-_AMOUNT = re.compile(r"[0-9]{1,4}(\.[0-9]{1,4})?")
 LONG_RULES = 160
 """An input folder's rules longer than this (in words) fold under a ``<details>``."""
 LAYOUTS: tuple[tuple[str, str | None, str], ...] = (
-    ("none", None, "All in the category's folder"),
-    ("year", "{year}", "By year"),
-    ("year-month", "{year}/{month}", "By year, then month"),
-    ("issuer", "{issuer}", "By issuer"),
-    ("issuer-year", "{issuer}/{year}", "By issuer, then year"),
+    ("none", None, t("settings.layout.none")),
+    ("year", "{year}", t("settings.layout.year")),
+    ("year-month", "{year}/{month}", t("settings.layout.year_month")),
+    ("issuer", "{issuer}", t("settings.layout.issuer")),
+    ("issuer-year", "{issuer}/{year}", t("settings.layout.issuer_year")),
 )
 """The sub-folder layouts the page offers (``config._layout`` checks any other)."""
 SCHEDULE_MODES = ("off", "daily", "watch", "both")
-SECTION_TITLES = (
-    ("schedule", "When to organize"),
-    ("provider", "Who classifies"),
-    ("reading", "What flib reads and sends"),
-    ("inputs", "Folders"),
-    ("categories", "Categories"),
-    ("costs", "Cost caps"),
-    ("reminders", "Notifications and what is due"),
-    ("language", "Language"),
-    ("file", "Everything else"),
+SECTION_TITLES = tuple(
+    (key, t(f"settings.section.{key}"))
+    for key in (
+        "schedule",
+        "provider",
+        "reading",
+        "inputs",
+        "categories",
+        "costs",
+        "reminders",
+        "language",
+        "file",
+    )
 )
 
-STALE = (
-    "The configuration file changed since this page was shown: edited by hand, in another "
-    "tab or by flib. Nothing was saved; the page now shows it as it is."
-)
-NO_PATH = (
-    "This flib ui does not know its configuration file, so its settings can only be read "
-    "here. Run `flib ui` from Terminal to change them."
-)
-GONE = (
-    "What happened there is no longer kept (only the latest are, until the session ends). "
-    "The page shows the settings as they are now."
-)
-NOTHING = "Nothing changed: the settings were already like that."
-OTHER_DATABASE = (
-    "The file now names another database than this flib ui uses. Nothing was saved; end "
-    "the session and run `flib ui` again."
-)
-OTHER_SCHEDULE = (
-    "The schedule uses another configuration file, {other}. Nothing was changed in launchd: "
-    "tick “Use this file for the schedule” to move it here."
-)
+STALE = t("settings.stale")
+NO_PATH = t("settings.no_path")
+GONE = t("settings.gone")
+NOTHING = t("settings.nothing")
+OTHER_DATABASE = t("settings.other_database")
 
 LABELS = {
-    "language": "Language",
-    "inputs": "Input folders",
-    "output_root": "Library folder",
-    "review_folder": "Review folder",
-    "duplicates_folder": "Duplicates folder",
-    "duplicates": "Duplicates",
-    "provider.name": "Who classifies",
-    "provider.model": "Model",
-    "vision.enabled": "Images to the model (vision)",
-    "ocr.enabled": "Text in images (OCR)",
-    "ocr.languages": "Text recognition languages",
-    "search.semantic.enabled": "Search by meaning",
-    "limits.max_cost_usd_per_run": "Cost cap per run",
-    "limits.max_cost_usd_per_day": "Daily cost cap",
-    "summary.notify": "Summary notification",
-    "due.remind": "Due reminders",
-    "due.remind_days_before": "Reminder, days before",
-    "due.kinds": "Kinds on the Due list",
-    "schedule.mode": "When to organize",
-    "schedule.time": "Daily run at",
-    "categories": "Categories",
+    key: t(f"settings.label.{key}")
+    for key in (
+        "language",
+        "inputs",
+        "output_root",
+        "review_folder",
+        "duplicates_folder",
+        "duplicates",
+        "provider.name",
+        "provider.model",
+        "vision.enabled",
+        "ocr.enabled",
+        "ocr.languages",
+        "search.semantic.enabled",
+        "limits.max_cost_usd_per_run",
+        "limits.max_cost_usd_per_day",
+        "summary.notify",
+        "due.remind",
+        "due.remind_days_before",
+        "due.kinds",
+        "schedule.mode",
+        "schedule.time",
+        "categories",
+    )
 }
 FIELDS = {
-    "categories.name": "Category name",
-    "categories.hint": "Category hint",
-    "categories.layout": "Sub-folders",
-    "inputs.path": "Input folder",
+    key: t(f"settings.field.{key}")
+    for key in ("categories.name", "categories.hint", "categories.layout", "inputs.path")
 }
 """Fields the parser names with a list index (``categories.5.name``)."""
 
@@ -200,7 +187,10 @@ def lit(value: object) -> str:
 
 
 def prose(text: str) -> Markup:
-    """Text where the page's `backticks` mark a command; the user's are text."""
+    """Text where the page's `backticks` mark a command; the user's are text. A message
+    is rendered: only its translation's backticks count, never a parameter's."""
+    if isinstance(text, Msg):
+        return render(text)
     parts = text.split("`")
     if len(parts) % 2 == 0:
         parts = [text.replace("`", _TICK)]
@@ -215,21 +205,41 @@ def prose(text: str) -> Markup:
 def message(text: str, *, error: bool = False, **attrs: object) -> Markup:
     return el(
         "p",
-        prose(sentence(text)),
+        prose(text) if isinstance(text, Msg) else prose(sentence(text)),
         class_="notice error" if error else "notice",
         role="status",
         **attrs,
     )
 
 
-def command(config_path: Path | None, *args: str) -> str:
+def command(config_path: Path | None, *args: str) -> Msg:
     """A ``flib`` command line the user can paste: every word quoted for the shell, and
-    ``-c <file>`` when this is not the default configuration file. Marked as a command."""
+    ``-c <file>`` when this is not the default configuration file. A message that renders
+    as one ``<code>``, whatever the words hold (a name with a backtick stays text)."""
     words = ["flib", args[0]]
     if config_path is not None and config_path != default_config_path():
         words += ["-c", str(config_path)]
     words += args[1:]
-    return "`" + lit(" ".join(shlex.quote(w) for w in words)) + "`"
+    return t("settings.command", text=shown(" ".join(shlex.quote(w) for w in words)))
+
+
+def listed(parts: list[Msg | str], msg_id: str = "settings.list.semicolon") -> Msg | str:
+    """Parts one after another (``a; b; c``), as a message that renders in any language."""
+    result = parts[-1]
+    for part in reversed(parts[:-1]):
+        result = t(msg_id, first=part, rest=result)
+    return result
+
+
+def _value(value: object) -> Msg | str:
+    """A value for a message: a message as it is, anything else as text (``shown``)."""
+    return value if isinstance(value, Msg) else shown(str(value))
+
+
+def _exc_text(exc: BaseException) -> Msg | str:
+    """An exception's words: a message when it carries one."""
+    first = exc.args[0] if exc.args else None
+    return first if isinstance(first, Msg) else str(exc)
 
 
 def browser_text(value: str) -> str:
@@ -270,16 +280,16 @@ def read(path: Path) -> Snapshot:
     try:
         data = path.read_bytes()
     except FileNotFoundError:
-        return Snapshot(path, b"", "", None, None, "There is no configuration file there.")
+        return Snapshot(path, b"", "", None, None, t("settings.file.missing"))
     except OSError:
-        return Snapshot(path, b"", "", None, None, "The configuration file cannot be read.")
+        return Snapshot(path, b"", "", None, None, t("settings.file.unreadable"))
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
-        return Snapshot(path, data, "", None, None, "The configuration file is not UTF-8 text.")
+        return Snapshot(path, data, "", None, None, t("settings.file.not_utf8"))
     try:
         raw = config_edit.load(text)
-    except EditError as exc:
+    except EditError as exc:  # YAML's own words, as the command line shows them
         return Snapshot(path, data, text, None, None, sentence_of(str(exc)))
     try:
         config = parse_config(raw)
@@ -292,20 +302,29 @@ def sentence_of(text: str) -> str:
     return stop(text[:1].upper() + text[1:])
 
 
-def invalid(exc: ConfigError) -> str:
-    """The parser's refusal: each field and why, in one paragraph (as text)."""
+def invalid(exc: ConfigError) -> Msg | str:
+    """The parser's refusal: each field and why, in one paragraph (as text). The field's
+    name is the page's (translated); why is the parser's own words, as the command line
+    prints them (pydantic's messages are English only)."""
     lines = str(exc).splitlines()[1:] or [str(exc)]
-    parts = []
+    parts: list[Msg | str] = []
     for line in lines:
         where, _, why = line.strip().partition(": ")
-        why = why.removeprefix("Value error, ")
+        why = shown(why.removeprefix("Value error, "))
         if where == "(root)":
             parts.append(why)
             continue
         label = LABELS.get(where) or FIELDS.get(re.sub(r"\.\d+(?=\.|$)", "", where))
-        where = f"{label} ({where})" if label else where
-        parts.append(f"{where}: {why}" if why else where)
-    return lit("; ".join(parts))
+        where = shown(where)
+        if label:
+            parts.append(
+                t("settings.invalid.labelled", label=label, where=where, why=why)
+                if why
+                else t("settings.invalid.labelled_only", label=label, where=where)
+            )
+        else:
+            parts.append(t("settings.invalid.where", where=where, why=why) if why else where)
+    return listed(parts)
 
 
 @contextmanager
@@ -324,7 +343,7 @@ def _current(path: Path, pin: str) -> tuple[Snapshot, dict[str, Any], Config]:
     if snap.pin != pin:
         raise Refused(STALE)
     if snap.config is None or snap.raw is None:
-        raise Refused(f"The configuration file cannot be changed here: {snap.problem}")
+        raise Refused(t("settings.file.cannot_change", problem=_value(snap.problem)))
     return snap, snap.raw, snap.config
 
 
@@ -340,9 +359,9 @@ def _write(path: Path, old: bytes, text: str) -> None:
     except config_edit.Changed as exc:
         raise Refused(STALE) from exc
     except EditError as exc:
-        raise Refused(f"Not saved: {exc}.") from exc
+        raise Refused(t("settings.file.not_saved", error=shown(str(exc)))) from exc
     except OSError as exc:
-        raise Refused("The configuration file could not be written; nothing changed.") from exc
+        raise Refused(t("settings.file.write_failed")) from exc
 
 
 def commit(snap: Snapshot, old: dict[str, Any], edits: list[Edit], running: Config) -> Saved:
@@ -350,14 +369,12 @@ def commit(snap: Snapshot, old: dict[str, Any], edits: list[Edit], running: Conf
     try:
         text = config_edit.edit_text(snap.text, edits)
     except EditError as exc:
-        raise Refused(
-            f"Not saved: {exc}. Change it in the configuration file instead; nothing was written."
-        ) from exc
+        raise Refused(t("settings.file.edit_failed", error=shown(str(exc)))) from exc
     raw = config_edit.load(text)
     try:
         config = parse_config(raw)
     except ConfigError as exc:
-        raise Refused(f"Not saved, nothing was written: {invalid(exc)}.") from exc
+        raise Refused(t("settings.file.invalid", problem=invalid(exc))) from exc
     if config.database != running.database:
         raise Refused(OTHER_DATABASE)
     _write(snap.path, snap.data, text)
@@ -367,7 +384,7 @@ def commit(snap: Snapshot, old: dict[str, Any], edits: list[Edit], running: Conf
 # --- what changed ----------------------------------------------------------------------
 
 
-_LISTS = {"categories": "Category", "inputs": "Input folder"}
+_LISTS = {"categories": "category", "inputs": "input"}
 """Lists of entries told apart field by field, each named by its name or path."""
 
 
@@ -383,20 +400,22 @@ def _flat(data: Any, prefix: str = "") -> dict[str, Any]:
 _ABSENT = object()
 
 
-def describe(key: str, value: Any) -> str:
+def describe(key: str, value: Any) -> Msg | str:
     """A value as the page shows it (as text): web addresses by their host only."""
     if value is _ABSENT:
-        return "the default"
+        return t("settings.value.default")
     if key.endswith("base_url") and isinstance(value, str):
         return host_of(value)
     if value is None:
-        return "none"
+        return t("settings.value.none")
     if isinstance(value, bool):
-        return "on" if value else "off"
+        return t("settings.value.on") if value else t("settings.value.off")
     if isinstance(value, list):
-        return ", ".join(_ident(v) for v in value) or "none"
+        return ", ".join(_ident(v) for v in value) or t("settings.value.none")
     if isinstance(value, dict):
         return "…"
+    if isinstance(value, float):  # a cost cap: with the page's decimal separator
+        return formats.amount_input(value)
     return str(value)
 
 
@@ -414,10 +433,16 @@ def _entries(key: str, old: Any, new: Any) -> list[Item]:
     """What changed in a list of categories or input folders, one line per field: a
     renamed category, a hint, an entry added or removed (never the whole list)."""
     noun = _LISTS[key]
+
+    def entry(name: str, field: str | None = None) -> Msg:
+        if field is None:
+            return t(f"settings.entry.{noun}", name=shown(name))
+        return t(f"settings.entry.{noun}_field", name=shown(name), field=shown(field))
+
     if not isinstance(new, list):
-        return [Item(LABELS[key], "back to what the language brings")]
+        return [Item(LABELS[key], t("settings.change.language_default"))]
     if not isinstance(old, list):
-        return [Item(LABELS[key], "written in the file, as they were")]
+        return [Item(LABELS[key], t("settings.change.written"))]
     items: list[Item] = []
     if len(old) == len(new):
         pairs = list(zip(old, new, strict=True))
@@ -425,20 +450,24 @@ def _entries(key: str, old: Any, new: Any) -> list[Item]:
         before = {_ident(e): e for e in old}
         after = {_ident(e): e for e in new}
         pairs = [(before[n], after[n]) for n in after if n in before]
-        items += [Item(f"{noun} {lit(n)}", "added") for n in after if n not in before]
-        items += [Item(f"{noun} {lit(n)}", "removed") for n in before if n not in after]
+        items += [Item(entry(n), t("settings.change.added")) for n in after if n not in before]
+        items += [Item(entry(n), t("settings.change.removed")) for n in before if n not in after]
     for a, b in pairs:
         name = _ident(a)
         if _ident(b) != name:
-            items.append(Item(f"{noun} {lit(name)}", f"renamed to {lit(_ident(b))}"))
+            items.append(Item(entry(name), t("settings.change.renamed", name=shown(_ident(b)))))
         fa, fb = _fields_of(a), _fields_of(b)
         for field in dict.fromkeys([*fb, *fa]):
             if field in ("name", "path"):
                 continue
             va, vb = fa.get(field, _ABSENT), fb.get(field, _ABSENT)
             if va != vb:
-                text = f"{lit(describe(field, va))} → {lit(describe(field, vb))}"
-                items.append(Item(f"{noun} {lit(_ident(b))} {field}", text))
+                text = t(
+                    "settings.change.value",
+                    old=_value(describe(field, va)),
+                    new=_value(describe(field, vb)),
+                )
+                items.append(Item(entry(_ident(b), field), text))
     return items
 
 
@@ -471,19 +500,21 @@ def diff(
         if key in _LISTS:
             items += _entries(key, a, b)
         else:
-            text = f"{lit(describe(key, a))} → {lit(describe(key, b))}"
-            items.append(Item(LABELS.get(key, lit(key)), text))
+            text = t(
+                "settings.change.value", old=_value(describe(key, a)), new=_value(describe(key, b))
+            )
+            items.append(Item(LABELS.get(key) or shown(key), text))
     return items
 
 
-def host_of(url: str) -> str:
+def host_of(url: str) -> Msg | str:
     """Where a web address goes, and nothing else of it: ``api.example.com``."""
     try:
         parts = urlsplit(url)
         host = parts.hostname or "?"
         port = f":{parts.port}" if parts.port else ""
     except ValueError:
-        return "an address in the file"
+        return t("settings.address_in_file")
     return f"{host}{port}"
 
 
@@ -497,16 +528,16 @@ class ProviderChoice:
     label: str
 
 
-def _provider_label(name: str, config: ProviderConfig) -> str:
+def _provider_label(name: str, config: ProviderConfig) -> Msg:
     if name == "anthropic":
-        return "Anthropic API"
+        return t("settings.provider.anthropic")
     if name == "claude-code":
-        return "Your Claude subscription (Claude Code)"
+        return t("settings.provider.claude_code")
     if name == "ollama":
-        return "Ollama, on this Mac"
+        return t("settings.provider.ollama")
     if name == "openai-compat":
-        return f"OpenAI-compatible API at {host_of(config.base_url or '')}"
-    return "The test provider (nothing is sent)"
+        return t("settings.provider.openai_compat", host=host_of(config.base_url or ""))
+    return t("settings.provider.fake")
 
 
 def provider_choices(config: Config) -> list[ProviderChoice]:
@@ -522,48 +553,59 @@ def provider_choices(config: Config) -> list[ProviderChoice]:
     if p.base_url is None or is_loopback_url(p.base_url):
         pairs += [("ollama", LOCAL_MODEL), ("ollama", DEFAULT_MODELS["ollama"])]
     return [
-        ProviderChoice(name, model, f"{_provider_label(name, p)}: {model}")
+        ProviderChoice(
+            name,
+            model,
+            t("settings.provider.choice", provider=_provider_label(name, p), model=model),
+        )
         for name, model in dict.fromkeys(pairs)
     ]
 
 
-def leaves(config: Config, name: str | None = None) -> str:
+def leaves(config: Config, name: str | None = None) -> Msg:
     """What leaves the Mac to classify a file, in one sentence."""
     p = config.provider
     name = name or p.name
     chars = p.max_chars_per_file
-    what = f"Each file's name, details and up to {chars} characters of its text"
     if name == "anthropic":
-        return f"{what} go to Anthropic's API."
+        return t("settings.leaves.anthropic", chars=chars)
     if name == "claude-code":
-        return f"{what} go to Anthropic through your Claude subscription."
+        return t("settings.leaves.claude_code", chars=chars)
     if name in ("ollama", "openai-compat"):
         url = p.base_url or ("http://localhost:11434/v1" if name == "ollama" else "")
         if is_loopback_url(url):
-            return "Nothing leaves this Mac: the model runs here."
-        return f"{what} go to {host_of(url)}."
-    return "Nothing leaves this Mac."
+            return t("settings.leaves.local")
+        return t("settings.leaves.remote", chars=chars, host=host_of(url))
+    return t("settings.leaves.none")
 
 
-def key_state(config: ProviderConfig) -> str | None:
+KEY_LABELS = {
+    "anthropic": t("settings.key.anthropic"),
+    "openai-compat": t("settings.key.openai_compat"),
+    "embeddings": t("settings.key.embeddings"),
+}
+
+
+def key_state(config: ProviderConfig) -> Msg | None:
     """Whether the provider's API key is found, and where: never the key itself (the
     Keychain is only asked whether it holds one)."""
     spec = credentials.key_spec(config)
     if spec is None:
         return None
     source = credentials.key_source(config, spec)
-    where = {"environment": "in the environment", "keychain": "in the Keychain"}
+    label = KEY_LABELS.get(spec.provider) or spec.label
     if source == "none":
-        return f"{spec.label}: not set. `flib key set` in Terminal saves it in the Keychain."
-    return f"{spec.label}: set ({where.get(source, 'in the file named by provider.env_file')})."
+        return t("settings.key.not_set", label=label)
+    where = source if source in ("environment", "keychain") else "env_file"
+    return t("settings.key.set", label=label, where=t(f"settings.key.where.{where}"))
 
 
 @dataclass(frozen=True, slots=True)
 class Candidate:
     key: str
     path: Path
-    label: str
-    note: str
+    label: Msg
+    note: Msg
     entry: Any
     """What goes in ``inputs``: the path as ``flib init`` writes it, with its rules."""
 
@@ -576,16 +618,15 @@ def candidates() -> list[Candidate]:
         Candidate(
             "downloads",
             downloads,
-            "Downloads",
-            "Everything at its top level.",
+            t("settings.folder.downloads"),
+            t("settings.folder.downloads_note"),
             display_path(downloads),
         ),
         Candidate(
             "desktop",
             desktop,
-            "Desktop",
-            f"Only documents and images unchanged for {DESKTOP_MIN_AGE_DAYS} days; folders are "
-            "left alone, as `flib init` sets it up.",
+            t("settings.folder.desktop"),
+            t("settings.folder.desktop_note", days=DESKTOP_MIN_AGE_DAYS),
             {
                 "path": display_path(desktop),
                 "only": list(DESKTOP_ONLY),
@@ -596,7 +637,11 @@ def candidates() -> list[Candidate]:
     ]
 
 
-def folder_problem(path: Path, config: Config) -> str | None:
+ALREADY = "settings.why.already"
+"""Why a folder cannot be added that is no problem: it is an input folder already."""
+
+
+def folder_problem(path: Path, config: Config) -> Msg | None:
     """Why ``path`` cannot be an input folder, or ``None``. Checked on the server, at the
     moment of the change: a folder of the user's own under the home folder, really there,
     not a link, not hidden, not ``~/Library``, not the home folder or ``/``, not the
@@ -604,29 +649,29 @@ def folder_problem(path: Path, config: Config) -> str | None:
     home = Path.home()
     text = str(path)
     if not path.is_absolute() or os.path.normpath(text) != text:
-        return "it is not a plain folder path"
+        return t("settings.why.plain")
     try:
         info = os.lstat(path)
     except OSError:
-        return "there is no such folder"
+        return t("settings.why.missing")
     if stat.S_ISLNK(info.st_mode):
-        return "it is a link to somewhere else"
+        return t("settings.why.link")
     if not stat.S_ISDIR(info.st_mode):
-        return "it is not a folder"
+        return t("settings.why.not_folder")
     if same_place(path, Path(path.anchor)) or same_place(path, home):
-        return "it is too broad"
+        return t("settings.why.broad")
     if not path.is_relative_to(home) or not is_within(path, home):
-        return "it is outside your home folder"
+        return t("settings.why.outside")
     if any(part.startswith(".") for part in path.relative_to(home).parts):
-        return "it is hidden"
+        return t("settings.why.hidden")
     if is_within(path, home / "Library"):
-        return "it is a system folder"
+        return t("settings.why.system")
     if info.st_uid != os.getuid():
-        return "it is not your folder"
+        return t("settings.why.not_yours")
     if is_within(path, config.output_root):
-        return "it is the library, or inside it"
+        return t("settings.why.library")
     if any(same_place(path, p) for p in config.input_paths):
-        return "it is an input folder already"
+        return t(ALREADY)
     return None
 
 
@@ -671,37 +716,29 @@ class _View:
 
 def settings_page(path: Path | None, csrf: str, outcome: Outcome | None, *, gone: bool) -> Page:
     parts: list[Markup | None] = [
-        el("h1", "Settings"),
-        el(
-            "p",
-            prose(
-                "The essentials. Each change is checked as `flib check-config` checks it "
-                "before it is saved, keeps a backup, and can be undone with Restore the "
-                "previous settings. Everything else is in the configuration file."
-            ),
-            class_="lead",
-        ),
+        el("h1", t("settings.title")),
+        el("p", prose(t("settings.lead")), class_="lead"),
     ]
     if gone or (outcome is not None and outcome.anchor is None):
         parts.append(outcome_notice(outcome, gone))
     if path is None:
         parts.append(message(NO_PATH))
-        return HTTPStatus.OK, layout("Settings", "settings", join(parts), csrf)
+        return HTTPStatus.OK, layout(t("settings.title"), "settings", join(parts), csrf)
     snap = read(path)
     view = _View(snap, csrf, outcome)
     if snap.config is None:
         if outcome is not None and outcome.anchor is not None:  # no section to show it in
             parts.append(outcome_notice(outcome, False))
-        parts.append(message(f"The configuration file cannot be used: {snap.problem}", error=True))
+        parts.append(message(t("settings.unusable", problem=_value(snap.problem)), error=True))
         parts.append(_file_section(view))
-        return HTTPStatus.OK, layout("Settings", "settings", join(parts), csrf)
+        return HTTPStatus.OK, layout(t("settings.title"), "settings", join(parts), csrf)
     config = snap.config
     parts += [
         el(
             "nav",
             *(el("a", title, href=f"#s-{key}", class_="chip") for key, title in SECTION_TITLES),
             class_="chips toc",
-            aria_label="Sections",
+            aria_label=t("settings.toc"),
         ),
         _schedule_section(view, config),
         _provider_section(view, config),
@@ -713,7 +750,7 @@ def settings_page(path: Path | None, csrf: str, outcome: Outcome | None, *, gone
         _language_section(view, config),
         _file_section(view),
     ]
-    return HTTPStatus.OK, layout("Settings", "settings", join(parts), csrf)
+    return HTTPStatus.OK, layout(t("settings.title"), "settings", join(parts), csrf)
 
 
 def outcome_notice(
@@ -731,13 +768,13 @@ def outcome_notice(
     if outcome.restore:
         restore = el(
             "p",
-            el("a", "Restore the previous settings…", href="/settings/restore"),
+            el("a", t("settings.restore_link"), href="/settings/restore"),
             class_="note",
         )
     return el(
         "div",
         message(outcome.text, error=outcome.error),
-        el("ul", *items, class_="moves", aria_label="What changed") if items else None,
+        el("ul", *items, class_="moves", aria_label=t("settings.what_changed")) if items else None,
         restore,
         class_="outcome",
         id=None if anchor is None else f"o-{anchor}",
@@ -746,6 +783,8 @@ def outcome_notice(
 
 
 def _text_of(label: str) -> str:
+    if isinstance(label, Msg):
+        return label
     return label.replace(_TICK, "`")
 
 
@@ -794,8 +833,8 @@ def _help(text: str) -> Markup:
     return el("p", prose(text), class_="note")
 
 
-def _save(label: str = "Save") -> Markup:
-    return el("div", el("button", label, type="submit"), class_="buttons")
+def _save(label: str | None = None) -> Markup:
+    return el("div", el("button", label or t("settings.save"), type="submit"), class_="buttons")
 
 
 def _schedule_section(view: _View, config: Config) -> Markup:
@@ -805,7 +844,7 @@ def _schedule_section(view: _View, config: Config) -> Markup:
         state = scheduler.status()
     except scheduler.ScheduleError:
         state = None
-        notes.append(message("launchd's state cannot be read now.", error=True))
+        notes.append(message(t("settings.schedule.unreadable"), error=True))
     current = "off"
     at = config.schedule.time
     takeover = None
@@ -813,33 +852,19 @@ def _schedule_section(view: _View, config: Config) -> Markup:
         current = state.mode or "daily"
         at = state.time or at
         if not state.loaded:
-            notes.append(
-                message("The schedule is written but not loaded: save it again.", error=True)
-            )
+            notes.append(message(t("settings.schedule.not_loaded"), error=True))
         other = other_schedule(view.snap.path)
         if other is not None:
             notes.append(
-                message(
-                    f"The installed schedule uses another configuration file, "
-                    f"{lit(display_path(other))}. Saving here changes nothing in launchd "
-                    "unless you tick the box below: then it uses this file instead.",
-                    error=True,
-                )
+                message(t("settings.schedule.other", other=shown(display_path(other))), error=True)
             )
-            takeover = _check("takeover", "Use this file for the schedule", False)
+            takeover = _check("takeover", t("settings.schedule.takeover"), False)
         stale = scheduler.stale_watch_message(state, config.input_paths)
         if stale and other is None:
-            notes.append(
-                message("Watch mode watches other folders than the inputs: save it again.")
-            )
+            notes.append(message(t("settings.schedule.stale_watch")))
     current = typed.get("mode", current)
     at = typed.get("time", at)
-    words = {
-        "off": "Off: only when you run it",
-        "daily": "Every day at the time below",
-        "watch": "As files arrive",
-        "both": "As files arrive, and every day at the time below",
-    }
+    words = {mode: t(f"settings.schedule.mode.{mode}") for mode in SCHEDULE_MODES}
     radios = [
         el(
             "label",
@@ -853,35 +878,31 @@ def _schedule_section(view: _View, config: Config) -> Markup:
     form = _form(
         view,
         "schedule",
-        el("fieldset", el("legend", "Run flib"), *radios, class_="choices"),
+        el("fieldset", el("legend", t("settings.schedule.legend")), *radios, class_="choices"),
         _field(
-            "Daily run at (24-hour)",
+            t("settings.schedule.time"),
             el("input", type="time", name="time", value=at, required=True, step=60),
         ),
         takeover,
-        _save("Save the schedule"),
+        _save(t("settings.schedule.save")),
         action="/settings/schedule",
     )
     return _section(
         view,
         "schedule",
-        _help(
-            "A launchd agent runs flib, as `flib schedule` sets it up. If the Mac is asleep "
-            "at the time, it runs on wake. As files arrive, the reminders and the periodic "
-            "summary come only after a daily run."
-        ),
+        _help(t("settings.schedule.help")),
         *notes,
         form,
         _help(menu_bar_note()),
     )
 
 
-def menu_bar_note() -> str:
+def menu_bar_note() -> Msg:
     """Whether flib is in the menu bar (#116), and the command that changes it: a line,
     not a toggle (installing it builds an app and a LaunchAgent; that stays a command)."""
     if menubar.installed():
-        return "Menu bar: the cat is there. `flib menu --remove` takes it away."
-    return "Menu bar: not shown. `flib menu` puts the cat there, with what needs you."
+        return t("settings.menu.shown")
+    return t("settings.menu.hidden")
 
 
 def _provider_section(view: _View, config: Config) -> Markup:
@@ -896,7 +917,7 @@ def _provider_section(view: _View, config: Config) -> Markup:
         _form(
             view,
             "provider",
-            _field("Provider and model", el("select", *options, name="choice")),
+            _field(t("settings.provider.field"), el("select", *options, name="choice")),
             el(
                 "ul",
                 *(
@@ -904,61 +925,98 @@ def _provider_section(view: _View, config: Config) -> Markup:
                     for c in choices[1:]
                 ),
                 class_="moves",
-                aria_label="What each choice sends",
+                aria_label=t("settings.provider.each"),
             ),
             _save(),
         ),
-        _help(
-            "Another server or model, a key or the provider's other options are set in the "
-            "file (`flib key set` for a key). `flib reprocess` classifies filed files again."
-        ),
+        _help(t("settings.provider.help")),
     )
 
 
 def _reading_section(view: _View, config: Config) -> Markup:
     semantic = config.search.semantic
-    where = "this Mac" if is_loopback_url(semantic.base_url) else host_of(semantic.base_url)
-    vision_help = (
-        "Images (made smaller, without their location) and the first pages of scanned PDFs "
-        "go to the model with the file. Off, they are classified from their name and text."
+    where = (
+        t("settings.reading.this_mac")
+        if is_loopback_url(semantic.base_url)
+        else host_of(semantic.base_url)
     )
-    if config.provider.name == "claude-code":
-        vision_help += " It has no effect with your Claude subscription."
+    vision_help = t(
+        "settings.reading.vision_help_claude"
+        if config.provider.name == "claude-code"
+        else "settings.reading.vision_help"
+    )
     return _section(
         view,
         "reading",
         _form(
             view,
             "reading",
-            _check(
-                "vision", "Send images to the model (vision)", config.vision.enabled, vision_help
-            ),
+            _check("vision", t("settings.reading.vision"), config.vision.enabled, vision_help),
             _check(
                 "ocr",
-                "Read text in images and scanned PDFs (OCR)",
+                t("settings.reading.ocr"),
                 config.ocr.enabled,
-                "On this Mac, with macOS's own text recognition; nothing is sent for it.",
+                t("settings.reading.ocr_help"),
             ),
             _check(
                 "semantic",
-                "Search by meaning",
+                t("settings.reading.semantic"),
                 semantic.enabled,
-                f"Names, tags, descriptions and categories (never file content) go to {where} "
-                "to be embedded. `flib search --reindex` embeds what is already filed.",
+                t("settings.reading.semantic_help", where=where),
             ),
             _save(),
         ),
     )
 
 
+def rules_text(config: Config, entry: InputConfig) -> Msg | str:
+    """An input folder's effective rules in words, in the page's language: what
+    ``Config.input_summary`` says for ``flib check-config`` (the same words in English),
+    with the patterns as text."""
+
+    def globs(values: list[str]) -> str:
+        return shown(", ".join(values))
+
+    parts: list[Msg | str] = []
+    if entry.only is not None:
+        parts.append(t("settings.rules.only", patterns=globs(entry.only)))
+    ignore = [*config.ignore, *entry.ignore]
+    if ignore:
+        if entry.ignore:
+            own = len(entry.ignore)
+            parts.append(t("settings.rules.ignore_own", patterns=globs(ignore), own=own))
+        else:
+            parts.append(t("settings.rules.ignore", patterns=globs(ignore)))
+    if entry.min_age_days:
+        parts.append(t("settings.rules.min_age", days=entry.min_age_days))
+    parts.append(t(f"settings.rules.folders.{config.folders_for(entry)}"))
+    parts.append(t(f"settings.rules.duplicates.{config.duplicates_for(entry)}"))
+    if entry.category is not None:
+        category = config.category(entry.category)
+        layout_value = entry.layout or (category.layout if category else None)
+        if layout_value:
+            msg_id = (
+                "settings.rules.fixed_layout_renamed"
+                if entry.rename
+                else "settings.rules.fixed_layout_kept"
+            )
+            parts.append(t(msg_id, category=shown(entry.category), layout=shown(layout_value)))
+        else:
+            msg_id = "settings.rules.fixed_renamed" if entry.rename else "settings.rules.fixed_kept"
+            parts.append(t(msg_id, category=shown(entry.category)))
+    else:
+        parts.append(t("settings.rules.ai"))
+    return listed(parts)
+
+
 def _rules(config: Config, entry: InputConfig) -> Markup:
     """An input folder's rules in words; long ones (hundreds of patterns) fold away."""
-    text = shown(config.input_summary(entry))
-    if len(text) <= LONG_RULES:
+    text = rules_text(config, entry)
+    if len(str(text)) <= LONG_RULES:
         return el("div", text, class_="where")
     return el(
         "details",
-        el("summary", "Its rules"),
+        el("summary", t("settings.rules.summary")),
         el("div", text, class_="where"),
         class_="rules",
     )
@@ -972,10 +1030,10 @@ def _inputs_section(view: _View, config: Config) -> Markup:
         if len(config.inputs) > 1:
             remove = el(
                 "a",
-                "Stop organizing it…",
+                t("settings.inputs.stop"),
                 href=f"/settings/input-remove?index={i}",
                 class_="small-link",
-                aria_label=f"Stop organizing {name}…",
+                aria_label=t("settings.inputs.stop_named", name=name),
             )
         rows.append(
             el(
@@ -989,10 +1047,16 @@ def _inputs_section(view: _View, config: Config) -> Markup:
     adds = []
     for candidate in candidates():
         why = folder_problem(candidate.path, config)
-        if why == "it is an input folder already":
+        if why is not None and why.msg_id == ALREADY:
             continue
         if why is not None:
-            adds.append(el("li", f"{candidate.label}: cannot be added, {why}.", class_="note"))
+            adds.append(
+                el(
+                    "li",
+                    t("settings.inputs.cannot_add", folder=candidate.label, why=why),
+                    class_="note",
+                )
+            )
             continue
         adds.append(
             el(
@@ -1001,7 +1065,12 @@ def _inputs_section(view: _View, config: Config) -> Markup:
                     view,
                     "input-add",
                     el("input", type="hidden", name="folder", value=candidate.key),
-                    el("button", f"Organize {candidate.label} too", type="submit", class_="small"),
+                    el(
+                        "button",
+                        t("settings.inputs.add", folder=candidate.label),
+                        type="submit",
+                        class_="small",
+                    ),
                     " ",
                     el("span", prose(candidate.note), class_="note"),
                 ),
@@ -1022,34 +1091,31 @@ def _inputs_section(view: _View, config: Config) -> Markup:
             class_="check",
         )
         for value, text in (
-            ("move", f"Set them aside in {config.duplicates_folder}"),
-            ("leave", "Leave them where they are"),
+            ("move", t("settings.inputs.dup_move", folder=shown(config.duplicates_folder))),
+            ("leave", t("settings.inputs.dup_leave")),
         )
     ]
     return _section(
         view,
         "inputs",
-        _help("flib reads the top level of each input folder only."),
-        el("ul", *rows, class_="hits", aria_label="Input folders"),
+        _help(t("settings.inputs.help")),
+        el("ul", *rows, class_="hits", aria_label=LABELS["inputs"]),
         el("ul", *adds, class_="plain") if adds else None,
         el(
             "dl",
-            el("dt", "Library"),
+            el("dt", t("settings.inputs.library")),
             el("dd", el("bdi", shown(display_path(config.output_root)), dir="ltr")),
-            el("dt", "Review folder"),
+            el("dt", LABELS["review_folder"]),
             el("dd", el("bdi", shown(config.review_folder), dir="ltr")),
             class_="facts",
         ),
-        _help(
-            "Another folder, the rules of a folder or the library's place are changed in the "
-            "file; files already filed stay where they are."
-        ),
+        _help(t("settings.inputs.help_file")),
         _form(
             view,
             "duplicates",
             el(
                 "fieldset",
-                el("legend", "Files with the same content as one already filed"),
+                el("legend", t("settings.inputs.dup_legend")),
                 *duplicates,
                 class_="choices",
             ),
@@ -1066,7 +1132,7 @@ def _layout_options(current: str | None, chosen: str | None = None) -> list[Mark
         options.append(
             el(
                 "option",
-                f"As in the file: {shown(current)}",
+                t("settings.layout.as_file", layout=shown(current)),
                 value="keep",
                 selected=picked == "keep",
             )
@@ -1092,18 +1158,15 @@ def _hint_field(hint: str | None, typed: dict[str, str]) -> Markup:
     if not editable_hint(hint):
         return el(
             "div",
-            el("span", "Hint for the AI", class_="label"),
+            el("span", t("settings.hint.label"), class_="label"),
             el("p", shown(hint or ""), class_="where hint"),
-            _help(
-                "It has line breaks or is long, so it is kept as it is here; change it in the "
-                "configuration file."
-            ),
+            _help(t("settings.hint.kept")),
             class_="field",
         )
     return join(
         el("input", type="hidden", name="hint_field", value="1"),
         _field(
-            "Hint for the AI (what belongs here)",
+            t("settings.hint.field"),
             _text_input("hint", typed.get("hint", hint or ""), MAX_HINT),
         ),
     )
@@ -1114,31 +1177,36 @@ def _categories_section(view: _View, config: Config) -> Markup:
     for category in config.categories:
         name = shown(category.name)
         typed = view.typed("categories", section="category-edit", category=category.name)
-        facts = [
-            category.layout and f"sub-folders {shown(category.layout)}",
-            None if category.rename else "names kept",
-        ]
+        facts: list[Msg | str] = []
+        if category.layout:
+            facts.append(t("settings.category.subfolders", layout=shown(category.layout)))
+        if not category.rename:
+            facts.append(t("settings.category.names_kept"))
         edit = el(
             "details",
-            el("summary", "Change", el("span", f" {name}", class_="sr-only")),
+            el(
+                "summary",
+                t("settings.category.change"),
+                el("span", " ", name, class_="sr-only"),
+            ),
             _form(
                 view,
                 "category-edit",
                 el("input", type="hidden", name="category", value=category.name),
                 _field(
-                    "Name",
+                    t("settings.category.name"),
                     _text_input("name", typed.get("name", category.name), MAX_NAME, required=True),
                 ),
                 _hint_field(category.hint, typed),
                 _field(
-                    "Sub-folders",
+                    t("settings.category.layout"),
                     el(
                         "select",
                         *_layout_options(category.layout, typed.get("layout")),
                         name="layout",
                     ),
                 ),
-                _check("rename", "Rename files with the naming pattern", category.rename),
+                _check("rename", t("settings.category.rename"), category.rename),
                 _save(),
             ),
             _form(
@@ -1147,10 +1215,10 @@ def _categories_section(view: _View, config: Config) -> Markup:
                 el("input", type="hidden", name="category", value=category.name),
                 el(
                     "button",
-                    "Remove this category",
+                    t("settings.category.remove"),
                     type="submit",
                     class_="small quiet",
-                    aria_label=f"Remove the category {name}",
+                    aria_label=t("settings.category.remove_named", name=name),
                 ),
             ),
             class_="other",
@@ -1160,8 +1228,12 @@ def _categories_section(view: _View, config: Config) -> Markup:
             el(
                 "li",
                 el("bdi", name, class_="name", dir="ltr"),
-                el("div", shown(category.hint or "no hint"), class_="where"),
-                el("div", ", ".join(f for f in facts if f), class_="note") if any(facts) else None,
+                el(
+                    "div",
+                    shown(category.hint) if category.hint else t("settings.category.no_hint"),
+                    class_="where",
+                ),
+                el("div", listed(facts, "settings.list.comma"), class_="note") if facts else None,
                 edit,
                 class_="hit",
             )
@@ -1169,23 +1241,24 @@ def _categories_section(view: _View, config: Config) -> Markup:
     typed = view.typed("categories", section="category-add")
     add = el(
         "details",
-        el("summary", "Add a category"),
+        el("summary", t("settings.category.add")),
         _form(
             view,
             "category-add",
             _field(
-                "Name (a folder name)",
+                t("settings.category.new_name"),
                 _text_input("name", typed.get("name", ""), MAX_NAME, required=True),
             ),
             _field(
-                "Hint for the AI (optional)", _text_input("hint", typed.get("hint", ""), MAX_HINT)
+                t("settings.category.new_hint"),
+                _text_input("hint", typed.get("hint", ""), MAX_HINT),
             ),
             _field(
-                "Sub-folders",
+                t("settings.category.layout"),
                 el("select", *_layout_options(None, typed.get("layout")), name="layout"),
             ),
-            _check("rename", "Rename files with the naming pattern", True),
-            _save("Add"),
+            _check("rename", t("settings.category.rename"), True),
+            _save(t("settings.category.add_button")),
         ),
         class_="other",
         open=bool(typed),
@@ -1193,21 +1266,37 @@ def _categories_section(view: _View, config: Config) -> Markup:
     return _section(
         view,
         "categories",
-        _help(
-            "Each one is a folder in the library. A hint tells the AI what belongs there. A "
-            "category that holds files is renamed or removed with `flib reprocess`, which "
-            "moves them; the page says how."
-        ),
-        el("ul", *items, class_="hits", aria_label="Categories"),
+        _help(t("settings.category.help")),
+        el("ul", *items, class_="hits", aria_label=LABELS["categories"]),
         add,
     )
 
 
 def amount_text(value: float | None) -> str:
-    """A cost cap as the page shows it: every digit the file has, never an exponent."""
-    if value is None:
-        return ""
-    return format(Decimal(repr(value)), "f")
+    """A cost cap as the page shows it: every digit the file has, never an exponent, with
+    the language's decimal separator (``formats.amount_input``)."""
+    return formats.amount_input(value)
+
+
+def as_shown(text: str, value: float | None) -> bool:
+    """Whether ``text`` is the cap as a page showed it, in either language's form: such
+    a value is left alone, whatever its digits (``0.00001`` is more than the form takes)."""
+    return any(text == formats.amount_input(value, lang) for lang in i18n.LANGUAGES)
+
+
+def no_prices(config: Config, *, capital: bool = False) -> Msg | None:
+    """``status.cost_cap_lines``'s warning in the page's words: a remote provider with no
+    prices, which no cost cap can stop. ``capital``: it starts a notice."""
+    if not config.provider.cost_unknown:
+        return None
+    files = config.limits.files_cap_per_day
+    limit = (
+        t("settings.costs.unlimited")
+        if files is None
+        else t("settings.costs.files_cap", files=files)
+    )
+    name = config.provider.name
+    return t("settings.costs.no_prices", provider=sentence(name) if capital else name, limit=limit)
 
 
 def _costs_section(view: _View, config: Config) -> Markup:
@@ -1221,29 +1310,23 @@ def _costs_section(view: _View, config: Config) -> Markup:
     )
     day_mode = typed.get("per_day", day_mode)
     day_modes = [
-        ("default", "Three times the cap per run"),
-        ("none", "No daily cap"),
-        ("amount", "This amount:"),
+        ("default", t("settings.costs.default")),
+        ("none", t("settings.costs.none")),
+        ("amount", t("settings.costs.amount")),
     ]
-    warning = [
-        message(line.removeprefix("warning: "), error=True)
-        for line in status_mod.cost_cap_lines(config)
-        if line.startswith("warning")
-    ]
+    found = no_prices(config, capital=True)
+    warning = [message(found, error=True)] if found is not None else []
     day_value = amount_text(limits.max_cost_usd_per_day) if explicit else ""
     return _section(
         view,
         "costs",
-        _help(
-            "What the provider's calls may cost, estimated by flib. Files left over wait for "
-            "the next run. The daily cap applies to the scheduled runs."
-        ),
+        _help(t("settings.costs.help")),
         *warning,
         _form(
             view,
             "costs",
             _field(
-                "Per run, US$ (empty: no cap)",
+                t("settings.costs.per_run"),
                 el(
                     "input",
                     type="text",
@@ -1256,7 +1339,7 @@ def _costs_section(view: _View, config: Config) -> Markup:
             ),
             el(
                 "fieldset",
-                el("legend", "Per day"),
+                el("legend", t("settings.costs.per_day")),
                 *(
                     el(
                         "label",
@@ -1275,7 +1358,7 @@ def _costs_section(view: _View, config: Config) -> Markup:
                 ),
                 el(
                     "label",
-                    el("span", "Daily cap, US$", class_="sr-only"),
+                    el("span", t("settings.costs.day_amount"), class_="sr-only"),
                     el(
                         "input",
                         type="text",
@@ -1303,7 +1386,7 @@ def _reminders_section(view: _View, config: Config) -> Markup:
                 "input", type="checkbox", name="kinds", value=kind, checked=kind in config.due.kinds
             ),
             " ",
-            kind,
+            kind_label(kind),
             class_="chip",
         )
         for kind in KINDS
@@ -1316,13 +1399,13 @@ def _reminders_section(view: _View, config: Config) -> Markup:
             "reminders",
             _check(
                 "notify",
-                "Notify me with the periodic summary",
+                t("settings.reminders.notify"),
                 config.summary.notify,
-                "A macOS notification with counts only, never file names, when files have waited.",
+                t("settings.reminders.notify_help"),
             ),
-            _check("remind", "Count documents coming due in the summary", config.due.remind),
+            _check("remind", t("settings.reminders.remind"), config.due.remind),
             _field(
-                "Days before the due date",
+                t("settings.reminders.days"),
                 el(
                     "input",
                     type="number",
@@ -1336,7 +1419,7 @@ def _reminders_section(view: _View, config: Config) -> Markup:
             ),
             el(
                 "fieldset",
-                el("legend", "Kinds of document on the Due list"),
+                el("legend", t("settings.reminders.kinds")),
                 *kinds,
                 class_="chips",
             ),
@@ -1347,7 +1430,12 @@ def _reminders_section(view: _View, config: Config) -> Markup:
 
 def _language_section(view: _View, config: Config) -> Markup:
     options = [
-        el("option", locale.display_name, value=code, selected=code == config.language)
+        el(
+            "option",
+            i18n.NAMES.get(code, locale.display_name),
+            value=code,
+            selected=code == config.language,
+        )
         for code, locale in LOCALES.items()
     ]
     return _section(
@@ -1356,11 +1444,8 @@ def _language_section(view: _View, config: Config) -> Markup:
         _form(
             view,
             "language",
-            _field("Names and descriptions in", el("select", *options, name="language")),
-            _help(
-                "Folder and category names stay as they are: the page writes them in the "
-                "file first if they came from the language."
-            ),
+            _field(t("settings.language.field"), el("select", *options, name="language")),
+            _help(t("settings.language.help")),
             _save(),
         ),
     )
@@ -1373,28 +1458,23 @@ def _file_section(view: _View) -> Markup:
         "file",
         el(
             "p",
-            "The configuration file: ",
-            el("bdi", el("code", shown(display_path(view.snap.path))), dir="ltr"),
-            prose(". `config.example.yaml` in the repository lists every setting."),
-        ),
-        el(
-            "p",
-            prose(
-                "`flib check-config` checks it, and `flib doctor` checks flib as a whole "
-                "(folder access, the schedule, the key)."
+            t(
+                "settings.file.where",
+                path=el("bdi", el("code", shown(display_path(view.snap.path))), dir="ltr"),
             ),
         ),
+        el("p", prose(t("settings.file.check"))),
         el(
             "div",
             el(
                 "form",
                 csrf_field(view.csrf),
-                el("button", "Open it in a text editor", type="submit", class_="small quiet"),
+                el("button", t("settings.file.open"), type="submit", class_="small quiet"),
                 method="post",
                 action="/settings/open",
                 class_="inline",
             ),
-            el("a", "Restore the previous settings…", href="/settings/restore", class_="small-link")
+            el("a", t("settings.restore_link"), href="/settings/restore", class_="small-link")
             if backup
             else None,
             class_="tools",
@@ -1412,40 +1492,39 @@ def input_remove_page(path: Path | None, csrf: str, query: str) -> Page:
     if len(values) != 1 or not values[0].isascii() or not values[0].isdigit():
         raise BadRequest
     index = int(values[0][:6])
-    parts: list[Markup | None] = [el("h1", "Stop organizing a folder")]
-    back = el("p", el("a", "Back to Settings", href="/settings#s-inputs"))
+    parts: list[Markup | None] = [el("h1", t("settings.remove.title"))]
+    back = el("p", el("a", t("settings.back"), href="/settings#s-inputs"))
     snap = read(path) if path is not None else None
     config = snap.config if snap is not None else None
     if snap is None or config is None or index >= len(config.inputs) or len(config.inputs) < 2:
-        parts += [message("That folder cannot be removed from here now.", error=True), back]
-        return HTTPStatus.OK, layout("Stop organizing", "settings", join(parts), csrf)
+        parts += [message(t("settings.remove.cannot"), error=True), back]
+        return HTTPStatus.OK, layout(t("settings.remove.short"), "settings", join(parts), csrf)
     entry = config.inputs[index]
     view = _View(snap, csrf, None)
     parts += [
         el(
             "p",
-            "flib stops taking files from ",
-            el("bdi", shown(display_path(entry.path)), class_="name", dir="ltr"),
-            ". Nothing in it moves; what flib already filed stays in the library. Its "
-            "entry, its rules and the comment above it leave the configuration file "
-            "(a backup is kept).",
+            t(
+                "settings.remove.lead",
+                folder=el("bdi", shown(display_path(entry.path)), class_="name", dir="ltr"),
+            ),
             class_="lead",
         ),
-        el("div", shown(config.input_summary(entry)), class_="where"),
+        el("div", rules_text(config, entry), class_="where"),
         _form(
             view,
             "input-remove",
             el("input", type="hidden", name="index", value=index),
             el(
                 "div",
-                el("button", "Stop organizing it", type="submit"),
+                el("button", t("settings.remove.button"), type="submit"),
                 " ",
-                el("a", "Cancel", href="/settings#s-inputs"),
+                el("a", t("common.cancel"), href="/settings#s-inputs"),
                 class_="confirm",
             ),
         ),
     ]
-    return HTTPStatus.OK, layout("Stop organizing", "settings", join(parts), csrf)
+    return HTTPStatus.OK, layout(t("settings.remove.short"), "settings", join(parts), csrf)
 
 
 # --- the changes -----------------------------------------------------------------------
@@ -1471,24 +1550,30 @@ def flag(fields: Fields, name: str) -> bool:
     return bool(values)
 
 
-def field(fields: Fields, name: str, limit: int, label: str) -> str:
+def field(fields: Fields, name: str, limit: int, label: Msg) -> str:
     """A text field, trimmed and composed (NFC); refused, naming it, when too long or
     holding invisible characters."""
     value = browser_text(one(fields, name, required=False) or "")
     if len(value) > limit:
-        raise Refused(f"Not saved: {label} is longer than {limit} characters.")
+        raise Refused(t("settings.field.too_long", label=label, limit=limit))
     if any(unicodedata.category(c) in ("Cc", "Cf") for c in value):
-        raise Refused(f"Not saved: {label} has invisible characters, which are not taken.")
+        raise Refused(t("settings.field.invisible", label=label))
     return value
 
 
-def amount(text: str, what: str) -> float:
-    if not _AMOUNT.fullmatch(text) or not 0 < float(text) <= MAX_AMOUNT:
-        raise Refused(
-            f"Not saved: {what} must be an amount in US$ above 0 and at most {MAX_AMOUNT:g}, "
-            "like 1.50."
-        )
-    return float(text)
+def amount(text: str, what: Msg) -> float:
+    """A cost cap typed in the form, read by ``formats.parse_amount``'s rule: ``3,00`` and
+    ``3.00`` are both three; ``1.234`` in pt-BR (``1,234`` in English) is refused."""
+    bad = Refused(t("settings.costs.bad_amount", what=what, max=f"{MAX_AMOUNT:g}"))
+    try:
+        value = formats.parse_amount(text)
+    except formats.AmountError as exc:
+        if exc.kind == "ambiguous":
+            raise Refused(t("settings.costs.ambiguous", what=what, typed=shown(text))) from exc
+        raise bad from exc
+    if not 0 < value <= Decimal(str(MAX_AMOUNT)):
+        raise bad
+    return float(value)
 
 
 def _set(edits: list[Edit], path: tuple[str | int, ...], old: Any, new: Any) -> None:
@@ -1539,8 +1624,9 @@ def _costs_edits(ctx: Context) -> list[Edit]:
     edits: list[Edit] = []
     current = config.limits.max_cost_usd_per_run
     per_run_text = (one(fields, "per_run", required=False) or "").strip()
-    if per_run_text != amount_text(current):  # as shown: left alone, whatever its digits
-        per_run = None if not per_run_text else amount(per_run_text, "the cap per run")
+    if not as_shown(per_run_text, current):  # as shown: left alone, whatever its digits
+        what = t("settings.costs.what_run")
+        per_run = None if not per_run_text else amount(per_run_text, what)
         _set(edits, ("limits", "max_cost_usd_per_run"), current, per_run)
     limits = ctx.raw.get("limits")
     written = isinstance(limits, dict) and "max_cost_usd_per_day" in limits
@@ -1553,9 +1639,9 @@ def _costs_edits(ctx: Context) -> list[Edit]:
             edits.append(Set(("limits", "max_cost_usd_per_day"), None))
     else:
         text = (one(fields, "day_amount", required=False) or "").strip()
-        if written and old is not None and text == amount_text(old):
+        if written and old is not None and as_shown(text, old):
             return edits
-        day = amount(text, "the daily cap")
+        day = amount(text, t("settings.costs.what_day"))
         if not written or old != day:
             edits.append(Set(("limits", "max_cost_usd_per_day"), day))
     return edits
@@ -1565,7 +1651,7 @@ def _reminders_edits(ctx: Context) -> list[Edit]:
     config, fields = ctx.config, ctx.fields
     days = (one(fields, "days", required=False) or "").strip()
     if not days.isdigit() or not days.isascii() or len(days) > 2 or int(days) > 60:
-        raise Refused("Not saved: Days before the due date needs a number from 0 to 60.")
+        raise Refused(t("settings.reminders.bad_days"))
     kinds = fields.get("kinds", [])
     if len(set(kinds)) != len(kinds) or not set(kinds) <= set(KINDS):
         raise Malformed("kinds")
@@ -1636,27 +1722,27 @@ def _category(config: Config, fields: Fields) -> tuple[int, Category]:
     raise Refused(STALE)
 
 
-def _holds_files(config: Config, name: str) -> str | None:
+def _holds_files(config: Config, name: str) -> Msg | None:
     """Why category ``name`` holds files, or ``None`` when renaming it moves nothing. A
     folder that cannot be read is taken to hold some."""
     for entry in config.inputs:
         if entry.category == name:
-            return f"the input folder {lit(display_path(entry.path))} files everything in it"
+            return t("settings.holds.input", path=shown(display_path(entry.path)))
     count = 0
     if config.database.exists():
         try:
             with read_index(config) as store:
                 count = store.files_in_category(name)
         except Unreadable as exc:
-            raise Refused(f"Not saved: {exc}; nothing changed.") from exc
+            raise Refused(t("settings.holds.index_error", problem=_exc_text(exc))) from exc
     if count:
-        return f"the index has {plural(count, 'file')} in it"
+        return t("settings.holds.index", count=count)
     folder = config.output_root / name
     try:
         if folder.is_dir() and any(p.name != ".DS_Store" for p in folder.iterdir()):
-            return "its folder is not empty"
+            return t("settings.holds.not_empty")
     except OSError:
-        return "its folder cannot be read"
+        return t("settings.holds.unreadable")
     return None
 
 
@@ -1672,10 +1758,10 @@ def _categories_edit(raw: dict[str, Any], config: Config, edits: list[Edit]) -> 
 
 
 def _category_add(ctx: Context) -> list[Edit]:
-    name = field(ctx.fields, "name", MAX_NAME, "the name")
+    name = field(ctx.fields, "name", MAX_NAME, t("settings.what.name"))
     if not name:
-        raise Refused("Not saved: a category needs a name.")
-    hint = field(ctx.fields, "hint", MAX_HINT, "the hint")
+        raise Refused(t("settings.category.needs_name"))
+    hint = field(ctx.fields, "hint", MAX_HINT, t("settings.what.hint"))
     entry: dict[str, Any] = {"name": name}
     if hint:
         entry["hint"] = hint
@@ -1690,21 +1776,23 @@ def _category_add(ctx: Context) -> list[Edit]:
 def _category_edit(ctx: Context) -> list[Edit]:
     fields = ctx.fields
     i, category = _category(ctx.config, fields)
-    name = field(fields, "name", MAX_NAME, "the name")
+    name = field(fields, "name", MAX_NAME, t("settings.what.name"))
     name = name or category.name  # names are NFC with no spaces at the ends: as shown
     hint: str | None = category.hint
     if flag(fields, "hint_field") and editable_hint(category.hint):
-        typed = field(fields, "hint", MAX_HINT, "the hint")
+        typed = field(fields, "hint", MAX_HINT, t("settings.what.hint"))
         if typed != browser_text(category.hint or ""):
             hint = typed or None
     rename = flag(fields, "rename")
     layout_value = _layout_choice(fields, category.layout)
     if name != category.name and (why := _holds_files(ctx.config, category.name)):
         raise Refused(
-            f"{lit(category.name)} was not renamed: {why}. Renaming it means moving them: "
-            "change the name in the configuration file, then run "
-            + command(ctx.path, "reprocess", "--rename-category", category.name, name)
-            + " in Terminal."
+            t(
+                "settings.category.not_renamed",
+                name=shown(category.name),
+                why=why,
+                command=command(ctx.path, "reprocess", "--rename-category", category.name, name),
+            )
         )
     edits: list[Edit] = []
     base = ("categories", i)
@@ -1723,14 +1811,15 @@ def _category_edit(ctx: Context) -> list[Edit]:
 def _category_remove(ctx: Context) -> list[Edit]:
     i, category = _category(ctx.config, ctx.fields)
     if len(ctx.config.categories) == 1:
-        raise Refused("Not saved: flib needs at least one category.")
+        raise Refused(t("settings.category.last"))
     if why := _holds_files(ctx.config, category.name):
         raise Refused(
-            f"{lit(category.name)} was not removed: {why}. Remove it in the configuration "
-            "file, then run "
-            + command(ctx.path, "reprocess", "--remove-category", category.name)
-            + " in Terminal: it classifies those files again (`--to-review` sends them to "
-            "review instead)."
+            t(
+                "settings.category.not_removed",
+                name=shown(category.name),
+                why=why,
+                command=command(ctx.path, "reprocess", "--remove-category", category.name),
+            )
         )
     return _categories_edit(ctx.raw, ctx.config, [Delete(("categories", i))])
 
@@ -1742,7 +1831,7 @@ def _input_add(ctx: Context) -> list[Edit]:
         raise Malformed("folder")
     why = folder_problem(found.path, ctx.config)
     if why is not None:
-        raise Refused(f"{found.label} was not added: {why}.")
+        raise Refused(t("settings.inputs.not_added", folder=found.label, why=why))
     if isinstance(ctx.raw.get("inputs"), list):
         return [Append(("inputs",), found.entry)]
     return [Set(("inputs",), [display_path(p) for p in ctx.config.input_paths] + [found.entry])]
@@ -1755,7 +1844,7 @@ def _input_remove(ctx: Context) -> list[Edit]:
     if int(value) >= len(ctx.config.inputs):
         raise Malformed("index")
     if len(ctx.config.inputs) == 1 or not isinstance(ctx.raw.get("inputs"), list):
-        raise Refused("Not saved: flib needs at least one input folder.")
+        raise Refused(t("settings.inputs.last"))
     return [Delete(("inputs", int(value)))]
 
 
@@ -1822,8 +1911,24 @@ def save(running: Config, path: Path, fields: Fields) -> tuple[Outcome, Config |
     notes = list(saved.changes)
     if section.startswith("input-"):
         notes += _refresh_watch(path, saved.config)
-    outcome = Outcome("Saved.", items=tuple(notes), anchor=anchor, restore=True)
+    if saved.config.language != config.language:
+        notes += refresh_menu(path)
+    outcome = Outcome(t("settings.saved"), items=tuple(notes), anchor=anchor, restore=True)
     return outcome, saved.config
+
+
+def refresh_menu(path: Path) -> list[Item]:
+    """After a change of language, the menu bar item's fixed entries follow (#126): they
+    are put in the app when it is built, so it is rebuilt (``flib menu --refresh``).
+    Only when it is installed for this configuration file."""
+    try:
+        target = menubar.read_target() if menubar.installed() else None
+        if target is None or not same_place(target.config, path):
+            return []
+        menubar.refresh()
+    except (menubar.MenuError, OSError):
+        return [Item(t("settings.menu.name"), t("settings.menu.failed"))]
+    return [Item(t("settings.menu.name"), t("settings.menu.done"))]
 
 
 def _refresh_watch(path: Path, config: Config) -> list[Item]:
@@ -1835,24 +1940,13 @@ def _refresh_watch(path: Path, config: Config) -> list[Item]:
         if not state.installed or not state.watch_paths:
             return []
         if other_schedule(path) is not None:
-            return [
-                Item(
-                    "Watch mode",
-                    "not changed: the schedule uses another configuration file.",
-                )
-            ]
+            return [Item(t("settings.watch.name"), t("settings.watch.other"))]
         scheduler.install_for(
             path, config, state.time or config.schedule.time, state.mode or "watch"
         )
     except (scheduler.ScheduleError, OSError):
-        return [
-            Item(
-                "Watch mode",
-                "still watches the old folders: launchd did not take the change. "
-                "`flib schedule --refresh` in Terminal tries again and says why.",
-            )
-        ]
-    return [Item("Watch mode", "now watches these folders.")]
+        return [Item(t("settings.watch.name"), t("settings.watch.failed"))]
+    return [Item(t("settings.watch.name"), t("settings.watch.done"))]
 
 
 # --- the schedule ----------------------------------------------------------------------
@@ -1872,17 +1966,14 @@ def schedule(running: Config, path: Path, fields: Fields) -> tuple[Outcome, Conf
         snap, raw, config = _current(path, pin)
         other = other_schedule(path)
         if other is not None and not takeover:
-            raise Refused(OTHER_SCHEDULE.format(other=lit(display_path(other))))
+            raise Refused(t("settings.other_schedule", other=shown(display_path(other))))
         if mode == "off":
             try:
                 removed = scheduler.remove()
                 notifier.remove()
             except OSError as exc:
-                raise Refused(
-                    "The schedule could not be removed; `flib schedule --remove` in Terminal "
-                    "says why."
-                ) from exc
-            text = "The schedule is off: flib runs only when you run it." if removed else NOTHING
+                raise Refused(t("settings.schedule.remove_failed")) from exc
+            text = t("settings.schedule.off") if removed else NOTHING
             return Outcome(text, anchor="schedule"), None
         when = config.schedule.time
         if mode != "watch":
@@ -1891,7 +1982,7 @@ def schedule(running: Config, path: Path, fields: Fields) -> tuple[Outcome, Conf
                     raise ValueError(at)
                 when = ScheduleConfig(time=at).time
             except ValueError as exc:
-                raise Refused("Not saved: Daily run at needs a 24-hour time like 12:30.") from exc
+                raise Refused(t("settings.schedule.bad_time")) from exc
         edits: list[Edit] = []
         written = raw.get("schedule")
         if config.schedule.mode != mode or not (isinstance(written, dict) and "mode" in written):
@@ -1903,83 +1994,67 @@ def schedule(running: Config, path: Path, fields: Fields) -> tuple[Outcome, Conf
         try:
             scheduler.install_for(path, config, when, mode)
         except (scheduler.ScheduleError, OSError):
-            text = "macOS's launchd did not take the schedule"
-            text += " (the settings were saved)" if saved else ""
-            text += f". {schedule_now()} `flib schedule` in Terminal says why."
+            refused = "settings.schedule.refused_saved" if saved else "settings.schedule.refused"
+            text = t(refused, now=schedule_now())
             outcome = Outcome(
                 text, error=True, items=tuple(items), anchor="schedule", restore=bool(saved)
             )
             return outcome, config if saved else None
-    items += [Item("Note", note) for note in schedule_notes(config)]
+    items += [Item(t("settings.note"), note) for note in schedule_notes(config)]
     outcome = Outcome(
         _scheduled(mode, when, config), items=tuple(items), anchor="schedule", restore=bool(saved)
     )
     return outcome, config if saved else None
 
 
-def schedule_now() -> str:
+def schedule_now() -> Msg:
     """What launchd has now: loaded, or only written (installed but not loaded)."""
     try:
         state = scheduler.status()
     except scheduler.ScheduleError:
-        return "launchd's state cannot be read now."
+        return t("settings.now.unreadable")
     if not state.installed:
-        return "Nothing is scheduled now."
-    what = f"{state.mode}{' at ' + state.time if state.time else ''}"
-    if state.loaded:
-        return f"Loaded and running now: {what}."
-    return f"Written but not loaded, so not running: {what}."
-
-
-def _scheduled(mode: str, when: str, config: Config) -> str:
-    folders = plural(len(config.inputs), "input folder")
-    if mode == "daily":
-        return f"Daily run scheduled at {when}. If the Mac is asleep then, it runs on wake."
-    text = (
-        f"Watch mode on: flib runs when something arrives in the {folders}, once downloads finish."
+        return t("settings.now.none")
+    mode: Msg | str = (
+        t(f"settings.mode.{state.mode}") if state.mode in SCHEDULE_MODES[1:] else str(state.mode)
     )
+    what = t("settings.now.what_at", mode=mode, time=state.time) if state.time else mode
+    if state.loaded:
+        return t("settings.now.loaded", what=what)
+    return t("settings.now.written", what=what)
+
+
+def _scheduled(mode: str, when: str, config: Config) -> Msg:
+    if mode == "daily":
+        return t("settings.scheduled.daily", time=when)
     if mode == "both":
-        text += f" And every day at {when}."
-    return text
+        return t("settings.scheduled.both", count=len(config.inputs), time=when)
+    return t("settings.scheduled.watch", count=len(config.inputs))
 
 
-def schedule_notes(config: Config) -> list[str]:
+def schedule_notes(config: Config) -> list[Msg]:
     """What ``flib schedule`` would warn about, without asking anything."""
     notes = []
     if not scheduler.is_installed_tool():
-        notes.append(
-            "flib runs from a development folder: the schedule depends on it. Install it with "
-            "`./scripts/install.sh` and save the schedule again."
-        )
+        notes.append(t("settings.notes.dev"))
     spec = credentials.key_spec(config.provider)
     if spec is not None:
         source = credentials.key_source(config.provider, spec)
         if source == "none" and spec.provider == "anthropic":
-            notes.append("No API key is set: the scheduled run fails until `flib key set`.")
+            notes.append(t("settings.notes.no_key"))
         elif source == "environment":
-            notes.append(
-                "The API key is only in this Terminal's environment, which the scheduled run "
-                "cannot see: `flib key set` saves it in the Keychain."
-            )
+            notes.append(t("settings.notes.env_key"))
     if config.provider.name == "claude-code":
         from file_librarian.providers import claude_code
 
         if claude_code.find_claude(config.provider, search_path=scheduler.SAFE_PATH) is None:
-            notes.append(
-                "The scheduled run will not find Claude Code: `flib schedule` in Terminal says "
-                "what to add to the file."
-            )
+            notes.append(t("settings.notes.claude"))
     problem = notifier.ensure()
     if problem is not None:
-        notes.append(
-            "Notifications will show as Script Editor; `flib schedule --refresh` tries again."
-        )
-    notes += [
-        line.removeprefix("warning: ")
-        for line in status_mod.cost_cap_lines(config)
-        if line.startswith("warning")
-    ]
-    notes.append("`flib doctor` checks that the scheduled run can read the folders.")
+        notes.append(t("settings.notes.notifier"))
+    if (warning := no_prices(config)) is not None:
+        notes.append(warning)
+    notes.append(t("settings.notes.doctor"))
     return notes
 
 
@@ -1988,70 +2063,57 @@ def schedule_notes(config: Config) -> list[str]:
 
 def restore_page(path: Path | None, csrf: str, query: str) -> Page:
     query_params(query, frozenset())  # it takes nothing
-    parts: list[Markup | None] = [el("h1", "Restore the previous settings")]
-    back = el("p", el("a", "Back to Settings", href="/settings"))
+    parts: list[Markup | None] = [el("h1", t("settings.restore.title"))]
+    back = el("p", el("a", t("settings.back"), href="/settings"))
+    title = t("settings.restore.short")
     if path is None:
         parts += [message(NO_PATH), back]
-        return HTTPStatus.OK, layout("Restore", "settings", join(parts), csrf)
+        return HTTPStatus.OK, layout(title, "settings", join(parts), csrf)
     found = config_edit.backups(path)
     if not found:
-        parts += [
-            message("There is no backup to restore: nothing was changed from here yet."),
-            back,
-        ]
-        return HTTPStatus.OK, layout("Restore", "settings", join(parts), csrf)
+        parts += [message(t("settings.restore.none")), back]
+        return HTTPStatus.OK, layout(title, "settings", join(parts), csrf)
     latest = found[0]
     now, then = read(path), read(latest)
     if then.config is None:
-        parts += [message(f"The latest backup cannot be used: {then.problem}", error=True), back]
-        return HTTPStatus.OK, layout("Restore", "settings", join(parts), csrf)
+        problem = _value(then.problem)
+        parts += [message(t("settings.restore.unusable", problem=problem), error=True), back]
+        return HTTPStatus.OK, layout(title, "settings", join(parts), csrf)
     changes = diff(now.raw or {}, then.raw or {}, now.config, then.config)
     parts += [
-        el(
-            "p",
-            "This puts back the configuration file as it was before the last change made "
-            "here (a backup from ",
-            _stamp(latest, path),
-            "). The current file is backed up first, so this can be undone the same way. The "
-            "schedule in launchd is not changed: save it again on the Settings page if needed.",
-            class_="lead",
-        ),
-        message(
-            "The whole file is put back: comments and changes made by hand since that "
-            "backup are lost (the current file stays in a backup).",
-            error=True,
-        ),
+        el("p", t("settings.restore.lead", stamp=_stamp(latest, path)), class_="lead"),
+        message(t("settings.restore.warning"), error=True),
         el(
             "ul",
             *(el("li", el("strong", _text_of(i.name)), ": ", prose(i.text)) for i in changes),
             class_="moves",
-            aria_label="What changes",
+            aria_label=t("settings.restore.what"),
         )
         if changes
-        else message("The backup has the same settings; only comments or layout differ."),
+        else message(t("settings.restore.same")),
         el(
             "form",
             csrf_field(csrf),
             el("input", type="hidden", name="pin", value=now.pin),
             el("input", type="hidden", name="backup", value=config_edit.pin(then.data)),
-            el("button", "Restore these settings", type="submit"),
+            el("button", t("settings.restore.button"), type="submit"),
             " ",
-            el("a", "Cancel", href="/settings"),
+            el("a", t("common.cancel"), href="/settings"),
             method="post",
             action="/settings/restore",
             class_="confirm",
         ),
     ]
-    return HTTPStatus.OK, layout("Restore", "settings", join(parts), csrf)
+    return HTTPStatus.OK, layout(title, "settings", join(parts), csrf)
 
 
-def _stamp(backup: Path, path: Path) -> str:
-    """When a backup was made, in local time."""
+def _stamp(backup: Path, path: Path) -> Msg | str:
+    """When a backup was made, in local time (``formats.moment``)."""
     found = config_edit.stamp_of(path, backup)
     if found is None:  # pragma: no cover - backups() lists only stamped names
-        return "earlier"
+        return t("settings.restore.earlier")
     moment = datetime.strptime(found[0], "%Y%m%d-%H%M%S").replace(tzinfo=UTC)
-    return moment.astimezone().strftime("%Y-%m-%d %H:%M")
+    return formats.moment(moment.astimezone())
 
 
 def restore(running: Config, path: Path, fields: Fields) -> tuple[Outcome, Config | None]:
@@ -2066,14 +2128,17 @@ def restore(running: Config, path: Path, fields: Fields) -> tuple[Outcome, Confi
         found = config_edit.backups(path)
         then = read(found[0]) if found else None
         if then is None or config_edit.pin(then.data) != wanted:
-            raise Refused("The backup changed since the page was shown; nothing was restored.")
+            raise Refused(t("settings.restore.changed"))
         if then.config is None:
-            raise Refused(f"The backup cannot be used: {then.problem}")
+            raise Refused(t("settings.restore.backup_unusable", problem=_value(then.problem)))
         if then.config.database != running.database:
             raise Refused(OTHER_DATABASE)
         _write(path, snap.data, then.text)
     items = diff(snap.raw or {}, then.raw or {}, snap.config, then.config)
-    return Outcome("The previous settings are back.", items=tuple(items), restore=True), then.config
+    if snap.config is not None and then.config.language != snap.config.language:
+        items += refresh_menu(path)
+    outcome = Outcome(t("settings.restore.done"), items=tuple(items), restore=True)
+    return outcome, then.config
 
 
 # --- open in an editor -----------------------------------------------------------------
@@ -2083,7 +2148,7 @@ def open_in_editor(path: Path | None, program: str, runner: Callable[[list[str]]
     """``open -t`` on the configuration file (the server's own path, never one from the
     page): an outcome for the page either way."""
 
-    def refused(text: str) -> Outcome:
+    def refused(text: Msg) -> Outcome:
         return Outcome(text, error=True, anchor="file")
 
     if path is None:
@@ -2091,17 +2156,13 @@ def open_in_editor(path: Path | None, program: str, runner: Callable[[list[str]]
     try:
         info = path.stat()
     except OSError:
-        return refused("There is no configuration file there.")
+        return refused(t("settings.file.missing"))
     if not stat.S_ISREG(info.st_mode):
-        return refused("The configuration file is not a plain file.")
+        return refused(t("settings.file.not_plain"))
     try:
         code = runner([program, "-t", "--", str(path)])
     except (OSError, subprocess.SubprocessError):
         code = -1
     if code != 0:
-        return refused("macOS could not open it.")
-    return Outcome(
-        "Opened in your text editor. Reload this page after you save it there; "
-        "`flib check-config` checks it.",
-        anchor="file",
-    )
+        return refused(t("settings.file.open_failed"))
+    return Outcome(t("settings.file.opened"), anchor="file")

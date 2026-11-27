@@ -1,65 +1,66 @@
 <!doctype html>
-<html lang="en">
+<html lang="{{lang}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="flib-csrf" content="{{csrf}}">
-<title>Status · file-librarian</title>
+<meta name="flib-messages" content="{{messages}}">
+<title>{{t:status.title}} · file-librarian</title>
 <link rel="icon" href="/static/icon.png">
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/status.js" defer></script>
 </head>
 <body>
-<a class="skip" href="#main">Skip to content</a>
+<a class="skip" href="#main">{{t:frame.skip}}</a>
 <header class="top">
   <a class="brand" href="/status"><img src="/static/icon.png" alt="" width="28" height="28"><span>file-librarian</span></a>
-  <nav aria-label="Pages"><a href="/status" aria-current="page">Status</a><a href="/review">Review</a><a href="/search">Search</a><a href="/activity">Activity</a><a href="/due">Due</a><a href="/settings">Settings</a></nav>
-  <form class="end" method="post" action="/session/end"><input type="hidden" name="csrf" value="{{csrf}}"><button type="submit" class="quiet">End session</button></form>
+  <nav class="pages" aria-label="{{t:nav.label}}"><a href="/status" aria-current="page">{{t:nav.status}}</a><a href="/review">{{t:nav.review}}</a><a href="/search">{{t:nav.search}}</a><a href="/activity">{{t:nav.activity}}</a><a href="/due">{{t:nav.due}}</a><a href="/settings">{{t:nav.settings}}</a></nav>
+  <form class="end" method="post" action="/session/end"><input type="hidden" name="csrf" value="{{csrf}}"><button type="submit" class="quiet">{{t:frame.end_session}}</button></form>
 </header>
 <main id="main" tabindex="-1">
-  <h1>Status</h1>
-  <p class="lead" id="summary" aria-live="polite">Loading…</p>
-  <noscript><p class="lead">This page shows its counts with JavaScript. <code>flib status</code> in Terminal shows the same.</p></noscript>
+  <h1>{{t:status.title}}</h1>
+  <p class="lead" id="summary" aria-live="polite">{{t:status.loading}}</p>
+  <noscript><p class="lead">{{t:status.no_script}}</p></noscript>
   <section class="cards" id="cards" hidden>
     <article class="card">
-      <h2><a href="/review">Review</a></h2>
+      <h2><a href="/review">{{t:status.review}}</a></h2>
       <p class="number" id="review-total">0</p>
       <p class="note" id="review-note"></p>
       <ul class="groups" id="review-groups"></ul>
-      <p class="note" id="review-go" hidden><a href="/review">Go through them</a></p>
+      <p class="note" id="review-go" hidden><a href="/review">{{t:status.go_review}}</a></p>
     </article>
     <article class="card">
-      <h2>Failed</h2>
+      <h2>{{t:status.failed}}</h2>
       <p class="number" id="failed-total">0</p>
       <ul class="groups" id="failed-groups"></ul>
     </article>
     <article class="card">
-      <h2>Due</h2>
+      <h2>{{t:status.due}}</h2>
       <p class="number" id="due-total">0</p>
       <p class="note" id="due-note"></p>
     </article>
     <article class="card">
-      <h2>Left in place</h2>
+      <h2>{{t:status.left}}</h2>
       <p class="number" id="sensitive">0</p>
-      <p class="note" id="sensitive-note">Sensitive files, never moved or sent anywhere.</p>
+      <p class="note" id="sensitive-note">{{t:status.sensitive_note}}</p>
     </article>
     <article class="card">
-      <h2>Duplicates set aside</h2>
+      <h2>{{t:status.duplicates}}</h2>
       <p class="number" id="duplicates">0</p>
-      <p class="note">Nothing is deleted.</p>
+      <p class="note">{{t:status.nothing_deleted}}</p>
     </article>
     <article class="card wide">
-      <h2>Runs</h2>
+      <h2>{{t:status.runs}}</h2>
       <dl class="facts">
-        <dt>Last run</dt><dd id="last-run">none yet</dd>
-        <dt>Next run</dt><dd id="next-run">none scheduled</dd>
-        <dt>Today</dt><dd id="today"></dd>
-        <dt>This month</dt><dd id="month"></dd>
+        <dt>{{t:status.last_run}}</dt><dd id="last-run">{{t:status.none_yet}}</dd>
+        <dt>{{t:status.next_run}}</dt><dd id="next-run">{{t:status.none_scheduled}}</dd>
+        <dt>{{t:status.today}}</dt><dd id="today"></dd>
+        <dt>{{t:status.month}}</dt><dd id="month"></dd>
       </dl>
     </article>
   </section>
-  <p class="actions"><button type="button" id="refresh">Refresh</button></p>
+  <p class="actions"><button type="button" id="refresh">{{t:status.refresh}}</button></p>
 </main>
-<footer>Counts only: this page shows no file names. It is served on this Mac, at 127.0.0.1, while <code>flib ui</code> runs.</footer>
+<footer>{{t:status.footer}}</footer>
 </body>
 </html>
