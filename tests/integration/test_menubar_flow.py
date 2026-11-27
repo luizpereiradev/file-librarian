@@ -11,6 +11,7 @@ import logging
 import os
 import shutil
 import stat
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -751,6 +752,28 @@ def test_an_opener_that_cannot_be_opened_is_removed(
     assert len(calls(fake_browser)) == 1  # the first, failed attempt only
 
 
+def test_an_opener_is_never_written_through_a_link(
+    cfg: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A link planted where the opener goes (``O_EXCL | O_NOFOLLOW``) is refused: nothing
+    is written through it, and the folder is removed."""
+    victim = tmp_path / "victim"
+    victim.write_text("keep", encoding="utf-8")
+    real = tempfile.mkdtemp
+
+    def planted(*args: Any, **kwargs: Any) -> str:
+        folder = str(real(*args, **kwargs))
+        (Path(folder) / ui_server.HANDOFF_NAME).symlink_to(victim)
+        return folder
+
+    monkeypatch.setattr(tempfile, "mkdtemp", planted)
+    where = ui_server.Running(os.getpid(), 54321, ui_server.session_name())
+    with pytest.raises(FileExistsError):
+        ui_server.write_opener(where, "review")
+    assert victim.read_text(encoding="utf-8") == "keep"
+    assert list(ui_server.handoff_root().iterdir()) == []
+
+
 def test_an_opener_that_cannot_be_written_leaves_no_folder(
     cfg: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -780,12 +803,109 @@ def test_an_opener_that_cannot_be_written_leaves_no_folder(
 )
 def test_a_host_that_is_no_sessions_name_is_not_believed(cfg: Config, host: object) -> None:
     with ui_lock(cfg.database):
-        record = {"pid": os.getpid(), "port": 5, "host": host}
-        ui_server.running_path(cfg.database).write_text(json.dumps(record))
+        ui_server.write_running(cfg.database, 5)
+        private = ui_server.name_path(cfg.database)
+        private.write_text(json.dumps({"pid": os.getpid(), "port": 5, "host": host}))
         assert ui_server.running(cfg.database) is None
-        record["host"] = "127.0.0.1"
-        ui_server.running_path(cfg.database).write_text(json.dumps(record))
+        ui_server.write_running(cfg.database, 5, "127.0.0.1")
         assert ui_server.running(cfg.database) == ui_server.Running(os.getpid(), 5, "127.0.0.1")
+
+
+def test_the_name_is_kept_out_of_the_database_folder(cfg: Config) -> None:
+    """The database may sit on a volume that ignores ownership (FAT, exFAT,
+    ``noowners``), where a 0600 file is every account's: only pid and port go there. The
+    name goes in a private record in the account's own 0700 temporary folder, keyed by
+    the database's path."""
+    name = ui_server.session_name()
+    cfg.database.parent.mkdir(parents=True, exist_ok=True)
+    ui_server.write_running(cfg.database, 4242, name)
+    beside = ui_server.running_path(cfg.database).read_text(encoding="utf-8")
+    assert json.loads(beside) == {"pid": os.getpid(), "port": 4242}
+    assert name not in beside
+    assert all(
+        name not in p.read_text("utf-8") for p in cfg.database.parent.iterdir() if p.is_file()
+    )
+    private = ui_server.name_path(cfg.database)
+    assert private.parent == ui_server.handoff_root()
+    assert private.name.startswith(ui_server.NAME_PREFIX) and private.suffix == ".json"
+    assert str(cfg.database) not in private.name  # a hash, not the path
+    assert stat.S_IMODE(private.stat().st_mode) == 0o600
+    assert json.loads(private.read_text("utf-8")) == {
+        "pid": os.getpid(),
+        "port": 4242,
+        "host": name,
+    }
+    other = cfg.database.with_name("other.db")
+    assert ui_server.name_path(other) != private
+    ui_server.remove_running(cfg.database)
+    assert not private.exists() and not ui_server.running_path(cfg.database).exists()
+
+
+def test_a_host_next_to_the_database_is_never_taken(cfg: Config, fake_browser: Path) -> None:
+    """Another account that takes the lock on such a volume could write the record next
+    to the database: a host there never steers the browser. Without this account's own
+    private record nothing is opened, and flib ui says why."""
+    planted = ui_server.session_name()
+    with ui_lock(cfg.database):
+        record = {"pid": os.getpid(), "port": 54321, "host": planted}
+        ui_server.running_path(cfg.database).write_text(json.dumps(record))
+        assert ui_server.running_port(cfg.database) == 54321  # the port is believed
+        assert ui_server.running(cfg.database) is None  # but no address
+        lines: list[str] = []
+        assert ui_server.run(cfg, page="review", echo=lines.append) == "running"
+        assert lines[0] == ui_server.UNCONFIRMED
+        assert "Use the browser tab it opened" in lines[-1]
+    assert calls(fake_browser) == []
+
+
+@pytest.mark.parametrize("problem", ["other pid", "other port", "readable", "link", "large"])
+def test_a_private_record_that_does_not_match_is_not_believed(
+    cfg: Config, tmp_path: Path, problem: str
+) -> None:
+    name = ui_server.session_name()
+    with ui_lock(cfg.database):
+        ui_server.write_running(cfg.database, 54321, name)
+        assert ui_server.running(cfg.database) == ui_server.Running(os.getpid(), 54321, name)
+        private = ui_server.name_path(cfg.database)
+        data = {"pid": os.getpid(), "port": 54321, "host": name}
+        if problem == "other pid":
+            private.write_text(json.dumps(data | {"pid": os.getppid()}))
+        elif problem == "other port":
+            private.write_text(json.dumps(data | {"port": 54322}))
+        elif problem == "readable":
+            private.chmod(0o644)
+        elif problem == "link":
+            target = tmp_path / "elsewhere.json"
+            target.write_text(json.dumps(data))
+            target.chmod(0o600)
+            private.unlink()
+            private.symlink_to(target)
+        else:  # valid JSON, one byte past the limit (a longer one would not parse cut)
+            text = json.dumps(data | {"pad": ""})
+            text = json.dumps(data | {"pad": "x" * (ui_server.MAX_RECORD + 1 - len(text))})
+            assert len(text) == ui_server.MAX_RECORD + 1
+            private.write_text(text)
+        assert ui_server.running(cfg.database) is None
+
+
+def test_private_records_of_a_flib_ui_that_is_gone_are_swept(
+    loopback_network: None, cfg: Config, tmp_path: Path
+) -> None:
+    root = ui_server.handoff_root()
+    gone = 2**22 + 12345  # a process id no process has
+    stale = root / f"{ui_server.NAME_PREFIX}{'0' * 32}.json"
+    stale.write_text(json.dumps({"pid": gone, "port": 5, "host": "127.0.0.1"}))
+    broken = root / f"{ui_server.NAME_PREFIX}{'1' * 32}.json"
+    broken.write_text("not json")
+    alive = root / f"{ui_server.NAME_PREFIX}{'2' * 32}.json"
+    alive.write_text(json.dumps({"pid": os.getppid(), "port": 5, "host": "127.0.0.1"}))
+    for path in (stale, broken, alive):
+        path.chmod(0o600)
+    other = root / "something-else.json"
+    other.write_text("{}")
+    ui_server.sweep_names(root)
+    assert not stale.exists() and not broken.exists()
+    assert alive.exists() and other.exists()
 
 
 def test_a_port_out_of_range_is_not_believed(cfg: Config) -> None:

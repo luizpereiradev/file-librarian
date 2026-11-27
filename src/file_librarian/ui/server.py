@@ -70,6 +70,7 @@ from __future__ import annotations
 
 import dataclasses
 import errno
+import hashlib
 import hmac
 import html
 import io
@@ -230,6 +231,15 @@ UNNAMED_WARNING = (
     "at 127.0.0.1. There, browsers send its session cookie to every server on 127.0.0.1, "
     "whatever the port: another program or account listening there could use the "
     "session while it lasts. Current macOS resolves them; see the threat model."
+)
+PRIVATE_ADDRESS = (
+    "This address is private until the session ends: the token in it works once, but "
+    "the name before the port lasts the session, and anyone who has it and runs a "
+    "server on this Mac could take the session. Clear the terminal once you opened it."
+)
+UNCONFIRMED = (
+    "flib ui is already running, but nothing was opened: its address could not be "
+    "confirmed as this account's own (its private record is missing or not yours)."
 )
 HANDOFF_NAME = "open-file-librarian.html"
 HANDOFF = """<!doctype html>
@@ -1710,8 +1720,13 @@ one exception, and is not in this table."""
 
 
 RUNNING_NAME = "flib-ui.json"
-"""Next to the database while a ``flib ui`` serves: its pid, port and host name (0600:
-the name is what keeps other servers on loopback from the session's cookie)."""
+"""Next to the database while a ``flib ui`` serves: its pid and port, never its name.
+The database may be on a volume that ignores ownership (FAT, exFAT, ``noowners``),
+where a 0600 file is every account's to read."""
+NAME_PREFIX = "ui-name-"
+"""The private record of the session's name: ``ui-name-<hash of the database>.json`` in
+the account's own 0700 temporary folder (``handoff_root``), never next to the database."""
+MAX_RECORD = 4096
 
 
 @dataclass(frozen=True, slots=True)
@@ -1731,51 +1746,114 @@ def running_path(database: Path) -> Path:
     return database.parent / RUNNING_NAME
 
 
-def write_running(database: Path, port: int, host: str = HOST) -> None:
-    """Say where this ``flib ui`` serves, for a second ``flib ui --open PAGE`` (the menu
-    bar's entries) to open that page in it. Best effort; readable by the user only,
-    never written through a link."""
-    path = running_path(database)
-    tmp = path.with_name(f".{RUNNING_NAME}.{os.getpid()}")
+def name_path(database: Path) -> Path:
+    """The private record of the name of the ``flib ui`` serving ``database``."""
+    key = hashlib.sha256(str(database.resolve()).encode("utf-8", "surrogateescape"))
+    return handoff_root() / f"{NAME_PREFIX}{key.hexdigest()[:32]}.json"
+
+
+def _write_private(path: Path, data: dict[str, Any]) -> None:
+    """``data`` as JSON in ``path``, atomically: 0600, never written through a link."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}")
     with suppress(OSError):
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump({"pid": os.getpid(), "port": port, "host": host}, fh)
+            json.dump(data, fh)
         tmp.replace(path)
 
 
+def _read_record(path: Path, *, private: bool) -> dict[str, Any] | None:
+    """A record's JSON object, read without following a link, at most ``MAX_RECORD``
+    bytes; ``private``: only a regular file of this account that no one else may read
+    or write."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        if private and (info.st_uid != os.getuid() or info.st_mode & 0o077):
+            return None
+        with os.fdopen(os.dup(fd), "rb") as fh:
+            raw = fh.read(MAX_RECORD + 1)
+        if len(raw) > MAX_RECORD:
+            return None
+        data = json.loads(raw)
+    except (OSError, ValueError):
+        return None
+    finally:
+        os.close(fd)
+    return data if isinstance(data, dict) else None
+
+
+def write_running(database: Path, port: int, host: str = HOST) -> None:
+    """Say where this ``flib ui`` serves, for a second ``flib ui --open PAGE`` (the menu
+    bar's entries) to open that page in it. Next to the database: pid and port only.
+    The name goes in the private record (``name_path``). Best effort; 0600, never
+    written through a link."""
+    _write_private(running_path(database), {"pid": os.getpid(), "port": port})
+    _write_private(name_path(database), {"pid": os.getpid(), "port": port, "host": host})
+
+
 def remove_running(database: Path) -> None:
-    path = running_path(database)
-    with suppress(OSError, ValueError, TypeError, AttributeError):
-        if json.loads(path.read_text(encoding="utf-8")).get("pid") == os.getpid():
-            path.unlink()
+    for path, private in ((running_path(database), False), (name_path(database), True)):
+        data = _read_record(path, private=private)
+        if data is not None and data.get("pid") == os.getpid():
+            with suppress(OSError):
+                path.unlink()
+
+
+def sweep_names(root: Path) -> None:
+    """Remove private name records whose ``flib ui`` is gone (its pid no longer runs)."""
+    with suppress(OSError):
+        for entry in root.iterdir():
+            if entry.name.startswith(NAME_PREFIX) and entry.name.endswith(".json"):
+                data = _read_record(entry, private=True)
+                pid = None if data is None else data.get("pid")
+                if not isinstance(pid, int) or isinstance(pid, bool) or not _alive(pid):
+                    with suppress(OSError):
+                        entry.unlink()
+
+
+def _holder_record(database: Path) -> tuple[int, int] | None:
+    """The pid and port next to the database, when the pid holds the interface's lock."""
+    data = _read_record(running_path(database), private=False)
+    if data is None:
+        return None
+    pid, port = data.get("pid"), data.get("port")
+    if not isinstance(pid, int) or not isinstance(port, int) or isinstance(port, bool):
+        return None
+    if pid != ui_holder(database) or not 0 < port < 65536:
+        return None
+    return pid, port
 
 
 def running(database: Path) -> Running | None:
-    """Where the ``flib ui`` that holds the lock serves, when it said so; ``None``
-    otherwise: a file left by a server that is gone, or that names another process, a
-    port out of range or a host that is neither a session's name nor ``127.0.0.1`` is
-    not believed. A record without a host is an older ``flib ui``'s: ``127.0.0.1``."""
-    try:
-        data = json.loads(running_path(database).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    """Where the ``flib ui`` that holds the lock serves; ``None`` when that cannot be
+    confirmed. The pid and port next to the database must name the live lock holder;
+    the host comes only from the private record, of this account, for that same pid
+    and port, and is a session's name or ``127.0.0.1``. A host next to the database is
+    never taken: on a volume that ignores ownership, another account could write it
+    and steer the browser to a server of its own."""
+    found = _holder_record(database)
+    if found is None:
         return None
-    if not isinstance(data, dict):
+    pid, port = found
+    data = _read_record(name_path(database), private=True)
+    if data is None or data.get("pid") != pid or data.get("port") != port:
         return None
-    pid, port, host = data.get("pid"), data.get("port"), data.get("host", HOST)
-    if not isinstance(pid, int) or not isinstance(port, int) or isinstance(port, bool):
-        return None
+    host = data.get("host")
     if not isinstance(host, str) or not (host == HOST or NAME.fullmatch(host)):
-        return None
-    if pid != ui_holder(database) or not 0 < port < 65536:
         return None
     return Running(pid, port, host)
 
 
 def running_port(database: Path) -> int | None:
-    """The port of the ``flib ui`` that holds the lock (``running``), or ``None``."""
-    found = running(database)
-    return None if found is None else found.port
+    """The port next to the database, when its pid holds the interface's lock."""
+    found = _holder_record(database)
+    return None if found is None else found[1]
 
 
 def write_opener(where: Running, page: str) -> Path:
@@ -1855,6 +1933,7 @@ def run(
     try:
         with ui_lock(config.database):
             sweep_handoffs(handoff_root())
+            sweep_names(handoff_root())
             named = names_resolve()
             if not named:
                 warn(UNNAMED_WARNING)
@@ -1884,6 +1963,8 @@ def run(
                     else:
                         echo(f"flib ui: {ui.launch_url}")
                         echo(f"The link works once; keep it to yourself. {ending}")
+                        if ui.named:
+                            echo(PRIVATE_ADDRESS)
                     while ui.wait(0.5) is None:
                         pass
             finally:
@@ -1903,6 +1984,10 @@ def run(
                 'it runs. (Another browser gets the "session ended" page.)'
             )
             return "running"
+        if where is None and browser and running_port(config.database) is not None:
+            # Its port is known, but not that its name is this account's own: nothing
+            # is opened rather than an address someone else may have chosen.
+            echo(UNCONFIRMED)
         echo(
             f"{exc}. Use the browser tab it opened, or end it there (End session) or "
             "with Ctrl-C in its terminal, then run `flib ui` again; it also ends on its "

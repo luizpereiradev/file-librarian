@@ -1762,7 +1762,21 @@ def test_flib_ui_no_browser_prints_the_link(
         r"flib ui: http://flib-[0-9a-f]{32}\.localhost:\d+/launch\?token=", result.stdout
     )
     assert "The link works once" in result.stdout
+    # The token works once, but the name lasts the session: said, right after the link.
+    assert ui_server.PRIVATE_ADDRESS in result.stdout
+    assert "the name before the port lasts the session" in ui_server.PRIVATE_ADDRESS
     assert opened(fake_browser) == []
+
+
+def test_without_a_name_the_link_needs_no_such_line(
+    loopback_network: None, cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ui_server, "names_resolve", lambda: False)
+    lines: list[str] = []
+    sender = interrupt_when_listening(signal.SIGTERM)
+    ui_server.run(cfg, browser=False, echo=lines.append, warn=lambda line: None)
+    sender.join()
+    assert ui_server.PRIVATE_ADDRESS not in lines
 
 
 # --- the handoff file ------------------------------------------------------------------
@@ -1965,9 +1979,13 @@ def test_stale_handoff_folders_are_swept_at_start(
     os.utime(old, (hour_ago, hour_ago))
     other = root / "something-else"
     other.mkdir()
+    name_record = root / f"{ui_server.NAME_PREFIX}{'0' * 32}.json"
+    name_record.write_text(json.dumps({"pid": gone, "port": 5, "host": "127.0.0.1"}))
+    name_record.chmod(0o600)
     sender = interrupt_when_listening(signal.SIGTERM)
     assert ui_server.run(cfg, browser=False, echo=lambda line: None) == "signal"
     sender.join()
+    assert not name_record.exists()  # a private name record of a flib ui that is gone
     assert not stale.exists()  # its owner is gone
     assert not old.exists()  # too old to belong to a link anyone still opens
     assert other.exists()  # only handoff folders
