@@ -13,6 +13,7 @@ referrer policies. Nothing goes beyond 127.0.0.1.
 
 from __future__ import annotations
 
+import base64
 import http.client
 import json
 import os
@@ -21,6 +22,7 @@ import shutil
 import socket
 import threading
 from dataclasses import dataclass
+from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -510,4 +512,152 @@ def test_a_second_open_reaches_the_running_session(
     finally:
         ui.close()
         shutil.rmtree(profile, ignore_errors=True)
+        shutil.rmtree(profile, ignore_errors=True)
+
+
+SHOTS = os.environ.get("FLIB_TEST_SCREENSHOTS")
+"""A folder to save each page's picture in (pt-BR, light, and a few dark): opt-in, for
+looking at the layout with the longer Portuguese words (#126)."""
+PAGES_PT = (
+    "status",
+    "review",
+    "search",
+    "activity",
+    "due",
+    "settings",
+    "settings/restore",
+    "settings/input-remove?index=1",
+)
+OVERFLOW = """(() => {
+  const width = WIDTH;
+  const out = [];
+  const seen = 'button, a.button, .chip, header nav a, input, select';
+  for (const e of document.querySelectorAll(seen)) {
+    const r = e.getBoundingClientRect();
+    if (r.width === 0) continue;  // folded away in a <details>
+    if (r.right > width + 0.5 || r.left < -0.5) out.push(['outside', e.outerHTML.slice(0, 80)]);
+    if (e.scrollWidth > e.clientWidth + 1 && e.tagName !== 'INPUT' && e.tagName !== 'SELECT')
+      out.push(['clipped', e.outerHTML.slice(0, 80)]);
+  }
+  return out;
+})()"""
+
+
+WIDEST = """[...document.querySelectorAll('body *')]
+  .filter(e => e.getBoundingClientRect().right > WIDTH + 0.5)
+  .slice(-4).map(e => e.outerHTML.slice(0, 160))"""
+"""What sticks out on the right, for the failure's message."""
+
+
+def _shot(tab: Any, name: str) -> None:
+    if not SHOTS:
+        return
+    size = tab.call("Page.getLayoutMetrics")["cssContentSize"]
+    clip = {"x": 0, "y": 0, "width": size["width"], "height": size["height"], "scale": 1}
+    data = tab.call(
+        "Page.captureScreenshot", {"format": "png", "captureBeyondViewport": True, "clip": clip}
+    )["data"]
+    folder = Path(SHOTS)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{name}.png").write_bytes(base64.b64decode(data))
+
+
+def test_every_page_in_portuguese_in_a_real_browser(
+    loopback_network: None, downloads: Path, tmp_path: Path, fake_launchd: Path
+) -> None:
+    """The interface in pt-BR (#126): every page at 390 and 1440 px, with nothing
+    scrolling sideways, no button or chip cut off and no menu item out of view; the
+    Status page's script in Portuguese; a review decision and a cost cap typed with a
+    decimal comma, by real clicks."""
+    assert BROWSER is not None
+    desktop = downloads.parent / "Desktop"
+    desktop.mkdir(exist_ok=True)
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        f"language: pt-BR\ninputs: [{json.dumps(str(downloads))}, {json.dumps(str(desktop))}]\n"
+        f"output_root: {json.dumps(str(tmp_path / 'Organizado'))}\n"
+        f"database: {json.dumps(str(tmp_path / 'index.db'))}\n"
+        "provider: {name: fake, model: x}\n",
+        encoding="utf-8",
+    )
+    cfg = load_config(path)
+    soon = (date.today() + timedelta(days=3)).isoformat()
+    late = (date.today() - timedelta(days=2)).isoformat()
+    files = {
+        "conta de luz.pdf": answer(
+            "Financeiro", kind="bill", issuer="Companhia de Energia", amount="1234.56",
+            currency="BRL", due_date=soon, description="Conta de luz",
+        ),
+        "conta de agua.pdf": answer(
+            "Financeiro", kind="bill", issuer="Saneamento", amount="12.34", currency="USD",
+            due_date=late, description="Conta de água",
+        ),
+        "recibo.pdf": answer("Compras", confidence=0.3, description="Recibo"),
+        "foto.png": answer("Imagens", confidence=0.3, description="Foto"),
+        "notas.txt": answer("Outros", confidence=0.95, description="Anotações"),
+    }  # fmt: skip
+    for name in files:
+        put(downloads, name, name.encode())
+    pipeline.run(cfg, FakeProvider(files), simulate=False)
+    ui = Ui(cfg, poll_seconds=0.05, config_path=path)
+    ui.start()
+    profile = tmp_path / "profile"
+    try:
+        handoff = ui.write_handoff()
+        with headless(BROWSER, profile) as (tab, _):
+            tab.call("Page.navigate", {"url": handoff.as_uri()})
+            tab.wait_for(lambda: tab.url() == f"{ui.origin}/status" and tab.ready())
+            tab.wait_for(lambda: "por você" in tab.text())  # the script's words
+            assert "Execuções" in tab.text() and "Última execução" in tab.text()
+            assert tab.evaluate("document.documentElement.lang") == "pt-BR"
+            # A review decision by a click, said in Portuguese.
+            tab.goto(f"{ui.origin}/review")
+            assert "2 arquivos em revisão" in tab.text()
+            tab.click("form[action='/review/file'] button")
+            tab.wait_for(lambda: "/review?n=" in tab.url() and tab.ready())
+            assert "agora está em" in tab.text()
+            # A cost cap typed with a decimal comma, as the page shows numbers.
+            tab.goto(f"{ui.origin}/settings")
+            tab.evaluate("document.querySelector('input[name=per_run]').value = '3,00'")
+            tab.click("#s-costs button[type=submit]")
+            tab.wait_for(lambda: "/settings?n=" in tab.url() and tab.ready())
+            assert "Salvo." in tab.text()
+            assert load_config(path).limits.max_cost_usd_per_run == 3.0
+            value = tab.evaluate("document.querySelector('input[name=per_run]').value")
+            assert value == "3,0"
+            light = [{"name": "prefers-color-scheme", "value": "light"}]
+            tab.call("Emulation.setEmulatedMedia", {"features": light})
+            for width, height, mobile in ((390, 844, True), (1440, 900, False)):
+                metrics = {"width": width, "height": height, "deviceScaleFactor": 1}
+                tab.call("Emulation.setDeviceMetricsOverride", {**metrics, "mobile": mobile})
+                for page in PAGES_PT:
+                    tab.goto(f"{ui.origin}/{page}")
+                    if page == "status":
+                        tab.wait_for(lambda: "por você" in tab.text())
+                    assert tab.evaluate("document.documentElement.lang") == "pt-BR"
+                    wide = tab.evaluate(
+                        "Math.max(window.innerWidth, document.documentElement.scrollWidth)"
+                    )
+                    assert wide <= width, (
+                        page,
+                        width,
+                        wide,
+                        tab.evaluate(WIDEST.replace("WIDTH", str(width))),
+                    )
+                    assert tab.evaluate(OVERFLOW.replace("WIDTH", str(width))) == [], (page, width)
+                    _shot(tab, f"{width}-{page.split('?')[0].replace('/', '-')}")
+            # A few pages in dark mode, for the pictures.
+            tab.call(
+                "Emulation.setEmulatedMedia",
+                {"features": [{"name": "prefers-color-scheme", "value": "dark"}]},
+            )
+            for page in ("review", "due"):
+                tab.goto(f"{ui.origin}/{page}")
+                _shot(tab, f"1440-{page}-dark")
+            tab.click("form.end button")
+            tab.wait_for(lambda: "Esta sessão terminou" in tab.text() and tab.ready())
+            _shot(tab, "1440-ended-dark")
+        assert ui.wait(10) == "ended"
+    finally:
+        ui.close()
         shutil.rmtree(profile, ignore_errors=True)

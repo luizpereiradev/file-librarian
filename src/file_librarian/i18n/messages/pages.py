@@ -1,0 +1,121 @@
+"""The packaged pages (``ui/pages/``: Status's frame, session ended, open elsewhere,
+opening) and the handoff file (``ui.server.HANDOFF``); see ``i18n.messages``."""
+
+from __future__ import annotations
+
+from file_librarian.i18n import Entry
+
+EN: dict[str, Entry] = {
+    # ended.html
+    "ended.title": "Session ended",
+    "ended.heading": "This session has ended",
+    "ended.lead": (
+        "Each link from `flib ui` works once, and the interface closes when it is not in use. "
+        "You can close this tab."
+    ),
+    "ended.again": "For a new session, run `flib ui` in Terminal.",
+    # elsewhere.html
+    "elsewhere.title": "Open in another window",
+    "elsewhere.heading": "flib ui is open in another window",
+    "elsewhere.lead": (
+        "The session that `flib ui` started belongs to the browser or window that opened its "
+        "link first; this one does not have it."
+    ),
+    "elsewhere.move": (
+        "Use that window. To move here, choose End session there (or press Ctrl-C where "
+        "`flib ui` runs), then run `flib ui` again."
+    ),
+    # opening.html
+    "opening.title": "Opening",
+    "opening.heading": "Session started",
+    "opening.continue": "Continue to file-librarian",
+    "open.heading": "Opening file-librarian",
+    # the handoff file
+    "handoff.title": "Opening file-librarian",
+    "handoff.opening": "Opening file-librarian…",
+    "handoff.no_script": (
+        "This page needs JavaScript. Run `flib ui --no-browser` for a link instead."
+    ),
+    "handoff.done": "file-librarian opened in this browser. You can close this tab.",
+    # status.html
+    "status.title": "Status",
+    "status.loading": "Loading…",
+    "status.no_script": (
+        "This page shows its counts with JavaScript. `flib status` in Terminal shows the same."
+    ),
+    "status.review": "Review",
+    "status.go_review": "Go through them",
+    "status.failed": "Failed",
+    "status.due": "Due",
+    "status.left": "Left in place",
+    "status.sensitive_note": "Sensitive files, never moved or sent anywhere.",
+    "status.duplicates": "Duplicates set aside",
+    "status.nothing_deleted": "Nothing is deleted.",
+    "status.runs": "Runs",
+    "status.last_run": "Last run",
+    "status.next_run": "Next run",
+    "status.today": "Today",
+    "status.month": "This month",
+    "status.none_yet": "none yet",
+    "status.none_scheduled": "none scheduled",
+    "status.refresh": "Refresh",
+    "status.footer": (
+        "Counts only: this page shows no file names. It is served on this Mac only "
+        "(loopback), while `flib ui` runs."
+    ),
+}
+
+PT_BR: dict[str, Entry] = {
+    "ended.title": "Sessão encerrada",
+    "ended.heading": "Esta sessão terminou",
+    "ended.lead": (
+        "Cada link do `flib ui` funciona uma vez só, e a interface fecha quando não está em "
+        "uso. Você já pode fechar esta aba."
+    ),
+    "ended.again": "Para uma nova sessão, rode `flib ui` no Terminal.",
+    "elsewhere.title": "Aberto em outra janela",
+    "elsewhere.heading": "O flib ui está aberto em outra janela",
+    "elsewhere.lead": (
+        "A sessão que o `flib ui` iniciou pertence ao navegador ou à janela que abriu o link "
+        "primeiro; esta aqui não tem a sessão."
+    ),
+    "elsewhere.move": (
+        "Use aquela janela. Para trazer a sessão para cá, escolha Encerrar sessão lá (ou "
+        "pressione Ctrl-C onde o `flib ui` está rodando) e rode `flib ui` de novo."
+    ),
+    "opening.title": "Abrindo",
+    "opening.heading": "Sessão iniciada",
+    "opening.continue": "Continuar para o file-librarian",
+    "open.heading": "Abrindo o file-librarian",
+    "handoff.title": "Abrindo o file-librarian",
+    "handoff.opening": "Abrindo o file-librarian…",
+    "handoff.no_script": (
+        "Esta página precisa de JavaScript. Rode `flib ui --no-browser` para receber um link."
+    ),
+    "handoff.done": "O file-librarian abriu neste navegador. Você já pode fechar esta aba.",
+    "status.title": "Status",
+    "status.loading": "Carregando…",
+    "status.no_script": (
+        "Esta página mostra as contagens com JavaScript. `flib status` no Terminal mostra o mesmo."
+    ),
+    "status.review": "Revisão",
+    "status.go_review": "Revisar agora",
+    "status.failed": "Com falha",
+    "status.due": "Vencimentos",
+    "status.left": "Deixados no lugar",
+    "status.sensitive_note": "Arquivos sensíveis, nunca movidos nem enviados a lugar nenhum.",
+    "status.duplicates": "Duplicados separados",
+    "status.nothing_deleted": "Nada é apagado.",
+    "status.runs": "Execuções",
+    "status.last_run": "Última execução",
+    "status.next_run": "Próxima execução",
+    "status.today": "Hoje",
+    "status.month": "Este mês",
+    "status.none_yet": "nenhuma ainda",
+    "status.none_scheduled": "nenhuma agendada",
+    "status.refresh": "Atualizar",
+    "status.footer": (
+        "Só contagens: esta página não mostra nomes de arquivos. Ela é servida só por este Mac "
+        "(loopback), enquanto o `flib ui` estiver rodando."
+    ),
+}

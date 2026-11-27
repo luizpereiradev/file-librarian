@@ -104,10 +104,13 @@ from types import FrameType
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlsplit
 
+from file_librarian import i18n
 from file_librarian import status as status_mod
 from file_librarian.config import Config
+from file_librarian.i18n import t
+from file_librarian.i18n.messages import status as status_messages
 from file_librarian.lock import AlreadyRunningError, ui_holder, ui_lock
-from file_librarian.ui import actions, api, review, settings, views
+from file_librarian.ui import actions, api, markup, review, settings, views
 
 OPEN = "/usr/bin/open"
 """Opens the handoff file in the default browser; tests swap in a fake."""
@@ -243,19 +246,18 @@ UNCONFIRMED = (
 )
 HANDOFF_NAME = "open-file-librarian.html"
 HANDOFF = """<!doctype html>
-<html lang="en">
+<html lang="{lang}">
 <head>
 <meta charset="utf-8">
 <meta name="referrer" content="no-referrer">
-<title>Opening file-librarian</title>
+<title>{title}</title>
 </head>
 <body>
 <form id="launch" method="post" action="{action}">
 <input type="hidden" name="token" value="{token}">
 </form>
-<p id="state">Opening file-librarian&hellip;</p>
-<noscript><p>This page needs JavaScript. Run <code>flib ui --no-browser</code> for a link
-instead.</p></noscript>
+<p id="state">{opening}</p>
+<noscript><p>{no_script}</p></noscript>
 <script>
 (function () {{
   // Posts the token once, then leaves nothing that could post it again: a
@@ -266,8 +268,7 @@ instead.</p></noscript>
       form.elements.token.value = "";
       form.remove();
     }}
-    document.getElementById("state").textContent =
-      "file-librarian opened in this browser. You can close this tab.";
+    document.getElementById("state").textContent = {done};
   }}
   window.addEventListener("pageshow", function (event) {{
     if (event.persisted) spent();  // shown again from the back/forward cache
@@ -285,7 +286,8 @@ instead.</p></noscript>
 """
 """The handoff file: opened from disk (not served, so the server's CSP does not
 apply), it posts the launch token to the server at once and then clears it,
-so going back to it, a double submit or a bfcache restore cannot post it again."""
+so going back to it, a double submit or a bfcache restore cannot post it again. In
+the configured language (#126); every text in it is escaped (``handoff_text``)."""
 OPENER = """<!doctype html>
 <html lang="en">
 <head>
@@ -314,6 +316,22 @@ MAX_SAVED_SEARCHES = 32
 
 class UiError(Exception):
     """The server cannot start (port in use, unknown page, not a loopback address)."""
+
+
+def handoff_text(language: str, action: str, token: str) -> str:
+    """The handoff file in ``language``: the catalogue's words escaped like any value
+    (``markup.render``), the one for the script as a JSON string literal."""
+    with i18n.using(language) as lang:
+        done = json.dumps(t("handoff.done").text(), ensure_ascii=True).replace("<", "\\u003c")
+        return HANDOFF.format(
+            lang=lang,
+            title=markup.esc(t("handoff.title").text()),
+            opening=markup.render(t("handoff.opening")),
+            no_script=markup.render(t("handoff.no_script")),
+            done=done,
+            action=html.escape(action),
+            token=html.escape(token),
+        )
 
 
 def check_bind(host: str) -> None:
@@ -684,7 +702,7 @@ class Ui:
         prefix = f"{HANDOFF_PREFIX}{os.getpid()}-"  # so a sweep can tell it is ours
         folder = Path(tempfile.mkdtemp(prefix=prefix, dir=handoff_root()))
         path = folder / HANDOFF_NAME
-        text = HANDOFF.format(action=html.escape(self.origin + LAUNCH), token=html.escape(token))
+        text = handoff_text(self.config.language, self.origin + LAUNCH, token)
         try:
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -1111,6 +1129,9 @@ class _Handler(BaseHTTPRequestHandler):
     do_HEAD = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = do_TRACE = do_CONNECT = _not_allowed
 
     def _handle(self) -> None:
+        # The words of every page: the running configuration's language, read per
+        # request, so a change on the Settings page applies from the next one (#126).
+        i18n.use(self.server.ui.config.language)
         try:
             if self.command != "POST":  # a GET has no body: it has all arrived
                 self.server.request_read(self.connection)
@@ -1318,7 +1339,8 @@ class _Handler(BaseHTTPRequestHandler):
             else:
                 if query:
                     raise _Reject(HTTPStatus.BAD_REQUEST)  # a static page takes nothing
-                page = ui.pages[path[1:]].replace("{{csrf}}", session.csrf)
+                bundle = status_messages.bundle(i18n.current())
+                page = markup.page(ui.pages[path[1:]], session.csrf, bundle)
                 self._reply(HTTPStatus.OK, page.encode(), _HTML)
             return
         raise _Reject(HTTPStatus.NOT_FOUND)
@@ -1333,7 +1355,8 @@ class _Handler(BaseHTTPRequestHandler):
             raise _Reject(HTTPStatus.BAD_REQUEST) from exc
         if page is None or page not in PAGE_PATHS:
             raise _Reject(HTTPStatus.BAD_REQUEST)
-        body = self.server.ui.pages["open"].replace("{{next}}", PAGE_PATHS[page])
+        template = self.server.ui.pages["open"].replace("{{next}}", PAGE_PATHS[page])
+        body = markup.page(template)
         self._reply(HTTPStatus.OK, body.encode(), _HTML)
 
     def _search_page(self, session: Session, query: str) -> None:
@@ -1438,7 +1461,7 @@ class _Handler(BaseHTTPRequestHandler):
             # The post came from a page on disk, so a redirect would be a
             # cross-site chain and the SameSite=Strict cookie would not go with
             # it. This page moves on from the server's own origin instead.
-            page = ui.pages["opening"].encode()
+            page = markup.page(ui.pages["opening"]).encode()
             self._reply(HTTPStatus.OK, page, _HTML, [("Set-Cookie", cookie)])
         else:
             self._redirect(f"/{ui.page}", [("Set-Cookie", cookie)])
@@ -1604,7 +1627,11 @@ class _Handler(BaseHTTPRequestHandler):
                 raise actions.Refused(settings.NO_PATH)
             outcome, saved = change(ui.config, ui.config_path, fields)
             if saved is not None:
-                ui.config = saved
+                # The server goes on with what is saved before anything else happens.
+                old, ui.config = ui.config, saved
+                notes = settings.after_change(old, saved, ui.config_path)
+                if notes:
+                    outcome = dataclasses.replace(outcome, items=(*outcome.items, *notes))
             return outcome
 
         self._act(session, "/settings", do, prefix="o-")
@@ -1646,7 +1673,7 @@ class _Handler(BaseHTTPRequestHandler):
         """The "session ended" page, or, while a session goes on in another browser
         or window, the page that says so (and how to move it here)."""
         ui = self.server.ui
-        page = ui.pages["elsewhere" if ui.live() else "ended"]
+        page = markup.page(ui.pages["elsewhere" if ui.live() else "ended"])
         self._reply(code, page.encode(), _HTML, headers)
 
     def _redirect(self, location: str, headers: Iterable[tuple[str, str]] = ()) -> None:
@@ -1672,20 +1699,13 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 PROBLEMS: dict[int, str] = {
-    HTTPStatus.BAD_REQUEST: "This address or form asks for something the page does not "
-    "offer. Go back, or open the page from the menu.",
+    HTTPStatus.BAD_REQUEST: t("problem.bad_request"),
     HTTPStatus.FORBIDDEN: "",  # STALE_FORM or STALE_SESSION
-    HTTPStatus.NOT_FOUND: "There is no such page here. Use the menu above.",
+    HTTPStatus.NOT_FOUND: t("problem.not_found"),
 }
 """Refusals a browser gets as a page (``Accept: text/html``), with one sentence each."""
-STALE_FORM = (
-    "This form is from an earlier page or an earlier flib ui session. Reload the "
-    "page and try again."
-)
-STALE_SESSION = (
-    "This page is from an earlier flib ui session, or that session has ended. Run "
-    "`flib ui` in Terminal for a new one."
-)
+STALE_FORM = t("problem.stale_form")
+STALE_SESSION = t("problem.stale_session")
 
 ACTION_PAGES = frozenset({"/review", "/review/accept", "/undo"})
 SETTINGS_PAGES: dict[str, Callable[[Path | None, str, str], views.Page]] = {

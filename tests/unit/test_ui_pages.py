@@ -158,7 +158,7 @@ def assert_safe(page: str) -> None:
     parser = _Collector()
     parser.feed(page)
     assert parser.problems == []
-    assert page.count('aria-label="Pages"') == 1  # a slot in a value is never filled
+    assert page.count('<nav class="pages"') == 1  # a slot in a value is never filled
 
 
 def file_id(cfg: Config, name: str) -> int:
@@ -232,7 +232,7 @@ def test_the_navigation_links_the_pages_that_exist(client: UiClient) -> None:
 
 def test_the_generated_navigation_matches_the_status_page() -> None:
     """Status is a static file; its menu is the one the other pages are built with."""
-    static = ui_server.load_pages()["status"]
+    static = markup.page(ui_server.load_pages()["status"])  # its words filled in
     built = markup.nav("status")
     assert built in static.replace("\n    ", "").replace("\n  </nav>", "</nav>")
 

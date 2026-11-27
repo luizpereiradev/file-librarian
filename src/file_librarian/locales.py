@@ -1,9 +1,10 @@
 """Supported languages and the defaults each one brings.
 
 ``language`` in the configuration picks the language of generated names and
-descriptions and the default names of the folders flib creates. Anything set
-explicitly in the configuration wins over these defaults. The tool's own
-messages stay in English.
+descriptions and the default names of the folders flib creates, and the
+language of the web interface and the menu bar item (``file_librarian.i18n``,
+#126). Anything set explicitly in the configuration wins over these defaults.
+The command line's messages stay in English.
 
 To add a language, add an entry to ``LOCALES`` and a test in
 ``tests/unit/test_config.py``.
