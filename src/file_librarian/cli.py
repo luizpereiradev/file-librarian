@@ -2465,14 +2465,17 @@ def ui(
     ] = False,
     port: Annotated[
         int,
-        typer.Option("--port", min=0, max=65535, help="Port on 127.0.0.1 [default: a free one]."),
+        typer.Option(
+            "--port", min=0, max=65535, help="Port on 127.0.0.1 and ::1 [default: a free one]."
+        ),
     ] = 0,
     config: ConfigOption = None,
 ) -> None:
     """Open the local interface in your browser: Status, Review, Search, Activity, Due and
     Settings.
 
-    A server on 127.0.0.1 only, for this Mac. The browser gets a one-time
+    A server on loopback only, for this Mac, under a random .localhost name of
+    its own, so other servers on the Mac never get its cookie. The browser gets a one-time
     token through a file only you can read (`--no-browser` prints a link that
     works once instead). It ends after `ui.idle_minutes` without use, with End
     session, or with Ctrl-C. A second `flib ui` while one runs says so and exits.

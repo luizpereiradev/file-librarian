@@ -506,7 +506,7 @@ def pt_ui(loopback_network: None, cfg: Config) -> Iterator[Ui]:
 
 
 def test_every_page_says_its_language(pt_ui: Ui) -> None:
-    client = UiClient(pt_ui.port)
+    client = UiClient(pt_ui.port, pt_ui.host_name)
     assert client.launch(pt_ui.launch_url).status == 303
     for path in ("/status", "/review", "/search", "/activity", "/due", "/settings"):
         reply = client.get(path)
@@ -526,14 +526,23 @@ def test_every_page_says_its_language(pt_ui: Ui) -> None:
 
 
 def test_the_ended_page_is_in_the_language_too(pt_ui: Ui) -> None:
-    stranger = UiClient(pt_ui.port)
+    stranger = UiClient(pt_ui.port, pt_ui.host_name)
     reply = stranger.get("/status")
     assert reply.status == 403 and '<html lang="pt-BR">' in reply.text
     assert "Esta sessão terminou" in reply.text and "<code>flib ui</code>" in reply.text
 
 
+def test_the_open_page_is_in_the_language_too(pt_ui: Ui) -> None:
+    """Where an opener file sends the browser (#125): in the language, slots filled."""
+    reply = UiClient(pt_ui.port, pt_ui.host_name).get("/open?page=due")
+    assert reply.status == 200 and '<html lang="pt-BR">' in reply.text
+    assert "<h1>Abrindo o file-librarian</h1>" in reply.text
+    assert '<a id="continue" href="/due">Continuar para o file-librarian</a>' in reply.text
+    assert "{{" not in reply.text
+
+
 def test_a_change_of_language_applies_from_the_next_request(ui: Ui) -> None:
-    client = UiClient(ui.port)
+    client = UiClient(ui.port, ui.host_name)
     assert client.launch(ui.launch_url).status == 303
     assert '<html lang="en">' in client.get("/due").text
     ui.config = _pt(ui.config)  # what saving the language on the Settings page does
@@ -654,7 +663,7 @@ def test_an_attribute_from_a_message_is_plain_text() -> None:
     link = markup.el("a", "x", title=t("frame.footer"), aria_label=t("ended.again"))
     head = link.split(">", 1)[0]
     assert "<code>" not in head and "&lt;code&gt;" not in head and "`" not in head
-    assert 'title="Served on this Mac, at 127.0.0.1, while flib ui runs.' in head
+    assert 'title="Served on this Mac only (loopback), while flib ui runs.' in head
     assert 'aria-label="For a new session, run flib ui in Terminal."' in head
 
 

@@ -106,7 +106,7 @@ def start(serve: list[Ui], cfg: Config, **kw: object) -> UiClient:
     ui = Ui(cfg, poll_seconds=0.01, **kw)  # type: ignore[arg-type]
     ui.start()
     serve.append(ui)
-    c = UiClient(ui.port)
+    c = UiClient(ui.port, ui.host_name)
     assert c.launch(ui.launch_url).status == 303
     return c
 
@@ -180,7 +180,7 @@ PAGES = ["/activity", "/search", "/due"]
 
 @pytest.mark.parametrize("path", PAGES)
 def test_each_page_needs_the_session(empty: UiClient, path: str) -> None:
-    reply = UiClient(empty.port).get(path)
+    reply = UiClient(empty.port, empty.name).get(path)
     assert reply.status == 403
     assert "is open in another window" in reply.text  # the session lives elsewhere
 
@@ -246,7 +246,7 @@ def test_flib_ui_can_open_each_page(serve: list[Ui], cfg: Config, page: str) -> 
     ui = Ui(cfg, page=page, poll_seconds=0.01)
     ui.start()
     serve.append(ui)
-    c = UiClient(ui.port)
+    c = UiClient(ui.port, ui.host_name)
     assert c.launch(ui.launch_url).headers["Location"] == f"/{page}"
     assert c.get(f"/{page}").status == 200
 
@@ -1323,7 +1323,7 @@ def test_a_kept_search_belongs_to_its_session(serve: list[Ui], cfg: Config, fill
     c = start(serve, cfg)
     location = search_location(c, q="power")
     ui = serve[0]
-    other = UiClient(ui.port)
+    other = UiClient(ui.port, ui.host_name)
     assert other.get(location).status == 403  # no session: no search
     ui.end_session()
     assert ui.saved_search(views_session(ui), location.split("=", 1)[1]) is None
@@ -1373,9 +1373,9 @@ def test_the_ended_page_still_gets_its_stylesheet(serve: list[Ui], cfg: Config) 
     c = start(serve, cfg)
     ui = serve[0]
     assert c.post_form("/session/end", {"csrf": c.csrf()}).status == 200
-    css = UiClient(ui.port).get("/static/app.css")  # what the browser asks for next
+    css = UiClient(ui.port, ui.host_name).get("/static/app.css")  # what the browser asks for next
     assert css.status == 200 and css.headers["Content-Type"].startswith("text/css")
-    assert UiClient(ui.port).get("/status").status == 403  # nothing else
+    assert UiClient(ui.port, ui.host_name).get("/status").status == 403  # nothing else
     assert ui.wait(5) == "ended"
 
 
@@ -1418,7 +1418,7 @@ def test_a_browser_gets_a_refusal_as_a_page(
 
 def test_a_form_from_an_earlier_session_says_so(serve: list[Ui], cfg: Config) -> None:
     c = start(serve, cfg)
-    stale = UiClient(c.port)  # its cookie went with the earlier session
+    stale = UiClient(c.port, c.name)  # its cookie went with the earlier session
     reply = stale.post_form("/search", {"csrf": "old", "q": "x"}, HTML)
     assert reply.status == 403
     assert "earlier flib ui session" in reply.text
@@ -1431,7 +1431,7 @@ def test_the_status_page_takes_no_query(client: UiClient) -> None:
 
 
 def test_a_browser_gets_an_icon_at_the_usual_address(empty: UiClient) -> None:
-    reply = UiClient(empty.port).get("/favicon.ico")  # no session needed, like the CSS
+    reply = UiClient(empty.port, empty.name).get("/favicon.ico")  # no session needed, like the CSS
     assert reply.status == 200 and reply.headers["Content-Type"] == "image/png"
 
 

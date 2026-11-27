@@ -56,7 +56,8 @@ def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def loopback_network(_no_network: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Opt-in for one test: connections to 127.0.0.1 only, for an in-process fake server.
+    """Opt-in for one test: connections to 127.0.0.1 (and ::1) only, for an in-process
+    fake server.
 
     Names are not resolved (not even ``localhost``) and every other address stays
     blocked, so a test using it still cannot reach a real server.
@@ -68,7 +69,8 @@ def loopback_network(_no_network: None, monkeypatch: pytest.MonkeyPatch) -> None
         return _REAL_GETADDRINFO(host, *args, **kwargs)
 
     def connect(sock: socket.socket, address: Any) -> None:
-        if not (isinstance(address, tuple) and address[0] == LOOPBACK):
+        # ``::1`` too: ``flib ui`` holds it on its port, and a test connects to it.
+        if not (isinstance(address, tuple) and address[0] in (LOOPBACK, "::1")):
             raise NetworkBlockedError(f"only {LOOPBACK} is allowed in this test, not {address!r}")
         _REAL_CONNECT(sock, address)
 
@@ -227,6 +229,10 @@ def fake_browser(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.M
     temp = folder / "T"
     temp.mkdir(mode=0o700)
     monkeypatch.setattr("file_librarian.ui.server.handoff_root", lambda: temp)
+    # The network is closed, so no name resolves here: flib ui is told this Mac's
+    # resolver gives loopback for .localhost (as current macOS does); names_resolve
+    # itself has its own tests.
+    monkeypatch.setattr("file_librarian.ui.server.names_resolve", lambda: True)
     return folder / "calls.jsonl"
 
 

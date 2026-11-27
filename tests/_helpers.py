@@ -452,15 +452,24 @@ class UiResponse:
 
 class UiClient:
     """A browser stand-in for ``flib ui`` tests: requests to 127.0.0.1 with any headers,
-    and a cookie jar. Needs the ``loopback_network`` fixture."""
+    and a cookie jar, for the server named ``name`` (the ``Host`` it sends). Needs the
+    ``loopback_network`` fixture."""
 
-    def __init__(self, port: int) -> None:
+    def __init__(self, port: int, name: str = "127.0.0.1") -> None:
         self.port = port
+        self.name = name
         self.cookies: dict[str, str] = {}
+
+    @classmethod
+    def for_url(cls, url: str) -> UiClient:
+        """A client for the server an address (``http://<name>:<port>/...``) names."""
+        split = urlsplit(url)
+        assert split.hostname is not None and split.port is not None, url
+        return cls(split.port, split.hostname)
 
     @property
     def origin(self) -> str:
-        return f"http://127.0.0.1:{self.port}"
+        return f"http://{self.name}:{self.port}"
 
     def request(
         self,
@@ -471,7 +480,7 @@ class UiClient:
         headers: dict[str, str] | None = None,
         host: str | None = None,
     ) -> UiResponse:
-        sent = {"Host": host if host is not None else f"127.0.0.1:{self.port}"}
+        sent = {"Host": host if host is not None else f"{self.name}:{self.port}"}
         if self.cookies:
             sent["Cookie"] = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
         sent |= headers or {}
@@ -503,7 +512,7 @@ class UiClient:
         token = re.search(r'name="token" value="([^"]+)"', text)
         assert action is not None and token is not None, "not a handoff page"
         split = urlsplit(html.unescape(action.group(1)))
-        assert split.netloc == f"127.0.0.1:{self.port}", split.netloc
+        assert split.netloc == f"{self.name}:{self.port}", split.netloc
         return self.request(
             "POST",
             split.path,

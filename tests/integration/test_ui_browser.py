@@ -14,12 +14,19 @@ referrer policies. Nothing goes beyond 127.0.0.1.
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import os
+import secrets
 import shutil
+import socket
+import threading
+from dataclasses import dataclass
 from datetime import date, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -27,7 +34,7 @@ from file_librarian import config_edit, pipeline
 from file_librarian.config import Category, Config, load_config
 from file_librarian.db.store import Store
 from file_librarian.providers.fake import FakeProvider
-from file_librarian.ui.server import Ui
+from file_librarian.ui.server import Running, Ui, write_opener
 from tests._cdp import find_browser, headless
 from tests._helpers import answer, put
 from tests.unit.test_ui import nothing_left_behind  # noqa: F401 - no socket left behind
@@ -262,6 +269,249 @@ def test_settings_in_a_real_browser(
                 assert wide <= 0, (page, wide)
     finally:
         ui.close()
+
+
+# --- another server on loopback (#125) ----------------------------------------------------
+
+
+@dataclass
+class Seen:
+    """One request the attacker's server got: where it was sent and what came with it."""
+
+    host: str
+    path: str
+    method: str
+    headers: dict[str, str]
+    body: str
+
+
+class Attacker:
+    """A throwaway server of another program (or account) on loopback: on its own port,
+    on 127.0.0.1 and ::1, it records every request the browser sends it and serves a page
+    that makes the browser load more of it, every way a page can."""
+
+    def __init__(self) -> None:
+        self.seen: list[Seen] = []
+        self._lock = threading.Lock()
+        attacker = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, format: str, *args: Any) -> None:
+                pass
+
+            def _record(self) -> None:
+                length = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(length).decode("latin-1") if length else ""
+                with attacker._lock:
+                    attacker.seen.append(
+                        Seen(
+                            self.headers.get("Host", ""),
+                            self.path,
+                            self.command,
+                            dict(self.headers.items()),
+                            body,
+                        )
+                    )
+
+            def do_GET(self) -> None:
+                self._record()
+                if self.path.startswith("/redirect"):
+                    self.send_response(302)
+                    self.send_header("Location", f"http://127.0.0.1:{attacker.port}/redirected")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                page = self.path.startswith("/page")
+                body = attacker.page().encode() if page else b"ok"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html" if page else "text/plain")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            do_POST = do_GET
+
+        class V6(ThreadingHTTPServer):
+            address_family = socket.AF_INET6
+
+            def server_bind(self) -> None:
+                self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+                super().server_bind()
+
+        self._v4 = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self._v4.server_address[1]
+        self._v6 = V6(("::1", self.port), Handler)
+        for server in (self._v4, self._v6):
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    def page(self) -> str:
+        """Every way a page makes the browser send a request: images, a redirect, fetch
+        with credentials, and a form posted at once, to each host it can name."""
+        other_name = f"flib-{secrets.token_hex(16)}.localhost"  # a name, not the session's
+        hosts = ["127.0.0.1", "localhost", "[::1]", other_name]
+        images = "".join(f'<img src="http://{h}:{self.port}/img">' for h in hosts)
+        fetches = ",".join(
+            f'fetch("http://{h}:{self.port}/fetch", {{credentials: "include", mode: "no-cors"}})'
+            for h in hosts
+        )
+        return (
+            "<!doctype html><html><body>"
+            f'{images}<img src="/redirect-img">'
+            f'<form id="f" method="post" action="http://127.0.0.1:{self.port}/form">'
+            '<input name="x" value="1"></form>'
+            f"<script>Promise.allSettled([{fetches}]).then(() => "
+            'document.getElementById("f").submit());</script>'
+            "</body></html>"
+        )
+
+    def paths(self) -> set[str]:
+        with self._lock:
+            return {seen.path for seen in self.seen}
+
+    def close(self) -> None:
+        for server in (self._v4, self._v6):
+            server.shutdown()
+            server.server_close()
+
+
+def _plain(
+    port: int, method: str, path: str, headers: dict[str, str], body: bytes = b""
+) -> tuple[int, bytes]:
+    """One request from a client outside the browser, to the interface's port."""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    try:
+        conn.request(method, path, body=body or None, headers=headers)
+        reply = conn.getresponse()
+        return reply.status, reply.read()
+    finally:
+        conn.close()
+
+
+def test_another_server_on_loopback_gets_nothing_that_uses_the_session(
+    loopback_network: None, downloads: Path, cfg: Config, tmp_path: Path
+) -> None:
+    """The acceptance test of #125. Browsers keep cookies per host, not per port: a
+    server on another loopback port that gets the session's browser to load its pages,
+    by a top-level navigation (a link in the interface itself, typed, redirected),
+    images, ``fetch`` with credentials and a form post, must get nothing that lets a
+    client outside the browser use the session."""
+    assert BROWSER is not None
+    put(downloads, "power bill.pdf", b"power")
+    pipeline.run(cfg, FakeProvider({"power bill.pdf": answer("Finance")}), simulate=False)
+    ui = Ui(cfg, poll_seconds=0.05)
+    ui.start()
+    attacker = Attacker()
+    profile = tmp_path / "profile"
+    try:
+        handoff = ui.write_handoff()
+        with headless(BROWSER, profile) as (tab, browser):
+            tab.call("Page.navigate", {"url": handoff.as_uri()})
+            tab.wait_for(lambda: tab.url() == f"{ui.origin}/status" and tab.ready())
+            [session] = browser("Storage.getCookies", {})["cookies"]
+            tab.goto(f"{ui.origin}/search")
+            csrf = tab.evaluate("document.querySelector('input[name=csrf]').value")
+            hidden = {session["value"], csrf, urlsplit(ui.origin).hostname or ""} - {""}
+            # 1. A link in the interface itself: a top-level navigation it starts.
+            tab.evaluate(f"location.href = 'http://127.0.0.1:{attacker.port}/top'")
+            tab.wait_for(lambda: "/top" in attacker.paths())
+            # 2. Opened from elsewhere and redirected; then the attacker's own page.
+            tab.call("Page.navigate", {"url": f"http://localhost:{attacker.port}/redirect-top"})
+            tab.wait_for(lambda: "/redirected" in attacker.paths())
+            tab.call("Page.navigate", {"url": f"http://127.0.0.1:{attacker.port}/page"})
+            tab.wait_for(lambda: "/form" in attacker.paths(), timeout=20)
+            tab.wait_for(lambda: {"/img", "/fetch", "/redirected"} <= attacker.paths())
+            # The session itself is untouched: the interface still works in the browser.
+            tab.goto(f"{ui.origin}/status")
+            assert "Status" in tab.text()
+        seen = list(attacker.seen)
+        assert {s.path for s in seen} >= {"/top", "/redirect-top", "/page", "/img", "/form"}
+        everything = "\n".join(
+            f"{s.method} {s.host}{s.path}\n"
+            + "\n".join(f"{k}: {v}" for k, v in s.headers.items())
+            + f"\n{s.body}"
+            for s in seen
+        )
+        # No cookie at all, no referrer naming the interface, nothing secret anywhere.
+        assert [s.path for s in seen if "Cookie" in s.headers] == []
+        for secret in hidden:
+            assert secret not in everything
+        # A client outside the browser, given all of it, can neither read a page nor act.
+        cookies = {s.headers["Cookie"] for s in seen if "Cookie" in s.headers} or {""}
+        hosts = {f"127.0.0.1:{ui.port}", f"localhost:{ui.port}"} | {
+            f"{s.host.rsplit(':', 1)[0]}:{ui.port}" for s in seen
+        }
+        for cookie in cookies:
+            for host in hosts:
+                sent = {"Host": host, "Accept": "text/html"} | (
+                    {"Cookie": cookie} if cookie else {}
+                )
+                status, body = _plain(ui.port, "GET", "/search", sent)
+                assert status != 200 and b"power bill.pdf" not in body, host
+                forged = sent | {
+                    "Origin": ui.origin,
+                    "Sec-Fetch-Site": "same-origin",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                }
+                status, _ = _plain(ui.port, "POST", "/session/end", forged, b"csrf=" + b"x" * 43)
+                assert status != 200, host
+        assert ui.wait(0.1) is None and ui.live()  # the session goes on
+    finally:
+        attacker.close()
+        ui.close()
+        shutil.rmtree(profile, ignore_errors=True)
+
+
+def test_only_the_sessions_own_name_gets_the_cookie(
+    loopback_network: None, cfg: Config, tmp_path: Path
+) -> None:
+    """What the name protects, shown: the browser sends the cookie to the session's name
+    on any port, and to nothing else. The name is the one host a server on another port
+    cannot name; ``Referrer-Policy: same-origin`` keeps it from them (above)."""
+    assert BROWSER is not None
+    ui = Ui(cfg, poll_seconds=0.05)
+    ui.start()
+    attacker = Attacker()
+    profile = tmp_path / "profile"
+    try:
+        handoff = ui.write_handoff()
+        with headless(BROWSER, profile) as (tab, browser):
+            tab.call("Page.navigate", {"url": handoff.as_uri()})
+            tab.wait_for(lambda: tab.url() == f"{ui.origin}/status" and tab.ready())
+            [session] = browser("Storage.getCookies", {})["cookies"]
+            assert session["domain"] == ui.host_name  # host-only, for this name
+            assert session["httpOnly"] and session["sameSite"] == "Strict"
+            tab.goto(f"http://{ui.host_name}:{attacker.port}/named")
+            tab.wait_for(lambda: "/named" in attacker.paths())
+        [named] = [s for s in attacker.seen if s.path == "/named"]
+        assert named.headers.get("Cookie") == f"{ui.cookie_name}={session['value']}"
+    finally:
+        attacker.close()
+        ui.close()
+        shutil.rmtree(profile, ignore_errors=True)
+
+
+def test_a_second_open_reaches_the_running_session(
+    loopback_network: None, cfg: Config, tmp_path: Path
+) -> None:
+    """``flib ui --open review`` (the menu bar's Review) while the interface runs: the
+    opener file sends the browser to ``/open``, which moves on to the page from the
+    server's own origin, so the Strict cookie goes with it."""
+    assert BROWSER is not None
+    ui = Ui(cfg, poll_seconds=0.05)
+    ui.start()
+    profile = tmp_path / "profile"
+    try:
+        handoff = ui.write_handoff()
+        with headless(BROWSER, profile) as (tab, _):
+            tab.call("Page.navigate", {"url": handoff.as_uri()})
+            tab.wait_for(lambda: tab.url() == f"{ui.origin}/status" and tab.ready())
+            opener = write_opener(Running(os.getpid(), ui.port, ui.host_name), "review")
+            tab.call("Page.navigate", {"url": opener.as_uri()})
+            tab.wait_for(lambda: tab.url() == f"{ui.origin}/review" and tab.ready())
+            assert "Review" in tab.text() and "session has ended" not in tab.text()
+    finally:
+        ui.close()
+        shutil.rmtree(profile, ignore_errors=True)
         shutil.rmtree(profile, ignore_errors=True)
 
 

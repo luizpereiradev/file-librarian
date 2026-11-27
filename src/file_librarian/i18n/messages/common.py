@@ -16,7 +16,7 @@ EN: dict[str, Entry] = {
     "frame.skip": "Skip to content",
     "frame.end_session": "End session",
     "frame.footer": (
-        "Served on this Mac, at 127.0.0.1, while `flib ui` runs. Names and descriptions come "
+        "Served on this Mac only (loopback), while `flib ui` runs. Names and descriptions come "
         "from your files and the AI: they are shown as text only."
     ),
     # refusals as pages (ui.server, ui.views.problem_page)
@@ -84,7 +84,7 @@ PT_BR: dict[str, Entry] = {
     "frame.skip": "Pular para o conteúdo",
     "frame.end_session": "Encerrar sessão",
     "frame.footer": (
-        "Servido por este Mac, em 127.0.0.1, enquanto o `flib ui` estiver rodando. Nomes e "
+        "Servido só por este Mac (loopback), enquanto o `flib ui` estiver rodando. Nomes e "
         "descrições vêm dos seus arquivos e da IA: aparecem aqui só como texto."
     ),
     "problem.title.400": "Pedido inválido",

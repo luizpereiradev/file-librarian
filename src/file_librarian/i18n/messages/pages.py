@@ -29,6 +29,7 @@ EN: dict[str, Entry] = {
     "opening.title": "Opening",
     "opening.heading": "Session started",
     "opening.continue": "Continue to file-librarian",
+    "open.heading": "Opening file-librarian",
     # the handoff file
     "handoff.title": "Opening file-librarian",
     "handoff.opening": "Opening file-librarian…",
@@ -59,8 +60,8 @@ EN: dict[str, Entry] = {
     "status.none_scheduled": "none scheduled",
     "status.refresh": "Refresh",
     "status.footer": (
-        "Counts only: this page shows no file names. It is served on this Mac, at 127.0.0.1, "
-        "while `flib ui` runs."
+        "Counts only: this page shows no file names. It is served on this Mac only "
+        "(loopback), while `flib ui` runs."
     ),
 }
 
@@ -85,6 +86,7 @@ PT_BR: dict[str, Entry] = {
     "opening.title": "Abrindo",
     "opening.heading": "Sessão iniciada",
     "opening.continue": "Continuar para o file-librarian",
+    "open.heading": "Abrindo o file-librarian",
     "handoff.title": "Abrindo o file-librarian",
     "handoff.opening": "Abrindo o file-librarian…",
     "handoff.no_script": (
@@ -113,7 +115,7 @@ PT_BR: dict[str, Entry] = {
     "status.none_scheduled": "nenhuma agendada",
     "status.refresh": "Atualizar",
     "status.footer": (
-        "Só contagens: esta página não mostra nomes de arquivos. Ela é servida por este Mac, "
-        "em 127.0.0.1, enquanto o `flib ui` estiver rodando."
+        "Só contagens: esta página não mostra nomes de arquivos. Ela é servida só por este Mac "
+        "(loopback), enquanto o `flib ui` estiver rodando."
     ),
 }

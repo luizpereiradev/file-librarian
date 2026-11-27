@@ -54,9 +54,9 @@ All notable changes to this project are documented here. The format follows
   (`launchctl kickstart`) when it is this configuration's, and otherwise runs
   here; with a run going on it does nothing and says so.
 - `flib ui --open PAGE` while an interface is already running opens that
-  page in it (`http://127.0.0.1:<port>/PAGE`, no secret in it), instead of
-  only saying one runs. The running server records its pid and port
-  (`flib-ui.json`, 0600, next to the database).
+  page in it, instead of only saying one runs. The running server records
+  its pid and port (`flib-ui.json`, 0600, next to the database) and its
+  name in a private record in the account's own temporary folder (#125).
 - `flib ui` has a **Settings** page (#117): when to organize (off, daily at
   a time, as files arrive or both, installed in launchd by the same function
   as `flib schedule`), who classifies (a fixed choice among the providers the
@@ -574,6 +574,29 @@ All notable changes to this project are documented here. The format follows
 
 ### Security
 
+- `flib ui`'s session cookie no longer reaches other servers on loopback
+  (#125). Browsers keep cookies per host, not per port, so any program or
+  account listening on another 127.0.0.1 port that got the browser to load
+  one of its pages (a link, a redirect, an image) received the cookie, and
+  with it could read pages and post actions from outside the browser. Each
+  session is now served under a random name of its own,
+  `flib-<32 hex>.localhost` (current macOS, Chrome and Firefox resolve
+  `*.localhost` to loopback by themselves), whose host-only cookie the
+  browser sends to that name only; the `Host` check is exact for it. The
+  server holds `[::1]` on its port as well, since browsers try it first for
+  such a name. The cookie is `flib_ui` with a `Max-Age` renewed by each
+  request, so it ends a minute after the idle timer. The name stays off
+  every command line and out of the database's folder (which may be on a
+  volume that ignores ownership): it is kept in a private record in the
+  account's own temporary folder, and a second `flib ui --open PAGE` (the
+  menu bar's entries) takes it only from there, then opens a 0600 opener
+  file that goes through `/open` (which, for the read-only pages, acts like
+  `SameSite=Lax` for whoever knows the name). The terminal says the port
+  only, except in the `--no-browser` link, which says the address is
+  private until the session ends. A Mac whose resolver does not give loopback
+  for `.localhost` gets the interface at `127.0.0.1` as before, with a
+  warning on stderr saying what that leaves open. A real-browser test with
+  a throwaway server on another port covers it.
 - Descriptions, tags and proposed names keep personal identifiers out of the
   index (#82): the prompt asks the AI not to copy phone numbers, e-mail
   addresses, document, account or card numbers, payment keys, addresses or
