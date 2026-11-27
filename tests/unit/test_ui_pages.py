@@ -737,6 +737,8 @@ def refused(
     assert_safe(plain.text)
     [said] = NOTICE.findall(plain.text)
     fields = {"back": "search"} if back is None else back
+    scripted = post(c, route, id=ident, **fields)  # what the page sends, from a script
+    assert scripted.status == status and "Location" not in scripted.headers
     reply = c.post_form(route, {"csrf": c.csrf("/search"), "id": ident, **fields}, HTML)
     assert reply.status == 303, reply.status
     assert reply.body == b""
@@ -1638,6 +1640,32 @@ def test_closing_does_not_wait_out_the_linger(serve: list[Ui], cfg: Config) -> N
     assert time.monotonic() - began < 5
 
 
+def test_end_session_asks_to_stop_before_it_replies(
+    monkeypatch: pytest.MonkeyPatch, serve: list[Ui], cfg: Config
+) -> None:
+    """The cause of #134, checked by order, not by timing: the stop is queued before a
+    byte of the reply goes, so nothing the browser does after it can come first."""
+    c = start(serve, cfg)
+    ui = serve[0]
+    seen: list[str] = []
+    stop, reply = ui.stop, ui_server._Handler._reply
+
+    def stopping(reason: str) -> None:
+        seen.append(f"stop {reason}")
+        stop(reason)
+
+    def replying(self: Any, code: int, *args: Any, **kwargs: Any) -> None:
+        seen.append(f"reply {code}")
+        reply(self, code, *args, **kwargs)
+
+    csrf = c.csrf()
+    monkeypatch.setattr(ui, "stop", stopping)
+    monkeypatch.setattr(ui_server._Handler, "_reply", replying)
+    assert c.post_form("/session/end", {"csrf": csrf}).status == 200
+    assert seen == ["stop ended", "reply 200"]
+    assert ui.wait(5) == "ended"
+
+
 @pytest.mark.parametrize(
     ("request_", "status", "text"),
     [
@@ -1824,9 +1852,12 @@ def clone(cfg: Config, name: str, count: int, *, first: int = 1) -> None:
 
 @pytest.fixture
 def many(downloads: Path, cfg: Config) -> None:
-    """111 files that match ``bulk`` (and the category Other), and a sensitive one."""
+    """111 files that match ``bulk`` (and the category Other), and one more that matches
+    too but is sensitive: never shown, never counted with them."""
     fill(downloads, cfg, {"bulk.txt": answer("Other", description="bulk notes")})
-    clone(cfg, "bulk.txt", 110)
+    clone(cfg, "bulk.txt", 111)
+    with sqlite3.connect(cfg.database) as conn:
+        conn.execute("UPDATE files SET status = 'sensitive' WHERE original_name = 'bulk.txt 111'")
 
 
 def test_the_title_says_how_many_matched_not_the_limit(
@@ -1890,7 +1921,7 @@ def test_the_csv_cut_over_a_library_of_more_than_5000_matches(
 ) -> None:
     """The real limit, over a real index (#127's untested list): 5005 files match, the
     export has the first 5000 and a last row saying so; the sensitive file is not one."""
-    clone(cfg, "bulk.txt", views.EXPORT_LIMIT - 111 + 5, first=111)  # 5005 in all
+    clone(cfg, "bulk.txt", views.EXPORT_LIMIT - 111 + 5, first=112)  # 5005 in all
     c = start(serve, cfg)
     rows = list(csv.reader(io.StringIO(search(c, "/search/export", q="bulk").text)))
     assert rows[0] == list(views.CSV_COLUMNS)
@@ -1898,7 +1929,7 @@ def test_the_csv_cut_over_a_library_of_more_than_5000_matches(
     cut = "# cut: more than 5000 matches; only the first 5000 are here. Narrow the search."
     assert rows[-1] == [cut]
     assert len({row[0] for row in rows[1:-1]}) == views.EXPORT_LIMIT  # 5000 files, each once
-    assert all("id_rsa" not in row[0] for row in rows)
+    assert all("id_rsa" not in row[0] and row[1] != "bulk.txt 111" for row in rows[1:-1])
     page = search(c, q="bulk", limit="500").text
     assert "<title>Search: 500 of 5005 matches · file-librarian</title>" in page
 
