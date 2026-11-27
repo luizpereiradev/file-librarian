@@ -569,8 +569,24 @@ key is only "set (in the Keychain)" or "not set" (`settings.key_state` asks
 errors give a line and column, never the file's text. `POST /settings/open`
 runs `open -t -- <the server's own path>`, never one from the form.
 
-**Session.** The server binds a free port and makes a random launch token
-(256 bits). The token never goes on a command line, where any account on the
+**Session.** The server binds a free port on `127.0.0.1`, holds the same
+port on `[::1]` (IPv6 only; a port another program holds there is never
+used: the next free one is tried), picks a random host name for itself,
+`flib-<32 hex>.localhost` (128 bits, #125), and makes a random launch token
+(256 bits). Every address it builds (the handoff form's action, the
+`--no-browser` link, the page `flib-ui.json` lets a second `flib ui --open`
+reach) uses that name; the `Host` check accepts it and nothing else. Why
+the name: browsers keep cookies per host, never per port, so under the bare
+`127.0.0.1` every other server on loopback that got the browser to load one
+of its pages received the session cookie (see the threat model). Under a
+name nobody else knows, the host-only cookie goes to that name only.
+`[::1]` is held because Chrome and macOS's resolver (Safari's) give `::1`
+first for a `.localhost` name: whoever held `[::1]:<port>` would get the
+browser's requests, cookie and all. Before it starts, `flib ui` asks this
+Mac's resolver for a throwaway `.localhost` name (`names_resolve`, never the
+session's own); if the answer is not loopback and only loopback (a macOS
+before 26), the server is at `127.0.0.1` as before and `flib ui` says on
+stderr what that leaves open. The token never goes on a command line, where any account on the
 Mac could read it with `ps`. `flib ui` writes a *handoff file*, an HTML page
 readable only by the user (mode 0600, created with `O_EXCL | O_NOFOLLOW`, in
 a 0700 folder with a random name in the account's own temporary folder,
@@ -589,13 +605,18 @@ is per database, and another `flib ui`, for another configuration, shares
 the account's temporary folder. The first
 use of the token (compared with `hmac.compare_digest`) burns it, deletes the
 handoff file, prints "session started" in the terminal, and sets an
-`HttpOnly`, `SameSite=Strict` cookie named `flib_ui_<port>`; the page holds a
+`HttpOnly`, `SameSite=Strict`, host-only cookie named `flib_ui` (at
+`127.0.0.1`, without a name, `flib_ui_<port>`, so two servers keep theirs
+apart), with a `Max-Age` of the idle time plus a minute that every request
+of the session renews: a session's cookie is gone a minute after its
+server, and earlier sessions' cookies do not pile up (they were for names
+never used again anyway). The page holds a
 per-session CSRF token. The reply is a small page whose script moves on to the
 interface: a redirect would continue a chain that started on disk, which the
 browser treats as cross-site, so the `Strict` cookie would not go with it.
 The handoff file is also deleted when the server ends. With `--no-browser`
-the user asked for a link: `http://127.0.0.1:<port>/launch?token=...` is
-printed, and opening it does the same exchange as a GET, ending in a 303 to
+the user asked for a link: `http://<name>:<port>/launch?token=...` is
+printed (otherwise the terminal shows the port only, never the name), and opening it does the same exchange as a GET, ending in a 303 to
 the page. A request with `Sec-Purpose` or `Purpose: prefetch`/`prerender` (a
 browser preloading a typed address) never takes part in the exchange: it is
 refused without using the token. The token is read from the body of a POST
@@ -619,7 +640,23 @@ requests do not count), on End session (a POST), or on SIGINT/SIGTERM. One
 `flib ui` runs at a time (an `flock` on `flib-ui.lock` next to the database,
 apart from the instance lock, so it never keeps a run from starting); a
 second one says so and exits with 0, since only the first knows its port and
-token. Actions that change files or the index, when they come, take the
+token. With `--open PAGE` (the menu bar's entries) the second one opens that
+page in the first: the first records its pid, port and name in
+`flib-ui.json` (0600, never written through a link, believed only when the
+pid holds the lock and the host is a session name or `127.0.0.1`). The name
+is what keeps other servers from the cookie, so it never goes on `open`'s
+command line, which every account can read with `ps`: the second one writes
+an *opener file* (0600, new, in a 0700 folder named after the first
+server's pid, removed when that server ends, or by the next `flib ui` once
+it is gone) whose `<meta http-equiv="refresh">` sends the browser to
+`GET /open?page=PAGE`. That navigation comes from a page on disk, so it is
+cross-site and the `Strict` cookie does not go with it; `/open` needs no
+session, holds nothing (a fixed choice from `PAGE_PATHS`, no other field)
+and serves a page whose script moves on to the page from the server's own
+origin, which then carries the cookie (the launch exchange's "opening" page
+works the same way). `/open` takes a GET with no `Origin` and any
+`Sec-Fetch-Site` but `same-site`, and exists only under a name: at
+`127.0.0.1` the address holds no secret and is opened directly. Actions that change files or the index, when they come, take the
 instance lock for that action only.
 
 **Routes.** Every POST but `/launch` is in `server.POST_ROUTES` and is reached
@@ -663,9 +700,11 @@ browser's cookies). How each is handled:
 | --- | --- | --- |
 | Reached from the network | binds `127.0.0.1` only; `check_bind` refuses `0.0.0.0`, `::` and any non-loopback address, before and after binding | `test_never_binds_anything_but_loopback`, `test_a_wildcard_host_is_refused_before_binding`, `test_the_bound_address_is_checked_again` |
 | Another account on the Mac takes the token | the token is never in a process's arguments: the handoff file (0600, in a 0700 random folder in the account's own temporary folder) carries it, is cleared from the page once posted, and is deleted once used or when the server ends; a prefetch never uses it; a used token that comes back without the session ends everything with a warning; "session started" in the terminal shows when the session began; `--no-browser` prints the link only to whoever asked for it | `test_the_handoff_file_is_for_the_user_only`, `test_the_handoff_file_starts_the_session_and_is_deleted`, `test_a_used_token_from_a_client_without_the_session_ends_everything`, `test_a_stolen_link_ends_flib_ui_with_a_warning`, `test_flib_ui_opens_a_handoff_file_and_ends_with_the_session`, `test_the_handoff_page_posts_the_token_once_and_keeps_nothing`, `test_handoff_folders_go_in_the_user_temp_folder`, `test_the_handoff_file_is_always_new_and_never_a_link`, `test_stale_handoff_folders_are_swept_at_start`, `test_a_prefetch_of_the_link_does_not_use_it` |
-| DNS rebinding, another program on `[::1]` | `Host` must be exactly `127.0.0.1:<port>`, one header, else 421; `localhost` is refused and never printed, since another program could hold `[::1]:<port>` | `test_a_foreign_host_header_is_misdirected`, `test_two_host_headers_are_misdirected`, `test_only_127_0_0_1_is_ever_named` |
+| DNS rebinding, another program on `[::1]` | `Host` must be exactly `<name>:<port>`, one header, else 421 (`127.0.0.1`, `localhost`, the name on another port, in capitals or with a trailing dot, another `.localhost` name: all refused); the server holds `[::1]:<port>` itself (IPv6 only), and a port another program holds there is never used | `test_a_foreign_host_header_is_misdirected`, `test_two_host_headers_are_misdirected`, `test_only_the_sessions_name_is_ever_named`, `test_the_server_listens_on_loopback_only`, `test_a_request_to_the_v6_address_is_served`, `test_a_port_another_program_holds_on_v6_is_never_used`, `test_a_port_held_on_v6_is_an_error_when_asked_for` |
+| Another server on loopback getting the session cookie (#125) | browsers keep cookies per host, not per port: the session is served under its own random name, `flib-<32 hex>.localhost`, and its cookie is host-only (no `Domain`), so the browser sends it to that name and nothing else; a server on another port cannot name it, and `Referrer-Policy: same-origin` keeps it out of every request to another origin (another port is one); the name is never on a command line (the second `--open` goes through a 0600 opener file) nor in the terminal; `HttpOnly`, `SameSite=Strict`, a `Max-Age` a minute past the idle timer, renewed per request and expired by End session; where `.localhost` does not resolve to loopback, `127.0.0.1` with a warning | `tests/integration/test_ui_browser.py::test_another_server_on_loopback_gets_nothing_that_uses_the_session` (a throwaway server on another port, reached by a link in the interface, a typed address, a redirect, images, `fetch` with credentials and a form post to `127.0.0.1`, `localhost`, `[::1]` and another `.localhost` name: no cookie, no referrer, no CSRF token; a client given all it saw can neither read a page nor post; fails on the earlier `127.0.0.1` design), `test_only_the_sessions_own_name_gets_the_cookie`, `test_the_launch_token_becomes_a_session_cookie`, `test_each_request_of_the_session_renews_its_cookie`, `test_a_localhost_name_counts_only_when_it_resolves_to_loopback_only`, `test_without_names_flib_ui_serves_at_127_0_0_1_and_says_what_that_leaves`, `test_open_under_a_name_goes_through_an_opener_file` |
+| A page from disk reaching the session through `/open` | `GET /open?page=PAGE` holds nothing and needs no session: a fixed page from `PAGE_PATHS`, no other field, no `Origin`, not `same-site`, GET only, only under a name; what it serves moves on from the server's own origin to a page that then needs the cookie | `test_open_moves_on_to_the_page_from_this_origin`, `test_open_takes_a_page_and_nothing_else`, `test_open_is_a_get_only`, `test_without_a_name_there_is_no_open`, `tests/integration/test_ui_browser.py::test_a_second_open_reaches_the_running_session` |
 | Cross-site requests | an `Origin` other than the server's is 403 on any request (exact match, not a prefix); `Upgrade` is 400; `Sec-Fetch-Site` other than same-origin (or `none` on a GET) is 403; every POST route needs the exact `Origin` (or `Sec-Fetch-Site: same-origin`), the session cookie (`SameSite=Strict`) and the CSRF token, form field (in a form body only) or `X-Flib-CSRF` header; no `Access-Control-*` header is ever sent | `test_any_request_from_another_origin_is_forbidden`, `test_an_upgrade_request_is_refused`, `test_a_cross_site_request_is_forbidden`, `test_a_post_from_another_origin_is_forbidden`, `test_every_post_route_needs_the_cookie_the_origin_and_the_csrf_token`, `test_the_csrf_token_is_in_a_form_field_or_a_header`, `test_no_reply_ever_allows_another_origin`, `test_the_launch_post_takes_the_null_origin_and_nothing_wider` |
-| A cookie planted on 127.0.0.1 | browsers share cookies across ports: any cookie of the name that holds the session counts, so a planted one cannot lock the user out; each is compared in constant time | `test_a_planted_cookie_of_the_same_name_does_not_lock_the_user_out`, `test_the_session_id_is_compared_in_constant_time` |
+| A cookie planted for the session's host | under a name nobody else can set one; at `127.0.0.1` (no name) browsers share cookies across ports, so any cookie of the name that holds the session counts and a planted one cannot lock the user out; each is compared in constant time | `test_a_planted_cookie_of_the_same_name_does_not_lock_the_user_out`, `test_the_session_id_is_compared_in_constant_time` |
 | Guessing or replaying the link | 256-bit token, constant-time compare, single use; a wrong guess does not burn it; `Referrer-Policy: same-origin` everywhere (a referrer goes to this server only, never to another site; the handoff page itself is `no-referrer`); never logged | `test_the_launch_token_works_once`, `test_a_wrong_or_missing_token_gets_the_ended_page`, `test_a_wrong_launch_post_gets_the_ended_page`, `test_the_token_is_compared_in_constant_time`, `test_nothing_is_logged` |
 | Script injection | `Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; require-trusted-types-for 'script'`; no inline script, style or handler; scripts put text in with `textContent` only; server-built pages escape every value from the index (names, descriptions, issuers, tags, search words) through `markup.el`; `nosniff` | `test_every_page_references_only_packaged_files_and_has_no_inline_code`, `test_the_policy_allows_no_inline_code`, `test_the_policy_requires_trusted_types`, `test_each_page_is_escaped_and_has_no_inline_code`, `test_search_finds_by_words_and_escapes_everything`, `test_el_escapes_text_and_attributes`, `test_the_layout_fills_its_slots_in_one_pass` |
 | Names and words in the history | search words and filters go in a POST body; the address holds only fixed choices, any other name is 400; Open and Show in Finder post an index id | `test_a_search_in_the_address_is_never_run`, `test_due_refuses_choices_it_does_not_offer`, `test_activity_windows`, `test_names_the_page_does_not_offer_are_refused` |
@@ -682,11 +721,23 @@ browser's cookies). How each is handled:
 | Referrer policy and origin checks | not `no-referrer`: under it a browser sends `Origin: null` on a same-origin form post, which the origin check refuses, so every form failed in a real browser; `same-origin` sends the real origin; `Origin: null` is still accepted on `POST /launch` only | `test_the_referrer_policy_lets_a_browser_send_its_origin_on_a_post`, `tests/integration/test_ui_browser.py` (headless Chrome, opt-in: `FLIB_TEST_BROWSER=1`) |
 | Leaking through errors | GET and POST only (405, unknown methods 501); every error body is its status phrase, or for a browser's page a short page with the menu, with a status line even for a request line that makes no sense; a bug gets a plain 500 and no traceback; `Server: flib`; `Cache-Control: no-store` | `test_only_get_and_post_are_allowed`, `test_error_pages_reveal_nothing`, `test_a_bug_gets_a_plain_500_and_no_traceback` |
 
-Known limits: the cookie is not `Secure`, since there is no TLS on loopback.
-Browsers keep cookies per host, not per port, so the session cookie is also
-sent to any other server on 127.0.0.1; its name carries the port, and it
-is useless without this server, but a program listening there could read it
-while the session lasts. With `--no-browser` the first page after the link
+Known limits: the cookie is not `Secure` nor `__Host-`: there is no TLS on
+loopback, and neither would keep it from another port (`Secure` is about
+the scheme, not the port). The session's name is a secret for as long as the
+session lasts: the browser sends the cookie to that name on *any* port
+(`test_only_the_sessions_own_name_gets_the_cookie` shows it), so someone who
+reads it (the address bar on a shared screen, the browser's history) and
+also runs a server on loopback and gets the browser to visit that name on
+its port could take the session until it ends. Nothing a browser sends on a
+plain navigation is kept apart by port, so no second measure closes that;
+checking which account owns the connecting socket would, and is left for
+later. The name is never on a command line, in the terminal or in a
+referrer to another origin. On a Mac whose resolver does not give loopback
+for `.localhost` (macOS before 26), the interface is at `127.0.0.1` and
+the cookie goes to every server on 127.0.0.1, as before #125; `flib ui`
+warns. A browser that sends `.localhost` names to a proxy or a DNS server
+(set up to) would not reach the interface at all; macOS, Safari, Chrome and
+Firefox resolve them to the Mac itself. With `--no-browser` the first page after the link
 gets the link as its `Referer`, from and to this server only.
 Many local connections that reconnect as soon as they are dropped can still
 crowd out the session's: with 200 of them, about 1 request in 10 from the
@@ -782,7 +833,7 @@ itself.
 | A malformed, oversized, ambiguous or future state file | a regular file of at most 4 KiB (a link is not followed), plain ASCII matching `FORM` as a whole (one flat object; values a printable string with only `\uXXXX` escapes, a whole number 0..9999, `true` or `false`), each key once, known keys only (exact), `version` 1, else the defaults; then the pose from the fixed set (exact), counts not booleans, texts at most 80 UTF-16 units with no control, format, bidi or line-break character, `running` a boolean. `menubar.sanitize` is the same contract in Python; anything either side would read differently (a key twice, a trailing comma, a lone surrogate, a long decimal, deep nesting, a full-width letter, a byte order mark) is outside `FORM` and gives the defaults on both. The opt-in test runs the compiled applet's parser on the same corpus | `test_sanitize_keeps_only_what_the_contract_allows`, `test_the_parser_constants_come_from_python`, `test_the_real_applet_parses_the_state_as_the_contract_says` (opt-in) |
 | File names on the screen | the state holds counts and fixed sentences only; no name, folder or category is ever written; `seen.json` likewise | `test_a_run_shows_busy_then_what_waits`, `test_read_seen_checks_what_the_applet_wrote` |
 | A secret in a log | the agent's output and the output of everything the applet starts (`flib ui` among them) go to `/dev/null`; `flib ui` puts its launch token in the handoff file, never in output | `test_the_agent_starts_at_login_and_stays_off_after_quit`, `test_the_actions_are_the_only_things_a_click_runs` |
-| The interface's launch weakened | the applet runs `flib ui --open PAGE` like the terminal does: the token still goes through the handoff file; `--open` is a fixed choice and `run` refuses any other page; when an interface already runs, the second one opens the page's address from `PAGE_PATHS`, which holds no secret and works only in the browser that has the session's cookie; the port comes from `flib-ui.json` (0600, never written through a link) only when its pid is the holder of the interface's lock | `test_open_goes_to_the_page_of_the_interface_already_running`, `test_a_page_not_in_the_table_never_reaches_an_address`, `test_flib_ui_open_is_a_fixed_choice`, `test_a_record_that_does_not_match_the_holder_is_not_believed`, `test_a_boolean_port_is_not_believed_even_from_the_holder`, `test_the_running_record_is_private_and_never_follows_a_link` |
+| The interface's launch weakened | the applet runs `flib ui --open PAGE` like the terminal does: the token still goes through the handoff file; `--open` is a fixed choice and `run` refuses any other page; when an interface already runs, the second one opens the page from `PAGE_PATHS` through a 0600 opener file and `/open` (the session's name never on a command line), which works only in the browser that has the session's cookie; the port and name come from `flib-ui.json` (0600, never written through a link) only when its pid is the holder of the interface's lock and the host is a session name or `127.0.0.1` | `test_open_goes_to_the_page_of_the_interface_already_running`, `test_open_under_a_name_goes_through_an_opener_file`, `test_a_host_that_is_no_sessions_name_is_not_believed`, `test_a_page_not_in_the_table_never_reaches_an_address`, `test_flib_ui_open_is_a_fixed_choice`, `test_a_record_that_does_not_match_the_holder_is_not_believed`, `test_a_boolean_port_is_not_believed_even_from_the_holder`, `test_the_running_record_is_private_and_never_follows_a_link` |
 | Counts of one library shown by an app acting on another | `target.json` is written only once the app and its agent are in place; a failed reinstall keeps the old record, a launchd refusal unloads the agent; every hook needs the agent installed and the database named in the record | `test_a_failed_install_leaves_no_target_and_no_writes`, `test_a_failed_reinstall_never_mixes_two_configurations`, `test_another_librarys_lock_is_ignored` |
 | A link in flib's menu folder | nothing is written through a folder that is a link or not the user's; `remove` unlinks a link instead of deleting what it points to, does every step, and then names what is left, without a traceback | `test_a_linked_menu_folder_is_never_written_through`, `test_an_app_path_that_is_a_link_is_unlinked`, `test_a_partial_removal_says_what_is_left` |
 | A hostile `seen.json` or `target.json` taking `flib status` down | at most 8 KiB read, never through a link, any parse failure (a nesting too deep included) gives "nothing reported"; `summary` never raises | `test_summary_never_raises_on_a_hostile_seen_file`, `test_summary_never_raises_at_all` |

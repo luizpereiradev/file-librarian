@@ -562,6 +562,24 @@ All notable changes to this project are documented here. The format follows
 
 ### Security
 
+- `flib ui`'s session cookie no longer reaches other servers on loopback
+  (#125). Browsers keep cookies per host, not per port, so any program or
+  account listening on another 127.0.0.1 port that got the browser to load
+  one of its pages (a link, a redirect, an image) received the cookie, and
+  with it could read pages and post actions from outside the browser. Each
+  session is now served under a random name of its own,
+  `flib-<32 hex>.localhost` (current macOS, Chrome and Firefox resolve
+  `*.localhost` to loopback by themselves), whose host-only cookie the
+  browser sends to that name only; the `Host` check is exact for it. The
+  server holds `[::1]` on its port as well, since browsers try it first for
+  such a name. The cookie is `flib_ui` with a `Max-Age` renewed by each
+  request, so it ends a minute after the idle timer. The name stays off
+  every command line: a second `flib ui --open PAGE` (the menu bar's
+  entries) opens a 0600 opener file that goes through `/open`, and the
+  terminal says the port only. A Mac whose resolver does not give loopback
+  for `.localhost` gets the interface at `127.0.0.1` as before, with a
+  warning on stderr saying what that leaves open. A real-browser test with
+  a throwaway server on another port covers it.
 - Descriptions, tags and proposed names keep personal identifiers out of the
   index (#82): the prompt asks the AI not to copy phone numbers, e-mail
   addresses, document, account or card numbers, payment keys, addresses or
