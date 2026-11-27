@@ -526,10 +526,21 @@ def test_every_page_says_its_language(pt_ui: Ui) -> None:
 
 
 def test_the_ended_page_is_in_the_language_too(pt_ui: Ui) -> None:
+    """Every page for a browser without the session (#127): not started yet, ended, and
+    ended because the link was opened twice."""
     stranger = UiClient(pt_ui.port, pt_ui.host_name)
     reply = stranger.get("/status")
     assert reply.status == 403 and '<html lang="pt-BR">' in reply.text
+    assert "Esta sessão ainda não começou" in reply.text and "<code>flib ui</code>" in reply.text
+    assert UiClient(pt_ui.port, pt_ui.host_name).launch(pt_ui.launch_url).status == 303
+    pt_ui.end_session()  # as End session does, without ending the server
+    reply = stranger.get("/status")
+    assert reply.status == 403 and '<html lang="pt-BR">' in reply.text
     assert "Esta sessão terminou" in reply.text and "<code>flib ui</code>" in reply.text
+    assert stranger.launch(pt_ui.launch_url).status == 403  # the used link again: theft
+    reply = stranger.get("/status")
+    assert reply.status == 403 and '<html lang="pt-BR">' in reply.text
+    assert "foi encerrada porque o link dela foi aberto duas vezes" in reply.text
 
 
 def test_the_open_page_is_in_the_language_too(pt_ui: Ui) -> None:

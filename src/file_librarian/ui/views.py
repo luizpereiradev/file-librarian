@@ -32,6 +32,7 @@ import csv
 import dataclasses
 import io
 import os
+import re
 import sqlite3
 import stat
 import subprocess
@@ -61,6 +62,7 @@ from file_librarian.search import (
     SearchFilters,
     SearchHit,
     Sums,
+    fts_query,
     make_filters,
     semantic_search,
     split_values,
@@ -213,15 +215,24 @@ def chips(links: Sequence[tuple[str, str, bool]], label: str) -> Markup:
     )
 
 
-def file_actions(file_id: int, name: str, csrf: str, *, can_open: bool) -> Markup:
+def file_actions(
+    file_id: int,
+    name: str,
+    csrf: str,
+    *,
+    can_open: bool,
+    back: Sequence[tuple[str, str]] = (),
+) -> Markup:
     """Open and Show in Finder: forms that post the file's id, never its path. Open only
-    for a document ``openable`` says macOS shows in an app rather than runs."""
+    for a document ``openable`` says macOS shows in an app rather than runs. ``back``:
+    the page they are on (``back_to`` reads it), where a refusal is shown (#127)."""
 
     def action(path: str, label: Msg, named: Msg) -> Markup:
         return el(
             "form",
             csrf_field(csrf),
             el("input", type="hidden", name="id", value=file_id),
+            *(el("input", type="hidden", name=k, value=v) for k, v in back),
             el("button", label, type="submit", class_="small", aria_label=named),
             method="post",
             action=path,
@@ -285,6 +296,41 @@ def one_choice(params: dict[str, list[str]], name: str) -> str | None:
     if len(values) > 1:
         raise BadRequest
     return values[0] if values else None
+
+
+KEPT_KEY = re.compile(r"[A-Za-z0-9_-]{16}")
+"""A kept search's or outcome's id in an address (``secrets.token_urlsafe(12)``)."""
+BACK_PAGES = ("search", "due", "review")
+"""The pages whose Open and Show in Finder buttons say where they are (``back_to``)."""
+
+
+def back_to(fields: dict[str, list[str]]) -> str | None:
+    """The address of the page an Open or Show in Finder form came from, built here
+    from fixed parts only (never from the form's text): ``/search`` with the kept
+    search's id, ``/due`` with its window, ``/review``. ``None`` when the form names no
+    page (a script); ``BadRequest`` for anything the pages never send."""
+    page = _choice(fields, "back", BACK_PAGES)
+    if page is None:
+        if fields.keys() & {"r", *DUE_PARAMS}:
+            raise BadRequest
+        return None
+    if page == "search":
+        if fields.keys() & DUE_PARAMS:
+            raise BadRequest
+        key = one_choice(fields, "r")
+        if key is None:
+            return "/search"
+        if not KEPT_KEY.fullmatch(key):
+            raise BadRequest
+        return f"/search?r={key}"
+    if "r" in fields:
+        raise BadRequest
+    if page == "due":
+        window = due_window(fields)
+        return f"/due?{window}" if window else "/due"
+    if fields.keys() & DUE_PARAMS:
+        raise BadRequest
+    return "/review"
 
 
 def _choice(params: dict[str, list[str]], name: str, allowed: tuple[str, ...]) -> str | None:
@@ -473,7 +519,7 @@ def _move(move: activity_mod.Move, config: Config) -> Markup:
         filename(move.source.name),
         el("span", " → ", aria_hidden="true"),
         el("span", t("activity.to"), class_="sr-only"),
-        el("span", _destination(move, config), class_="where"),
+        el("bdi", _destination(move, config), class_="where", dir="ltr"),
         " ",
         *tags,
         " " if undo else None,
@@ -635,6 +681,9 @@ class Found:
     weak: int = 0
     sensitive: int = 0
     """Sensitive files that matched; never shown."""
+    total: int | None = None
+    """Every match by words that may be shown (no sensitive file), however many are
+    listed; ``None`` for a search by meaning, which keeps only the closest (#127)."""
     error: str | None = None
     categories: list[str] = field(default_factory=list)
 
@@ -716,6 +765,14 @@ def find(config: Config, form: SearchForm | None, *, totals: bool = True) -> Fou
             if len(found.hits) < form.limit:
                 row = store.file_by_current_path(Path(hit.path))
                 found.hits.append((hit, None if row is None else row.id))
+        if not form.semantic or not config.search.semantic.enabled:
+            # By words, every match is known: all fetched, or counted when there are more.
+            everything = len(hits) < limit
+            found.total = (
+                len(hits) - found.sensitive
+                if everything
+                else count_matches(store, form.q, filters, form.duplicates)
+            )
         if totals:
             found.sums = sum_amounts(store, form.q, filters=filters, by=form.by)
     return found
@@ -725,9 +782,16 @@ SEARCH_GONE = t("search.gone")
 
 
 def search_page(
-    config: Config, csrf: str, fields: dict[str, list[str]] | None, *, notice: str | None = None
+    config: Config,
+    csrf: str,
+    fields: dict[str, list[str]] | None,
+    *,
+    notice: str | None = None,
+    key: str | None = None,
+    outcome: Markup | None = None,
 ) -> Page:
-    """The form, and the results when ``fields`` (a kept search) are given."""
+    """The form, and the results when ``fields`` (a kept search, ``key`` its id) are
+    given. ``outcome``: what an Open or Show in Finder from this page refused (#127)."""
     form = None if fields is None else SearchForm.parse(fields)
     try:
         found = find(config, form)
@@ -738,6 +802,7 @@ def search_page(
     parts: list[Markup | None] = [
         el("h1", t("nav.search")),
         el("p", t("search.lead"), class_="lead"),
+        outcome,
         message(notice) if notice else None,
         _search_form(
             config,
@@ -751,11 +816,39 @@ def search_page(
     if found.error:
         parts.append(message(found.error, error=True))
     elif form is not None:
-        parts.append(_results(found, form, config, csrf))
-        title = t("search.title_matches", count=len(found.hits))
+        back = (("back", "search"),) + ((("r", key),) if key is not None else ())
+        parts.append(_results(found, form, config, csrf, back))
+        title = _title(found, form)
     elif found.notice:
         parts.append(message(found.notice))
     return HTTPStatus.OK, layout(title, "search", join(parts), csrf)
+
+
+def _title(found: Found, form: SearchForm) -> Msg:
+    """The page's title says how many matched: all of them, or how many of how many
+    are listed (``Search: 50 of 111 matches``), never just the page's limit."""
+    count = len(found.hits)
+    if found.total is not None and found.total > count:
+        return t("search.title_of", shown=count, count=found.total)
+    if found.total is None and count >= form.limit:
+        return t("search.title_capped", count=count)
+    return t("search.title_matches", count=count)
+
+
+def count_matches(store: Store, text: str, filters: SearchFilters, include_duplicates: bool) -> int:
+    """How many files the search by words matches, sensitive files left out (they are
+    counted apart): what ``words_search`` would list without a limit."""
+    if fts_query(text) is None and not filters:
+        return 0
+    return store.count_files(
+        fts_query(text),
+        categories=filters.categories,
+        extensions=filters.extensions,
+        since=filters.since,
+        until=filters.until,
+        include_duplicates=include_duplicates,
+        fields=filters.fields,
+    )
 
 
 def _semantic_default(config: Config) -> bool:
@@ -959,7 +1052,13 @@ def _advanced(form: SearchForm) -> bool:
     return any(v is not None for v in hidden) or form.duplicates or form.limit != DEFAULT_LIMIT
 
 
-def _results(found: Found, form: SearchForm, config: Config, csrf: str) -> Markup:
+def _results(
+    found: Found,
+    form: SearchForm,
+    config: Config,
+    csrf: str,
+    back: Sequence[tuple[str, str]] = (),
+) -> Markup:
     """The count and the totals first, right under the form; then each match."""
     parts: list[Markup | None] = []
     if found.notice:
@@ -972,13 +1071,18 @@ def _results(found: Found, form: SearchForm, config: Config, csrf: str) -> Marku
             parts.append(message(t("search.no_close")))
         elif config.database.exists():
             parts.append(message(t("search.no_matches")))
+    elif found.total is not None and found.total > count:
+        line = t("search.matches_of", shown=count, count=found.total)
+        parts.append(el("h2", line, class_="count"))
     else:
-        key = "search.matches_capped" if count >= form.limit else "search.matches"
+        capped = found.total is None and count >= form.limit  # by meaning: the closest
+        key = "search.matches_capped" if capped else "search.matches"
         parts.append(el("h2", t(key, count=count), class_="count"))
     if found.sums is not None and (found.hits or found.sums.totals):
-        parts.append(_sums(found.sums, semantic=form.semantic))
+        words = fts_query(form.q) is not None
+        parts.append(_sums(found.sums, semantic=form.semantic, words=words))
     if found.hits:
-        items = [_hit(hit, i, config, csrf) for hit, i in found.hits]
+        items = [_hit(hit, i, config, csrf, back) for hit, i in found.hits]
         parts.append(el("ol", *items, class_="hits", aria_label=t("search.matches_label")))
     return el("section", *parts, class_="results", aria_label=t("search.results_label"))
 
@@ -991,7 +1095,13 @@ def _input_of(path: Path, config: Config) -> str:
     return shown(path.parent.name)
 
 
-def _hit(hit: SearchHit, file_id: int | None, config: Config, csrf: str) -> Markup:
+def _hit(
+    hit: SearchHit,
+    file_id: int | None,
+    config: Config,
+    csrf: str,
+    back: Sequence[tuple[str, str]] = (),
+) -> Markup:
     """One match, as ``flib search`` lists it. A file that is not filed (put back by
     ``flib undo``, missing, failed) says where it is and offers no button: those
     are for files in the library."""
@@ -1004,8 +1114,8 @@ def _hit(hit: SearchHit, file_id: int | None, config: Config, csrf: str) -> Mark
     elif filed and hit.category:
         tags.append(el("span", hit.category, class_="badge"))
     elif status == FileStatus.SKIPPED.value:
-        back = t("search.not_filed", folder=_input_of(path, config))
-        tags.append(el("span", back, class_="badge"))
+        put_back = t("search.not_filed", folder=_input_of(path, config))
+        tags.append(el("span", put_back, class_="badge"))
     elif not filed:
         tags.append(el("span", FILE_STATES.get(status, status), class_="badge"))
     if not hit.exists:
@@ -1018,7 +1128,7 @@ def _hit(hit: SearchHit, file_id: int | None, config: Config, csrf: str) -> Mark
     if hit.original_name != path.name:
         details.append(el("div", t("views.was", name=filename(hit.original_name)), class_="note"))
     if hit.duplicate_of is not None:
-        original = short(Path(hit.duplicate_of), config)
+        original = el("bdi", short(Path(hit.duplicate_of), config), dir="ltr")
         details.append(el("div", t("search.duplicate_of", path=original), class_="note"))
     if (line := fields_line(hit)) is not None:
         details.append(el("div", line, class_="fields"))
@@ -1035,7 +1145,7 @@ def _hit(hit: SearchHit, file_id: int | None, config: Config, csrf: str) -> Mark
         )
     if file_id is not None and hit.exists and filed:
         can_open = openable(path)
-        details.append(file_actions(file_id, shown(path.name), csrf, can_open=can_open))
+        details.append(file_actions(file_id, shown(path.name), csrf, can_open=can_open, back=back))
     return el("li", *details, class_="hit")
 
 
@@ -1103,9 +1213,14 @@ def fields_line(hit: SearchHit) -> Markup | None:
     return join(*(join(" · " if i else None, part) for i, part in enumerate(parts)))
 
 
-def _sums(sums: Sums, *, semantic: bool) -> Markup:
+def _sums(sums: Sums, *, semantic: bool, words: bool = True) -> Markup:
+    """``words``: the search had words (the totals add up every match by them); without,
+    every match of the filters."""
     parts: list[Markup | None] = [el("h2", t("search.totals"))]
-    note = t("search.totals_note_semantic") if semantic else t("search.totals_note")
+    if not words:
+        note = t("search.totals_note_filters")
+    else:
+        note = t("search.totals_note_semantic") if semantic else t("search.totals_note")
     parts.append(el("p", note, class_="note"))
     if not sums.totals:
         parts.append(message(t("search.no_amounts")))
@@ -1350,7 +1465,9 @@ def _due_actions(
             action="/due/settle",
             class_="inline",
         )
-    return join(file_actions(item.file_id, name, csrf, can_open=openable(item.path)), settle)
+    back = (("back", "due"), *keep)  # a refusal is shown on this page, in this window
+    tools = file_actions(item.file_id, name, csrf, can_open=openable(item.path), back=back)
+    return join(tools, settle)
 
 
 def _due_table(

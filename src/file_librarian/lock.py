@@ -22,6 +22,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import os
+import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -132,17 +133,22 @@ def reprocess_lock(database: Path) -> Iterator[None]:
 
 
 @contextmanager
-def ui_lock(database: Path) -> Iterator[None]:
+def ui_lock(database: Path) -> Iterator[Callable[[], None]]:
     """One ``flib ui`` at a time (#113). Separate from the instance lock, which
     the interface never holds while it runs, so an open interface never keeps a
     run from starting. The interface will not stay read-only: each action that
     changes files or the index (review, fix, undo) must take ``instance_lock``
-    for that action only, and say so when a run holds it."""
+    for that action only, and say so when a run holds it.
+
+    Yields ``release``: lets the lock go before the block ends (from any thread,
+    once; the end of the block then leaves alone whatever the next holder wrote).
+    A ``flib ui`` whose link was stolen calls it, so a new one can start while it
+    serves only the page that says why (#127)."""
     with _flock(
         database.parent / UI_LOCK_NAME,
         "flib ui is already running (pid {pid})",
-    ):
-        yield
+    ) as release:
+        yield release
 
 
 @contextmanager
@@ -153,7 +159,7 @@ def _flock(
     wait: float = 0.0,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
-) -> Iterator[None]:
+) -> Iterator[Callable[[], None]]:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     try:
@@ -171,10 +177,21 @@ def _flock(
                 raise AlreadyRunningError(busy.format(pid=holder)) from exc
         os.ftruncate(fd, 0)
         os.pwrite(fd, str(os.getpid()).encode(), 0)
+        guard = threading.Lock()
+        held = [True]
+
+        def release() -> None:
+            # Our pid out first, then the lock: once it is free, the file is the next
+            # holder's, and nothing here may touch it again.
+            with guard:
+                if held[0]:
+                    held[0] = False
+                    os.ftruncate(fd, 0)
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+
         try:
-            yield
+            yield release
         finally:
-            os.ftruncate(fd, 0)
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            release()
     finally:
         os.close(fd)

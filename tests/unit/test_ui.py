@@ -70,6 +70,8 @@ def raw_headers(reply: bytes) -> dict[str, str]:
 
 
 HANG_GUARD_SECONDS = 20
+STOLEN = "This session was ended because its link was opened twice"
+"""What every page says after a theft of the launch link (#127)."""
 
 
 @pytest.fixture(autouse=True)
@@ -457,8 +459,45 @@ def test_the_launch_token_works_once(ui: Ui, events: list[str]) -> None:
     stale = UiClient(ui.port, ui.host_name)
     reply = stale.launch(ui.launch_url)
     assert reply.status == 403
-    assert "This session has ended" in reply.text
+    # Its second use is a theft (#127): said so, never a new session.
+    assert STOLEN in reply.text
     assert "Set-Cookie" not in reply.headers
+
+
+def test_after_a_theft_every_page_says_why_and_nothing_is_left_to_take(
+    ui: Ui, events: list[str]
+) -> None:
+    """#127: the server ends on a theft, but first answers for ``stolen_linger`` (a
+    signal ends it at once) with the page that says why, to the rightful tab too. The
+    thief gets that page and nothing else: no cookie, no session, no second chance."""
+    rightful = UiClient(ui.port, ui.host_name)
+    assert rightful.launch(ui.launch_url).status == 303
+    csrf = rightful.csrf()
+    thief = UiClient(ui.port, ui.host_name)
+    taken = thief.launch(ui.launch_url)
+    assert taken.status == 403 and STOLEN in taken.text
+    assert "Set-Cookie" not in taken.headers and thief.cookies == {}
+    html = {"Accept": "text/html"}
+    for who in (rightful, thief):
+        for reply in (
+            who.get("/status", headers=html),
+            who.get("/search", headers=html),
+            who.post_form("/search", {"csrf": csrf, "q": "x"}, html),
+            who.post_form("/session/end", {"csrf": csrf}, html),
+        ):
+            assert reply.status == 403, reply.status
+            assert STOLEN in reply.text
+            assert "Set-Cookie" not in reply.headers
+            assert csrf not in reply.text and token_of(ui) not in reply.text
+        css = who.get("/static/app.css")  # the page is styled
+        assert css.status == 200 and css.headers["Content-Type"].startswith("text/css")
+    assert rightful.get("/api/v1/status").status == 401
+    # The token again, and again: no second warning, no session, no other reason.
+    assert UiClient(ui.port, ui.host_name).launch(ui.launch_url).status == 403
+    assert ui.wait(0) is None  # still answering
+    ui.stop("signal")  # Ctrl-C ends the wait for the rightful tab at once
+    assert ui.wait(5) == "stolen"
+    assert events == ["started", "stolen"]
 
 
 def test_a_used_token_from_a_client_without_the_session_ends_everything(
@@ -470,6 +509,8 @@ def test_a_used_token_from_a_client_without_the_session_ends_everything(
     first.launch(ui.launch_url)
     session_id = first.cookies[ui.cookie_name]
     assert UiClient(ui.port, ui.host_name).launch(ui.launch_url).status == 403
+    assert ui.session(session_id) is None  # dropped before the reply
+    ui.stop("closed")  # not the end of the linger: the reason is the first one given
     assert ui.wait(5) == "stolen"
     assert events == ["started", "stolen"]
     assert ui.session(session_id) is None
@@ -523,11 +564,15 @@ def test_the_cookie_lasts_at_least_a_minute(loopback_network: None, cfg: Config)
 @pytest.mark.parametrize(
     "query", ["", "token=", "token=wrong", "tok=X", "token=X&token=X", "token=%FF%FE"]
 )
-def test_a_wrong_or_missing_token_gets_the_ended_page(ui: Ui, query: str) -> None:
+def test_a_wrong_or_missing_token_gets_the_not_started_page(ui: Ui, query: str) -> None:
+    """Before the link was opened, the truth (#127): not started yet, use the link; not
+    "ended". Nothing of the token, the session or a cookie."""
     query = query.replace("X", token_of(ui))
     reply = UiClient(ui.port, ui.host_name).get(f"/launch?{query}")
     assert reply.status == 403
-    assert "This session has ended" in reply.text
+    assert "This session has not started yet" in reply.text
+    assert "This session has ended" not in reply.text
+    assert token_of(ui) not in reply.text and "Set-Cookie" not in reply.headers
     # A wrong guess does not burn the real link.
     assert UiClient(ui.port, ui.host_name).launch(ui.launch_url).status == 303
 
@@ -1696,8 +1741,9 @@ def test_flib_ui_without_open_says_why(
 
 
 def test_a_stolen_link_ends_flib_ui_with_a_warning(
-    loopback_network: None, cfg: Config, fake_browser: Path
+    loopback_network: None, cfg: Config, fake_browser: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(ui_server, "STOLEN_LINGER", 0.0)  # what the tab sees: tested above
     lines: list[str] = []
     warnings: list[str] = []
 
@@ -1713,6 +1759,123 @@ def test_a_stolen_link_ends_flib_ui_with_a_warning(
     assert warnings == [ui_server.STOLEN_WARNING]
     assert "Another program or account on this Mac may have seen it" in warnings[0]
     assert lines[-1].startswith("flib ui ended: the launch link was used again")
+
+
+def launch_url(lines: list[str]) -> str:
+    wait_for(lambda: any("/launch?token=" in line for line in lines), timeout=10)
+    return next(line for line in lines if "/launch?token=" in line).split(" ", 2)[2]
+
+
+def test_after_a_theft_flib_ui_can_start_again_at_once(
+    loopback_network: None, cfg: Config, fake_browser: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stolen page says "run `flib ui` again" (#127 review): that is true at once.
+    On the theft the old server gives up its records and the lock while it serves only
+    that page; a new ``flib ui`` starts a fresh session on its own port and name; the
+    old one ends later ("stolen", exit 1) and removes nothing of the new one."""
+    monkeypatch.setattr(ui_server, "STOLEN_LINGER", 30.0)  # ended below; a failure bound
+    made: list[Ui] = []
+
+    class Recorded(ui_server.Ui):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            made.append(self)
+
+    monkeypatch.setattr(ui_server, "Ui", Recorded)
+    old_lines: list[str] = []
+    new_lines: list[str] = []
+    second: list[str] = []
+    seen: dict[str, Any] = {}
+
+    def run_again() -> None:
+        second.append(ui_server.run(cfg, browser=False, echo=new_lines.append, warn=print))
+
+    def steal_then_start_again() -> None:
+        url = launch_url(old_lines)
+        rightful = UiClient.for_url(url)
+        assert rightful.launch(url).status == 303
+        assert UiClient.for_url(url).launch(url).status == 403  # the theft
+        # Its records go with the lock (the stolen() call ran before the 403 was sent).
+        assert not ui_server.running_path(cfg.database).exists()
+        assert not ui_server.name_path(cfg.database).exists()
+        assert ui_server.running(cfg.database) is None
+        # A new flib ui, while the old one still answers with the stolen page.
+        again = threading.Thread(target=run_again, name="test-second-ui", daemon=True)
+        again.start()
+        seen["thread"] = again
+        fresh = launch_url(new_lines)
+        assert urlsplit(fresh).netloc != urlsplit(url).netloc  # its own port and name
+        client = UiClient.for_url(fresh)
+        assert client.launch(fresh).status == 303
+        assert client.get("/status").status == 200
+        assert STOLEN in rightful.get("/status").text  # the old one: that page only
+        seen["client"], seen["where"] = client, ui_server.running(cfg.database)
+        os.kill(os.getpid(), signal.SIGTERM)  # Ctrl-C in the old one's terminal
+
+    work = Background(steal_then_start_again)
+    assert ui_server.run(cfg, browser=False, echo=old_lines.append, warn=print) == "stolen"
+    work.join()
+    old, new = made
+    where = seen["where"]
+    assert where is not None and (where.port, where.host) == (new.port, new.host_name)
+    # The old one ended and left the new one's records, lock and session alone.
+    assert ui_server.running(cfg.database) == where
+    assert seen["client"].get("/status").status == 200
+    assert ui_server.run(cfg, browser=False, echo=lambda line: None) == "running"
+    new.stop("signal")
+    seen["thread"].join(10)
+    assert second == ["signal"]
+    assert ui_server.running(cfg.database) is None  # and the new one removed its own
+    assert old.reason == "stolen"
+
+
+def test_a_flib_ui_removes_only_its_own_records(cfg: Config) -> None:
+    cfg.database.parent.mkdir(parents=True, exist_ok=True)
+    ui_server.write_running(cfg.database, 4242, "flib-" + "a" * 32 + ".localhost")
+    ui_server.remove_running(cfg.database, 4343, "flib-" + "b" * 32 + ".localhost")
+    assert ui_server.running_path(cfg.database).exists()  # another port: not this one's
+    ui_server.remove_running(cfg.database, 4242, "flib-" + "b" * 32 + ".localhost")
+    assert ui_server.running_path(cfg.database).exists() is False  # its pid and port
+    assert ui_server.name_path(cfg.database).exists()  # but another name: kept
+    ui_server.remove_running(cfg.database, 4242, "flib-" + "a" * 32 + ".localhost")
+    assert not ui_server.name_path(cfg.database).exists()
+
+
+def test_the_theft_linger_outlasts_end_sessions(ui: Ui, events: list[str]) -> None:
+    """After a theft the stolen page is served past End session's 1.5 s (a mutant set
+    both lingers alike), until a signal ends it."""
+    UiClient(ui.port, ui.host_name).launch(ui.launch_url)
+    thief = UiClient(ui.port, ui.host_name)
+    assert thief.launch(ui.launch_url).status == 403
+    assert ui.wait(ui_server.END_LINGER + 0.5) is None  # past End session's linger
+    late = thief.get("/status", headers={"Accept": "text/html"})
+    assert late.status == 403 and STOLEN in late.text
+    ui.stop("signal")
+    assert ui.wait(5) == "stolen"
+
+
+def test_after_a_theft_even_a_missing_page_says_why(ui: Ui) -> None:
+    UiClient(ui.port, ui.host_name).launch(ui.launch_url)
+    thief = UiClient(ui.port, ui.host_name)
+    thief.launch(ui.launch_url)
+    for path in ("/no/such/page", "/status?x=1", "/due?within=9y"):
+        reply = thief.get(path, headers={"Accept": "text/html"})
+        assert reply.status in (400, 403, 404) and STOLEN in reply.text, path
+    assert thief.get("/no/such/page").headers["Content-Type"].startswith("text/plain")
+    ui.stop("closed")
+    assert ui.wait(5) == "stolen"
+
+
+def test_the_ui_lock_can_be_let_go_early_once(cfg: Config) -> None:
+    lock = cfg.database.parent / "flib-ui.lock"
+    with ui_lock(cfg.database) as release:
+        release()
+        assert lock.read_text() == ""
+        with ui_lock(cfg.database):  # free: the next one takes it at once
+            assert lock.read_text() == str(os.getpid())
+            release()  # again: nothing, and the next holder's pid stays
+            assert lock.read_text() == str(os.getpid())
+    assert lock.read_text() == ""
 
 
 def test_flib_ui_exits_with_an_error_when_the_link_was_stolen(
@@ -1851,10 +2014,10 @@ def test_the_launch_post_takes_the_null_origin_and_nothing_wider(
 
 
 @pytest.mark.parametrize("body", [b"", b"token=", b"token=wrong", b"token=a&token=b"])
-def test_a_wrong_launch_post_gets_the_ended_page(ui: Ui, body: bytes) -> None:
+def test_a_wrong_launch_post_gets_the_not_started_page(ui: Ui, body: bytes) -> None:
     sent = {"Origin": "null", "Content-Type": "application/x-www-form-urlencoded"}
     reply = UiClient(ui.port, ui.host_name).request("POST", "/launch", body=body, headers=sent)
-    assert reply.status == 403 and "This session has ended" in reply.text
+    assert reply.status == 403 and "This session has not started yet" in reply.text
     assert UiClient(ui.port, ui.host_name).launch(ui.launch_url).status == 303  # still unused
 
 
@@ -1871,6 +2034,7 @@ def test_a_used_token_posted_again_without_the_session_ends_everything(
     finally:
         handoff.unlink()
         handoff.parent.rmdir()
+    ui.stop("closed")  # the linger's end; the reason stays the theft
     assert ui.wait(5) == "stolen"
     assert events == ["started", "stolen"]
 
@@ -2272,7 +2436,7 @@ class _Collector(HTMLParser):
 def test_every_page_references_only_packaged_files_and_has_no_inline_code() -> None:
     assets = load_assets()
     pages = load_pages()
-    assert set(pages) == {"status", "ended", "opening", "elsewhere", "open"}
+    assert set(pages) == {"status", "ended", "opening", "elsewhere", "open", "waiting", "stolen"}
     routes = {"/"} | {f"/{p}" for p in ui_server.PAGES} | set(ui_server.POST_ROUTES)
     for name, html in pages.items():
         html = html.replace("{{next}}", ui_server.PAGE_PATHS["review"])  # what /open fills in

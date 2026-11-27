@@ -84,6 +84,16 @@ EN: dict[str, Entry] = {
         "Search again."
     ),
     "search.title_matches": Plural(one="Search: {count} match", other="Search: {count} matches"),
+    "search.title_of": Plural(
+        one="Search: {shown} of {count} match", other="Search: {shown} of {count} matches"
+    ),
+    "search.title_capped": Plural(
+        one="Search: the closest match", other="Search: the {count} closest matches"
+    ),
+    "search.matches_of": Plural(
+        one="{shown} of {count} match (the most asked for)",
+        other="{shown} of {count} matches (the most asked for)",
+    ),
     "search.matches": Plural(one="{count} match", other="{count} matches"),
     "search.matches_capped": Plural(
         one="{count} match (the most asked for)", other="{count} matches (the most asked for)"
@@ -129,8 +139,8 @@ EN: dict[str, Entry] = {
     "search.filters_used": "Filters ({count} in use)",
     "search.sensitive": Plural(
         one=(
-            "{count} sensitive file also matched; they are never shown here (`flib search` in "
-            "Terminal lists them)."
+            "{count} sensitive file also matched; it is never shown here (`flib search` in "
+            "Terminal lists it)."
         ),
         other=(
             "{count} sensitive files also matched; they are never shown here (`flib search` in "
@@ -153,6 +163,7 @@ EN: dict[str, Entry] = {
     "search.tags_label": "Tags",
     "search.totals": "Totals",
     "search.totals_note": "Over every match by words (never duplicates), not only those listed.",
+    "search.totals_note_filters": "Over every match (never duplicates), not only those listed.",
     "search.totals_note_semantic": (
         "Over every match by words (never duplicates), not only those listed. Totals match the "
         "words only, not by meaning."
@@ -225,40 +236,40 @@ EN: dict[str, Entry] = {
     ),
     "open.failed": "macOS could not open it.",
     # flib's core (i18n.core): search's filter errors, named as the form names its fields
-    "core.search.unknown_category": "Unknown category {value} (known: {known})",
-    "core.search.bad_extension": "Bad extension {value}: give it like pdf or .pdf",
-    "core.search.since_after_until": "Processed from {since} is after Processed until {until}",
-    "core.search.issuer": "Issuer {value} names no organisation",
-    "core.search.unknown_kind": "Unknown kind {value} (kinds: {kinds})",
-    "core.search.min_over_max": "At least {low} is more than At most {high}",
-    "core.search.currency": "Currency {value} is not a currency code like USD or BRL",
-    "core.search.period": "Period {value} is not a year or month like 2026 or 2026-09",
-    "core.search.amount": "{field} {value} is not an amount like 100 or 99.90",
-    "core.search.date_form": "{field} {value} is not a date like 2026-01-31",
-    "core.search.date_invalid": "{field} {value} is not a valid date",
+    "core.search.unknown_category": "Unknown category {value} (known: {known}).",
+    "core.search.bad_extension": "Bad extension {value}: give it like pdf or .pdf.",
+    "core.search.since_after_until": "Processed from {since} is after Processed until {until}.",
+    "core.search.issuer": "Issuer {value} names no organisation.",
+    "core.search.unknown_kind": "Unknown kind {value} (kinds: {kinds}).",
+    "core.search.min_over_max": "At least {low} is more than At most {high}.",
+    "core.search.currency": "Currency {value} is not a currency code like USD or BRL.",
+    "core.search.period": "Period {value} is not a year or month like 2026 or 2026-09.",
+    "core.search.amount": "{field} {value} is not an amount like 100 or 99.90.",
+    "core.search.date_form": "{field} {value} is not a date like 2026-01-31.",
+    "core.search.date_invalid": "{field} {value} is not a valid date.",
     "core.search.outdated": Plural(
         one=(
             "{count} file has no up-to-date embedding yet and may be found by words only; the "
-            "next run or `flib search --reindex` embeds it"
+            "next run or `flib search --reindex` embeds it."
         ),
         other=(
             "{count} files have no up-to-date embedding yet and may be found by words only; "
-            "the next run or `flib search --reindex` embeds them"
+            "the next run or `flib search --reindex` embeds them."
         ),
     ),
     "core.search.semantic_off": (
-        "Semantic search is off (search.semantic.enabled: false); searched by words only"
+        "Semantic search is off (search.semantic.enabled: false); searched by words only."
     ),
     "core.search.no_embeddings": (
         "No file has an embedding from {model} yet; run `flib search --reindex`. Searched by "
-        "words only"
+        "words only."
     ),
     "core.search.semantic_unavailable": (
-        "Semantic search unavailable ({why}); searched by words only"
+        "Semantic search unavailable ({why}); searched by words only."
     ),
-    "core.index.older": "The index is from an older flib; the next `flib run` updates it",
+    "core.index.older": "The index is from an older flib; the next `flib run` updates it.",
     "core.index.newer": (
-        "The index (schema {schema}) is newer than this flib; upgrade file-librarian"
+        "The index (schema {schema}) is newer than this flib; upgrade file-librarian."
     ),
 }
 
@@ -374,6 +385,21 @@ PT_BR: dict[str, Entry] = {
         one="Busca: {count} resultado",
         other="Busca: {count} resultados",
     ),
+    "search.title_of": Plural(
+        zero="Busca: nenhum resultado",
+        one="Busca: {shown} de {count} resultado",
+        other="Busca: {shown} de {count} resultados",
+    ),
+    "search.title_capped": Plural(
+        zero="Busca: nenhum resultado",
+        one="Busca: o resultado mais próximo",
+        other="Busca: os {count} resultados mais próximos",
+    ),
+    "search.matches_of": Plural(
+        zero="Nenhum resultado",
+        one="{shown} de {count} resultado (o máximo pedido)",
+        other="{shown} de {count} resultados (o máximo pedido)",
+    ),
     "search.matches": Plural(
         zero="Nenhum resultado", one="{count} resultado", other="{count} resultados"
     ),
@@ -424,8 +450,8 @@ PT_BR: dict[str, Entry] = {
     "search.sensitive": Plural(
         zero="Nenhum arquivo sensível foi encontrado.",
         one=(
-            "{count} arquivo sensível também foi encontrado; arquivos sensíveis nunca aparecem "
-            "aqui (`flib search` no Terminal mostra)."
+            "{count} arquivo sensível também foi encontrado; ele nunca aparece aqui (`flib "
+            "search` no Terminal mostra)."
         ),
         other=(
             "{count} arquivos sensíveis também foram encontrados; eles nunca aparecem aqui "
@@ -451,6 +477,9 @@ PT_BR: dict[str, Entry] = {
     "search.totals": "Totais",
     "search.totals_note": (
         "Somando todos os resultados por palavras (nunca duplicados), não só os listados."
+    ),
+    "search.totals_note_filters": (
+        "Somando todos os resultados (nunca duplicados), não só os listados."
     ),
     "search.totals_note_semantic": (
         "Somando todos os resultados por palavras (nunca duplicados), não só os listados. Os "
@@ -529,45 +558,45 @@ PT_BR: dict[str, Entry] = {
     ),
     "open.failed": "O macOS não conseguiu abrir.",
     # o núcleo do flib (i18n.core)
-    "core.search.unknown_category": "Categoria desconhecida: {value} (existentes: {known})",
-    "core.search.bad_extension": "Extensão inválida: {value}; escreva como pdf ou .pdf",
+    "core.search.unknown_category": "Categoria desconhecida: {value} (existentes: {known}).",
+    "core.search.bad_extension": "Extensão inválida: {value}; escreva como pdf ou .pdf.",
     "core.search.since_after_until": (
-        "“Processado a partir de” ({since}) é depois de “Processado até” ({until})"
+        "“Processado a partir de” ({since}) é depois de “Processado até” ({until})."
     ),
-    "core.search.issuer": "Emissor {value} não identifica nenhuma organização",
-    "core.search.unknown_kind": "Tipo desconhecido: {value} (tipos: {kinds})",
-    "core.search.min_over_max": "O valor mínimo ({low}) é maior que o valor máximo ({high})",
-    "core.search.currency": "Moeda {value} não é um código de moeda como USD ou BRL",
-    "core.search.period": "Período {value} não é um ano ou mês como 2026 ou 2026-09",
-    "core.search.amount": "{field}: {value} não é um valor como 100 ou 99,90",
-    "core.search.date_form": "{field}: {value} não é uma data como 2026-01-31",
-    "core.search.date_invalid": "{field}: {value} não é uma data válida",
+    "core.search.issuer": "Emissor {value} não identifica nenhuma organização.",
+    "core.search.unknown_kind": "Tipo desconhecido: {value} (tipos: {kinds}).",
+    "core.search.min_over_max": "O valor mínimo ({low}) é maior que o valor máximo ({high}).",
+    "core.search.currency": "Moeda {value} não é um código de moeda como USD ou BRL.",
+    "core.search.period": "Período {value} não é um ano ou mês como 2026 ou 2026-09.",
+    "core.search.amount": "{field}: {value} não é um valor como 100 ou 99,90.",
+    "core.search.date_form": "{field}: {value} não é uma data como 2026-01-31.",
+    "core.search.date_invalid": "{field}: {value} não é uma data válida.",
     "core.search.outdated": Plural(
-        zero="Todos os arquivos têm um embedding atualizado",
+        zero="Todos os arquivos têm um embedding atualizado.",
         one=(
             "{count} arquivo ainda não tem um embedding atualizado e pode ser encontrado só "
-            "pelas palavras; a próxima execução ou `flib search --reindex` resolve isso"
+            "pelas palavras; a próxima execução ou `flib search --reindex` resolve isso."
         ),
         other=(
             "{count} arquivos ainda não têm um embedding atualizado e podem ser encontrados só "
-            "pelas palavras; a próxima execução ou `flib search --reindex` resolve isso"
+            "pelas palavras; a próxima execução ou `flib search --reindex` resolve isso."
         ),
     ),
     "core.search.semantic_off": (
         "A busca por significado está desligada (search.semantic.enabled: false); a busca usou só "
-        "as palavras"
+        "as palavras."
     ),
     "core.search.no_embeddings": (
         "Nenhum arquivo tem embedding de {model} ainda; rode `flib search --reindex`. A busca usou "
-        "só as palavras"
+        "só as palavras."
     ),
     "core.search.semantic_unavailable": (
-        "A busca por significado não está disponível ({why}); a busca usou só as palavras"
+        "A busca por significado não está disponível ({why}); a busca usou só as palavras."
     ),
     "core.index.older": (
-        "O índice é de uma versão anterior do flib; a próxima execução de `flib run` o atualiza"
+        "O índice é de uma versão anterior do flib; a próxima execução de `flib run` o atualiza."
     ),
     "core.index.newer": (
-        "O índice (esquema {schema}) é de uma versão mais nova do flib; atualize o file-librarian"
+        "O índice (esquema {schema}) é de uma versão mais nova do flib; atualize o file-librarian."
     ),
 }
