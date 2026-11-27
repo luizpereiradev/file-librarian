@@ -24,7 +24,7 @@ from urllib.parse import urlencode
 
 import pytest
 
-from file_librarian import activity, catchup, due, pipeline
+from file_librarian import activity, catchup, due, i18n, pipeline
 from file_librarian.config import Config
 from file_librarian.db.store import RunRow, Store
 from file_librarian.extractors import origin
@@ -32,6 +32,7 @@ from file_librarian.models import Classification, FileStatus, OperationStatus, R
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.runlog import write_log
 from file_librarian.scanner import SkipReason
+from file_librarian.search import SearchFilters
 from file_librarian.ui import markup, views
 from file_librarian.ui import server as ui_server
 from file_librarian.ui.server import CSP, Ui
@@ -45,6 +46,7 @@ from tests._helpers import (
     put,
     write_xattr,
 )
+from tests.fake_openai import FakeOpenAI
 from tests.unit.test_ui import (  # noqa: F401 - fixtures: every server is checked the same way
     _Collector,
     events,
@@ -365,7 +367,7 @@ def test_duplicates_only_when_asked(downloads: Path, cfg: Config, serve: list[Ui
     c = start(serve, cfg)
     assert "duplicate of" not in search(c, q="bill").text
     text = search(c, q="bill", duplicates="1").text
-    assert "duplicate of Finance/bill.pdf" in text
+    assert 'duplicate of <bdi dir="ltr">Finance/bill.pdf</bdi>' in text
 
 
 def test_semantic_search_falls_back_with_a_notice(
@@ -388,7 +390,7 @@ def test_search_on_an_index_from_an_older_flib(client: UiClient, cfg: Config) ->
         conn.execute("PRAGMA user_version = 12")
     reply = client.get("/search")
     assert reply.status == 503
-    expected = "The index is from an older flib; the next <code>flib run</code> updates it"
+    expected = "The index is from an older flib; the next <code>flib run</code> updates it."
     assert expected in reply.text
 
 
@@ -522,7 +524,7 @@ def test_activity_shows_each_run_and_what_it_moved(client: UiClient) -> None:
     text = client.get("/activity").text
     assert_safe(text)
     assert "by hand" in text and "run 1" in text
-    assert "power.pdf</bdi>" in text and ">Finance/</span>" in text  # the move's folder
+    assert "power.pdf</bdi>" in text and ">Finance/</bdi>" in text  # the move's folder
     assert "1 sensitive file left in place" in text
     assert "id_rsa" not in text
     assert 'aria-current="true">7 days' in text.replace('href="/activity?days=7" ', "")
@@ -537,7 +539,7 @@ def test_activity_marks_duplicates_and_undone_moves(
     with Store.open(cfg.database) as store:
         undo_run(store, 1, config=cfg)
     text = start(serve, cfg).get("/activity").text
-    assert ">_Duplicates/</span>" in text
+    assert ">_Duplicates/</bdi>" in text
     assert ">undone<" in text
 
 
@@ -718,6 +720,35 @@ def test_activity_never_shows_a_database_error(
 
 # --- Open and Show in Finder -----------------------------------------------------------
 
+KEPT = r"[A-Za-z0-9_-]{16}"
+NOTICE = re.compile(r'<p class="notice error" role="status">(.*?)</p>')
+
+
+def refused(
+    c: UiClient, route: str, ident: str, status: int, back: dict[str, str] | None = None
+) -> UiResponse:
+    """An Open or Show in Finder that is refused, both ways (#127). A script (no
+    ``Accept: text/html``) gets ``status`` and a page saying why, as before. A browser,
+    posting what the page sends (``back``: the Search page by default), is sent (303)
+    to a GET of that page, which says the same: Back and Forward never land on the
+    form's reply ("Confirm Form Resubmission"). Returns that page."""
+    plain = post(c, route, id=ident)
+    assert plain.status == status, plain.status
+    assert_safe(plain.text)
+    [said] = NOTICE.findall(plain.text)
+    fields = {"back": "search"} if back is None else back
+    reply = c.post_form(route, {"csrf": c.csrf("/search"), "id": ident, **fields}, HTML)
+    assert reply.status == 303, reply.status
+    assert reply.body == b""
+    location = reply.headers["Location"]
+    if back is None:
+        assert re.fullmatch(rf"/search\?n={KEPT}", location), location
+    page = c.get(location, headers=HTML)
+    assert page.status == 200, page.status
+    assert_safe(page.text)
+    assert said in page.text  # the same words, on the page the browser came from
+    return page
+
 
 def test_open_and_reveal_ask_macos_by_id(
     client: UiClient, cfg: Config, fake_browser: Path, downloads: Path
@@ -736,9 +767,7 @@ def test_open_and_reveal_ask_macos_by_id(
 def test_open_needs_a_known_id(
     client: UiClient, fake_browser: Path, ident: str, status: int
 ) -> None:
-    reply = post(client, "/files/open", id=ident)
-    assert reply.status == status
-    assert_safe(reply.text)
+    refused(client, "/files/open", ident, status)
     assert opened(fake_browser) == []
 
 
@@ -752,9 +781,10 @@ def test_open_never_takes_a_path(
 
 
 def test_open_refuses_a_sensitive_file(client: UiClient, cfg: Config, fake_browser: Path) -> None:
-    reply = post(client, "/files/open", id=str(file_id(cfg, "id_rsa")))
-    assert reply.status == 403
-    assert "id_rsa" not in reply.text
+    for route in ("/files/open", "/files/reveal"):
+        page = refused(client, route, str(file_id(cfg, "id_rsa")), 403)
+        assert "id_rsa" not in page.text
+    assert "id_rsa" not in post(client, "/files/open", id=str(file_id(cfg, "id_rsa"))).text
     assert opened(fake_browser) == []
 
 
@@ -768,17 +798,15 @@ def test_open_rechecks_the_path_from_the_index(
     outside.write_bytes(b"x")
     with sqlite3.connect(cfg.database) as conn:
         conn.execute("UPDATE files SET current_path = ? WHERE id = ?", (str(outside), ident))
-    reply = post(client, "/files/open", id=str(ident))
-    assert reply.status == 403
+    reply = refused(client, "/files/open", str(ident), 403)
     assert str(tmp_path) not in reply.text
     with sqlite3.connect(cfg.database) as conn:
         conn.execute("UPDATE files SET current_path = ? WHERE id = ?", (str(path), ident))
     path.unlink()
     path.symlink_to(outside)
-    assert post(client, "/files/open", id=str(ident)).status == 403
+    refused(client, "/files/open", str(ident), 403)
     path.unlink()
-    reply = post(client, "/files/open", id=str(ident))
-    assert reply.status == 404
+    reply = refused(client, "/files/open", str(ident), 404)
     assert "no longer where the index says" in reply.text
     assert str(path) not in reply.text
     assert opened(fake_browser) == []
@@ -792,6 +820,8 @@ def test_when_macos_cannot_open_it_the_page_says_so_plainly(
     assert reply.status == 502
     assert "macOS could not open it." in reply.text
     assert "LSOpen" not in reply.text and "power.pdf" not in reply.text
+    page = refused(client, "/files/open", str(file_id(cfg, "power.pdf")), 502)
+    assert "macOS could not open it." in page.text and "LSOpen" not in page.text
 
 
 def test_open_survives_a_missing_program(client: UiClient, cfg: Config) -> None:
@@ -801,7 +831,7 @@ def test_open_survives_a_missing_program(client: UiClient, cfg: Config) -> None:
 
 
 def test_open_without_an_index(empty: UiClient, cfg: Config) -> None:
-    assert post(empty, "/files/open", id="1").status == 404
+    refused(empty, "/files/open", "1", 404)
     assert not cfg.database.exists()
 
 
@@ -818,6 +848,137 @@ def test_the_buttons_post_the_id_and_the_csrf_token(client: UiClient, cfg: Confi
     assert f'<input type="hidden" name="id" value="{ident}">' in text
     assert 'action="/files/reveal"' in text
     assert str(cfg.output_root) not in text.split("<ol", 1)[1].split("</ol>", 1)[0]
+
+
+def form_fields(page: str, route: str, ident: int) -> dict[str, str]:
+    """The fields of the ``route`` form for file ``ident`` on ``page``, as a browser posts
+    them."""
+    for form in re.findall(rf'<form method="post" action="{route}".*?</form>', page, re.S):
+        fields = dict(re.findall(r'<input type="hidden" name="([^"]+)" value="([^"]*)">', form))
+        if fields.get("id") == str(ident):
+            return fields
+    raise AssertionError(f"no {route} form for file {ident}")
+
+
+@pytest.mark.parametrize(
+    ("page", "name", "address"),
+    [
+        ("search", "power.pdf", rf"/search\?r={KEPT}&n={KEPT}"),
+        ("/due?within=2w&all=1", "power.pdf", rf"/due\?within=2w&all=1&n={KEPT}"),
+        ("/due?overdue=1", "water.pdf", rf"/due\?overdue=1&n={KEPT}"),
+        ("/review", "unsure.pdf", rf"/review\?n={KEPT}"),
+    ],
+)
+@pytest.mark.parametrize("route", ["/files/open", "/files/reveal"])
+def test_a_refused_open_goes_back_to_the_page_it_came_from(
+    client: UiClient,
+    cfg: Config,
+    fake_browser: Path,
+    page: str,
+    name: str,
+    address: str,
+    route: str,
+) -> None:
+    """#127: post, redirect, get, as Search, Review and Settings do. The file went away
+    after the page was shown; its button is refused, and the browser lands on a GET of
+    the same page (the same search, the same window) that says why. Reloading it, or
+    Back and Forward, asks nothing again; nothing is ever opened."""
+    ident = file_id(cfg, name)
+    shown = search(client, q="power") if page == "search" else client.get(page)
+    fields = form_fields(shown.text, route, ident)
+    assert fields["back"] == page.strip("/").split("?")[0]
+    with Store.open(cfg.database) as store:
+        store.file_by_id(ident).current_path.unlink()
+    reply = client.post_form(route, fields, HTML)
+    assert reply.status == 303
+    location = reply.headers["Location"]
+    assert re.fullmatch(address, location), location
+    for _ in range(2):  # and once more, as a reload does
+        again = client.get(location, headers=HTML)
+        assert again.status == 200
+        assert "no longer where the index says" in again.text
+        assert_safe(again.text)
+    if page == "search":  # the same search, its words still in the form
+        assert 'value="power"' in again.text and "<ol" in again.text
+    assert opened(fake_browser) == []
+
+
+def test_a_refusal_is_kept_for_its_session_only(
+    serve: list[Ui], cfg: Config, filled: int, fake_browser: Path
+) -> None:
+    c = start(serve, cfg)
+    ui = serve[0]
+    fields = {"csrf": c.csrf("/search"), "id": "9999", "back": "review"}
+    location = c.post_form("/files/open", fields, HTML).headers["Location"]
+    key = location.split("n=", 1)[1]
+    assert ui._session is not None
+    assert ui.kept_outcome(ui._session, key) is not None
+    assert ui.kept_outcome(views_session(ui), key) is None  # another session: nothing
+    assert UiClient(ui.port, ui.host_name).get(location).status == 403  # no session
+    gone = c.get("/search?n=nope", headers=HTML)
+    assert gone.status == 200 and "is no longer kept" in gone.text
+    assert c.get(f"/search?n={key}&n={key}").status == 400
+    assert opened(fake_browser) == []
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"back": "//evil.example/"},
+        {"back": "https://evil.example/"},
+        {"back": "/search"},
+        {"back": "settings"},
+        {"back": "search", "r": "../../../x"},
+        {"back": "search", "r": "A" * 16 + "/x"},
+        {"back": "search", "r": "A" * 15},
+        {"back": "search", "within": "7d"},
+        {"back": "due", "within": "9y"},
+        {"back": "due", "overdue": "1", "within": "7d"},
+        {"back": "due", "r": "A" * 16},
+        {"back": "review", "within": "7d"},
+        {"back": "review", "r": "A" * 16},
+        {"r": "A" * 16},
+        {"within": "7d"},
+    ],
+)
+@pytest.mark.parametrize("route", ["/files/open", "/files/reveal"])
+def test_where_a_refusal_goes_is_never_taken_from_the_form(
+    client: UiClient, cfg: Config, fake_browser: Path, fields: dict[str, str], route: str
+) -> None:
+    """The address a refusal goes back to is built from fixed parts: a page the form
+    never names is a 400, checked before anything is opened (here a file that would
+    open), so it is never an open redirect."""
+    sent = {"csrf": client.csrf("/search"), "id": str(file_id(cfg, "power.pdf")), **fields}
+    for headers in (HTML, {}):
+        reply = client.post_form(route, sent, headers)
+        assert reply.status == 400
+        assert "Location" not in reply.headers
+    assert opened(fake_browser) == []
+
+
+def test_two_pages_to_go_back_to_are_refused(
+    client: UiClient, cfg: Config, fake_browser: Path
+) -> None:
+    body = urlencode(
+        {"csrf": client.csrf("/search"), "id": "9999", "back": ["search", "due"]}, doseq=True
+    )
+    sent = HTML | {
+        "Origin": client.origin,
+        "Sec-Fetch-Site": "same-origin",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+    assert client.request("POST", "/files/open", body=body.encode(), headers=sent).status == 400
+
+
+def test_a_successful_open_stays_on_the_page(
+    client: UiClient, cfg: Config, fake_browser: Path, downloads: Path
+) -> None:
+    """Asked: 204 and no body, for a browser too, so it stays where it was and adds
+    nothing to its history (#127 checked it in a real browser)."""
+    fields = {"csrf": client.csrf("/search"), "id": str(file_id(cfg, "power.pdf"))}
+    reply = client.post_form("/files/open", fields | {"back": "due", "within": "7d"}, HTML)
+    assert reply.status == 204 and reply.body == b"" and "Location" not in reply.headers
+    assert opened(fake_browser) == [["--", str(library(downloads) / "Finance" / "power.pdf")]]
 
 
 def test_a_missing_file_has_no_buttons(client: UiClient, cfg: Config) -> None:
@@ -894,7 +1055,7 @@ def test_a_dotdot_in_the_index_never_leaves_the_library(
     assert sneaky.is_relative_to(cfg.output_root)  # textually inside
     set_path(cfg, ident, sneaky)
     for route in ("/files/open", "/files/reveal"):
-        assert post(client, route, id=str(ident)).status == 403
+        refused(client, route, str(ident), 403)
     assert opened(fake_browser) == []
 
 
@@ -910,7 +1071,7 @@ def test_a_symlinked_folder_never_leaves_the_library(
     finance.symlink_to(elsewhere)
     ident = str(file_id(cfg, "power.pdf"))
     for route in ("/files/open", "/files/reveal"):
-        assert post(client, route, id=ident).status == 403
+        refused(client, route, ident, 403)
     assert opened(fake_browser) == []
 
 
@@ -952,7 +1113,7 @@ def test_open_refuses_what_could_run_and_offers_show_in_finder(
     c = start(serve, cfg)
     for name in DANGEROUS:
         ident = str(file_id(cfg, name))
-        assert post(c, "/files/open", id=ident).status == 403, name
+        refused(c, "/files/open", ident, 403)
         assert post(c, "/files/reveal", id=ident).status == 204, name
     assert all(call[0] == "-R" for call in opened(fake_browser))
     text = search(c, category=["Other"], limit="100").text
@@ -1184,7 +1345,7 @@ def test_an_open_with_file_gets_show_in_finder_only(
     power = library(downloads) / "Finance" / "power.pdf"
     write_xattr(power, "com.apple.LaunchServices.OpenWith", b"bplist00")
     ident = str(file_id(cfg, "power.pdf"))
-    assert post(client, "/files/open", id=ident).status == 403
+    refused(client, "/files/open", ident, 403)
     assert post(client, "/files/reveal", id=ident).status == 204
     assert opened(fake_browser) == [["-R", "--", str(power)]]
     text = search(client, q="power").text
@@ -1226,7 +1387,7 @@ def test_a_link_below_the_root_into_the_library_is_refused(
     (lib / "Finance").symlink_to(lib / "Finance2")
     ident = str(file_id(cfg, "power.pdf"))
     for route in ("/files/open", "/files/reveal"):
-        assert post(client, route, id=ident).status == 403
+        refused(client, route, ident, 403)
     assert opened(fake_browser) == []
 
 
@@ -1279,6 +1440,85 @@ def test_format_characters_are_dropped_from_every_name_shown(
     folder = library(downloads) / "Fi\u2066nance" / "a.pdf"
     assert views.short(folder, cfg) == "Finance/a.pdf"
     assert views.short(Path("/else\u200bwhere/a.pdf"), cfg) == "/elsewhere/a.pdf"
+
+
+RTL_BILL = "\u05d7\u05e9\u05d1\u05d5\u05df 2026.pdf"  # Hebrew for "bill", then a number
+RTL_SHOT = "\u05ea\u05de\u05d5\u05e0\u05d4 7.png"  # "picture"
+ISOLATED = re.compile(r'<bdi[^>]* dir="ltr">.*?</bdi>', re.S)
+
+
+def assert_isolated(page: str, *names: str) -> None:
+    """Every place ``names`` show up as text is inside ``<bdi dir="ltr">`` (#127), so a
+    right-to-left name keeps its order (the number stays at the end) and its
+    neighbours theirs. Attribute values (``aria-label``) are not laid out."""
+    body = page.split("<body", 1)[1]
+    seen = ISOLATED.findall(body)
+    rest = re.sub(r'="[^"]*"', '=""', ISOLATED.sub("", body))
+    for name in names:
+        assert any(name in part for part in seen), name
+        assert name not in rest, name
+
+
+def test_right_to_left_names_are_isolated_on_every_page(
+    downloads: Path, cfg: Config, serve: list[Ui]
+) -> None:
+    run_id = fill(
+        downloads,
+        cfg,
+        {
+            RTL_BILL: answer(  # below the rename threshold: the name stays
+                "Finance",
+                kind="bill",
+                currency="USD",
+                amount="12",
+                due_date=soon(2),
+                description="power",
+            ),
+            RTL_SHOT: answer("Images", confidence=0.3, description="shot"),
+        },
+    )
+    put(downloads, "copy.pdf", RTL_BILL.encode())  # the same bytes: a duplicate of the bill
+    pipeline.run(cfg, FakeProvider({}, default=answer()), simulate=False)
+    c = start(serve, cfg)
+    bill_id, shot_id = file_id(cfg, RTL_BILL), file_id(cfg, RTL_SHOT)
+    review = c.get("/review").text
+    group = re.search(r'id="g-([0-9a-f]{16})"', review)  # the group's key, as the page names it
+    assert group is not None
+    pages = {
+        "search": search(c, q="power").text,
+        "due": c.get("/due").text,
+        "activity": c.get("/activity").text,
+        "review": review,
+        "accept all": c.get(f"/review/accept?g={group.group(1)}").text,
+        "undo a run": c.get(f"/undo?run={run_id}").text,
+        "undo a file": c.get(f"/undo?file={bill_id}").text,
+    }
+    pin = re.search(
+        rf'name="id" value="{shot_id}"><input type="hidden" name="pin" value="([0-9a-f]+)"',
+        review,
+    )
+    assert pin is not None
+    fields = {"csrf": c.csrf("/review"), "id": str(shot_id), "pin": pin.group(1)}
+    renamed = "\u05ea\u05de\u05d5\u05e0\u05d4 8.png"  # a new name, also right to left
+    moved = c.post_form("/review/file", fields | {"category": "Images", "name": renamed})
+    assert moved.status == 303
+    pages["outcome"] = c.get(moved.headers["Location"].split("#", 1)[0]).text
+    pages["activity, renamed"] = c.get("/activity").text  # "→ Images/<new name>"
+    pages["a duplicate"] = search(c, q="copy", duplicates="1").text  # "duplicate of ..."
+    names = {
+        "search": (RTL_BILL,),
+        "due": (RTL_BILL,),
+        "undo a file": (RTL_BILL,),
+        "review": (RTL_SHOT,),
+        "accept all": (RTL_SHOT,),
+        "outcome": (renamed,),
+        "activity, renamed": (RTL_BILL, RTL_SHOT, renamed),
+        "a duplicate": (RTL_BILL,),
+    }
+    for where, page in pages.items():
+        assert_isolated(page, *names.get(where, (RTL_BILL, RTL_SHOT)))
+    assert f"Images/{renamed}" in pages["activity, renamed"]
+    assert f"Finance/{RTL_BILL}</bdi>" in pages["a duplicate"]
 
 
 # --- the browser round of #124 ---------------------------------------------------------
@@ -1372,18 +1612,26 @@ def test_a_bad_fixed_choice_is_refused_before_it_is_kept(client: UiClient) -> No
 def test_the_ended_page_still_gets_its_stylesheet(serve: list[Ui], cfg: Config) -> None:
     c = start(serve, cfg)
     ui = serve[0]
+    # A linger longer than any test (a failure bound): the requests below never race
+    # its end (#134); closing ends it.
+    ui.end_linger = 30.0
     assert c.post_form("/session/end", {"csrf": c.csrf()}).status == 200
     css = UiClient(ui.port, ui.host_name).get("/static/app.css")  # what the browser asks for next
     assert css.status == 200 and css.headers["Content-Type"].startswith("text/css")
     assert UiClient(ui.port, ui.host_name).get("/status").status == 403  # nothing else
+    assert ui.wait(0) is None  # still lingering
+    ui.stop("closed")
     assert ui.wait(5) == "ended"
 
 
 def test_closing_does_not_wait_out_the_linger(serve: list[Ui], cfg: Config) -> None:
+    """End session asks the server to stop before its reply goes (#134): once the
+    browser has the "ended" page, a close that comes next cannot take the reason's
+    place, and it ends the linger at once."""
     c = start(serve, cfg)
     ui = serve[0]
     ui.end_linger = 30.0
-    c.post_form("/session/end", {"csrf": c.csrf()})
+    assert c.post_form("/session/end", {"csrf": c.csrf()}).status == 200
     began = time.monotonic()
     ui.stop("closed")
     assert ui.wait(5) == "ended"
@@ -1478,7 +1726,7 @@ def test_an_activity_move_shows_its_own_folder(filled: int, cfg: Config) -> None
             "UPDATE files SET category = 'Other' WHERE id = ?", (file_id(cfg, "power.pdf"),)
         )
     page = views.activity_page(cfg, "t", "")[1].decode()
-    assert ">Finance/</span>" in page
+    assert ">Finance/</bdi>" in page
     assert ">Other<" not in page
 
 
@@ -1505,6 +1753,12 @@ def test_sensitive_matches_never_take_a_shown_matchs_place(
         )
     text = search(start(serve, cfg), q="key", limit="20").text
     assert "2 matches" in text and "1 sensitive file also matched" in text
+    # One file: "it", never "they" (#127).
+    assert "1 sensitive file also matched; it is never shown here" in text
+    assert "Terminal lists it)" in text and "they are never shown" not in text
+    with i18n.using("pt-BR"):
+        pt = views.search_page(cfg, "t", {"q": ["key"], "limit": ["20"]})[1].decode()
+    assert "1 arquivo sensível também foi encontrado; ele nunca aparece aqui" in pt
     found = views.find(cfg, views.SearchForm(q="key", limit=1))
     assert len(found.hits) == 1
 
@@ -1531,6 +1785,7 @@ def test_every_page_says_the_same_about_an_index_too_old(
         reply = c.get(path)
         assert reply.status == 503, path
         assert "The index is from an older flib; the next <code>flib run</code>" in reply.text
+        assert "<code>flib run</code> updates it.</p>" in reply.text  # a whole sentence
 
 
 def test_a_file_in_review_has_one_review_badge(client: UiClient) -> None:
@@ -1543,6 +1798,137 @@ def test_due_says_how_far_back_the_window_reaches(client: UiClient) -> None:
     text = client.get("/due").text
     assert f"{due.LOOKBACK_DAYS} days back" in text
     assert "Past due, however long ago" in client.get("/due?overdue=1").text
+
+
+def clone(cfg: Config, name: str, count: int, *, first: int = 1) -> None:
+    """``count`` more rows like ``name``'s in the index (``bulk 1.txt``, ...), each a file
+    of its own; the index's triggers make them searchable. A library of thousands, made
+    in a moment, without running the pipeline over each file."""
+    with sqlite3.connect(cfg.database) as conn:
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(files)") if row[1] != "id"]
+        made = {
+            "sha256": "f.sha256 || '-' || n.i",
+            "original_name": "f.original_name || ' ' || n.i",
+            "original_path": "f.original_path || ' ' || n.i",
+            "current_name": "f.current_name || ' ' || n.i",
+            "current_path": "f.current_path || ' ' || n.i",
+        }
+        chosen = ", ".join(made.get(column, f"f.{column}") for column in columns)
+        conn.execute(
+            f"WITH RECURSIVE n(i) AS (SELECT ? UNION ALL SELECT i + 1 FROM n WHERE i < ?) "  # noqa: S608
+            f"INSERT INTO files ({', '.join(columns)}) SELECT {chosen} FROM files f, n "
+            "WHERE f.original_name = ?",
+            (first, first + count - 1, name),
+        )
+
+
+@pytest.fixture
+def many(downloads: Path, cfg: Config) -> None:
+    """111 files that match ``bulk`` (and the category Other), and a sensitive one."""
+    fill(downloads, cfg, {"bulk.txt": answer("Other", description="bulk notes")})
+    clone(cfg, "bulk.txt", 110)
+
+
+def test_the_title_says_how_many_matched_not_the_limit(
+    many: None, cfg: Config, serve: list[Ui]
+) -> None:
+    """#127: 111 matched, 50 are listed: "50 of 111", never "Search: 50 matches"."""
+    c = start(serve, cfg)
+    for fields in ({"q": "bulk"}, {"category": ["Other"]}):
+        text = search(c, limit="50", **fields).text
+        assert "<title>Search: 50 of 111 matches · file-librarian</title>" in text, fields
+        assert ">50 of 111 matches (the most asked for)</h2>" in text
+        assert text.split("<ol", 1)[1].count('class="hit"') == 50
+        every = search(c, limit="500", **fields).text
+        assert "<title>Search: 111 matches · file-librarian</title>" in every
+        assert ">111 matches</h2>" in every  # all of them: nothing "most asked for"
+    with i18n.using("pt-BR"):
+        pt = views.search_page(cfg, "t", {"q": ["bulk"], "limit": ["50"]})[1].decode()
+    assert "<title>Busca: 50 de 111 resultados · file-librarian</title>" in pt
+    assert ">50 de 111 resultados (o máximo pedido)</h2>" in pt
+
+
+def test_exactly_the_limit_is_not_called_cut(downloads: Path, cfg: Config, serve: list[Ui]) -> None:
+    fill(downloads, cfg, {"bulk.txt": answer("Other", description="bulk notes")})
+    clone(cfg, "bulk.txt", 19)  # 20 matches, a limit of 20
+    text = search(start(serve, cfg), q="bulk", limit="20").text
+    assert "<title>Search: 20 matches · file-librarian</title>" in text
+    assert ">20 matches</h2>" in text and "most asked for" not in text
+
+
+def test_a_search_by_meaning_says_it_lists_the_closest(many: None, cfg: Config) -> None:
+    """By meaning there is no count of every match, only the closest: at the limit the
+    title says so rather than a count that reads as all. Nothing to count is 0."""
+    hits = views.find(cfg, views.SearchForm(q="bulk", limit=20)).hits
+    found = views.Found(hits=hits)  # no total: what a search by meaning gives
+    form = views.SearchForm(q="bulk", limit=20, semantic=True)
+    assert views._title(found, form) == "Search: the 20 closest matches"
+    with i18n.using("pt-BR"):
+        assert views._title(found, form).text() == "Busca: os 20 resultados mais próximos"
+    with Store.open_read_only(cfg.database) as store:
+        assert views.count_matches(store, "...", SearchFilters(), False) == 0
+        assert views.count_matches(store, "bulk", SearchFilters(), False) == 111
+
+
+def test_the_totals_say_what_they_add_up(many: None, cfg: Config, serve: list[Ui]) -> None:
+    """#127: "by words" only when the search had words; filters alone add up every
+    match of the filters."""
+    c = start(serve, cfg)
+    words = search(c, q="bulk").text
+    assert "Over every match by words (never duplicates), not only those listed." in words
+    filters = search(c, category=["Other"]).text
+    assert "Over every match (never duplicates), not only those listed." in filters
+    assert "by words" not in filters
+    with i18n.using("pt-BR"):
+        pt = views.search_page(cfg, "t", {"category": ["Other"]})[1].decode()
+    assert "Somando todos os resultados (nunca duplicados), não só os listados." in pt
+    assert "por palavras" not in pt
+
+
+def test_the_csv_cut_over_a_library_of_more_than_5000_matches(
+    many: None, cfg: Config, serve: list[Ui]
+) -> None:
+    """The real limit, over a real index (#127's untested list): 5005 files match, the
+    export has the first 5000 and a last row saying so; the sensitive file is not one."""
+    clone(cfg, "bulk.txt", views.EXPORT_LIMIT - 111 + 5, first=111)  # 5005 in all
+    c = start(serve, cfg)
+    rows = list(csv.reader(io.StringIO(search(c, "/search/export", q="bulk").text)))
+    assert rows[0] == list(views.CSV_COLUMNS)
+    assert len(rows) == 1 + views.EXPORT_LIMIT + 1
+    cut = "# cut: more than 5000 matches; only the first 5000 are here. Narrow the search."
+    assert rows[-1] == [cut]
+    assert len({row[0] for row in rows[1:-1]}) == views.EXPORT_LIMIT  # 5000 files, each once
+    assert all("id_rsa" not in row[0] for row in rows)
+    page = search(c, q="bulk", limit="500").text
+    assert "<title>Search: 500 of 5005 matches · file-librarian</title>" in page
+
+
+def test_a_search_by_meaning_in_the_interface(
+    downloads: Path, tmp_path: Path, serve: list[Ui], fake_openai: FakeOpenAI
+) -> None:
+    """Search by meaning end to end (#127's untested list), with the fake embeddings
+    server: a run embeds the files, the page embeds the query, and a synonym that no
+    word matches finds the bill."""
+    cfg = fake_config(
+        downloads,
+        database=str(tmp_path / "meaning.db"),
+        search={"semantic": {"enabled": True, "base_url": fake_openai.url, "model": "embed-a"}},
+    )
+    fill(
+        downloads,
+        cfg,
+        {
+            "scan_0042.pdf": answer("Finance", description="Electricity invoice for October."),
+            "IMG_4821.png": answer("Images", description="Sunset over the beach."),
+        },
+    )
+    c = start(serve, cfg)
+    assert "No matches." in search(c, q="bill").text  # by words: nothing
+    text = search(c, q="bill", semantic="1").text
+    assert "scan_0042.pdf" in text.split("<ol", 1)[1]
+    assert "No file has an embedding" not in text and "searched by words only" not in text
+    assert "Totals match the words only, not by meaning." in text
+    assert fake_openai.requests[-1].body == {"model": "embed-a", "input": ["bill"]}
 
 
 # --- layout ----------------------------------------------------------------------------

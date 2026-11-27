@@ -319,7 +319,8 @@ def _file(row: FileRow, target: str | None, config: Config, csrf: str, now: date
         open=target is None,  # without a suggestion to accept, this is the way
     )
     parts.append(el("div", *decide, move, class_="decide"))
-    tools = file_actions(row.id, name, csrf, can_open=openable(row.current_path))
+    can_open = openable(row.current_path)
+    tools = file_actions(row.id, name, csrf, can_open=can_open, back=(("back", "review"),))
     put_back = el("a", t("review.put_back"), href=f"/undo?file={row.id}", class_="small-link")
     parts.append(el("div", tools, put_back, class_="tools"))
     return el("li", *parts, class_="hit")

@@ -119,6 +119,133 @@ def test_a_session_in_a_real_browser(
         shutil.rmtree(profile, ignore_errors=True)
 
 
+def _opened(log: Path) -> list[list[str]]:
+    """What the fake ``open`` was asked to open (conftest's ``fake_browser``)."""
+    if not log.exists():
+        return []
+    return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+
+
+WIDE = "Math.max(window.innerWidth, document.documentElement.scrollWidth) - 390"
+"""How far a page reaches past a 390 px phone screen (a phone widens to fit)."""
+
+
+def _history(tab: Any) -> list[str]:
+    return [entry["url"] for entry in tab.call("Page.getNavigationHistory")["entries"]]
+
+
+def test_a_refused_open_in_a_real_browser(
+    loopback_network: None, downloads: Path, cfg: Config, tmp_path: Path, fake_browser: Path
+) -> None:
+    """#127: Open by a real click stays on the page and adds nothing to the history; a
+    refused Open (the file went away after the page was shown) is a post, redirect,
+    get, so Back and Forward reload GET pages: no "Confirm Form Resubmission", no
+    entry for the form's reply, and nothing is opened, then or again."""
+    assert BROWSER is not None
+    put(downloads, "power bill.pdf", b"power")
+    pipeline.run(cfg, FakeProvider({"power bill.pdf": answer("Finance")}), simulate=False)
+    filed = cfg.output_root / "Finance" / "power bill.pdf"
+    assert filed.exists()
+    ui = Ui(cfg, poll_seconds=0.05)
+    ui.start()
+    profile = tmp_path / "profile"
+    try:
+        handoff = ui.write_handoff()
+        with headless(BROWSER, profile) as (tab, _):
+            tab.call("Page.navigate", {"url": handoff.as_uri()})
+            tab.wait_for(lambda: tab.url() == f"{ui.origin}/status" and tab.ready())
+            tab.goto(f"{ui.origin}/search")
+            tab.evaluate("document.querySelector('input[name=q]').value = 'power'")
+            tab.click("form.search button[type=submit]:not([formaction])")
+            tab.wait_for(lambda: "/search?r=" in tab.url() and tab.ready())
+            results = tab.url()
+            before = _history(tab)
+            # Open, asked: 204, the browser stays where it was.
+            tab.click("form[action='/files/open'] button")
+            tab.wait_for(lambda: len(_opened(fake_browser)) == 1)
+            assert _opened(fake_browser) == [["--", str(filed)]]
+            assert tab.url() == results and _history(tab) == before
+            # The file goes away; the page still shows its button. Refused: the browser
+            # lands on a GET of the same search, which says why.
+            filed.unlink()
+            tab.click("form[action='/files/open'] button")
+            tab.wait_for(lambda: "&n=" in tab.url() and tab.ready())
+            refused = tab.url()
+            assert refused.startswith(results + "&n=")
+            assert "no longer where the index says" in tab.text()
+            assert "power bill.pdf" in tab.text()  # the same results, under the notice
+            # Back and Forward: plain GETs of pages, never the form's reply.
+            tab.evaluate("history.back()")
+            tab.wait_for(lambda: tab.url() == results and tab.ready())
+            assert "power bill.pdf" in tab.text()
+            tab.evaluate("history.forward()")
+            tab.wait_for(lambda: tab.url() == refused and tab.ready())
+            assert "no longer where the index says" in tab.text()
+            tab.evaluate("location.reload()")
+            tab.wait_for(lambda: tab.url() == refused and tab.ready())
+            assert "no longer where the index says" in tab.text()
+            assert not any("/files/" in url for url in _history(tab))
+            assert "Confirm Form Resubmission" not in tab.text()
+        assert _opened(fake_browser) == [["--", str(filed)]]  # the first, asked one only
+    finally:
+        ui.close()
+        shutil.rmtree(profile, ignore_errors=True)
+
+
+def test_before_the_link_and_after_a_theft_in_a_real_browser(
+    loopback_network: None, cfg: Config, tmp_path: Path
+) -> None:
+    """#127: a browser that reaches the server before the launch link was opened is told
+    so (not "ended"). After a theft of the link, the rightful tab's next page says why
+    the session ended, styled, instead of "connection refused"; the thief gets that page
+    and no cookie."""
+    assert BROWSER is not None
+    ui = Ui(cfg, poll_seconds=0.05, stolen_linger=30.0)  # ended below; a failure bound
+    ui.start()
+    profile = tmp_path / "profile"
+    styled = "getComputedStyle(document.body).backgroundColor !== 'rgba(0, 0, 0, 0)'"
+    try:
+        handoff = ui.write_handoff()
+        with headless(BROWSER, profile) as (tab, _):
+            phone = {"width": 390, "height": 844, "deviceScaleFactor": 2, "mobile": True}
+            tab.call("Emulation.setDeviceMetricsOverride", phone)
+            tab.goto(f"{ui.origin}/status")
+            assert "This session has not started yet" in tab.text()
+            assert "has ended" not in tab.text()
+            tab.wait_for(lambda: bool(tab.evaluate(styled)))
+            assert tab.evaluate(WIDE) <= 0  # nothing scrolls sideways at 390 px
+            # The launch still works: that visit used nothing.
+            tab.call("Page.navigate", {"url": handoff.as_uri()})
+            tab.wait_for(lambda: tab.url() == f"{ui.origin}/status" and tab.ready())
+            # Someone else opens the used link: a client without the session.
+            split = urlsplit(ui.launch_url)
+            conn = http.client.HTTPConnection("127.0.0.1", ui.port, timeout=10)
+            try:
+                conn.request(
+                    "GET",
+                    f"{split.path}?{split.query}",
+                    headers={"Host": f"{ui.host_name}:{ui.port}", "Accept": "text/html"},
+                )
+                reply = conn.getresponse()
+                body = reply.read().decode()
+            finally:
+                conn.close()
+            assert reply.status == 403 and reply.getheader("Set-Cookie") is None
+            assert "ended because its link was opened twice" in body
+            # The rightful tab, on its next click: told why, styled.
+            tab.click("nav a[href='/search']")
+            tab.wait_for(lambda: "opened twice" in tab.text() and tab.ready())
+            tab.wait_for(lambda: bool(tab.evaluate(styled)))
+            assert tab.evaluate(WIDE) <= 0
+            assert "Search" not in tab.evaluate("document.title")
+            assert ui.wait(0) is None and not ui.live()
+        ui.stop("signal")
+        assert ui.wait(10) == "stolen"
+    finally:
+        ui.close()
+        shutil.rmtree(profile, ignore_errors=True)
+
+
 def test_review_and_undo_in_a_real_browser(
     loopback_network: None, downloads: Path, cfg: Config, tmp_path: Path
 ) -> None:

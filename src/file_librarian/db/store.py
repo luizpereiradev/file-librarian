@@ -1101,6 +1101,36 @@ class Store:
         ).fetchall()
         return [FileRow.from_row(r) for r in rows]
 
+    def count_files(
+        self,
+        fts_query: str | None,
+        *,
+        categories: Sequence[str] = (),
+        extensions: Sequence[str] = (),
+        since: str | None = None,
+        until: str | None = None,
+        include_duplicates: bool = False,
+        fields: FieldFilters | None = None,
+    ) -> int:
+        """How many rows ``search_files`` would find without a limit, sensitive files
+        left out (a page counts those apart, #127)."""
+        where, params = _filter_clause(categories, extensions, since, until, (), fields)
+        where.append("f.status != 'sensitive'")
+        if not include_duplicates:
+            where.append("f.duplicate_of IS NULL")
+        source = "files f"
+        if fts_query is not None:
+            where.insert(0, "files_fts MATCH ?")
+            params.insert(0, fts_query)
+            source = "files_fts JOIN files f ON f.id = files_fts.rowid"
+        condition = " AND ".join(where)
+        # Only fixed SQL fragments and placeholders are joined; every value is bound.
+        row = self.conn.execute(
+            f"SELECT COUNT(*) FROM {source} WHERE {condition}",  # noqa: S608
+            params,
+        ).fetchone()
+        return int(row[0])
+
     def sum_amounts(
         self,
         fts_query: str | None,

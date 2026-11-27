@@ -25,8 +25,10 @@ an ``HttpOnly``, ``SameSite=Strict``, host-only cookie (renewed with each
 request, so it expires soon after the server does), and
 ``flib ui`` says "session started". The token never works again. If it comes
 back from a client without the session, someone else has it: the session is
-dropped, the server ends and ``flib ui`` warns. A stale link, a missing or
-wrong cookie or an ended session get the "session ended" page.
+dropped, the server ends and ``flib ui`` warns; for ``STOLEN_LINGER`` every page
+then says why, so the rightful tab learns it too. A stale link, a missing or
+wrong cookie or an ended session get the "session ended" page; before the link was
+opened, a page that says the session has not started yet (#127).
 
 Every request, before anything else:
 
@@ -226,7 +228,8 @@ ENDED = {
 STOLEN_WARNING = (
     "warning: the launch link was used a second time, by a client without the "
     "session. Another program or account on this Mac may have seen it, so the "
-    "session was dropped and flib ui ended. Run `flib ui` again for a new link."
+    "session was dropped and flib ui is ending (its pages say why for a minute; "
+    "Ctrl-C ends it now). Run `flib ui` again for a new link."
 )
 
 UNNAMED_WARNING = (
@@ -308,8 +311,13 @@ HANDOFF_STALE_SECONDS = 600.0
 """A handoff folder older than this is left over, whoever made it: a link is used
 within seconds, and a ``flib ui`` whose link was never used is no loss."""
 END_LINGER = 1.5
-"""Seconds the server keeps serving its static files after End session or a theft,
-so the "session ended" page it just sent gets its stylesheet and icon."""
+"""Seconds the server keeps serving its static files after End session, so the
+"session ended" page it just sent gets its stylesheet and icon."""
+STOLEN_LINGER = 60.0
+"""Seconds the server keeps answering after a theft of the launch link (#127): every
+page is the "ended because the link was opened twice" page, so the rightful tab is
+told why instead of finding the server gone. No session, token or cookie is left to
+take; a signal (Ctrl-C) ends it at once."""
 MAX_SAVED_SEARCHES = 32
 """Searches kept for ``GET /search?r=<id>`` (post, redirect, get), per server."""
 
@@ -494,6 +502,7 @@ class Ui:
         request_deadline: float = REQUEST_DEADLINE,
         close_grace: float = CLOSE_GRACE,
         end_linger: float = END_LINGER,
+        stolen_linger: float | None = None,
         on_event: Callable[[str], None] = lambda event: None,
         config_path: Path | None = None,
         named: bool = True,
@@ -510,6 +519,7 @@ class Ui:
         self.request_deadline = request_deadline
         self._grace = min(close_grace, request_timeout)
         self.end_linger = end_linger
+        self.stolen_linger = STOLEN_LINGER if stolen_linger is None else stolen_linger
         self._searches: OrderedDict[str, tuple[str, dict[str, list[str]]]] = OrderedDict()
         self._outcomes: OrderedDict[str, tuple[str, actions.Outcome]] = OrderedDict()
         self.assets = load_assets()
@@ -521,6 +531,7 @@ class Ui:
         self._lock = threading.Lock()
         self._launch: str | None = secrets.token_urlsafe(32)
         self._burned: str | None = None
+        self._stolen = False
         self._session: Session | None = None
         self._handoff: Path | None = None
         self._last = clock()
@@ -610,8 +621,10 @@ class Ui:
                         self._turn(selector, listeners, heads, tick)
                     if reason in ("ended", "stolen"):
                         # The page that says so asks for its stylesheet next: serve
-                        # it (there is no session any more) unless told to stop.
-                        until = time.monotonic() + self.end_linger
+                        # it (there is no session any more) unless told to stop. After
+                        # a theft, the rightful tab's next page says why, too.
+                        linger = self.end_linger if reason == "ended" else self.stolen_linger
+                        until = time.monotonic() + linger
                         while time.monotonic() < until and self._stops.empty():
                             self._turn(selector, listeners, heads, min(tick, 0.05))
                 finally:
@@ -751,10 +764,26 @@ class Ui:
         return used is not None and same(token, used)
 
     def stolen(self) -> None:
-        """The used token came back without the session: drop it and end."""
+        """The used token came back without the session: drop it and end (once: the
+        token coming back again while the server ends changes nothing)."""
+        with self._lock:
+            again, self._stolen = self._stolen, True
         self.end_session()
-        self.on_event("stolen")
-        self.stop("stolen")
+        if not again:
+            self.on_event("stolen")
+            self.stop("stolen")
+
+    def no_session_page(self) -> str:
+        """The packaged page for a browser without the session (#127): the link was
+        stolen; the session goes on elsewhere; it has not started yet (the launch link
+        is still unused); or it ended. Says nothing a client without the token could
+        use: no token, no cookie, nothing of the session."""
+        with self._lock:
+            if self._stolen:
+                return "stolen"
+            if self._session is not None:
+                return "elsewhere"
+            return "waiting" if self._launch is not None else "ended"
 
     def end_session(self) -> None:
         with self._lock:
@@ -1265,8 +1294,16 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _problem(self, code: int) -> None:
         """A refusal as a page with the menu and one sentence on what to do. Never
-        says why in detail: the status and a general hint only."""
+        says why in detail: the status and a general hint only. Before the session
+        started, or after a theft, a refused form gets that page instead (#127)."""
         session = self._session()
+        if (
+            code == HTTPStatus.FORBIDDEN
+            and session is None
+            and self.server.ui.no_session_page() in ("waiting", "stolen")
+        ):
+            self._ended(code)
+            return
         text = PROBLEMS[code]
         if code == HTTPStatus.FORBIDDEN:
             text = STALE_FORM if session is not None else STALE_SESSION
@@ -1364,11 +1401,22 @@ class _Handler(BaseHTTPRequestHandler):
         (``?r=<id>``): the words never go in the address."""
         ui = self.server.ui
         try:
-            params = views.query_params(query, frozenset({"r"}))
+            params = views.query_params(query, frozenset({"r", "n"}))
             key = views.one_choice(params, "r")
             fields = None if key is None else ui.saved_search(session, key)
             notice = views.SEARCH_GONE if key is not None and fields is None else None
-            code, body = views.search_page(ui.config, session.csrf, fields, notice=notice)
+            # ``?n=<id>``: what an Open or Show in Finder from this page refused (#127).
+            done = views.one_choice(params, "n")
+            outcome = None if done is None else ui.kept_outcome(session, done)
+            shown = review.outcome_notice(outcome, done is not None and outcome is None)
+            code, body = views.search_page(
+                ui.config,
+                session.csrf,
+                fields,
+                notice=notice,
+                key=key if fields is not None else None,
+                outcome=shown,
+            )
         except views.BadRequest as exc:
             raise _Reject(HTTPStatus.BAD_REQUEST) from exc
         self._reply(code, body, _HTML)
@@ -1521,11 +1569,22 @@ class _Handler(BaseHTTPRequestHandler):
         self._ask_macos(session, reveal=True)
 
     def _ask_macos(self, session: Session, *, reveal: bool) -> None:
-        code, text = views.open_by_id(
-            self.server.ui.config, self._fields(), reveal=reveal, program=OPEN
-        )
+        """Ask macOS to open (or show) the file the form names by id. Asked: 204, and the
+        browser stays where it was (no history entry). Refused: a browser is sent (303)
+        to the page the form came from, which says why (post, redirect, get, #127), so
+        Back and Forward never land on a form's reply; a script gets the status."""
+        fields = self._fields()
+        try:
+            back = views.back_to(fields)  # checked before anything is opened
+        except views.BadRequest as exc:
+            raise _Reject(HTTPStatus.BAD_REQUEST) from exc
+        ui = self.server.ui
+        code, text = views.open_by_id(ui.config, fields, reveal=reveal, program=OPEN)
         if text is None:  # asked: the browser stays on the page it was on
             self._reply(code, b"", _TEXT)
+        elif back is not None and self._wants_html():
+            key = ui.keep_outcome(session, actions.Outcome(text, error=True))
+            self._redirect(f"{back}{'&' if '?' in back else '?'}n={key}")
         else:
             self._reply(*views.problem_page(code, text, session.csrf), _HTML)
 
@@ -1663,17 +1722,22 @@ class _Handler(BaseHTTPRequestHandler):
     def _end_session(self, session: Session) -> None:
         ui = self.server.ui
         ui.end_session()
+        # Asked to stop before the reply goes (#134): once the browser has the "ended"
+        # page, "ended" is the reason the server gives, whatever stops it next. The
+        # reply still goes: the loop serves on for ``end_linger`` and then gives
+        # requests in progress their grace.
+        ui.stop("ended")
         expired = ui.cookie("", seconds=0)
         self._ended(HTTPStatus.OK, [("Set-Cookie", expired)])  # never "elsewhere": ended
-        ui.stop("ended")
 
     # --- replies ---
 
     def _ended(self, code: int, headers: Iterable[tuple[str, str]] = ()) -> None:
         """The "session ended" page, or, while a session goes on in another browser
-        or window, the page that says so (and how to move it here)."""
+        or window, the page that says so (and how to move it here); before the launch
+        link was opened, or after it was stolen, the page that says that (#127)."""
         ui = self.server.ui
-        page = markup.page(ui.pages["elsewhere" if ui.live() else "ended"])
+        page = markup.page(ui.pages[ui.no_session_page()])
         self._reply(code, page.encode(), _HTML, headers)
 
     def _redirect(self, location: str, headers: Iterable[tuple[str, str]] = ()) -> None:

@@ -1,5 +1,6 @@
-"""The packaged pages (``ui/pages/``: Status's frame, session ended, open elsewhere,
-opening) and the handoff file (``ui.server.HANDOFF``); see ``i18n.messages``."""
+"""The packaged pages (``ui/pages/``: Status's frame, session ended, ended after a
+theft, not started yet, open elsewhere, opening) and the handoff file
+(``ui.server.HANDOFF``); see ``i18n.messages``."""
 
 from __future__ import annotations
 
@@ -14,6 +15,30 @@ EN: dict[str, Entry] = {
         "You can close this tab."
     ),
     "ended.again": "For a new session, run `flib ui` in Terminal.",
+    # stolen.html: the launch link came back from a client without the session (#127)
+    "stolen.title": "Session ended for safety",
+    "stolen.heading": "This session was ended because its link was opened twice",
+    "stolen.lead": (
+        "The link `flib ui` opened works once. It was used again, by a browser or program "
+        "that did not have the session, so someone else on this Mac may have seen it: "
+        "flib ui dropped the session and is closing. Nothing was moved or changed."
+    ),
+    "stolen.again": (
+        "Run `flib ui` in Terminal for a new session. If you opened the link again yourself "
+        "(in another browser, or a copy of it), that was all; if not, check what else runs "
+        "on this Mac."
+    ),
+    # waiting.html: reached before the launch link was opened (#127)
+    "waiting.title": "Not opened yet",
+    "waiting.heading": "This session has not started yet",
+    "waiting.lead": (
+        "flib ui is waiting for its link to be opened: the page it opened in your browser "
+        "when it started, or the link it printed in Terminal (`flib ui --no-browser`)."
+    ),
+    "waiting.again": (
+        "Use that page or link; it works once. If it is gone, press Ctrl-C where `flib ui` "
+        "runs and run it again."
+    ),
     # elsewhere.html
     "elsewhere.title": "Open in another window",
     "elsewhere.heading": "flib ui is open in another window",
@@ -73,6 +98,29 @@ PT_BR: dict[str, Entry] = {
         "uso. Você já pode fechar esta aba."
     ),
     "ended.again": "Para uma nova sessão, rode `flib ui` no Terminal.",
+    "stolen.title": "Sessão encerrada por segurança",
+    "stolen.heading": "Esta sessão foi encerrada porque o link dela foi aberto duas vezes",
+    "stolen.lead": (
+        "O link que o `flib ui` abriu funciona uma vez só. Ele foi usado de novo, por um "
+        "navegador ou programa que não tinha a sessão; então outra pessoa ou programa neste Mac "
+        "pode ter visto o link, e o flib ui encerrou a sessão e está fechando. Nada foi movido "
+        "nem alterado."
+    ),
+    "stolen.again": (
+        "Rode `flib ui` no Terminal para uma nova sessão. Se foi você quem abriu o link de "
+        "novo (em outro navegador, ou uma cópia dele), foi só isso; se não, verifique o que "
+        "mais está rodando neste Mac."
+    ),
+    "waiting.title": "Ainda não aberto",
+    "waiting.heading": "Esta sessão ainda não começou",
+    "waiting.lead": (
+        "O flib ui está esperando que o link dele seja aberto: a página que ele abriu no seu "
+        "navegador ao iniciar, ou o link que mostrou no Terminal (`flib ui --no-browser`)."
+    ),
+    "waiting.again": (
+        "Use essa página ou esse link; ele funciona uma vez só. Se não estiver mais lá, "
+        "pressione Ctrl-C onde o `flib ui` está rodando e rode de novo."
+    ),
     "elsewhere.title": "Aberto em outra janela",
     "elsewhere.heading": "O flib ui está aberto em outra janela",
     "elsewhere.lead": (
