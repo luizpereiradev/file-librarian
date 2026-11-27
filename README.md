@@ -285,8 +285,9 @@ the browser's history; Open and Show in Finder send the file's number in the
 index, never a path. Open is for documents only (PDFs, images, text, modern office
 documents, media): anything that could run a program or go somewhere, such
 as an app, a script, an installer, a web location, a legacy `.doc`/`.xls`/`.ppt`
-or a file set to open with an app of its own, gets only Show in Finder. One runs at a time: a second `flib ui` says
-so and exits.
+or a file set to open with an app of its own, gets only Show in Finder. One
+runs at a time: a second `flib ui --open PAGE` opens that page in the one
+running (in the browser where it runs) and exits.
 
 `--no-browser` prints the key itself, in a link: it stays in the terminal's
 scrollback and, once opened, in the browser's history, and anyone who can see
@@ -295,6 +296,59 @@ once, and a second use ends the server, but prefer the default unless the
 browser cannot be opened for you. It uses only Python's standard
 library and files shipped with flib; nothing is loaded from the internet.
 [Architecture](docs/architecture.md#the-interface-flib-ui) has the details.
+
+### Menu bar
+
+```sh
+flib menu            # put flib in the menu bar; it starts at login
+flib menu --remove   # take it away
+```
+
+![The five poses in a light and a dark menu bar: busy, due, trouble,
+attention, asleep](docs/images/menu-bar.png)
+
+The cat from flib's icon sits in the menu bar, in the pose that says what
+needs you: carrying a sheet while a run is going on, a paw raised when a
+document is due soon or overdue, ruffled when flib cannot run (no key, no
+access to a folder, an index it cannot read), sitting and looking at you when
+files wait in review or failed, curled up asleep when nothing is pending. A
+small number next to it counts what the pose is about. It follows the menu
+bar's light or dark look.
+
+Its menu is short: a line saying how things are ("2 files to review, 1
+failed", "Organizing…", "Nothing pending"), when the next run is, **Open
+flib** (the interface's Status page), **Review (n)** and **Due (n)** when
+there is something there, **Organize now** (exactly what the daily run does;
+with a run going on, it says so and does nothing), **Settings…** and **Quit**.
+If a run is killed (a crash, a power cut), the menu says "The last run did
+not finish" after three hours, and sooner as soon as you open `flib status`,
+the interface or **Organize now**. Each
+"open" entry is `flib ui --open PAGE`; when the interface is already open,
+it goes to that page in it.
+
+The menu shows counts only, never a file name: the menu bar is visible to
+anyone looking at your screen, and in screen sharing. The item only reads a
+small state file flib writes (when a run starts and ends, after a review,
+fix, undo or due change, and when the schedule changes) and runs nothing but
+flib itself, with fixed arguments. It is a tiny app built on your Mac by
+`flib menu` with tools that ship with macOS (`osacompile`), inside flib's own
+environment, like the notifier; nothing is downloaded and nothing needs
+Xcode. After **Quit** (or a crash) it stays off until the next login, or
+until `flib menu`. `flib status`, `flib doctor` and the interface's
+Settings page say whether it is there; `./scripts/install.sh` rebuilds it
+after an update. On a Mac where it cannot be built, `flib menu` says why,
+and everything else works as before.
+
+**Uninstalling flib?** Run `flib menu --remove` first (and `flib schedule
+--remove`): the app lives inside flib's environment, and its LaunchAgent
+stays in `~/Library/LaunchAgents` until removed. Left behind, it only fails
+once at each login (it never retries), but it is clutter.
+
+Actions you take in an interface the menu opened, and **Organize now**
+without a daily run, run on behalf of the menu bar app: macOS may ask once
+whether "file-librarian" may access your Downloads folder. **Organize now**
+with a daily run installed starts that run, which uses the access you gave
+`flib-python`.
 
 ### Teaching it
 
@@ -420,6 +474,7 @@ Every command takes `--config PATH` (`-c`); without it, flib reads
 | `flib inspect FILE... [--json]` | Show hash, size and download origin (no hash for a file only in iCloud), and for an indexed file its status, category, why it is in review, the name choice and what the AI read in it (kind, issuer, amount, dates, period) |
 | `flib mcp` | Local MCP server for AI assistants ([Use it from Claude](#use-it-from-claude)) |
 | `flib ui [--open PAGE] [--no-browser] [--port N]` | The interface in your browser, served on 127.0.0.1 while in use: Status, Review (with undo), Search, Activity, Due and Settings ([Interface](#interface)) |
+| `flib menu [--remove \| --status \| --refresh]` | The cat in the menu bar: what needs you, and a menu that opens the interface on the right page ([Menu bar](#menu-bar)) |
 | `flib eval [--provider NAME] [--model M] [--language en\|pt-BR] [--limit N] [--json] [--out FILE] [--compare FILE]` | Measure classification quality on a built-in synthetic corpus, never touching your files ([Measuring quality](#measuring-quality)) |
 | `flib doctor [--stdout \| -o PATH] [--format markdown] [--logs N]` | A redacted diagnostics report for bug reports ([Troubleshooting](#troubleshooting)) |
 | `flib --version` | Print the version |

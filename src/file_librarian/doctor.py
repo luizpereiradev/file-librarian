@@ -43,7 +43,15 @@ from typing import Any, Literal
 
 import yaml
 
-from file_librarian import __version__, credentials, locality, notifier, protection, scheduler
+from file_librarian import (
+    __version__,
+    credentials,
+    locality,
+    menubar,
+    notifier,
+    protection,
+    scheduler,
+)
 from file_librarian import status as status_mod
 from file_librarian.config import (
     Config,
@@ -308,6 +316,7 @@ def collect(options: Options) -> tuple[list[Section], Redactor]:
         ("Configuration", lambda s: _configuration(s, redactor, path, config, config_error)),
         ("API key", lambda s: _api_key(s, redactor, config)),
         ("Schedule", lambda s: _schedule(s, redactor, path)),
+        ("Menu bar", lambda s: _menu_bar(s, path)),
         ("Database", lambda s: _database(s, redactor, config, options.runs)),
         ("Status", lambda s: _status(s, redactor, config)),
         ("Logs", lambda s: _logs(s, redactor, config, options.run_logs)),
@@ -552,6 +561,38 @@ def _schedule(section: Section, r: Redactor, config_path: Path) -> None:
     if scheduled is not None:
         same = os.path.realpath(scheduled) == os.path.realpath(config_path)
         section.lines.append(f"uses this configuration: {'yes' if same else 'no'}")
+
+
+def _menu_bar(section: Section, config_path: Path) -> None:
+    """The menu bar item (#116): no path, no text but its pose and counts."""
+    missing = menubar.missing_tools()
+    found = menubar.summary(full=True)
+    if not found.installed:
+        section.lines.append("installed: no")
+        if missing:
+            section.lines.append(f"cannot be built here: {', '.join(missing)} missing")
+        return
+    section.lines += [
+        "installed: yes",
+        f"loaded: {'yes' if found.loaded else 'no'}",
+        f"running: {'yes' if found.running else 'no'}",
+        f"app: {found.problem or 'built and current'}",
+    ]
+    if found.config is not None:
+        same = os.path.realpath(found.config) == os.path.realpath(config_path)
+        section.lines.append(f"uses this configuration: {'yes' if same else 'no'}")
+    seen = found.seen
+    if seen is None:
+        section.lines.append("last shown: nothing reported by the app yet")
+        return
+    try:
+        age = datetime.now(UTC).timestamp() - (menubar.folder() / menubar.SEEN_NAME).stat().st_mtime
+    except OSError:
+        age = None
+    when = "" if age is None else f", {max(0, int(age))} s ago"
+    counts = ", ".join(f"{key} {seen[key]}" for key in menubar.STATE_COUNTS)
+    busy = ", running" if seen["running"] else ""
+    section.lines.append(f"last shown: {seen['pose']} ({counts}{busy}){when}")
 
 
 def _notifier_line() -> str:

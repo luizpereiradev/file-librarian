@@ -20,7 +20,7 @@ jobs:
     # for a runner. Dependabot does not bump this; review it with the matrix.
     runs-on: macos-15
     # The suite takes about 7 minutes; the newest Python also runs the disk-image, OCR,
-    # notifier and browser steps.
+    # notifier, menu bar and browser steps.
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -67,6 +67,11 @@ jobs:
         env:
           FLIB_TEST_NOTIFIER: "1"
         run: uv run pytest -m notifier -p no:cacheprovider
+      - name: Menu bar applet compiled with the real tools, its parser run by osascript (never shown)
+        if: matrix.python == '3.15'
+        env:
+          FLIB_TEST_MENU: "1"
+        run: uv run pytest -m menu -p no:cacheprovider
       - name: flib ui in a real browser (headless Chrome from the runner image)
         if: matrix.python == '3.15'
         env:

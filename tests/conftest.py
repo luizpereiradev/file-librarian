@@ -117,6 +117,7 @@ def fake_launchd(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.M
     folder = tmp_path_factory.mktemp("launchd")
     script = _shim(folder, "launchctl", "fake_launchctl.py")
     monkeypatch.setenv("FAKE_LAUNCHD", str(folder / "loaded.json"))
+    monkeypatch.delenv("FAKE_LAUNCHD_STOPPED", raising=False)
     monkeypatch.setattr("file_librarian.scheduler.LAUNCHCTL", str(script))
     # The dedicated interpreter goes into a throwaway environment that reuses this
     # one's packages, never into the developer's .venv.
@@ -196,6 +197,20 @@ def fake_notifier_tools(
     monkeypatch.setenv("FAKE_NOTIFIER_LOG", str(folder / "calls.jsonl"))
     monkeypatch.delenv("FAKE_NOTIFIER_FAIL", raising=False)
     return folder / "calls.jsonl"
+
+
+@pytest.fixture(autouse=True)
+def menu_nudges(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The menu bar item's nudge (a distributed notification) is recorded, never posted;
+    returns the names posted."""
+    posted: list[str] = []
+
+    def record(name: str) -> bool:
+        posted.append(name)
+        return True
+
+    monkeypatch.setattr("file_librarian.menubar_state.POST", record)
+    return posted
 
 
 @pytest.fixture(autouse=True)

@@ -19,6 +19,8 @@ from file_librarian.config import load_config
 from tests._helpers import fake_config, put
 
 runner = CliRunner()
+MENU_NO = "n\n"
+"""The answer to init's last question, the menu bar item (#116)."""
 
 
 @pytest.fixture(autouse=True)
@@ -90,7 +92,7 @@ def test_accepting_both_adds_conservative_desktop_and_a_screenshots_category(
     # language, folder, output, review: Enter; Desktop: y; screenshots: y;
     # provider: Enter (Claude Code); schedule: n.
     answers = "\n\n\n\ny\ny\n\nn\n"
-    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers)
+    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers + MENU_NO)
 
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "work in progress" in result.stdout
@@ -131,7 +133,7 @@ def test_pt_br_names_the_screenshots_category_in_portuguese(
     path = tmp_path / "config.yaml"
     # language: pt-BR; folder, output, review: Enter; screenshots: y; provider; schedule: n.
     answers = "pt-BR\n\n\n\ny\n\nn\n"
-    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers)
+    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers + MENU_NO)
 
     assert result.exit_code == 0, result.stdout + result.stderr
     cfg = load_config(path)
@@ -145,7 +147,7 @@ def test_screenshots_saved_to_the_desktop_are_not_offered_as_an_input(
 ) -> None:
     path = tmp_path / "config.yaml"
     answers = "\n\n\n\nn\n\nn\n"  # Desktop: n
-    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers)
+    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers + MENU_NO)
 
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "which holds other files too" in result.stdout
@@ -160,7 +162,7 @@ def test_an_inbox_that_would_overlap_is_explained_and_left_out(
     monkeypatch.setenv("FAKE_SCREENSHOT_LOCATION", str(downloads / "Screens"))
     path = tmp_path / "config.yaml"
     answers = "\n\n\n\ny\n\nn\n"  # screenshots: y
-    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers)
+    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers + MENU_NO)
 
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "Not adding the screenshots folder" in result.stderr
@@ -185,7 +187,7 @@ def test_a_screenshots_folder_shared_with_other_files_is_refused(
     monkeypatch.setenv("FAKE_SCREENSHOT_LOCATION", f"~/{where}")
     path = tmp_path / "config.yaml"
     answers = "\n\n\n\n\nn\n"  # nothing about screenshots is asked
-    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers)
+    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers + MENU_NO)
 
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "which holds other files too" in result.stdout
@@ -269,7 +271,7 @@ def test_the_desktop_is_not_offered_when_it_is_the_first_input(
     path = tmp_path / "config.yaml"
     # language: Enter; folder: ~/Desktop; output, review: Enter; provider: Enter; schedule: n.
     answers = "\n~/Desktop\n\n\n\nn\n"
-    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers)
+    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers + MENU_NO)
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "Also tidy the Desktop?" not in result.stdout
     assert load_config(path).input_paths == [desktop]

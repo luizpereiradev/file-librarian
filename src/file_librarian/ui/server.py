@@ -45,9 +45,14 @@ the launch token.
 
 The server ends after ``ui.idle_minutes`` without a request from the session,
 on "End session" (a POST) or on SIGINT/SIGTERM. One ``flib ui`` runs at a time
-(``lock.ui_lock``); a second one says so and exits, since only the first knows
-its port and token. The clock, the idle poll and the timeouts are injectable
-for tests.
+(``lock.ui_lock``). The one running records its pid and port next to the
+database (``RUNNING_NAME``, nothing secret); a second ``flib ui --open PAGE``
+then opens ``http://127.0.0.1:<port>/PAGE`` in the default browser, which
+shows the page if it holds the session's cookie (the menu bar item's entries
+rely on it), and exits. No token is involved: the address gives nothing to a
+browser without the session. Without the record (or with ``--no-browser``),
+the second one says so and exits, since only the first knows its token. The
+clock, the idle poll and the timeouts are injectable for tests.
 """
 
 from __future__ import annotations
@@ -77,6 +82,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
+from enum import StrEnum
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from importlib import resources
@@ -87,14 +93,28 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 from file_librarian import status as status_mod
 from file_librarian.config import Config
-from file_librarian.lock import AlreadyRunningError, ui_lock
+from file_librarian.lock import AlreadyRunningError, ui_holder, ui_lock
 from file_librarian.ui import actions, api, review, settings, views
 
 OPEN = "/usr/bin/open"
 """Opens the handoff file in the default browser; tests swap in a fake."""
 HOST = "127.0.0.1"
-PAGES = ("status", "review", "search", "activity", "due", "settings")
-"""Pages ``--open`` can name."""
+
+
+class Page(StrEnum):
+    """Pages ``--open`` can name (a fixed choice on the command line too)."""
+
+    STATUS = "status"
+    REVIEW = "review"
+    SEARCH = "search"
+    ACTIVITY = "activity"
+    DUE = "due"
+    SETTINGS = "settings"
+
+
+PAGES = tuple(str(page) for page in Page)
+PAGE_PATHS = {page: f"/{page}" for page in PAGES}
+"""Each page's address on the server; an address is only ever taken from here."""
 VIEWS: dict[str, Callable[[Config, str, str], views.Page]] = {
     "activity": views.activity_page,
 }
@@ -1527,8 +1547,54 @@ one exception, and is not in this table."""
 # --- flib ui ---------------------------------------------------------------------------
 
 
-def open_file(path: Path) -> str | None:
-    """Ask macOS to open ``path`` in the default browser; why it failed, or ``None``."""
+RUNNING_NAME = "flib-ui.json"
+"""Next to the database while a ``flib ui`` serves: its pid and port, nothing secret."""
+
+
+def running_path(database: Path) -> Path:
+    return database.parent / RUNNING_NAME
+
+
+def write_running(database: Path, port: int) -> None:
+    """Say which port this ``flib ui`` serves on, for a second ``flib ui --open PAGE``
+    (the menu bar's entries) to open that page in it. Best effort."""
+    path = running_path(database)
+    tmp = path.with_name(f".{RUNNING_NAME}.{os.getpid()}")
+    with suppress(OSError):
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump({"pid": os.getpid(), "port": port}, fh)
+        tmp.replace(path)
+
+
+def remove_running(database: Path) -> None:
+    path = running_path(database)
+    with suppress(OSError, ValueError, TypeError, AttributeError):
+        if json.loads(path.read_text(encoding="utf-8")).get("pid") == os.getpid():
+            path.unlink()
+
+
+def running_port(database: Path) -> int | None:
+    """The port of the ``flib ui`` that holds the lock, when it said so; ``None`` otherwise
+    (a file left by a server that is gone, or that names another process, is not
+    believed)."""
+    try:
+        data = json.loads(running_path(database).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    pid, port = data.get("pid"), data.get("port")
+    if not isinstance(pid, int) or not isinstance(port, int) or isinstance(port, bool):
+        return None
+    if pid != ui_holder(database) or not 0 < port < 65536:
+        return None
+    return port
+
+
+def open_file(path: Path | str) -> str | None:
+    """Ask macOS to open ``path`` (a file, or a loopback address) in the default browser;
+    why it failed, or ``None``."""
     try:
         # A fixed binary; the path is one argument, never parsed by a shell.
         result = subprocess.run(  # noqa: S603
@@ -1562,6 +1628,8 @@ def run(
         elif event == "stolen":
             warn(STOLEN_WARNING)
 
+    if page not in PAGES:
+        raise UiError(f"no page {page!r}; one of: {', '.join(PAGES)}")
     minutes = _minutes(config.ui.idle_minutes)
     ending = f"It ends after {minutes} without use, with End session, or with Ctrl-C."
     try:
@@ -1571,6 +1639,7 @@ def run(
             try:
                 with _signals(ui):
                     ui.start()
+                    write_running(config.database, ui.port)
                     if browser:
                         handoff = ui.write_handoff()
                         echo(f"flib ui: opening {ui.url} in your browser. {ending}")
@@ -1586,11 +1655,21 @@ def run(
                     while ui.wait(0.5) is None:
                         pass
             finally:
+                remove_running(config.database)
                 ui.close()
             reason = ui.reason or "closed"
             echo("flib ui ended: " + ENDED[reason].format(minutes=minutes) + ".")
             return reason
     except AlreadyRunningError as exc:
+        running = running_port(config.database) if browser else None
+        if running is not None and open_file(f"http://{HOST}:{running}{PAGE_PATHS[page]}") is None:
+            # The page of the session already open (the menu bar's "Review", say): an
+            # address with no secret in it, for the browser that holds the cookie.
+            echo(
+                f"flib ui is already running: opened its {page} page in the browser where "
+                'it runs. (Another browser gets the "session ended" page.)'
+            )
+            return "running"
         echo(
             f"{exc}. Use the browser tab it opened, or end it there (End session) or "
             "with Ctrl-C in its terminal, then run `flib ui` again; it also ends on its "

@@ -22,6 +22,8 @@ from tests._helpers import put, write_config
 from tests.fake_openai import FakeOpenAI, completion, error
 
 runner = CliRunner()
+MENU_NO = "n\n"
+"""The answer to init's last question, the menu bar item (#116)."""
 REAL_PROBE = onboarding.probe_ollama  # before the autouse fixture stubs it
 KEY = "sk-" + "compat-" + "w" * 24
 ANSWER = {
@@ -318,7 +320,7 @@ def test_init_with_ollama_missing_the_model_skips_the_trial(
 def test_init_with_an_openai_compatible_server(tmp_path: Path, downloads: Path) -> None:
     path = tmp_path / "c.yaml"
     answers = "\n\n\n\nopenai-compat\nftp://nope\nhttp://127.0.0.1:1234/v1/\nlocal-model\nn\nn\n"
-    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers)
+    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers + MENU_NO)
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "http:// or https://" in result.stderr  # asked again
     cfg = load_config(path)
@@ -336,7 +338,7 @@ def test_init_with_an_openai_compatible_server(tmp_path: Path, downloads: Path) 
 def test_init_stores_an_openai_compat_key(tmp_path: Path, downloads: Path) -> None:
     path = tmp_path / "c.yaml"
     answers = f"\n\n\n\nopenai-compat\nhttps://api.example.com/v1\nm\ny\n{KEY}\nn\n"
-    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers)
+    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers + MENU_NO)
     assert result.exit_code == 0, result.stdout + result.stderr
     assert keychain.read(keychain.OPENAI_COMPAT_ACCOUNT) == KEY
     assert KEY not in result.stdout
@@ -358,7 +360,7 @@ def test_init_reports_a_keychain_failure_for_openai_compat(
     monkeypatch.setattr(keychain, "write", broken)
     path = write_config(tmp_path, downloads, compat_provider("https://api.example.com/v1"))
     answers = f"n\ny\n{KEY}\nn\n"
-    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers)
+    result = runner.invoke(app, ["init", "-c", str(path), "--sample", "0"], input=answers + MENU_NO)
     assert "Keychain write failed" in result.stderr
 
 

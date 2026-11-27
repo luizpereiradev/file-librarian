@@ -173,6 +173,8 @@ class Status:
     automatic_files_today: int = 0
     notifier: notifier.Choice | None = None
     """How a summary would be posted; ``None`` with ``summary.notify`` off."""
+    menu_bar: str | None = None
+    """The line about the menu bar item (#116); ``None`` when it is not installed."""
 
     @property
     def review_total(self) -> int:
@@ -190,15 +192,41 @@ class Status:
 # --- reading ---------------------------------------------------------------------------
 
 
-def collect(config: Config, *, now: datetime | None = None) -> Status:
-    """What waits for the user. Read-only and lock-free; raises ``StatusError``."""
+def collect(
+    config: Config, *, now: datetime | None = None, menu_bar: bool = True, probe: bool = True
+) -> Status:
+    """What waits for the user (see ``_collect``). A full look (``menu_bar`` and
+    ``probe``: ``flib status``, the interface, ``flib doctor``) also hands what it
+    found to the menu bar item, which then shows launchd's real answer and drops a
+    "running" left by a run that was killed; that writes only the item's own state
+    file, and only when it is installed."""
+    found = _collect(config, now=now, menu_bar=menu_bar, probe=probe)
+    if menu_bar and probe:
+        from file_librarian import menubar_state  # it builds on this module
+
+        menubar_state.changed(config.database, status=found)
+    return found
+
+
+def _collect(
+    config: Config, *, now: datetime | None = None, menu_bar: bool = True, probe: bool = True
+) -> Status:
+    """What waits for the user. Read-only and lock-free; raises ``StatusError``.
+    ``menu_bar=False`` leaves out the menu bar item's own state (what it shows is
+    computed from the rest). ``probe=False`` is the cheap form the menu bar item's
+    state uses on every write: the schedule from its plists only (no ``launchctl``),
+    and no notifier check."""
     # "Today" for due dates comes from the same clock `flib due` uses, so the two agree.
     due_today = due_mod.local_today(now or due_mod.clock())
     now = now or datetime.now(UTC)
-    schedule = next_run(now, config.input_paths)
-    posting = notifier.choice() if config.summary.notify else None
+    schedule = next_run(now, config.input_paths, probe=probe)
+    posting = notifier.choice() if config.summary.notify and probe else None
+    menu_line = _menu_bar_line() if menu_bar else None
     if not config.database.exists():
-        return Status(False, [], [], 0, None, None, schedule, 0.0, 0, None, notifier=posting)
+        return Status(
+            False, [], [], 0, None, None, schedule, 0.0, 0, None,
+            notifier=posting, menu_bar=menu_line,
+        )  # fmt: skip
     with Store.open_read_only(config.database) as store:
         version = store.schema_version
         if version > len(load_migrations()):
@@ -242,7 +270,14 @@ def collect(config: Config, *, now: datetime | None = None) -> Status:
         automatic_cost_today=cost_today,
         day_cap_reached=capped,
         notifier=posting,
+        menu_bar=menu_line,
     )
+
+
+def _menu_bar_line() -> str | None:
+    from file_librarian import menubar  # it builds on this module (poses)
+
+    return menubar.status_line(menubar.summary())
 
 
 def _today() -> str:
@@ -407,10 +442,10 @@ def count_skips(lines: Iterable[str]) -> dict[str, int]:
     return counts
 
 
-def next_run(now: datetime, inputs: list[Path] | None = None) -> NextRun:
+def next_run(now: datetime, inputs: list[Path] | None = None, *, probe: bool = True) -> NextRun:
     """The daily run's next start, from the installed agent (``None`` if not active)."""
     try:
-        state = scheduler.status()
+        state = scheduler.status(probe=probe)
     except (scheduler.ScheduleError, OSError, ValueError) as exc:
         return NextRun(False, False, None, None, str(exc))
     at = None
@@ -468,6 +503,8 @@ def render(
     lines.extend(_schedule_lines(status.schedule))
     if status.notifier is not None and status.schedule.installed:
         lines.append(notifier_line(status.notifier))
+    if status.menu_bar is not None:
+        lines.append(status.menu_bar)
     if status.database_exists:
         lines.extend(_watch_lines(status, config))
         month = f"This month: US$ {status.month_cost_usd:.4f}"

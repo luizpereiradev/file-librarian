@@ -248,7 +248,7 @@ def test_next_run_comes_from_the_installed_agent(
     cfg = fake_config(downloads)
     local = datetime(2026, 3, 10, 9, 0).astimezone()
     installed = scheduler.Status(True, True, "12:30", [])
-    monkeypatch.setattr("file_librarian.scheduler.status", lambda: installed)
+    monkeypatch.setattr("file_librarian.scheduler.status", lambda **kw: installed)
     assert st.next_run(local).at == local.replace(hour=12, minute=30)
     late = local.replace(hour=13)
     assert st.next_run(late).at == (late + timedelta(days=1)).replace(hour=12, minute=30)
@@ -257,10 +257,10 @@ def test_next_run_comes_from_the_installed_agent(
     assert lines[-1].startswith("Notifications: through osascript, shown as Script Editor")
 
     unloaded = scheduler.Status(True, False, "12:30", [])
-    monkeypatch.setattr("file_librarian.scheduler.status", lambda: unloaded)
+    monkeypatch.setattr("file_librarian.scheduler.status", lambda **kw: unloaded)
     assert "installed but not loaded" in st.render(st.collect(cfg), cfg)[-2]
 
-    def broken() -> scheduler.Status:
+    def broken(**kw: bool) -> scheduler.Status:
         raise scheduler.ScheduleError("cannot run launchctl")
 
     monkeypatch.setattr("file_librarian.scheduler.status", broken)
