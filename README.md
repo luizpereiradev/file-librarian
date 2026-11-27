@@ -1140,7 +1140,13 @@ Two kinds of files are treated differently, with every provider:
   `password(s)`, `passwd`, `2fa`, `senha(s)`, `contraseña(s)`,
   `mot(s) de passe`, `Passwort`/`Passwörter`, `recovery code(s)`,
   `backup code(s)`, `seed phrase`, `private key`, `recovery key`,
-  `bitwarden export`, `logins.csv`. `1Password-8.10.dmg` or a hexadecimal
+  `bitwarden export`, `logins.csv`, `client secret(s)`, `api key(s)`,
+  `access token`, `refresh token`, `secret key`. OAuth client files as the
+  cloud consoles name them (`client_secret_<id>.json`), `token.json`,
+  `secrets.json`/`.yaml`, `kubeconfig`, `*.tfstate` and `*.tfvars` count as
+  credential names, and a secret under a quoted key (`"client_secret":
+  "…"`) is found anywhere, also in a file that is one long line of JSON.
+  `1Password-8.10.dmg` or a hexadecimal
   name with `2fa` inside is not caught, and installers (`.dmg`, `.pkg`,
   `.app`…) never are by name alone. A harmless "password reset guide.pdf" is
   still left in place: rename it, or list it in `sensitive.allow_names`, and

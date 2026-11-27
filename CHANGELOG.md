@@ -602,6 +602,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Security
 
+- OAuth client files and one-line JSON credentials are now sensitive. A
+  client file as a cloud console names it (`client_secret_<id>.json`) was
+  classified and filed like any document, so its name and an excerpt of its
+  content went to the provider: no name rule matched it, and the rule for
+  `key = value` secrets only looked at the start of a line, which a file
+  that is one line of JSON never has. Now `client_secret*`, `token.json`,
+  `secrets.json`/`.yaml`, `.htpasswd`, `kubeconfig`, `*.tfstate` and
+  `*.tfvars` are credential names; names saying `client secret`, `api key`,
+  `access token`, `refresh token` or `secret key` are sensitive like the
+  password ones; a secret under a quoted key is found anywhere on a line;
+  and Google's `GOCSPX-` client secrets are recognised by their form. Files
+  filed before this change stay where they are: if one held a live secret,
+  rotate it.
+
 - `flib ui`'s session cookie no longer reaches other servers on loopback
   (#125). Browsers keep cookies per host, not per port, so any program or
   account listening on another 127.0.0.1 port that got the browser to load

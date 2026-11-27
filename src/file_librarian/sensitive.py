@@ -10,7 +10,7 @@ acceptable here: the cost is a file left in place, not a leaked key. Names
 alone are matched conservatively: ``*.key`` is left out because Keynote uses
 it; a real key file is still caught by its PEM header.
 
-Names that say they hold passwords or recovery material are sensitive too,
+Names that say they hold passwords, keys, tokens or recovery material are sensitive too,
 whatever their content (``sensitive_words``). They are matched by whole words,
 never inside another word: the name is cut into words at anything that is not
 a letter or digit and where a lower-case letter meets an upper-case one
@@ -37,6 +37,9 @@ SENSITIVE_NAMES = (
     "*.ovpn", ".env", ".env.*", "*.env", ".netrc", ".pgpass", ".npmrc", ".pypirc",
     "credentials", "credentials.json", "*credentials*.json", "service-account*.json",
     "logins.csv",  # the export of Firefox's and other browsers' saved passwords
+    # OAuth client files as the cloud consoles name them, and other stores of tokens.
+    "client_secret*", "client-secret*", "token.json", "tokens.json", "secrets.json",
+    "secrets.y*ml", ".htpasswd", "kubeconfig", "*.kubeconfig", "*.tfstate", "*.tfvars",
 )  # fmt: skip
 
 # Words (or runs of words) that say a file holds passwords or recovery material.
@@ -50,6 +53,8 @@ SENSITIVE_WORDS: tuple[tuple[str, ...], ...] = (
     ("código", "de", "recuperação"), ("codigo", "de", "recuperacao"),
     ("códigos", "de", "recuperação"), ("codigos", "de", "recuperacao"),
     ("bitwarden", "export"),
+    ("client", "secret"), ("client", "secrets"), ("api", "key"), ("api", "keys"),
+    ("access", "token"), ("refresh", "token"), ("secret", "key"),
 )  # fmt: skip
 # "recovery key" names a manual or a part as often as a key: only at the end of the
 # name (or before a number), or in a text-like file.
@@ -127,6 +132,7 @@ SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("Slack token", re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}")),
     ("Stripe key", re.compile(r"\b(?:sk|rk)_live_[A-Za-z0-9]{20,}")),
     ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+    ("Google OAuth client secret", re.compile(r"\bGOCSPX-[A-Za-z0-9_-]{20,}")),
     ("Anthropic API key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}")),
     ("OpenAI API key", re.compile(r"\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{32,}")),
     (
@@ -139,6 +145,15 @@ SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(
             r"(?im)^\s*(?:export\s+)?[\w.-]*(?:password|passwd|secret|api[_-]?key|access[_-]?token"
             r"|private[_-]?key|client[_-]?secret)[\w.-]*\s*[:=]\s*['\"]?[^\s'\"#]{8,}"
+        ),
+    ),
+    (
+        # The same keys as a quoted JSON or YAML key, anywhere on a line: a credentials
+        # file is often one long line, which the assignment pattern above never matches.
+        "password or secret in JSON",
+        re.compile(
+            r"(?i)[\"'][\w.-]*(?:password|passwd|secret|api[_-]?key|access[_-]?token"
+            r"|refresh[_-]?token|private[_-]?key)[\w.-]*[\"']\s*:\s*[\"'][^\"'\s]{8,}[\"']"
         ),
     ),
 )  # fmt: skip
