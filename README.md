@@ -282,7 +282,7 @@ your browser visit them (macOS, Safari, Chrome and Firefox resolve
 `.localhost` names to the Mac itself; on a Mac that does not, `flib ui`
 says so and serves at `127.0.0.1`, where they could). Treat that address
 like the session itself while it runs: it is in the address bar and the
-history, not in any command line or terminal message. The browser gets a
+history, never in a command line, and in the terminal only in the `--no-browser` link. The browser gets a
 one-time key through a file only you can read, never through the command
 line where other accounts on the Mac could see it, and the terminal says
 "session started" when it is used. If the key is used a second time, by
