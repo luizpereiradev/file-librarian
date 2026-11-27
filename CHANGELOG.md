@@ -13,10 +13,11 @@ All notable changes to this project are documented here. The format follows
   and ended pages and the handoff page) and the menu bar item's menu and
   state line are in Brazilian Portuguese, with dates as `25/11/2026 22:48`,
   a decimal comma and `R$ 1.234,56`; English stays as it was and is the
-  fallback. Changing the language on the Settings page switches the
-  interface from the next page and rebuilds the menu bar item. A cost cap
-  may be typed as `3,00` or `3.00`; `1.234` (in pt-BR) is refused as
-  ambiguous rather than guessed. One catalogue (`i18n/messages/`), checked
+  fallback; Portuguese says "nenhum arquivo" rather than "0 arquivo".
+  Changing the language on the Settings page switches the interface from the
+  next page and rebuilds the menu bar item. A cost cap or a search amount may
+  be typed as `3,00` or `3.00`; `1.234` (in pt-BR) is refused as ambiguous
+  rather than guessed. One catalogue (`i18n/messages/`), checked
   by tests. The command line, logs, notifications and docs stay English.
 
 - **flib in the menu bar** (#116): `flib menu` builds a small AppleScriptObjC

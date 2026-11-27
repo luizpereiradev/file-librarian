@@ -1457,7 +1457,11 @@ class _Handler(BaseHTTPRequestHandler):
                 raise actions.Refused(settings.NO_PATH)
             outcome, saved = change(ui.config, ui.config_path, fields)
             if saved is not None:
-                ui.config = saved
+                # The server goes on with what is saved before anything else happens.
+                old, ui.config = ui.config, saved
+                notes = settings.after_change(old, saved, ui.config_path)
+                if notes:
+                    outcome = dataclasses.replace(outcome, items=(*outcome.items, *notes))
             return outcome
 
         self._act(session, "/settings", do, prefix="o-")

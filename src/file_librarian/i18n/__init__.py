@@ -15,7 +15,8 @@ and state line; the command line, logs, notifications and docs stay English.
   fragments joined, since word order differs. A ``Plural`` picks its form from
   one integer parameter (``by``): ``one`` or ``other``. English: one is 1. pt-BR
   follows CLDR and formal grammar: 0 and 1 are singular ("0 arquivo"), which the
-  catalogue mostly avoids with a sentence of its own for nothing.
+  catalogue never shows: every pt-BR plural with a number has a ``zero`` form
+  ("nenhum arquivo"). English keeps "0 files", which reads naturally.
 - The language in use is a context variable: the server sets it at the start of
   each request from the running configuration (``use``), so a change on the
   Settings page applies from the next page; everything else (tests, the command
@@ -43,14 +44,21 @@ NAMES: dict[Lang, str] = {"en": "English", "pt-BR": "Português (Brasil)"}
 
 @dataclass(frozen=True, slots=True)
 class Plural:
-    """A message with a form per plural category, chosen by the integer ``by``."""
+    """A message with a form per plural category, chosen by the integer ``by``; ``zero``,
+    when given, is the form for exactly 0 ("nenhum arquivo" rather than "0 arquivo")."""
 
     one: str
     other: str
     by: str = "count"
+    zero: str | None = None
 
-    def forms(self) -> tuple[str, str]:
-        return self.one, self.other
+    def forms(self) -> tuple[str, ...]:
+        return (self.one, self.other) if self.zero is None else (self.zero, self.one, self.other)
+
+    def pick(self, lang: Lang, count: int) -> str:
+        if count == 0 and self.zero is not None:
+            return self.zero
+        return self.one if category(lang, count) == "one" else self.other
 
 
 Entry = str | Plural
@@ -114,7 +122,7 @@ def template(lang: Lang, msg_id: str, params: Mapping[str, object]) -> str:
     count = params[found.by]
     if not isinstance(count, int) or isinstance(count, bool):
         raise TypeError(f"{msg_id}: {found.by} must be a whole number")
-    return found.one if category(lang, count) == "one" else found.other
+    return found.pick(lang, count)
 
 
 class Msg(str):

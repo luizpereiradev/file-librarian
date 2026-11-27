@@ -440,7 +440,8 @@ def test_the_language_never_moves_the_library(client: UiClient, path: Path) -> N
     old = load_config(path)
     text = change(client, "language", language="pt-BR")
     # The page after the change already speaks the new language (#126).
-    assert '<html lang="pt-BR">' in text and "Idioma" in text and "en → pt-BR" in text
+    assert '<html lang="pt-BR">' in text and "Idioma" in text
+    assert "English → Português (Brasil)" in text  # each language by its own name
     new = load_config(path)
     assert new.language == "pt-BR"
     assert new.output_root == old.output_root and new.review_folder == old.review_folder

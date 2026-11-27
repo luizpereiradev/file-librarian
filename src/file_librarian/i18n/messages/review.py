@@ -320,9 +320,15 @@ PT_BR: dict[str, Entry] = {
     "review.renamed": "é o novo nome; o arquivo continua em revisão.",
     "review.undo_rename": "Desfazer a renomeação…",
     "review.undo_these": Plural(
-        one="Desfazer: devolver para a revisão…", other="Desfazer: devolver estes {count}…"
+        zero="Desfazer…",
+        one="Desfazer: devolver para a revisão…",
+        other="Desfazer: devolver estes {count}…",
     ),
     "review.accept_broken": Plural(
+        zero=(
+            "Nenhum arquivo foi movido para {target}: não foi possível gravar no índice, então "
+            "tudo parou aí. Veja a Atividade."
+        ),
         one=(
             "{count} arquivo foi movido para {target} e registrado; depois não foi possível "
             "gravar no índice, então o resto parou aí. Veja a Atividade: o próximo comando do "
@@ -336,14 +342,17 @@ PT_BR: dict[str, Entry] = {
     ),
     "review.nothing_moved": "Nada foi movido.",
     "review.accept_moved": Plural(
+        zero="Nenhum arquivo foi movido para {target}.",
         one="{count} arquivo movido para {target}, numa só execução.",
         other="{count} arquivos movidos para {target}, numa só execução.",
     ),
     "review.accept_moved_left": Plural(
+        zero="Nenhum arquivo foi movido para {target}. {left}",
         one="{count} arquivo movido para {target}, numa só execução. {left}",
         other="{count} arquivos movidos para {target}, numa só execução. {left}",
     ),
     "review.accept_left": Plural(
+        zero="Nenhum arquivo ficou para trás.",
         one="{count} arquivo não pôde ser movido e continua em revisão.",
         other="{count} arquivos não puderam ser movidos e continuam em revisão.",
     ),
@@ -361,10 +370,16 @@ PT_BR: dict[str, Entry] = {
     "undo.back_in": "está de volta em {folder}.",
     "undo.skipped": "ignorado: {why}.",
     "undo.warning": "aviso: {why}.",
-    "undo.restored": Plural(one="{count} devolvido", other="{count} devolvidos"),
-    "undo.skipped_count": Plural(one="{count} ignorado", other="{count} ignorados"),
+    "undo.restored": Plural(
+        zero="nenhum devolvido", one="{count} devolvido", other="{count} devolvidos"
+    ),
+    "undo.skipped_count": Plural(
+        zero="nenhum ignorado", one="{count} ignorado", other="{count} ignorados"
+    ),
     "undo.reverted": Plural(
-        one="{count} alteração no índice desfeita", other="{count} alterações no índice desfeitas"
+        zero="nenhuma alteração no índice desfeita",
+        one="{count} alteração no índice desfeita",
+        other="{count} alterações no índice desfeitas",
     ),
     "undo.done_run": "Execução {run} desfeita: {restored}, {skipped}.",
     "undo.done_run_reverted": "Execução {run} desfeita: {restored}, {skipped}, {reverted}.",
@@ -396,23 +411,36 @@ PT_BR: dict[str, Entry] = {
         "estava. Toda alteração fica registrada; Desfazer volta atrás."
     ),
     "review.nothing": "Nada esperando revisão.",
-    "review.count": Plural(one="{count} arquivo em revisão", other="{count} arquivos em revisão"),
+    "review.count": Plural(
+        zero="Nenhum arquivo em revisão",
+        one="{count} arquivo em revisão",
+        other="{count} arquivos em revisão",
+    ),
     "review.group_chip": "{title} ({count})",
     "review.groups_label": "Grupos",
     "review.more": Plural(
+        zero="Nenhum arquivo a mais.",
         one="E mais {count} arquivo; ele aparece aqui quando estes forem resolvidos.",
         other="E mais {count} arquivos; eles aparecem aqui quando estes forem resolvidos.",
     ),
-    "review.title": Plural(one="Revisão: {count} arquivo", other="Revisão: {count} arquivos"),
+    "review.title": Plural(
+        zero="Revisão: nenhum arquivo",
+        one="Revisão: {count} arquivo",
+        other="Revisão: {count} arquivos",
+    ),
     "review.accept_all_link": Plural(
-        one="Aceitar {target} para {count}…", other="Aceitar {target} para os {count}…"
+        zero="Aceitar {target} para nenhum arquivo…",
+        one="Aceitar {target} para {count} arquivo…",
+        other="Aceitar {target} para os {count}…",
     ),
     "review.accept_some_link": "Aceitar {target} para {count} dos {present}…",
     "review.from": "veio de {folder}",
     "review.in_review": "em revisão",
     "review.in_review_today": "em revisão desde hoje",
     "review.in_review_days": Plural(
-        one="em revisão há {count} dia", other="em revisão há {count} dias"
+        zero="em revisão desde hoje",
+        one="em revisão há {count} dia",
+        other="em revisão há {count} dias",
     ),
     "review.confidence": "confiança {value}",
     "review.reconcile": "`flib reconcile` no Terminal encontra o arquivo.",
@@ -432,6 +460,7 @@ PT_BR: dict[str, Entry] = {
     "review.accept_all": "Aceitar todos",
     "review.group_gone": "Esse grupo não está mais em revisão.",
     "review.accept_lead": Plural(
+        zero="Nenhum arquivo vai para {target}.",
         one=(
             "{count} arquivo vai para {target}, numa só execução: um Desfazer o devolve para a "
             "revisão. Se o nome já existir, ele ganha o próximo número livre; nada é "
@@ -444,6 +473,7 @@ PT_BR: dict[str, Entry] = {
         ),
     ),
     "review.accept_missing": Plural(
+        zero="Nenhum arquivo deste grupo sumiu do disco.",
         one="{count} arquivo deste grupo sumiu do disco e ficou de fora.",
         other="{count} arquivos deste grupo sumiram do disco e ficaram de fora.",
     ),
@@ -451,13 +481,16 @@ PT_BR: dict[str, Entry] = {
         "No máximo {count} por vez; o resto continua em revisão para a próxima rodada."
     ),
     "review.accept_button": Plural(
-        one="Mover {count} arquivo para {target}", other="Mover {count} arquivos para {target}"
+        zero="Nada para mover para {target}",
+        one="Mover {count} arquivo para {target}",
+        other="Mover {count} arquivos para {target}",
     ),
     "undo.title": "Desfazer",
     "undo.back_to": "de volta para ",
     "undo.old_name_back": " (recupera o nome antigo: {name})",
     "undo.moves_label": "Movimentações",
     "undo.run_none": Plural(
+        zero="Nada da execução {run} pode ser devolvido agora.",
         one=(
             "Nada da execução {run} pode ser devolvido agora: {count} arquivo dela aparece "
             "abaixo, com o motivo."
@@ -468,6 +501,9 @@ PT_BR: dict[str, Entry] = {
         ),
     ),
     "undo.run_lead": Plural(
+        zero=(
+            "Desfazer a execução {run} não devolve nenhum arquivo. Nada é forçado nem sobrescrito."
+        ),
         one=(
             "Desfazer a execução {run} devolve {count} arquivo para onde ele estava. Nada é "
             "forçado nem sobrescrito."
@@ -478,6 +514,10 @@ PT_BR: dict[str, Entry] = {
         ),
     ),
     "undo.run_lead_changes": Plural(
+        zero=(
+            "Desfazer a execução {run} não devolve nenhum arquivo, mas desfaz o que a execução "
+            "mudou no índice. Nada é forçado nem sobrescrito."
+        ),
         one=(
             "Desfazer a execução {run} devolve {count} arquivo para onde ele estava e desfaz o "
             "que a execução mudou no índice. Nada é forçado nem sobrescrito."
@@ -488,6 +528,10 @@ PT_BR: dict[str, Entry] = {
         ),
     ),
     "undo.run_lead_skipped": Plural(
+        zero=(
+            "Desfazer a execução {run} não devolve nenhum arquivo; {skipped} (veja abaixo). Nada é "
+            "forçado nem sobrescrito."
+        ),
         one=(
             "Desfazer a execução {run} devolve {count} arquivo para onde ele estava; {skipped} "
             "(veja abaixo). Nada é forçado nem sobrescrito."
@@ -498,6 +542,10 @@ PT_BR: dict[str, Entry] = {
         ),
     ),
     "undo.run_lead_skipped_changes": Plural(
+        zero=(
+            "Desfazer a execução {run} não devolve nenhum arquivo; {skipped} (veja abaixo); e "
+            "desfaz o que a execução mudou no índice. Nada é forçado nem sobrescrito."
+        ),
         one=(
             "Desfazer a execução {run} devolve {count} arquivo para onde ele estava; {skipped} "
             "(veja abaixo); e desfaz o que a execução mudou no índice. Nada é forçado nem "
@@ -509,7 +557,9 @@ PT_BR: dict[str, Entry] = {
             "nem sobrescrito."
         ),
     ),
-    "undo.run_skipped": Plural(one="{count} fica de fora", other="{count} ficam de fora"),
+    "undo.run_skipped": Plural(
+        zero="nenhum fica de fora", one="{count} fica de fora", other="{count} ficam de fora"
+    ),
     "undo.run_index_only": (
         "Desfazer a execução {run} desfaz o que ela mudou no índice (nada é movido). Nada é "
         "forçado nem sobrescrito."

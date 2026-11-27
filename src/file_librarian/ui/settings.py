@@ -48,6 +48,7 @@ How a change is made:
 from __future__ import annotations
 
 import dataclasses
+import logging
 import os
 import re
 import shlex
@@ -102,6 +103,8 @@ from file_librarian.ui.views import (
     sentence,
     shown,
 )
+
+log = logging.getLogger(__name__)
 
 MAX_HINT = 300
 """Characters a category's hint may have (it goes to the model with every file)."""
@@ -416,6 +419,8 @@ def describe(key: str, value: Any) -> Msg | str:
         return "…"
     if isinstance(value, float):  # a cost cap: with the page's decimal separator
         return formats.amount_input(value)
+    if key == "language" and value in i18n.NAMES:  # by its own name: English, Português
+        return i18n.NAMES[value]
     return str(value)
 
 
@@ -1911,22 +1916,30 @@ def save(running: Config, path: Path, fields: Fields) -> tuple[Outcome, Config |
     notes = list(saved.changes)
     if section.startswith("input-"):
         notes += _refresh_watch(path, saved.config)
-    if saved.config.language != config.language:
-        notes += refresh_menu(path)
     outcome = Outcome(t("settings.saved"), items=tuple(notes), anchor=anchor, restore=True)
     return outcome, saved.config
+
+
+def after_change(old: Config, new: Config, path: Path) -> list[Item]:
+    """What follows a saved change, run once the server already uses ``new``: a change of
+    language rebuilds the menu bar item (#126). Never raises: the change is saved."""
+    if new.language == old.language:
+        return []
+    return refresh_menu(path)
 
 
 def refresh_menu(path: Path) -> list[Item]:
     """After a change of language, the menu bar item's fixed entries follow (#126): they
     are put in the app when it is built, so it is rebuilt (``flib menu --refresh``).
-    Only when it is installed for this configuration file."""
+    Only when it is installed for this configuration file. Whatever goes wrong (a tool,
+    a bundle it cannot read) is said, never raised: the settings are already saved."""
     try:
         target = menubar.read_target() if menubar.installed() else None
         if target is None or not same_place(target.config, path):
             return []
         menubar.refresh()
-    except (menubar.MenuError, OSError):
+    except Exception as exc:  # the menu is a convenience: it never fails a saved change
+        log.warning("menu bar not rebuilt after a change of language: %s", type(exc).__name__)
         return [Item(t("settings.menu.name"), t("settings.menu.failed"))]
     return [Item(t("settings.menu.name"), t("settings.menu.done"))]
 
@@ -2135,8 +2148,6 @@ def restore(running: Config, path: Path, fields: Fields) -> tuple[Outcome, Confi
             raise Refused(OTHER_DATABASE)
         _write(path, snap.data, then.text)
     items = diff(snap.raw or {}, then.raw or {}, snap.config, then.config)
-    if snap.config is not None and then.config.language != snap.config.language:
-        items += refresh_menu(path)
     outcome = Outcome(t("settings.restore.done"), items=tuple(items), restore=True)
     return outcome, then.config
 

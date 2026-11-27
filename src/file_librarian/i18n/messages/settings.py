@@ -618,6 +618,7 @@ PT_BR: dict[str, Entry] = {
     "settings.folder.desktop": "Mesa",
     "settings.folder.downloads_note": "Tudo o que estiver no primeiro nível.",
     "settings.folder.desktop_note": Plural(
+        zero="Só documentos e imagens; as pastas ficam como estão, como o `flib init` configura.",
         one=(
             "Só documentos e imagens sem alteração há {days} dia; as pastas ficam como estão, "
             "como o `flib init` configura."
@@ -659,7 +660,10 @@ PT_BR: dict[str, Entry] = {
     "settings.rules.ignore": "ignora {patterns}",
     "settings.rules.ignore_own": "ignora {patterns} ({own} só desta pasta)",
     "settings.rules.min_age": Plural(
-        one="só o que não muda há {days} dia", other="só o que não muda há {days} dias", by="days"
+        zero="de qualquer idade",
+        one="só o que não muda há {days} dia",
+        other="só o que não muda há {days} dias",
+        by="days",
     ),
     "settings.rules.folders.as_unit": "subpastas: tratadas como um item só",
     "settings.rules.folders.ignore": "subpastas: ignoradas",
@@ -668,12 +672,12 @@ PT_BR: dict[str, Entry] = {
     "settings.rules.fixed_renamed": (
         "categoria fixa {category} (sem IA), renomeados pelo naming.pattern"
     ),
-    "settings.rules.fixed_kept": "categoria fixa {category} (sem IA), nome mantido",
+    "settings.rules.fixed_kept": "categoria fixa {category} (sem IA), nomes mantidos",
     "settings.rules.fixed_layout_renamed": (
         "categoria fixa {category} (sem IA), subpastas {layout}, renomeados pelo naming.pattern"
     ),
     "settings.rules.fixed_layout_kept": (
-        "categoria fixa {category} (sem IA), subpastas {layout}, nome mantido"
+        "categoria fixa {category} (sem IA), subpastas {layout}, nomes mantidos"
     ),
     "settings.rules.ai": "classificados pela IA",
     "settings.schedule.unreadable": "Não foi possível ler o estado do launchd agora.",
@@ -707,7 +711,7 @@ PT_BR: dict[str, Entry] = {
     ),
     "settings.schedule.off": "O agendamento está desligado: o flib só roda quando você rodar.",
     "settings.schedule.bad_time": (
-        "Não salvo: Execução diária às precisa de um horário de 24 horas, como 12:30."
+        "Não salvo: o horário da execução diária precisa estar no formato de 24 horas, como 12:30."
     ),
     "settings.schedule.refused": (
         "O launchd do macOS não aceitou o agendamento. {now} `flib schedule` no Terminal diz "
@@ -717,7 +721,9 @@ PT_BR: dict[str, Entry] = {
         "O launchd do macOS não aceitou o agendamento (as configurações foram salvas). {now} "
         "`flib schedule` no Terminal diz por quê."
     ),
-    "settings.menu.shown": "Barra de menus: o gato está lá. `flib menu --remove` tira ele de lá.",
+    "settings.menu.shown": (
+        "Barra de menus: o gato está lá. `flib menu --remove` remove o gato de lá."
+    ),
     "settings.menu.hidden": (
         "Barra de menus: não aparece. `flib menu` coloca o gato lá, com o que precisa de você."
     ),
@@ -734,6 +740,7 @@ PT_BR: dict[str, Entry] = {
         "roda quando ele acordar."
     ),
     "settings.scheduled.watch": Plural(
+        zero="Modo de observação ligado, mas não há nenhuma pasta de entrada para observar.",
         one=(
             "Modo de observação ligado: o flib roda quando algo chega em {count} pasta de "
             "entrada, depois que os downloads terminam."
@@ -744,6 +751,10 @@ PT_BR: dict[str, Entry] = {
         ),
     ),
     "settings.scheduled.both": Plural(
+        zero=(
+            "Modo de observação ligado, mas não há nenhuma pasta de entrada para observar. E todo "
+            "dia às {time}."
+        ),
         one=(
             "Modo de observação ligado: o flib roda quando algo chega em {count} pasta de "
             "entrada, depois que os downloads terminam. E todo dia às {time}."
@@ -807,9 +818,9 @@ PT_BR: dict[str, Entry] = {
     ),
     "settings.reading.semantic": "Busca por significado",
     "settings.reading.semantic_help": (
-        "Nomes, etiquetas, descrições e categorias (nunca o conteúdo dos arquivos) vão para "
-        "{where} para gerar os embeddings. `flib search --reindex` gera os embeddings do que "
-        "já está organizado."
+        "Nomes, tags, descrições e categorias (nunca o conteúdo dos arquivos) vão para {where} "
+        "para gerar os embeddings. `flib search --reindex` gera os embeddings do que já está "
+        "organizado."
     ),
     "settings.layout.none": "Tudo na pasta da categoria",
     "settings.layout.year": "Por ano",
@@ -854,7 +865,9 @@ PT_BR: dict[str, Entry] = {
     ),
     "settings.holds.input": "a pasta de entrada {path} manda tudo para ela",
     "settings.holds.index": Plural(
-        one="o índice tem {count} arquivo nela", other="o índice tem {count} arquivos nela"
+        zero="o índice não tem nenhum arquivo nela",
+        one="o índice tem {count} arquivo nela",
+        other="o índice tem {count} arquivos nela",
     ),
     "settings.holds.not_empty": "a pasta dela não está vazia",
     "settings.holds.unreadable": "não foi possível ler a pasta dela",
@@ -882,6 +895,7 @@ PT_BR: dict[str, Entry] = {
     ),
     "settings.costs.unlimited": "nada limita as execuções automáticas",
     "settings.costs.files_cap": Plural(
+        zero="as execuções automáticas não veem nenhum arquivo por dia (limits.max_files_per_day)",
         one=(
             "as execuções automáticas veem no máximo {files} arquivo por dia "
             "(limits.max_files_per_day)"
@@ -910,7 +924,7 @@ PT_BR: dict[str, Entry] = {
     "settings.reminders.days": "Dias antes do vencimento",
     "settings.reminders.kinds": "Tipos de documento na lista de Vencimentos",
     "settings.reminders.bad_days": (
-        "Não salvo: Dias antes do vencimento precisa ser um número de 0 a 60."
+        "Não salvo: o número de dias antes do vencimento precisa ser de 0 a 60."
     ),
     "settings.language.field": "Idioma da interface, dos nomes e das descrições",
     "settings.language.help": (

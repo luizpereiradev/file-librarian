@@ -52,15 +52,21 @@ PT_BR: dict[str, Entry] = {
     "menu.problem.run_failed": "O flib não conseguiu rodar (`flib doctor` diz por quê)",
     "menu.problem.no_access": "O macOS negou acesso a uma pasta (`flib doctor`)",
     "menu.to_review": Plural(
-        one="{count} arquivo para revisar", other="{count} arquivos para revisar"
+        zero="nenhum arquivo para revisar",
+        one="{count} arquivo para revisar",
+        other="{count} arquivos para revisar",
     ),
-    "menu.failed": Plural(one="{count} com falha", other="{count} com falha"),
-    "menu.overdue": Plural(one="{count} vencido", other="{count} vencidos"),
-    "menu.due_soon": Plural(one="{count} vence em breve", other="{count} vencem em breve"),
+    "menu.failed": Plural(
+        zero="nenhum com falha", one="{count} com falha", other="{count} com falha"
+    ),
+    "menu.overdue": Plural(zero="nenhum vencido", one="{count} vencido", other="{count} vencidos"),
+    "menu.due_soon": Plural(
+        zero="nenhum vence em breve", one="{count} vence em breve", other="{count} vencem em breve"
+    ),
     "menu.nothing": "Nada pendente",
     "menu.not_scheduled": "Sem agendamento",
     "menu.not_active": "Agendamento inativo (`flib schedule`)",
-    "menu.on_arrival": "Roda quando chegam arquivos",
+    "menu.on_arrival": "Roda quando chegarem arquivos",
     "menu.next_and_watch": "Próxima execução {when}, e quando chegarem arquivos",
     "menu.next": "Próxima execução {when}",
 }

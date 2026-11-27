@@ -9,6 +9,7 @@ commented configuration file in a temporary folder.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ from file_librarian.i18n import t
 from file_librarian.ui import settings
 from file_librarian.ui.actions import Outcome, Refused
 from file_librarian.ui.markup import render
+from file_librarian.ui.server import Ui
 from tests.unit.test_ui_settings import FILE
 
 
@@ -85,9 +87,9 @@ def test_languages_are_listed_by_their_own_names(path: Path) -> None:
         assert '<option value="pt-BR">Português (Brasil)</option>' in text
 
 
-def test_plurals_in_portuguese_treat_zero_as_singular() -> None:
+def test_plurals_in_portuguese_say_none_for_zero() -> None:
     with i18n.using("pt-BR"):
-        assert t("settings.holds.index", count=0) == "o índice tem 0 arquivo nela"
+        assert t("settings.holds.index", count=0) == "o índice não tem nenhum arquivo nela"
         assert t("settings.holds.index", count=1) == "o índice tem 1 arquivo nela"
         assert t("settings.holds.index", count=2) == "o índice tem 2 arquivos nela"
         assert t("settings.scheduled.watch", count=2).startswith(
@@ -153,7 +155,7 @@ def test_after_switching_the_language_the_page_and_its_outcome_are_in_the_new_on
         text = page_text(path, outcome)
     assert '<html lang="pt-BR">' in text
     assert "Salvo." in text and "Saved." not in text
-    assert "<strong>Idioma</strong>: en → pt-BR" in text
+    assert "<strong>Idioma</strong>: English → Português (Brasil)" in text
 
 
 def test_a_backtick_in_a_name_stays_text_in_portuguese(path: Path) -> None:
@@ -206,3 +208,77 @@ def test_a_cost_cap_in_what_changed_has_the_page_decimal_separator() -> None:
     with i18n.using("pt-BR"):
         assert settings_mod.describe("limits.max_cost_usd_per_run", 3.0) == "3,0"
     assert settings_mod.describe("limits.max_cost_usd_per_run", 3.0) == "3.0"
+
+
+# --- the menu bar's rebuild never fails a saved change (#135 review) --------------------
+
+
+@pytest.fixture
+def serve(loopback_network: None) -> Iterator[list[Ui]]:
+    started: list[Ui] = []
+    yield started
+    for ui in started:
+        ui.close()
+
+
+@pytest.fixture
+def broken_menu(monkeypatch: pytest.MonkeyPatch, path: Path) -> list[str]:
+    """The menu bar item installed for this file, and its rebuild failing with an error
+    no one planned for (a bundle it cannot read, say)."""
+    from file_librarian import menubar
+
+    calls: list[str] = []
+    monkeypatch.setattr(menubar, "installed", lambda: True)
+    monkeypatch.setattr(
+        menubar, "read_target", lambda: menubar.Target(path, load_config(path).database)
+    )
+
+    def refresh() -> str:
+        calls.append("refresh")
+        raise ValueError("bad Info.plist")
+
+    monkeypatch.setattr(menubar, "refresh", refresh)
+    return calls
+
+
+def test_a_failed_menu_rebuild_never_fails_the_language_change(
+    serve: list[Ui], path: Path, broken_menu: list[str]
+) -> None:
+    from tests.unit.test_ui_settings import change, start
+
+    client = start(serve, load_config(path), path)
+    text = change(client, "language", language="pt-BR")
+    assert broken_menu == ["refresh"]
+    assert load_config(path).language == "pt-BR"
+    assert serve[0].config.language == "pt-BR"  # the server goes on with what is saved
+    assert '<html lang="pt-BR">' in text and "Salvo." in text
+    assert "ainda no idioma anterior" in text and "flib menu --refresh" in text
+
+
+def test_a_failed_menu_rebuild_never_fails_a_restore(
+    serve: list[Ui], path: Path, broken_menu: list[str]
+) -> None:
+    import re
+
+    from tests.unit.test_ui_settings import change, post, start
+
+    client = start(serve, load_config(path), path)
+    change(client, "language", language="pt-BR")
+    confirm = client.get("/settings/restore").text
+    found = dict(re.findall(r'name="(pin|backup)" value="([0-9a-f]+)"', confirm))
+    csrf = re.search(r'name="csrf" value="([^"]+)"', confirm)
+    assert csrf is not None
+    reply = post(client, "/settings/restore", {"csrf": csrf.group(1)} | found)
+    assert reply.status == 303
+    text = client.get(reply.headers["Location"]).text
+    assert broken_menu == ["refresh", "refresh"]
+    assert load_config(path).language == "en" and serve[0].config.language == "en"
+    assert '<html lang="en">' in text and "The previous settings are back" in text
+    assert "still in the old language" in text
+
+
+def test_a_cap_shown_in_either_language_is_left_alone() -> None:
+    assert settings.as_shown("3.0", 3.0) and settings.as_shown("3,0", 3.0)
+    assert not settings.as_shown("3,00", 3.0) and not settings.as_shown("3", 3.0)
+    with i18n.using("pt-BR"):
+        assert settings.as_shown("0.5", 0.5)  # shown in English, posted after a switch

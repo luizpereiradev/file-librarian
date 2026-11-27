@@ -78,8 +78,8 @@ def _fill(text: str, params: Mapping[str, object], lang: Lang) -> Markup:
 
 def attr_text(value: object) -> str:
     """An attribute's value as text: a message in the language in use."""
-    if isinstance(value, Msg):
-        return value.text()
+    if isinstance(value, Msg):  # the catalogue's `backticks` mark code: no code here
+        return value.text().replace("`", "")
     if isinstance(value, Markup):
         return value.plain_text()
     return str(value)

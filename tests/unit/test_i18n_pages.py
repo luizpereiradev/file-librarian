@@ -126,9 +126,9 @@ def test_review_in_portuguese(downloads: Path, cfg: Config) -> None:
 
 
 @pytest.mark.parametrize(
-    ("count", "words"), [(0, "0 arquivo"), (1, "1 arquivo"), (2, "2 arquivos")]
+    ("count", "words"), [(0, "Nenhum arquivo"), (1, "1 arquivo"), (2, "2 arquivos")]
 )
-def test_plurals_in_portuguese_treat_zero_as_one(count: int, words: str) -> None:
+def test_plurals_in_portuguese_have_a_zero_form(count: int, words: str) -> None:
     assert t("review.count", count=count).text(PT) == f"{words} em revisão"
     english = "1 file in review" if count == 1 else f"{count} files in review"
     assert t("review.count", count=count).text("en") == english

@@ -17,7 +17,8 @@
     if (text === undefined) return id;
     params = params || {};
     if (typeof text !== "string") {
-      text = FORMATS.one.includes(params[text.by]) ? text.one : text.other;
+      const n = params[text.by];
+      text = n === 0 && text.zero !== undefined ? text.zero : FORMATS.one.includes(n) ? text.one : text.other;
     }
     return text.replace(/\{([a-z][a-z0-9_]*)\}/g, (_, key) => String(params[key]));
   }

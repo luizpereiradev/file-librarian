@@ -577,8 +577,8 @@ class SearchForm:
             known_categories=known,
             issuer=self.issuer,
             kinds=self.kinds,
-            min_amount=self.min_amount,
-            max_amount=self.max_amount,
+            min_amount=_amount(self.min_amount, "--min-amount"),
+            max_amount=_amount(self.max_amount, "--max-amount"),
             currency=self.currency,
             due_before=self.due_before,
             due_after=self.due_after,
@@ -586,9 +586,42 @@ class SearchForm:
         )
 
 
+class AmountRefused(SearchError):
+    """An amount typed in a filter that ``formats.parse_amount`` refuses; ``msg`` says why
+    in the page's words."""
+
+    def __init__(self, msg: Msg) -> None:
+        super().__init__(str(msg))
+        self.msg = msg
+
+
+_AMOUNT_FIELDS = {
+    "--min-amount": "search.label.min_amount",
+    "--max-amount": "search.label.max_amount",
+}
+
+
+def _amount(text: str | None, flag: str) -> str | None:
+    """A filter's amount read by the one rule every typed amount follows (``formats.
+    parse_amount``: ``1.234,56`` refused, ``1.234`` refused in pt-BR as it could be read
+    two ways), handed on as a plain decimal (``1234.5``)."""
+    if text is None:
+        return None
+    try:
+        value = formats.parse_amount(text, whole=12)
+    except formats.AmountError as exc:
+        field = t(_AMOUNT_FIELDS[flag])
+        if exc.kind == "ambiguous":
+            raise AmountRefused(t("search.amount_ambiguous", field=field, typed=text)) from exc
+        raise AmountRefused(t("core.search.amount", field=field, value=repr(text))) from exc
+    return str(value)
+
+
 def _for_the_page(error: SearchError) -> str:
     """A filter error in the form's words rather than the command line's (``core``
     knows each of them; one it does not is shown as it is, capitalised)."""
+    if isinstance(error, AmountRefused):
+        return error.msg
     text = core(str(error))
     return text if isinstance(text, Msg) else text[:1].upper() + text[1:]
 

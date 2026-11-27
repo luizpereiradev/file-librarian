@@ -426,7 +426,9 @@ use when it was made and which keeps its id and parameters, so a kept
 outcome or a module constant is rendered again in the language of the page
 that shows it. Sentences are whole, with named placeholders; a `Plural`
 picks `one` or `other` from one whole number (English: 1; pt-BR, after CLDR
-and formal grammar: 0 and 1). `ui/markup.render` escapes the translation and
+and formal grammar: 0 and 1), and its `zero` form for exactly 0 when it has one:
+every pt-BR plural that shows its number does ("nenhum arquivo", never "0
+arquivo"; a test checks), while English keeps "0 files". `ui/markup.render` escapes the translation and
 every parameter alike: only the catalogue's own backticks become `<code>`, a
 value's backticks stay text, and a hostile translation or value cannot add
 markup. The language is a context variable the server sets at the start of
@@ -438,13 +440,16 @@ unknown value is English. The packaged pages fill `{{t:<id>}}` slots
 writes dates, times and money for display (`25/11/2026 22:48`, `R$ 1.234,56`
 in pt-BR; English as before) without the process locale, which is not
 thread-safe; CSV exports, addresses and the file keep machine formats. A
-typed amount (`formats.parse_amount`) takes `.` or `,` as the decimal point
+typed amount (`formats.parse_amount`, the one rule for Settings' cost caps and
+Search's amount filters) takes `.` or `,` as the decimal point
 and refuses a lone thousands-like group (`1.234` in pt-BR, `1,234` in
 English) rather than guess. Texts of flib's core that the pages show
 (search filter errors, fix and undo refusals) are put in the catalogue's
 words when `i18n/core.py` recognises them, else shown in English. The menu
 bar's fixed entries are put in the applet when it is built, so a change of
-language rebuilds it (`menubar.refresh`, as `--refresh` does); its two
+language rebuilds it (`menubar.refresh`, as `--refresh` does), after the server
+already uses the saved configuration, and a failed rebuild is said on the page,
+never a failed save; its two
 lines are written in `state.json` in the language of the moment, still
 ASCII with `\uXXXX` escapes. The command line, logs and notifications stay
 English. Tests check every id is in both languages with the same

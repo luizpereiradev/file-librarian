@@ -312,7 +312,7 @@ def test_plural_categories(lang: i18n.Lang, count: int, form: str) -> None:
 def test_plural_messages_in_both_languages() -> None:
     with i18n.using("pt-BR"):
         assert [t("menu.to_review", count=n) for n in (0, 1, 2)] == [
-            "0 arquivo para revisar",
+            "nenhum arquivo para revisar",
             "1 arquivo para revisar",
             "2 arquivos para revisar",
         ]
@@ -449,6 +449,8 @@ def test_a_typed_amount_is_read(lang: i18n.Lang, typed: str, read: str) -> None:
         ("pt-BR", "1.234,56", "invalid"),
         ("en", "1,234.56", "invalid"),
         ("en", "-1", "invalid"),
+        ("en", "+1", "invalid"),
+        ("pt-BR", "+1,5", "invalid"),
         ("en", "1e3", "invalid"),
         ("en", "", "invalid"),
         ("en", "12345", "invalid"),
@@ -479,10 +481,12 @@ def test_the_status_script_gets_the_formats_and_its_messages() -> None:
     assert isinstance(messages, dict)
     assert messages["js.nothing_waits"] == "Nada espera por você."
     assert messages["js.waiting"] == {
+        "zero": "Nenhum arquivo espera por você.",
         "one": "{count} arquivo espera por você.",
         "other": "{count} arquivos esperam por você.",
         "by": "count",
     }
+    assert messages["js.trigger.manual"] == "manual"
     assert set(messages) == set(status_messages.SCRIPT_IDS)
 
 
@@ -613,3 +617,131 @@ def test_the_menu_is_built_in_the_configuration_language(tmp_path: Path) -> None
     config.write_text("language: [unreadable\n")
     assert menubar.literal("Organize now") in menubar.script(program, config, state)
     assert menubar.language_of(tmp_path / "missing.yaml") == "en"
+
+
+# --- the review of #135 -----------------------------------------------------------------
+
+
+def test_every_count_in_portuguese_has_a_zero_form() -> None:
+    """Never "0 arquivo": a pt-BR plural that shows its number says "nenhum" for zero."""
+    for msg_id, entry in CATALOGUE["pt-BR"].items():
+        if not isinstance(entry, Plural):
+            continue
+        number = "{" + entry.by + "}"
+        if number in entry.one or number in entry.other:
+            assert entry.zero is not None, msg_id
+            assert number not in entry.zero, msg_id
+
+
+@pytest.mark.parametrize(
+    ("msg_id", "texts"),
+    [
+        ("undo.skipped_count", ("nenhum ignorado", "1 ignorado", "2 ignorados")),
+        ("activity.organized", ("nenhum organizado", "1 organizado", "2 organizados")),
+        ("js.runs", ("nenhuma execução", "1 execução", "2 execuções")),
+        ("menu.overdue", ("nenhum vencido", "1 vencido", "2 vencidos")),
+    ],
+)
+def test_zero_one_two_in_portuguese(msg_id: str, texts: tuple[str, str, str]) -> None:
+    assert tuple(t(msg_id, count=n).text("pt-BR") for n in (0, 1, 2)) == texts
+
+
+def test_english_keeps_its_numbers_at_zero() -> None:
+    assert t("undo.skipped_count", count=0).text("en") == "0 skipped"
+
+
+def test_an_attribute_from_a_message_is_plain_text() -> None:
+    link = markup.el("a", "x", title=t("frame.footer"), aria_label=t("ended.again"))
+    head = link.split(">", 1)[0]
+    assert "<code>" not in head and "&lt;code&gt;" not in head and "`" not in head
+    assert 'title="Served on this Mac, at 127.0.0.1, while flib ui runs.' in head
+    assert 'aria-label="For a new session, run flib ui in Terminal."' in head
+
+
+def test_markup_as_an_attribute_is_its_text_escaped_once() -> None:
+    shown = markup.Markup("&lt;b&gt; <i>x</i> &amp; y")
+    assert shown.plain_text() == "<b> x & y"
+    link = markup.el("a", "z", aria_label=shown)
+    assert 'aria-label="&lt;b&gt; x &amp; y"' in link
+    assert "&amp;lt;" not in link
+
+
+def test_an_unpaired_backtick_in_a_translation_is_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(CATALOGUE, "en", {**CATALOGUE["en"], "test.odd": "run `flib {v} now"})
+    assert markup.render(t("test.odd", v="<x>")) == "run `flib &lt;x&gt; now"
+    monkeypatch.setitem(CATALOGUE, "en", {**CATALOGUE["en"], "test.even": "run `flib {v}` now"})
+    assert markup.render(t("test.even", v="<x>")) == "run <code>flib &lt;x&gt;</code> now"
+
+
+def test_the_language_is_set_again_on_a_thread_that_served_another() -> None:
+    import threading
+
+    seen: list[str] = []
+
+    def requests() -> None:  # one thread, two requests in two languages
+        i18n.use("pt-BR")
+        seen.append(t("nav.review").text())
+        i18n.use("en")
+        seen.append(t("nav.review").text())
+        i18n.use("xx")
+        seen.append(i18n.current())
+
+    thread = threading.Thread(target=requests)
+    thread.start()
+    thread.join()
+    assert seen == ["Revisão", "Review", "en"]
+
+
+def test_a_search_amount_follows_the_same_rule_as_settings(cfg: Config) -> None:
+    from file_librarian.ui import views
+
+    def error(lang: i18n.Lang, typed: str) -> str | None:
+        form = views.SearchForm.parse({"min_amount": [typed]})
+        with i18n.using(lang):
+            found = views.find(cfg, form)
+            return None if found.error is None else markup.esc(found.error)
+
+    ambiguous = error("pt-BR", "1.234")
+    assert ambiguous is not None and "pode ser lido de dois jeitos" in ambiguous
+    assert "Valor mínimo" in ambiguous
+    english = error("en", "1,234")
+    assert english is not None and "could be read two ways" in english
+    assert error("pt-BR", "1234,56") is None and error("en", "1234.56") is None
+    assert error("pt-BR", "1,234") is None  # a comma is the decimal point in pt-BR
+    wrong = error("pt-BR", "1.234,56")
+    assert wrong is not None and "não é um valor" in wrong
+
+
+def test_the_state_is_written_in_english_with_an_unreadable_configuration(
+    cfg: Config, tmp_path: Path
+) -> None:
+    config = tmp_path / "config.yaml"
+    config.write_text("language: [unreadable\n")
+    shown = menubar_state.view(cfg.database, config, status=_status(cfg))
+    assert shown.line == "Nothing pending"
+
+
+def test_search_errors_in_the_page_words(cfg: Config) -> None:
+    from file_librarian.ui import views
+
+    def error(**fields: str) -> str:
+        form = views.SearchForm.parse({k: [v] for k, v in fields.items()})
+        with i18n.using("pt-BR"):
+            found = views.find(cfg, form)
+            assert found.error is not None
+            return markup.esc(found.error)
+
+    since = error(since="2026-11-25", until="2026-11-01")
+    assert "25/11/2026" in since and "01/11/2026" in since and "2026-11-25" not in since
+    kind = views.SearchForm.parse({"kind": ["nonsense"]})
+    with i18n.using("pt-BR"):
+        found = views.find(cfg, kind)
+        assert found.error is not None
+        text = markup.esc(found.error)
+    assert "conta, recibo, fatura" in text and "bill" not in text
+
+
+def test_negative_money_puts_the_sign_first() -> None:
+    assert formats.amount(-123456, "BRL", "pt-BR") == "-R$ 1.234,56"
+    assert formats.amount(-1234, "EUR", "pt-BR") == "-EUR 12,34"
+    assert formats.amount(-123456, "BRL", "en") == "BRL -1,234.56"  # as flib prints it

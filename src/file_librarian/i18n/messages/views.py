@@ -97,6 +97,10 @@ EN: dict[str, Entry] = {
     "search.label.issuer": "Issuer",
     "search.label.min_amount": "At least",
     "search.label.max_amount": "At most",
+    "search.amount_ambiguous": (
+        "{field}: “{typed}” could be read two ways. Type it without the comma for a whole "
+        "number, or with a dot for decimals, like 1.50."
+    ),
     "search.label.currency": "Currency",
     "search.label.due_after": "Due after",
     "search.label.due_before": "Due before",
@@ -265,54 +269,76 @@ PT_BR: dict[str, Entry] = {
     "views.was": "antes: {name}",
     "views.more": "e mais {count}",
     # Atividade
-    "activity.days": Plural(one="{count} dia", other="{count} dias"),
+    "activity.days": Plural(zero="nenhum dia", one="{count} dia", other="{count} dias"),
     "activity.lead": "O que cada execução fez, da mais recente para a mais antiga.",
     "activity.none": Plural(
-        one="Nenhuma execução no último {count} dia.",
+        zero="Nenhuma execução hoje.",
+        one="Nenhuma execução no último dia.",
         other="Nenhuma execução nos últimos {count} dias.",
     ),
     "activity.capped": (
         "Só as {count} execuções mais recentes aparecem; escolha um período menor."
     ),
-    "activity.day_runs": Plural(one="{count} execução, {cost}", other="{count} execuções, {cost}"),
+    "activity.day_runs": Plural(
+        zero="nenhuma execução, {cost}",
+        one="{count} execução, {cost}",
+        other="{count} execuções, {cost}",
+    ),
     "activity.day_runs_unpriced": Plural(
+        zero="nenhuma execução, {cost} (e {unpriced} sem custo registrado)",
         one="{count} execução, {cost} (e {unpriced} sem custo registrado)",
         other="{count} execuções, {cost} (e {unpriced} sem custo registrado)",
     ),
-    "activity.runs_without_cost": Plural(one="{count} execução", other="{count} execuções"),
+    "activity.runs_without_cost": Plural(
+        zero="nenhuma execução", one="{count} execução", other="{count} execuções"
+    ),
     "activity.trigger.schedule": "execução diária",
-    "activity.trigger.manual": "à mão",
+    "activity.trigger.manual": "manual",
     "activity.trigger.mcp": "por um assistente",
     "activity.trigger.reprocess": "reclassificação",
     "activity.trigger.watch": "na chegada (observação)",
     "activity.run_counts": "{organized}, {review}, {duplicates}, {failed}; {cost}.",
-    "activity.organized": Plural(one="{count} organizado", other="{count} organizados"),
-    "activity.to_review": Plural(one="{count} para revisar", other="{count} para revisar"),
-    "activity.duplicates": Plural(
-        one="{count} duplicado separado", other="{count} duplicados separados"
+    "activity.organized": Plural(
+        zero="nenhum organizado", one="{count} organizado", other="{count} organizados"
     ),
-    "activity.failed": Plural(one="{count} com falha", other="{count} com falha"),
+    "activity.to_review": Plural(
+        zero="nenhum para revisar", one="{count} para revisar", other="{count} para revisar"
+    ),
+    "activity.duplicates": Plural(
+        zero="nenhum duplicado separado",
+        one="{count} duplicado separado",
+        other="{count} duplicados separados",
+    ),
+    "activity.failed": Plural(
+        zero="nenhum com falha", one="{count} com falha", other="{count} com falha"
+    ),
     "activity.unfinished": "Ela não terminou (ainda em andamento, ou interrompida).",
     "activity.sensitive": Plural(
+        zero="Nenhum arquivo sensível.",
         one="{count} arquivo sensível ficou onde estava, sem ser lido (não aparece aqui).",
         other="{count} arquivos sensíveis ficaram onde estavam, sem ser lidos (não aparecem aqui).",
     ),
     "activity.settled": Plural(
+        zero="Nenhum documento marcado como concluído ou reaberto.",
         one="{count} documento marcado como concluído ou reaberto.",
         other="{count} documentos marcados como concluídos ou reabertos.",
     ),
     "activity.index_changes": Plural(
-        one="{count} alteração no índice.", other="{count} alterações no índice."
+        zero="Nenhuma alteração no índice.",
+        one="{count} alteração no índice.",
+        other="{count} alterações no índice.",
     ),
     "activity.undo_run": "Desfazer esta execução…",
     "activity.undo_run_named": "Desfazer a execução {run}",
     "activity.run_number": "execução {run}",
     "activity.catch_up": "Execução feita depois que o Mac foi desbloqueado.",
     "activity.locked": Plural(
+        zero="Nenhum arquivo protegido foi pulado.",
         one="{count} arquivo protegido enquanto o Mac está bloqueado foi pulado.",
         other="{count} arquivos protegidos enquanto o Mac está bloqueado foram pulados.",
     ),
     "activity.locked_waited": Plural(
+        zero="Nenhum arquivo protegido foi pulado; {waited}.",
         one="{count} arquivo protegido enquanto o Mac está bloqueado foi pulado; {waited}.",
         other="{count} arquivos protegidos enquanto o Mac está bloqueado foram pulados; {waited}.",
     ),
@@ -344,11 +370,17 @@ PT_BR: dict[str, Entry] = {
         "Busque de novo."
     ),
     "search.title_matches": Plural(
-        one="Busca: {count} resultado", other="Busca: {count} resultados"
+        zero="Busca: nenhum resultado",
+        one="Busca: {count} resultado",
+        other="Busca: {count} resultados",
     ),
-    "search.matches": Plural(one="{count} resultado", other="{count} resultados"),
+    "search.matches": Plural(
+        zero="Nenhum resultado", one="{count} resultado", other="{count} resultados"
+    ),
     "search.matches_capped": Plural(
-        one="{count} resultado (o máximo pedido)", other="{count} resultados (o máximo pedido)"
+        zero="Nenhum resultado",
+        one="{count} resultado (o máximo pedido)",
+        other="{count} resultados (o máximo pedido)",
     ),
     "search.more_filters": "Mais filtros",
     "search.label.ext": "Extensão",
@@ -359,13 +391,17 @@ PT_BR: dict[str, Entry] = {
     "search.label.issuer": "Emissor",
     "search.label.min_amount": "Valor mínimo",
     "search.label.max_amount": "Valor máximo",
+    "search.amount_ambiguous": (
+        "{field}: “{typed}” pode ser lido de dois jeitos. Digite sem o ponto para um número "
+        "inteiro, ou com vírgula para os centavos, como 1,50."
+    ),
     "search.label.currency": "Moeda",
     "search.label.due_after": "Vence depois de",
     "search.label.due_before": "Vence antes de",
     "search.label.by": "Totais por",
     "search.label.limit": "Máximo de resultados",
     "search.label.duplicates": "Incluir duplicados separados",
-    "search.label.semantic": "Buscar também pelo sentido (busca semântica)",
+    "search.label.semantic": "Buscar também por significado",
     "search.label.category": "Categoria",
     "search.label.kind": "Tipo de documento",
     "search.by_currency_only": "só moeda",
@@ -386,6 +422,7 @@ PT_BR: dict[str, Entry] = {
     "search.filters": "Filtros",
     "search.filters_used": "Filtros ({count} em uso)",
     "search.sensitive": Plural(
+        zero="Nenhum arquivo sensível foi encontrado.",
         one=(
             "{count} arquivo sensível também foi encontrado; arquivos sensíveis nunca aparecem "
             "aqui (`flib search` no Terminal mostra)."
@@ -417,13 +454,14 @@ PT_BR: dict[str, Entry] = {
     ),
     "search.totals_note_semantic": (
         "Somando todos os resultados por palavras (nunca duplicados), não só os listados. Os "
-        "totais seguem só as palavras, não o sentido."
+        "totais seguem só as palavras, não o significado."
     ),
     "search.no_amounts": "Nenhum valor entre os resultados.",
     "search.no_group": "(nenhum)",
     "search.by_caption": "Por {group}",
     "search.per_currency": "Por moeda",
     "search.without_amount": Plural(
+        zero="Todos os arquivos encontrados informam valor.",
         one="{count} arquivo encontrado não informa valor; fica fora da conta.",
         other="{count} arquivos encontrados não informam valor; ficam fora da conta.",
     ),
@@ -444,16 +482,19 @@ PT_BR: dict[str, Entry] = {
     ),
     "due.span_overdue": "Vencidos, não importa há quanto tempo (hoje é {today}).",
     "due.span": Plural(
-        one="Vencidos desde {start} ({count} dia atrás) e a vencer até {end}; hoje é {today}.",
-        other="Vencidos desde {start} ({count} dias atrás) e a vencer até {end}; hoje é {today}.",
+        zero="Vencidos desde {start} e a vencer até {end}; hoje é {today}.",
+        one="Vencidos desde {start} (há {count} dia) e a vencer até {end}; hoje é {today}.",
+        other="Vencidos desde {start} (há {count} dias) e a vencer até {end}; hoje é {today}.",
     ),
     "due.nothing": "Nada vence neste período.",
     "due.totals": "Total em aberto, por moeda",
     "due.without_amount": Plural(
+        zero="Todos os documentos informam valor.",
         one="{count} documento não informa valor; fica fora da conta.",
         other="{count} documentos não informam valor; ficam fora da conta.",
     ),
     "due.hidden": Plural(
+        zero="Nenhum documento escondido.",
         one="{count} documento concluído ou de outro tipo não aparece.",
         other="{count} documentos concluídos ou de outros tipos não aparecem.",
     ),
@@ -474,8 +515,8 @@ PT_BR: dict[str, Entry] = {
     "due.today": "hoje",
     "due.tomorrow": "amanhã",
     "due.yesterday": "ontem",
-    "due.in_days": Plural(one="em {count} dia", other="em {count} dias"),
-    "due.days_ago": Plural(one="há {count} dia", other="há {count} dias"),
+    "due.in_days": Plural(zero="hoje", one="em {count} dia", other="em {count} dias"),
+    "due.days_ago": Plural(zero="hoje", one="há {count} dia", other="há {count} dias"),
     # Abrir e Mostrar no Finder
     "open.no_file": "Nenhum arquivo foi indicado.",
     "open.not_indexed": "Esse arquivo não está no índice.",
@@ -502,6 +543,7 @@ PT_BR: dict[str, Entry] = {
     "core.search.date_form": "{field}: {value} não é uma data como 2026-01-31",
     "core.search.date_invalid": "{field}: {value} não é uma data válida",
     "core.search.outdated": Plural(
+        zero="Todos os arquivos têm um embedding atualizado",
         one=(
             "{count} arquivo ainda não tem um embedding atualizado e pode ser encontrado só "
             "pelas palavras; a próxima execução ou `flib search --reindex` resolve isso"
@@ -512,15 +554,15 @@ PT_BR: dict[str, Entry] = {
         ),
     ),
     "core.search.semantic_off": (
-        "A busca semântica está desligada (search.semantic.enabled: false); busquei só pelas "
-        "palavras"
+        "A busca por significado está desligada (search.semantic.enabled: false); a busca usou só "
+        "as palavras"
     ),
     "core.search.no_embeddings": (
-        "Nenhum arquivo tem embedding de {model} ainda; rode `flib search --reindex`. Busquei "
-        "só pelas palavras"
+        "Nenhum arquivo tem embedding de {model} ainda; rode `flib search --reindex`. A busca usou "
+        "só as palavras"
     ),
     "core.search.semantic_unavailable": (
-        "A busca semântica não está disponível ({why}); busquei só pelas palavras"
+        "A busca por significado não está disponível ({why}); a busca usou só as palavras"
     ),
     "core.index.older": (
         "O índice é de uma versão anterior do flib; a próxima execução de `flib run` o atualiza"

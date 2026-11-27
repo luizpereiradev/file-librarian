@@ -10,14 +10,15 @@ process-wide and not thread-safe, and the server answers in threads.
 - pt-BR: ``25/11/2026 22:48``, a decimal comma and a dot for thousands,
   ``R$ 1.234,56``, ``US$ 12,34`` (other currencies by their code: ``EUR 1.234,56``).
 
-**Reading an amount typed in a form** (``parse_amount``), such as a cost cap: up to
-four digits, then optionally one separator, ``.`` or ``,``, and one to four digits
-of decimals; in either language both separators are read as the decimal point, so
-``3,00`` and ``3.00`` are both three. A separator followed by exactly three digits
-is refused when it is the language's thousands separator (``1.234`` in pt-BR,
-``1,234`` in English): it could mean a thousand and some or a little over one, and
-guessing could save the wrong number. No thousands separators otherwise, no sign,
-no exponent, no spaces inside.
+**Reading an amount typed in a form** (``parse_amount``): a cost cap on Settings, the
+amounts of Search's filters. Up to four digits (twelve for Search), then optionally
+one separator, ``.`` or ``,``, and one to four digits of decimals; in either
+language both separators are read as the decimal point, so ``3,00`` and ``3.00``
+are both three. A separator followed by exactly three digits is refused when it
+is the language's thousands separator (``1.234`` in pt-BR, ``1,234`` in English):
+it could mean a thousand and some or a little over one, and guessing could save
+the wrong number. No thousands separators otherwise, no sign (``+`` or ``-``), no
+exponent, no spaces inside.
 """
 
 from __future__ import annotations
@@ -111,8 +112,9 @@ def amount(minor: int, currency: str, lang: Lang | None = None) -> str:
     if lang == "en":
         return format_amount(minor, currency)
     places = exponent(currency)
-    number = grouped(Decimal(minor).scaleb(-places), places, lang)
-    return f"{SYMBOLS[lang].get(currency, currency)} {number}"
+    number = grouped(Decimal(abs(minor)).scaleb(-places), places, lang)
+    sign = "-" if minor < 0 else ""  # -R$ 1.234,56: the sign before the symbol
+    return f"{sign}{SYMBOLS[lang].get(currency, currency)} {number}"
 
 
 def day(value: date, lang: Lang | None = None) -> str:
@@ -155,7 +157,7 @@ def amount_input(value: float | None, lang: Lang | None = None) -> str:
     return format(Decimal(repr(value)), "f").replace(".", DECIMAL[_lang(lang)])
 
 
-_TYPED = re.compile(r"([0-9]{1,4})(?:([.,])([0-9]{1,4}))?")
+_TYPED = r"([0-9]{{1,{whole}}})(?:([.,])([0-9]{{1,4}}))?"
 
 
 class AmountError(ValueError):
@@ -166,17 +168,18 @@ class AmountError(ValueError):
         self.kind = kind
 
 
-def parse_amount(text: str, lang: Lang | None = None) -> Decimal:
-    """An amount typed in a form, by the rule in this module's docstring."""
-    match = _TYPED.fullmatch(text.strip())
+def parse_amount(text: str, lang: Lang | None = None, *, whole: int = 4) -> Decimal:
+    """An amount typed in a form, by the rule in this module's docstring; ``whole``: the
+    most digits before the separator (4 for a cost cap, more for a search's amount)."""
+    match = re.fullmatch(_TYPED.format(whole=whole), text.strip())
     if match is None:
         raise AmountError("invalid")
-    whole, separator, decimals = match.groups()
+    digits, separator, decimals = match.groups()
     if separator is None:
-        return Decimal(whole)
+        return Decimal(digits)
     if separator == GROUP[_lang(lang)] and len(decimals) == 3:
         raise AmountError("ambiguous")
-    return Decimal(f"{whole}.{decimals}")
+    return Decimal(f"{digits}.{decimals}")
 
 
 def for_scripts(lang: Lang | None = None) -> dict[str, object]:

@@ -13,8 +13,10 @@ the core's wording.
 
 from __future__ import annotations
 
+import contextlib
 import re
 from collections.abc import Callable
+from datetime import date
 
 from file_librarian.i18n import Msg, t
 
@@ -42,6 +44,33 @@ def _field(groups: dict[str, str]) -> dict[str, object]:
     return found
 
 
+def _dates(groups: dict[str, str]) -> dict[str, object]:
+    """Dates the form sent (``2026-11-25``) as the page shows dates (``25/11/2026``)."""
+    from file_librarian.i18n import formats
+
+    found: dict[str, object] = dict(groups)
+    for key, value in groups.items():
+        with contextlib.suppress(ValueError):
+            found[key] = formats.day(date.fromisoformat(value.strip()))
+    return found
+
+
+def _kinds(groups: dict[str, str]) -> dict[str, object]:
+    """The kinds the search knows by their labels (``conta, recibo…``), not their codes."""
+    found: dict[str, object] = dict(groups)
+    codes = [code.strip() for code in groups["kinds"].split(",")]
+    found["kinds"] = ", ".join(
+        t(f"kind.{code}").text() if f"kind.{code}" in _kind_ids() else code for code in codes
+    )
+    return found
+
+
+def _kind_ids() -> set[str]:
+    from file_librarian.i18n.messages import CATALOGUE
+
+    return {msg_id for msg_id in CATALOGUE["en"] if msg_id.startswith("kind.")}
+
+
 _KNOWN: list[tuple[re.Pattern[str], str, Callable[[dict[str, str]], dict[str, object]]]] = []
 
 
@@ -56,9 +85,15 @@ _known(
     r"unknown category " + _QUOTED + r" \(known: (?P<known>.*)\)", "core.search.unknown_category"
 )
 _known(r"bad extension " + _QUOTED + r": give it like pdf or \.pdf", "core.search.bad_extension")
-_known(r"--since (?P<since>.*) is after --until (?P<until>.*)", "core.search.since_after_until")
+_known(
+    r"--since (?P<since>.*) is after --until (?P<until>.*)",
+    "core.search.since_after_until",
+    _dates,
+)
 _known(r"--issuer " + _QUOTED + r" names no organisation", "core.search.issuer")
-_known(r"unknown kind " + _QUOTED + r" \(kinds: (?P<kinds>.*)\)", "core.search.unknown_kind")
+_known(
+    r"unknown kind " + _QUOTED + r" \(kinds: (?P<kinds>.*)\)", "core.search.unknown_kind", _kinds
+)
 _known(
     r"--min-amount (?P<low>.*) is more than --max-amount (?P<high>.*)", "core.search.min_over_max"
 )

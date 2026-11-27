@@ -155,6 +155,15 @@ def _config(path: Path) -> Config:
     return config
 
 
+def _language(config_path: Path) -> str:
+    """The configuration's language for the menu's lines; English when the file cannot
+    be read or parsed now (the state is still written)."""
+    try:
+        return _config(config_path).language
+    except Exception:
+        return i18n.DEFAULT
+
+
 def view(
     database: Path,
     config_path: Path,
@@ -166,8 +175,8 @@ def view(
     """What the item should show now, for the configuration at ``config_path``:
     from ``status`` when the caller has just collected it (``flib status``, which
     asked launchd), else collected here, cheaply unless ``probe``."""
-    config = _config(config_path)
     if status is None:
+        config = _config(config_path)
         try:
             status = status_mod.collect(config, now=now, menu_bar=False, probe=probe)
         except Exception:  # an index it cannot read, whatever the reason: trouble
@@ -175,7 +184,7 @@ def view(
     running = lock.holder(database) is not None
     problem = read_problem()
     shown = poses.menu_state(status, running=running, blocked=problem is not None)
-    with i18n.using(config.language):
+    with i18n.using(_language(config_path)):
         line, upcoming = describe(status, running=running, problem=problem)
     return View(
         shown.pose,

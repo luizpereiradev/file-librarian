@@ -52,21 +52,25 @@ EN: dict[str, Entry] = {
 
 PT_BR: dict[str, Entry] = {
     "js.waiting": Plural(
-        one="{count} arquivo espera por você.", other="{count} arquivos esperam por você."
+        zero="Nenhum arquivo espera por você.",
+        one="{count} arquivo espera por você.",
+        other="{count} arquivos esperam por você.",
     ),
     "js.nothing_waits": "Nada espera por você.",
     "js.nothing_to_review": "Nada para revisar.",
     "js.oldest_today": "O mais antigo chegou hoje.",
     "js.oldest_days": Plural(
-        one="O mais antigo espera há {count} dia.", other="O mais antigo espera há {count} dias."
+        zero="O mais antigo chegou hoje.",
+        one="O mais antigo espera há {count} dia.",
+        other="O mais antigo espera há {count} dias.",
     ),
     "js.reason_line": "{reason}: {parts}",
     "js.suggested_count": "{suggested} {count}",
-    "js.no_suggestion": "sem sugestão {count}",
+    "js.no_suggestion": "sem sugestão: {count}",
     "js.failed_retried": "{count}: {error} (nova tentativa na próxima execução)",
     "js.failed_given_up": "{count}: {error} (sem nova tentativa)",
     "js.due_note": "Vencidos: {overdue}; a vencer nos próximos {days}: {upcoming}.",
-    "js.days": Plural(one="{count} dia", other="{count} dias"),
+    "js.days": Plural(zero="nenhum dia", one="{count} dia", other="{count} dias"),
     "js.due_after_run": "Depois da próxima execução.",
     "js.sensitive_note": Plural(
         one="Arquivo sensível, nunca movido nem enviado a lugar nenhum.",
@@ -75,10 +79,10 @@ PT_BR: dict[str, Entry] = {
     "js.last_run": "{when}, {trigger}: {organized}, {review}, {failed}; {cost}",
     "js.none_yet": "Nenhuma ainda",
     "js.trigger.schedule": "execução diária",
-    "js.trigger.manual": "à mão",
+    "js.trigger.manual": "manual",
     "js.trigger.mcp": "por um assistente",
-    "js.trigger.watch": "na chegada",
-    "js.trigger.reprocess": "reprocessamento",
+    "js.trigger.watch": "na chegada (observação)",
+    "js.trigger.reprocess": "reclassificação",
     "js.not_scheduled": "Nenhuma agendada (`flib schedule` agenda uma)",
     "js.watching": "Quando chegarem arquivos (modo de observação)",
     "js.watch_not_loaded": "Modo de observação instalado, mas não carregado",
@@ -90,7 +94,7 @@ PT_BR: dict[str, Entry] = {
         "Execuções automáticas: {cost} (limite diário de {cap}), limite atingido"
     ),
     "js.month_unpriced": "{cost} (mais {runs} sem custo registrado)",
-    "js.runs": Plural(one="{count} execução", other="{count} execuções"),
+    "js.runs": Plural(zero="nenhuma execução", one="{count} execução", other="{count} execuções"),
     "js.unreadable": "Não foi possível ler o status: {error}",
 }
 
@@ -118,9 +122,9 @@ def bundle(lang: Lang) -> dict[str, object]:
     messages: dict[str, object] = {}
     for msg_id in SCRIPT_IDS:
         found = entry(lang, msg_id)
-        messages[msg_id] = (
-            found
-            if isinstance(found, str)
-            else {"one": found.one, "other": found.other, "by": found.by}
-        )
+        if isinstance(found, str):
+            messages[msg_id] = found
+        else:
+            forms = {"one": found.one, "other": found.other, "by": found.by}
+            messages[msg_id] = forms if found.zero is None else {**forms, "zero": found.zero}
     return {"formats": formats.for_scripts(lang), "m": messages}
