@@ -691,12 +691,22 @@ session also expires the cookie (`Max-Age=0`), drops the session and asks the
 server to stop before it replies (so its reason stays "ended" whatever comes
 next, #134); after it the server keeps serving its static files for 1.5 s, so
 the page it just sent gets its stylesheet. After a theft it keeps answering for
-60 s (`STOLEN_LINGER`; a signal ends it at once), and every page, for any
-client, is "this session was ended because its link was opened twice": the
-rightful tab is told why on its next click instead of finding the server gone,
-whichever of the two came first. The thief gets that page and nothing else: the
+60 s (`STOLEN_LINGER`; a signal ends it at once), and every page a browser asks
+for (`Accept: text/html`; any refusal, a 404 included) is "this session was
+ended because its link was opened twice": the rightful tab is told why on its
+next click instead of finding the server gone, whichever of the two came first;
+scripts get their plain status. The thief gets that page and nothing else: the
 session is gone, the token is spent, no cookie is set, and the token coming
-back again changes nothing. A browser opening a page
+back again changes nothing. That page says to run `flib ui` again, and that is
+true at once: on the theft the server removes its records (`flib-ui.json` and
+the private name record) and lets go of `flib-ui.lock` (`ui_lock` yields a
+`release`, used once; the end of the block then leaves the file to the next
+holder). A new `flib ui` starts a fresh session on a port and name of its own
+(port 0 never gives the old one's, which still listens on both addresses), and
+the menu bar's entries reach the new one. On its way out the old one removes
+only records with its own pid, port and name. Two servers then run for up to a
+minute, but the old one has no session: it acts on nothing and serves only that
+page. A browser opening a page
 (`Accept: text/html`) gets a refusal (400, 403, 404) as a page with the menu
 and one sentence on what to do (a form from an earlier session: reload, or
 run `flib ui` again); scripts and other clients get the plain status, and a

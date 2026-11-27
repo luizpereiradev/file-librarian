@@ -228,8 +228,8 @@ ENDED = {
 STOLEN_WARNING = (
     "warning: the launch link was used a second time, by a client without the "
     "session. Another program or account on this Mac may have seen it, so the "
-    "session was dropped and flib ui is ending (its pages say why for a minute; "
-    "Ctrl-C ends it now). Run `flib ui` again for a new link."
+    "session was dropped and this flib ui is ending (its pages say why for a minute; "
+    "Ctrl-C ends it now). Run `flib ui` again for a new link: it starts at once."
 )
 
 UNNAMED_WARNING = (
@@ -1295,13 +1295,12 @@ class _Handler(BaseHTTPRequestHandler):
     def _problem(self, code: int) -> None:
         """A refusal as a page with the menu and one sentence on what to do. Never
         says why in detail: the status and a general hint only. Before the session
-        started, or after a theft, a refused form gets that page instead (#127)."""
+        started a refused form, and after a theft any refusal, gets that page (#127)."""
         session = self._session()
-        if (
-            code == HTTPStatus.FORBIDDEN
-            and session is None
-            and self.server.ui.no_session_page() in ("waiting", "stolen")
-        ):
+        state = None if session is not None else self.server.ui.no_session_page()
+        # After a theft every refusal a browser gets is that page (a 404 too); before
+        # the session started, a refused form gets the page that says so.
+        if state == "stolen" or (code == HTTPStatus.FORBIDDEN and state == "waiting"):
             self._ended(code)
             return
         text = PROBLEMS[code]
@@ -1881,12 +1880,19 @@ def write_running(database: Path, port: int, host: str = HOST) -> None:
     _write_private(name_path(database), {"pid": os.getpid(), "port": port, "host": host})
 
 
-def remove_running(database: Path) -> None:
+def remove_running(database: Path, port: int | None = None, host: str | None = None) -> None:
+    """Remove the records of this ``flib ui``: only those it wrote (its pid and, when
+    given, its port and name), never those of a ``flib ui`` that started after it."""
     for path, private in ((running_path(database), False), (name_path(database), True)):
         data = _read_record(path, private=private)
-        if data is not None and data.get("pid") == os.getpid():
-            with suppress(OSError):
-                path.unlink()
+        if data is None or data.get("pid") != os.getpid():
+            continue
+        if port is not None and data.get("port") != port:
+            continue
+        if private and host is not None and data.get("host") != host:
+            continue
+        with suppress(OSError):
+            path.unlink()
 
 
 def sweep_names(root: Path) -> None:
@@ -2004,10 +2010,21 @@ def run(
     the lock.
     """
 
+    serving: list[Ui] = []
+    releases: list[Callable[[], None]] = []
+
     def on_event(event: str) -> None:
         if event == "started":
             echo("flib ui: session started in the browser.")
         elif event == "stolen":
+            # The stolen page says "run `flib ui` again": make that true at once (#127).
+            # This server keeps no session and serves only that page now, so it gives
+            # up its records (its own only) and the lock; a new ``flib ui`` starts a
+            # fresh session on a port and name of its own while this one ends.
+            for server in serving:
+                remove_running(config.database, server.port, server.host_name)
+            for release in releases:
+                release()
             warn(STOLEN_WARNING)
 
     if page not in PAGES:
@@ -2015,7 +2032,8 @@ def run(
     minutes = _minutes(config.ui.idle_minutes)
     ending = f"It ends after {minutes} without use, with End session, or with Ctrl-C."
     try:
-        with ui_lock(config.database):
+        with ui_lock(config.database) as release_lock:
+            releases.append(release_lock)
             sweep_handoffs(handoff_root())
             sweep_names(handoff_root())
             named = names_resolve()
@@ -2029,6 +2047,7 @@ def run(
                 config_path=config_path,
                 named=named,
             )
+            serving.append(ui)
             try:
                 with _signals(ui):
                     ui.start()
@@ -2052,7 +2071,8 @@ def run(
                     while ui.wait(0.5) is None:
                         pass
             finally:
-                remove_running(config.database)
+                # Only its own: after a theft a new flib ui may hold the records by now.
+                remove_running(config.database, ui.port, ui.host_name)
                 ui.close()
                 sweep_handoffs(handoff_root(), mine=True)  # the opener files of its pages
             reason = ui.reason or "closed"

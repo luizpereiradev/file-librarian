@@ -1761,6 +1761,123 @@ def test_a_stolen_link_ends_flib_ui_with_a_warning(
     assert lines[-1].startswith("flib ui ended: the launch link was used again")
 
 
+def launch_url(lines: list[str]) -> str:
+    wait_for(lambda: any("/launch?token=" in line for line in lines), timeout=10)
+    return next(line for line in lines if "/launch?token=" in line).split(" ", 2)[2]
+
+
+def test_after_a_theft_flib_ui_can_start_again_at_once(
+    loopback_network: None, cfg: Config, fake_browser: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stolen page says "run `flib ui` again" (#127 review): that is true at once.
+    On the theft the old server gives up its records and the lock while it serves only
+    that page; a new ``flib ui`` starts a fresh session on its own port and name; the
+    old one ends later ("stolen", exit 1) and removes nothing of the new one."""
+    monkeypatch.setattr(ui_server, "STOLEN_LINGER", 30.0)  # ended below; a failure bound
+    made: list[Ui] = []
+
+    class Recorded(ui_server.Ui):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            made.append(self)
+
+    monkeypatch.setattr(ui_server, "Ui", Recorded)
+    old_lines: list[str] = []
+    new_lines: list[str] = []
+    second: list[str] = []
+    seen: dict[str, Any] = {}
+
+    def run_again() -> None:
+        second.append(ui_server.run(cfg, browser=False, echo=new_lines.append, warn=print))
+
+    def steal_then_start_again() -> None:
+        url = launch_url(old_lines)
+        rightful = UiClient.for_url(url)
+        assert rightful.launch(url).status == 303
+        assert UiClient.for_url(url).launch(url).status == 403  # the theft
+        # Its records go with the lock (the stolen() call ran before the 403 was sent).
+        assert not ui_server.running_path(cfg.database).exists()
+        assert not ui_server.name_path(cfg.database).exists()
+        assert ui_server.running(cfg.database) is None
+        # A new flib ui, while the old one still answers with the stolen page.
+        again = threading.Thread(target=run_again, name="test-second-ui", daemon=True)
+        again.start()
+        seen["thread"] = again
+        fresh = launch_url(new_lines)
+        assert urlsplit(fresh).netloc != urlsplit(url).netloc  # its own port and name
+        client = UiClient.for_url(fresh)
+        assert client.launch(fresh).status == 303
+        assert client.get("/status").status == 200
+        assert STOLEN in rightful.get("/status").text  # the old one: that page only
+        seen["client"], seen["where"] = client, ui_server.running(cfg.database)
+        os.kill(os.getpid(), signal.SIGTERM)  # Ctrl-C in the old one's terminal
+
+    work = Background(steal_then_start_again)
+    assert ui_server.run(cfg, browser=False, echo=old_lines.append, warn=print) == "stolen"
+    work.join()
+    old, new = made
+    where = seen["where"]
+    assert where is not None and (where.port, where.host) == (new.port, new.host_name)
+    # The old one ended and left the new one's records, lock and session alone.
+    assert ui_server.running(cfg.database) == where
+    assert seen["client"].get("/status").status == 200
+    assert ui_server.run(cfg, browser=False, echo=lambda line: None) == "running"
+    new.stop("signal")
+    seen["thread"].join(10)
+    assert second == ["signal"]
+    assert ui_server.running(cfg.database) is None  # and the new one removed its own
+    assert old.reason == "stolen"
+
+
+def test_a_flib_ui_removes_only_its_own_records(cfg: Config) -> None:
+    cfg.database.parent.mkdir(parents=True, exist_ok=True)
+    ui_server.write_running(cfg.database, 4242, "flib-" + "a" * 32 + ".localhost")
+    ui_server.remove_running(cfg.database, 4343, "flib-" + "b" * 32 + ".localhost")
+    assert ui_server.running_path(cfg.database).exists()  # another port: not this one's
+    ui_server.remove_running(cfg.database, 4242, "flib-" + "b" * 32 + ".localhost")
+    assert ui_server.running_path(cfg.database).exists() is False  # its pid and port
+    assert ui_server.name_path(cfg.database).exists()  # but another name: kept
+    ui_server.remove_running(cfg.database, 4242, "flib-" + "a" * 32 + ".localhost")
+    assert not ui_server.name_path(cfg.database).exists()
+
+
+def test_the_theft_linger_outlasts_end_sessions(ui: Ui, events: list[str]) -> None:
+    """After a theft the stolen page is served past End session's 1.5 s (a mutant set
+    both lingers alike), until a signal ends it."""
+    UiClient(ui.port, ui.host_name).launch(ui.launch_url)
+    thief = UiClient(ui.port, ui.host_name)
+    assert thief.launch(ui.launch_url).status == 403
+    assert ui.wait(ui_server.END_LINGER + 0.5) is None  # past End session's linger
+    late = thief.get("/status", headers={"Accept": "text/html"})
+    assert late.status == 403 and STOLEN in late.text
+    ui.stop("signal")
+    assert ui.wait(5) == "stolen"
+
+
+def test_after_a_theft_even_a_missing_page_says_why(ui: Ui) -> None:
+    UiClient(ui.port, ui.host_name).launch(ui.launch_url)
+    thief = UiClient(ui.port, ui.host_name)
+    thief.launch(ui.launch_url)
+    for path in ("/no/such/page", "/status?x=1", "/due?within=9y"):
+        reply = thief.get(path, headers={"Accept": "text/html"})
+        assert reply.status in (400, 403, 404) and STOLEN in reply.text, path
+    assert thief.get("/no/such/page").headers["Content-Type"].startswith("text/plain")
+    ui.stop("closed")
+    assert ui.wait(5) == "stolen"
+
+
+def test_the_ui_lock_can_be_let_go_early_once(cfg: Config) -> None:
+    lock = cfg.database.parent / "flib-ui.lock"
+    with ui_lock(cfg.database) as release:
+        release()
+        assert lock.read_text() == ""
+        with ui_lock(cfg.database):  # free: the next one takes it at once
+            assert lock.read_text() == str(os.getpid())
+            release()  # again: nothing, and the next holder's pid stays
+            assert lock.read_text() == str(os.getpid())
+    assert lock.read_text() == ""
+
+
 def test_flib_ui_exits_with_an_error_when_the_link_was_stolen(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, downloads: Path
 ) -> None:

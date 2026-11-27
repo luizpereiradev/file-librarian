@@ -591,7 +591,10 @@ All notable changes to this project are documented here. The format follows
   - After a theft of the launch link, every page says the session was ended
     because its link was opened twice, for a minute (Ctrl-C ends it at once),
     so the rightful tab learns why instead of finding the server gone; the
-    thief gets that page and nothing else.
+    thief gets that page and nothing else. Meanwhile `flib ui` (and the menu
+    bar's entries) can start a new session at once: the ending one gives up
+    its lock and records on the theft, and removes only its own on the way
+    out.
 - `tests/unit/test_ui_pages.py::test_closing_does_not_wait_out_the_linger` no
   longer fails on busy runners (#134): End session asked the server to stop
   only after its reply, so a close right after it could take the reason's

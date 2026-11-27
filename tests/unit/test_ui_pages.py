@@ -1879,6 +1879,31 @@ def test_the_title_says_how_many_matched_not_the_limit(
     assert ">50 de 111 resultados (o máximo pedido)</h2>" in pt
 
 
+def test_duplicates_are_counted_only_when_asked_for(
+    downloads: Path, cfg: Config, serve: list[Ui]
+) -> None:
+    """``Store.count_files`` honours the duplicate filter: 25 files and 30 duplicates of
+    one of them match; with a limit of 20 each way says how many of how many."""
+    fill(downloads, cfg, {"bulk.txt": answer("Other", description="bulk notes")})
+    clone(cfg, "bulk.txt", 24)  # 25 files
+    clone(cfg, "bulk.txt", 30, first=100)
+    original = file_id(cfg, "bulk.txt")
+    with sqlite3.connect(cfg.database) as conn:
+        conn.execute(
+            "UPDATE files SET duplicate_of = ?, status = 'duplicate' WHERE id IN "
+            "(SELECT id FROM files WHERE original_name LIKE 'bulk.txt 1__')",
+            (original,),
+        )
+    c = start(serve, cfg)
+    plain = search(c, q="bulk", limit="20").text
+    assert "<title>Search: 20 of 25 matches · file-librarian</title>" in plain
+    every = search(c, q="bulk", limit="20", duplicates="1").text
+    assert "<title>Search: 20 of 55 matches · file-librarian</title>" in every
+    with Store.open_read_only(cfg.database) as store:
+        assert views.count_matches(store, "bulk", SearchFilters(), False) == 25
+        assert views.count_matches(store, "bulk", SearchFilters(), True) == 55
+
+
 def test_exactly_the_limit_is_not_called_cut(downloads: Path, cfg: Config, serve: list[Ui]) -> None:
     fill(downloads, cfg, {"bulk.txt": answer("Other", description="bulk notes")})
     clone(cfg, "bulk.txt", 19)  # 20 matches, a limit of 20
