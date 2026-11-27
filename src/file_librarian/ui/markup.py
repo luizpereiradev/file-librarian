@@ -124,7 +124,7 @@ LAYOUT = """<!doctype html>
 <main id="main" tabindex="-1">
 {{main}}
 </main>
-<footer>Served on this Mac, at 127.0.0.1, while <code>flib ui</code> runs. Names and descriptions come from your files and the AI: they are shown as text only.</footer>
+<footer>Served on this Mac only (loopback), while <code>flib ui</code> runs. Names and descriptions come from your files and the AI: they are shown as text only.</footer>
 </body>
 </html>
 """  # noqa: E501

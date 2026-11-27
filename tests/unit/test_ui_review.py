@@ -179,7 +179,7 @@ def test_flib_ui_can_open_on_review() -> None:
 
 def test_review_needs_the_session(client: UiClient) -> None:
     for path in ("/review", "/review/accept?g=0123456789abcdef", "/undo?run=1"):
-        assert UiClient(client.port).get(path).status == 403
+        assert UiClient(client.port, client.name).get(path).status == 403
 
 
 def test_an_empty_library_creates_nothing(serve: list[Ui], cfg: Config) -> None:
@@ -353,7 +353,7 @@ def test_a_double_submit_moves_once(client: UiClient, cfg: Config) -> None:
 def test_two_tabs_one_wins(serve: list[Ui], cfg: Config, seeded: int) -> None:
     """Two windows of one session, each with the page as it was."""
     tab = start(serve, cfg)
-    other = UiClient(tab.port)
+    other = UiClient(tab.port, tab.name)
     other.cookies = dict(tab.cookies)
     r = row(cfg, "shot-1.png")
     first, second = (pin_on_page(c.get("/review").text, r.id) for c in (tab, other))
@@ -849,7 +849,7 @@ def test_each_action_refuses_a_forged_post_and_moves_nothing(
         "done": "1",
         "file": str(r.id),
     }
-    sender = UiClient(client.port)
+    sender = UiClient(client.port, client.name)
     if missing != "cookie":
         sender.cookies = dict(client.cookies)
     if missing == "csrf":

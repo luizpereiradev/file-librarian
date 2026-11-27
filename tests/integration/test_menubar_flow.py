@@ -709,6 +709,85 @@ def test_a_record_that_does_not_match_the_holder_is_not_believed(
     assert calls(fake_browser) == []
 
 
+def test_open_under_a_name_goes_through_an_opener_file(cfg: Config, fake_browser: Path) -> None:
+    """The session's name keeps other servers on loopback from its cookie (#125): it
+    never goes on ``open``'s command line, which every account can read with ``ps``."""
+    name = ui_server.session_name()
+    with ui_lock(cfg.database):
+        ui_server.write_running(cfg.database, 54321, name)
+        assert ui_server.running(cfg.database) == ui_server.Running(os.getpid(), 54321, name)
+        lines: list[str] = []
+        assert ui_server.run(cfg, page="review", echo=lines.append) == "running"
+        assert "opened its review page in the browser where it runs" in lines[-1]
+    [[argument]] = calls(fake_browser)
+    assert name not in argument and "http" not in argument
+    opener = Path(argument)
+    assert opener.name == ui_server.HANDOFF_NAME
+    assert opener.parent.parent == ui_server.handoff_root()
+    # Named after the server it opens, which removes it when it ends.
+    assert opener.parent.name.startswith(f"{ui_server.HANDOFF_PREFIX}{os.getpid()}-")
+    assert stat.S_IMODE(opener.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(opener.stat().st_mode) == 0o600
+    text = opener.read_text(encoding="utf-8")
+    url = f"http://{name}:54321/open?page=review"
+    assert f'<meta http-equiv="refresh" content="0; url={url}">' in text
+    assert '<meta name="referrer" content="no-referrer">' in text
+    assert text.count("http://") == 2  # the refresh and the link, nothing else
+    ui_server.sweep_handoffs(ui_server.handoff_root(), mine=True)
+    assert not opener.parent.exists()
+
+
+def test_an_opener_that_cannot_be_opened_is_removed(
+    cfg: Config, fake_browser: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_OPEN_FAIL", "1")
+    where = ui_server.Running(os.getpid(), 54321, ui_server.session_name())
+    assert ui_server.open_running(where, "due") is not None
+    assert list(ui_server.handoff_root().iterdir()) == []
+    # One that cannot be written: said, and nothing opened.
+    monkeypatch.delenv("FAKE_OPEN_FAIL")
+    monkeypatch.setattr(ui_server, "handoff_root", lambda: Path("/nonexistent/T"))
+    assert ui_server.open_running(where, "due") == "FileNotFoundError"
+    assert len(calls(fake_browser)) == 1  # the first, failed attempt only
+
+
+def test_an_opener_that_cannot_be_written_leaves_no_folder(
+    cfg: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(*args: Any, **kwargs: Any) -> int:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(os, "fdopen", refuse)  # rmtree itself needs os.open
+    where = ui_server.Running(os.getpid(), 54321, ui_server.session_name())
+    with pytest.raises(PermissionError):
+        ui_server.write_opener(where, "due")
+    assert list(ui_server.handoff_root().iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "evil.example",
+        "localhost",
+        "x.localhost",
+        "flib-" + "A" * 32 + ".localhost",
+        "flib-" + "a" * 32 + ".localhost.evil.example",
+        "127.0.0.1:80",
+        "",
+        5,
+        None,
+    ],
+)
+def test_a_host_that_is_no_sessions_name_is_not_believed(cfg: Config, host: object) -> None:
+    with ui_lock(cfg.database):
+        record = {"pid": os.getpid(), "port": 5, "host": host}
+        ui_server.running_path(cfg.database).write_text(json.dumps(record))
+        assert ui_server.running(cfg.database) is None
+        record["host"] = "127.0.0.1"
+        ui_server.running_path(cfg.database).write_text(json.dumps(record))
+        assert ui_server.running(cfg.database) == ui_server.Running(os.getpid(), 5, "127.0.0.1")
+
+
 def test_a_port_out_of_range_is_not_believed(cfg: Config) -> None:
     with ui_lock(cfg.database):
         record = {"pid": os.getpid(), "port": 70000}

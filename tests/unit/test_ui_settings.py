@@ -88,7 +88,7 @@ def start(serve: list[Ui], cfg: Config, path: Path | None) -> UiClient:
     ui = Ui(cfg, poll_seconds=0.01, config_path=path)
     ui.start()
     serve.append(ui)
-    c = UiClient(ui.port)
+    c = UiClient(ui.port, ui.host_name)
     assert c.launch(ui.launch_url).status == 303
     return c
 
@@ -224,7 +224,7 @@ def test_every_label_is_tied_to_its_control(client: UiClient) -> None:
 
 def test_settings_need_the_session(client: UiClient) -> None:
     for where in ("/settings", "/settings/restore"):
-        assert UiClient(client.port).get(where).status == 403
+        assert UiClient(client.port, client.name).get(where).status == 403
 
 
 def test_the_address_takes_nothing_else(client: UiClient) -> None:
@@ -890,7 +890,7 @@ def test_a_forged_post_changes_nothing(client: UiClient, path: Path) -> None:
         assert post(client, route, good, Origin="http://evil.example").status == 403
         assert post(client, route, good, **{"Sec-Fetch-Site": "same-site"}).status == 403
         assert post(client, route, good | {"csrf": "x"}).status == 403
-        assert post(UiClient(client.port), route, good).status == 403
+        assert post(UiClient(client.port, client.name), route, good).status == 403
     unchanged(path, before)
     for route in ("/settings/save", "/settings/schedule", "/settings/restore", "/settings/open"):
         assert route in ui_server.POST_ROUTES
