@@ -963,18 +963,28 @@ def test_a_signal_handler_never_waits_on_a_lock(loopback_network: None, cfg: Con
 def test_two_quick_signals_end_flib_ui_once(
     loopback_network: None, cfg: Config, fake_browser: Path
 ) -> None:
-    original = signal.getsignal(signal.SIGINT)
+    # The second signal may come after flib ui has put the previous handler back
+    # (the sending thread can be paused between the two): that handler is this
+    # test's, never pytest's, whose KeyboardInterrupt would end the whole run.
+    late: list[int] = []
+    pytests = signal.signal(signal.SIGINT, lambda signum, frame: late.append(signum))
+    try:
+        original = signal.getsignal(signal.SIGINT)
 
-    def twice() -> None:
-        wait_for(lambda: signal.getsignal(signal.SIGINT) is not original, timeout=10)
-        os.kill(os.getpid(), signal.SIGINT)
-        os.kill(os.getpid(), signal.SIGINT)
+        def twice() -> None:
+            wait_for(lambda: signal.getsignal(signal.SIGINT) is not original, timeout=10)
+            os.kill(os.getpid(), signal.SIGINT)
+            os.kill(os.getpid(), signal.SIGINT)
 
-    sender = Background(twice)
-    lines: list[str] = []
-    assert ui_server.run(cfg, browser=False, echo=lines.append) == "signal"
-    sender.join()
+        sender = Background(twice)
+        lines: list[str] = []
+        assert ui_server.run(cfg, browser=False, echo=lines.append) == "signal"
+        sender.join()
+    finally:
+        signal.signal(signal.SIGINT, pytests)
     assert lines[-1] == "flib ui ended: interrupted."
+    assert [line for line in lines if line.startswith("flib ui ended")] == [lines[-1]]
+    assert len(late) <= 1
 
 
 def test_close_cuts_off_a_request_in_progress(loopback_network: None, cfg: Config) -> None:
@@ -1621,8 +1631,9 @@ class Background:
     """Runs ``work`` beside a ``flib ui`` that blocks the test until it ends.
 
     If ``work`` fails, ``flib ui`` would serve on for its ten idle minutes: so
-    it is ended with SIGTERM (once its handler is in place, never pytest's), and
-    ``join`` raises the failure.
+    its SIGTERM handler is called (once it is in place), and ``join`` raises the
+    failure. Called, not sent: a signal sent just as ``flib ui`` puts the old
+    handler back would end the test process (an xdist worker, or pytest itself).
     """
 
     def __init__(self, work: Callable[[], None]) -> None:
@@ -1640,8 +1651,9 @@ class Background:
             self._work()
         except BaseException as exc:
             self.error = exc
-            if self.listening():
-                os.kill(os.getpid(), signal.SIGTERM)
+            handler = signal.getsignal(signal.SIGTERM)
+            if handler is not self._original and callable(handler):
+                handler(signal.SIGTERM, None)  # flib ui's: it only asks the server to stop
 
     def join(self) -> None:
         self._thread.join(10)
