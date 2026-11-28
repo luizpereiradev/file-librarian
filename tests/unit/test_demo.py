@@ -164,3 +164,41 @@ def test_the_printed_commands_keep_to_the_demo(
     assert all(line.endswith('-c "$CFG"') for line in commands)
     assert f"DEMO_HOME={tmp_path / 'demo' / 'home'}" in out
     assert "--clean" in out
+
+
+def test_the_mess_is_a_folder_flib_never_reads(tmp_path: Path, fake_home: Path) -> None:
+    plain = demo.build(tmp_path / "plain", home=fake_home)
+    built = demo.build(tmp_path / "messy", home=fake_home, with_mess=True)
+    assert not plain.before.exists()
+    names = sorted(p.name for p in built.before.iterdir())
+    assert names == sorted(demo.MESSY) and len(set(demo.MESSY)) == len(demo.MESSY) >= 30
+    assert built.before.name == "Downloads"  # what the window's title shows
+    # Outside the demo's home, so outside every folder its configuration names.
+    assert built.home not in built.before.parents
+    config = load_config(built.config_path)
+    assert all(built.before != Path(i.path) for i in config.inputs)
+    # The library itself is the same with or without it.
+    with Store.open(plain.database) as a, Store.open(built.database) as b:
+        assert Counter(str(r.status) for r in a.all_files()) == Counter(
+            str(r.status) for r in b.all_files()
+        )
+    assert sorted(p.name for p in plain.downloads.iterdir()) == sorted(
+        p.name for p in built.downloads.iterdir()
+    )
+    # Spread over time, as a real folder is: not forty files from the same minute.
+    assert len({int(p.stat().st_mtime) // 86400 for p in built.before.iterdir()}) > 5
+    assert demo.clean(built.root, home=fake_home) and not built.root.exists()
+
+
+def test_messy_prints_where_the_folder_is(
+    tmp_path: Path,
+    fake_home: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    assert demo.main([str(tmp_path / "demo"), "--messy"]) == 0
+    out = capsys.readouterr().out
+    assert f"open {tmp_path / 'demo' / 'before' / 'Downloads'}" in out
+    assert demo.main([str(tmp_path / "plain")]) == 0
+    assert "before/Downloads" not in capsys.readouterr().out
