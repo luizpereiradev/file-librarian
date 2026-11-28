@@ -6,6 +6,9 @@ build/
 dist/
 .venv/
 
+# The documentation site, built by `python -m scripts.docs build`
+site/
+
 # Tooling caches
 .pytest_cache/
 .mypy_cache/

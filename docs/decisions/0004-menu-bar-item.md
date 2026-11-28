@@ -13,7 +13,7 @@ spike (#111) built the same item two ways and measured both on macOS 27.2
 (Apple silicon), as `flib-menu-test` with temporary bundle identifiers, under
 `~/Library/Application Support/io.flibtest.menu/` (apps under `/tmp` are
 treated as temporary). The code is in
-[`prototypes/menu-bar/`](../../prototypes/menu-bar/README.md).
+[`prototypes/menu-bar/`](https://github.com/luizpereiradev/file-librarian/tree/main/prototypes/menu-bar).
 
 1. **Applet**: an AppleScriptObjC script (`use framework "AppKit"`) compiled
    with `osacompile -s` (stay open). It creates an `NSStatusItem` with an

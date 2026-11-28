@@ -3,7 +3,9 @@
 Start with `flib check-config` (the configuration and the API key) and
 `flib schedule --status` (the daily run). `flib status` shows what the last
 run skipped, and each run's log in
-`~/Library/Application Support/file-librarian/logs` says why.
+`~/Library/Application Support/file-librarian/logs` says why. To report a bug,
+attach a [`flib doctor` report](#the-doctor-report): it leaves your key, file
+names and folders out.
 
 ## A file is skipped as "unreadable"
 
@@ -18,7 +20,7 @@ for example:
 
 - `EPERM` or `EACCES` in the daily run: macOS keeps the scheduled run out of
   that file. Give `flib-python` Full Disk Access as described in
-  [Run it every day](../README.md#run-it-every-day), then run `flib schedule`
+  [Run it every day](getting-started.md#run-it-every-day), then run `flib schedule`
   again to check. A scheduled run that hits this ends its log with a hint
   saying so. In a manual run, check the file's permissions (`ls -l`).
 - `EDEADLK`, `EAGAIN`, `EINTR`, `ETIMEDOUT`, `EBUSY` or `ESTALE`: another
@@ -221,3 +223,33 @@ last ten, rather than on the Desktop: flib writes nowhere new, and on many Macs
 the Desktop is synced to iCloud, which would upload a file you have not read
 yet. `open -R` on the printed path shows it in Finder, ready to drag into the
 issue.
+
+## For developers and CI
+
+- **The tests never touch your Mac.** `uv run pytest` runs offline, in
+  parallel, with a temporary `HOME`, a fake Keychain, fake `launchctl`,
+  `osascript`, `sips`, `open` and `claude`, and no network or DNS
+  ([Contributing](project.md#contributing)). A test that seems to need a real
+  tool gets an opt-in marker instead: `volumes`, `ocr`, `notifier`, `menu`,
+  `browser`, run one at a time, for example
+  `FLIB_TEST_BROWSER=1 uv run pytest -m browser -n 0` (it needs Chrome or
+  Chromium; `FLIB_TEST_BROWSER_PATH` names another).
+- **One test fails only in parallel.** Run it alone with `-n 0`; a test that
+  writes outside `tmp_path` or the fake `HOME`, or counts on a port it found
+  free, is the usual cause.
+- **`coverage report` says "No data to report".** Run `uv run coverage
+  combine` first: each worker writes its own data file.
+- **`uv sync` refuses a new release.** By design: releases younger than 7 days
+  are ignored (`exclude-newer` in `pyproject.toml`). Wait, or see
+  [Urgent security fixes](https://github.com/luizpereiradev/file-librarian/blob/main/SECURITY.md#urgent-security-fixes).
+- **CI.** The one required check is `CI passed`: lint, format, types and the
+  suite with coverage on the oldest and newest Python, plus the opt-in macOS
+  steps on the newest, and the `docs` job, which builds this site in both
+  languages in strict mode: a broken link or anchor, or a page missing from the
+  navigation, fails it (`uv run --group docs python -m scripts.docs build`
+  shows the same locally). A changed `--help` text fails the test suite until
+  the [CLI reference](cli.md) is regenerated (`uv run python -m
+  scripts.docs_cli`, with the Portuguese text in `scripts/cli_pt_BR.json`).
+- **Try flib without your files.** `uv run python -m scripts.demo
+  /tmp/flib-demo` builds a fictional library offline
+  ([demo library](getting-started.md#try-it-on-a-demo-library)).

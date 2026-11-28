@@ -8,6 +8,23 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **A documentation site, in English and Brazilian Portuguese** (#142):
+  <https://luizpereiradev.github.io/file-librarian/> (and `/pt-BR/`), built
+  with MkDocs and the Material theme from `docs/` (a `docs` dependency group,
+  never installed with flib; ADR 0005). Getting started, daily use, privacy and
+  safety, providers, configuration, a CLI reference generated from the command
+  line (a test fails when it is out of date), troubleshooting. The README is
+  now a one-screen landing page; what it documented moved to the site. CI
+  builds both languages in strict mode (`CI passed` requires it), and
+  `.github/workflows/docs.yml` deploys `main` to GitHub Pages.
+- **A demo library** (#142): `uv run python -m scripts.demo DIR [--pt-BR]`
+  builds, offline and in that folder only, a fictional developer's Downloads
+  after a few days of flib (about 40 invented files, backdated runs, a fix, an
+  undo, items in review, bills due), and prints commands confined to its own
+  `HOME`; `--clean` removes it. The site's screenshots
+  (`scripts/screenshots.py`, headless Chrome) and terminal samples
+  (`scripts/docs_samples.py`) are taken from it.
+
 - **The interface speaks the configured language** (#126): with `language:
   pt-BR`, every page of `flib ui` (including confirmations, outcomes, error
   and ended pages and the handoff page) and the menu bar item's menu and

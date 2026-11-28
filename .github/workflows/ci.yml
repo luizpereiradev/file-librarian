@@ -82,16 +82,38 @@ jobs:
           FLIB_TEST_BROWSER: "1"
         run: uv run pytest -m browser -p no:cacheprovider -n 0
 
-  # The one required check: it passes only when every matrix entry passed, so
-  # the branch rules do not depend on which versions ran.
+  # The documentation site, both languages, in strict mode: a broken link or
+  # anchor, a missing snippet or a page left out of the navigation fails it.
+  # Only the docs dependency group is installed (not flib itself); publishing is
+  # docs.yml's job, on main.
+  docs:
+    name: docs site (strict build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.8"
+          enable-cache: true
+      - name: Install the docs group only
+        run: uv sync --locked --only-group docs
+      - name: Build English and Brazilian Portuguese
+        run: uv run --no-sync python -m scripts.docs build
+
+  # The one required check: it passes only when every matrix entry passed and
+  # the docs site built, so the branch rules do not depend on which versions ran.
   passed:
     name: CI passed
     if: always()
-    needs: [check]
+    needs: [check, docs]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Every version passed
+      - name: Every version passed, and the docs built
         env:
-          RESULT: ${{ needs.check.result }}
-        run: test "$RESULT" = success
+          CHECK: ${{ needs.check.result }}
+          DOCS: ${{ needs.docs.result }}
+        run: test "$CHECK" = success && test "$DOCS" = success

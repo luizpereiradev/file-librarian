@@ -1034,7 +1034,7 @@ _DETAILED = {SkipReason.UNREADABLE, SkipReason.INPUT_UNREADABLE}
 ACCESS_HINT = (
     "hint: macOS denied the scheduled run access to some files. Give flib-python Full Disk "
     "Access (System Settings > Privacy & Security > Full Disk Access) and run `flib schedule` "
-    "to check (README, Run it every day)."
+    "to check (documentation: Getting started, Run it every day)."
 )
 
 

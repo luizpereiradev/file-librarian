@@ -1,0 +1,31 @@
+/* The screenshot strip on the home page: three figures side by side, stacked on
+   a phone. */
+.flib-strip {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr 1.4fr;
+  gap: 1rem;
+  align-items: start;
+  margin: 1.5rem 0;
+}
+.flib-strip figure {
+  margin: 0;
+}
+.flib-strip img {
+  width: 100%;
+  height: auto;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+.flib-strip figcaption {
+  font-size: 0.75rem;
+}
+@media (max-width: 44em) {
+  .flib-strip {
+    grid-template-columns: 1fr;
+  }
+}
+/* Screenshots in pages get a hairline so a light page does not melt into the site. */
+.md-typeset img[src*="screenshots/"] {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 4px;
+}

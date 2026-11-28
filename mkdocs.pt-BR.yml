@@ -1,0 +1,42 @@
+# The Brazilian Portuguese site: docs/pt-BR/ built into site/pt-BR/, with the
+# English site's theme and settings (mkdocs.yml). Every page in its navigation is
+# translated; pages that exist only in English are linked from the text, marked
+# "(em inglês)", never from this navigation.
+INHERIT: mkdocs.yml
+site_url: https://luizpereiradev.github.io/file-librarian/pt-BR/
+site_description: >-
+  Mantém a pasta Downloads do seu Mac organizada: uma IA decide a categoria e o
+  nome de cada arquivo, código determinístico move, um índice local encontra de novo.
+edit_uri: edit/main/docs/pt-BR/
+copyright: >-
+  Licença MIT. Todo arquivo, nome e valor nas capturas de tela é inventado.
+
+docs_dir: docs/pt-BR
+site_dir: site/pt-BR
+exclude_docs: ""
+not_in_nav: ""
+
+theme:
+  language: pt-BR
+
+extra:
+  alternate:
+    - name: English
+      link: ../
+      lang: en
+    - name: Português (Brasil)
+      link: ./
+      lang: pt-BR
+
+nav:
+  - Início: index.md
+  - Primeiros passos: getting-started.md
+  - Uso diário: daily-use.md
+  - Privacidade e segurança: privacy.md
+  - Provedores: providers.md
+  - Use pelo Claude: mcp.md
+  - Referência:
+      - Configuração: configuration.md
+      - Linha de comando: cli.md
+  - Solução de problemas: troubleshooting.md
+  - Projeto: project.md

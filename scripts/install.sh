@@ -83,7 +83,7 @@ if [ ! -f "$agents.menu.plist" ]; then
   echo "To see what needs you in the menu bar: flib menu"
 fi
 if [ "$with_mcp" = yes ]; then
-  echo "MCP server included: see \"Use it from Claude\" in the README."
+  echo "MCP server included: see https://luizpereiradev.github.io/file-librarian/mcp/"
 fi
 case ":$PATH:" in
   *":$(uv tool dir --bin):"*) ;;

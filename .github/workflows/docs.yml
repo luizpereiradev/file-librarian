@@ -1,0 +1,57 @@
+name: Docs
+
+# Publishes the documentation site (docs/, both languages) to GitHub Pages from
+# main. Pull requests build it in CI's `docs` job, which `CI passed` requires.
+# Pages must be set to deploy from GitHub Actions (Settings > Pages > Source).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  # One deployment at a time; a newer push waits rather than cancelling one
+  # half-way.
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build the site
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read # check out the repository
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.8"
+          # No cache in a workflow that publishes: nothing restored from a cache
+          # another run wrote can reach the site.
+          enable-cache: false
+      - name: Install the docs group only
+        run: uv sync --locked --only-group docs
+      - name: Build English and Brazilian Portuguese (strict)
+        run: uv run --no-sync python -m scripts.docs build
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site/
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write # publish the artifact to Pages
+      id-token: write # prove to Pages that this workflow made the artifact
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

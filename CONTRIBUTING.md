@@ -119,6 +119,26 @@ workflows (see [SECURITY.md](SECURITY.md#supply-chain)).
   without a shell): they import only `json`, `os` and `sys` at the top, and
   anything else where it is needed.
 
+## Documentation
+
+The site is built from `docs/` (English) and `docs/pt-BR/` (Brazilian
+Portuguese, same file names) with MkDocs and the Material theme
+([ADR 0005](docs/decisions/0005-documentation-site.md)):
+
+```sh
+uv run --group docs python -m scripts.docs serve   # both languages, strict, at http://127.0.0.1:8000
+uv run python -m scripts.docs_cli                  # after changing a command's --help
+uv run python -m scripts.docs_samples              # after changing a command's output
+uv run python -m scripts.screenshots               # after changing the interface (headless Chrome)
+```
+
+A user-visible change updates the English page and its Portuguese version in
+the same pull request. A changed `--help` text also needs its Portuguese in
+`scripts/cli_pt_BR.json` (`python -m scripts.docs_cli --template` lists what
+is missing); the test suite fails until it is there. Screenshots and samples
+come only from the demo library (`python -m scripts.demo`), never from a real
+Mac's files.
+
 ## Changing the prompt or the classifier
 
 The prompt (`providers/prompt.py`), the answer schema and the planner's
