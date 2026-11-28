@@ -17,6 +17,10 @@ All notable changes to this project are documented here. The format follows
   now a one-screen landing page; what it documented moved to the site. CI
   builds both languages in strict mode (`CI passed` requires it), and
   `.github/workflows/docs.yml` deploys `main` to GitHub Pages.
+- **A script for the presentation video** (`docs/video-script.md`): seven
+  scenes in about 75 seconds, narration in English and Portuguese, recorded on
+  the demo library. `scripts.demo --messy` adds a cluttered `before/Downloads`
+  folder to film first; flib never reads it.
 - **A demo library** (#142): `uv run python -m scripts.demo DIR [--pt-BR]`
   builds, offline and in that folder only, a fictional developer's Downloads
   after a few days of flib (about 40 invented files, backdated runs, a fix, an

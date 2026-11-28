@@ -2,6 +2,7 @@
 
     uv run python -m scripts.demo /tmp/flib-demo            # English
     uv run python -m scripts.demo /tmp/flib-demo-pt --pt-BR # Brazilian Portuguese
+    uv run python -m scripts.demo /tmp/flib-demo --messy    # plus a cluttered folder to film
     uv run python -m scripts.demo /tmp/flib-demo --clean    # remove it
 
 Everything lives in the folder given, which stands in for a home folder: its own
@@ -20,6 +21,10 @@ anywhere and no real tool is run: the Keychain, launchctl, the notifier, the men
 bar item, the OCR helper and ``open`` are pointed at paths that do not exist
 while the demo is built, and every path in its configuration is absolute, inside
 the folder. It refuses ``/``, your home folder and flib's real folders.
+
+``--messy`` adds ``before/Downloads``: a folder of that name, outside the demo's
+own Downloads and never read by flib, cluttered the way a Downloads folder is
+before any of this (``MESSY``). It exists for one shot of a video: the mess.
 
 Every name, company, amount and e-mail address here is invented.
 """
@@ -733,6 +738,42 @@ class ScriptedProvider:
         return classification(answer, self._language)
 
 
+# --- The mess, for one shot ---------------------------------------------------------------
+
+# Names as downloads really arrive: numbered copies, scanner and camera counters,
+# exports and "final" versions. Nothing here says what the file is; that is the point.
+MESSY = (
+    "documento(3).pdf", "documento(4).pdf", "scan_0003.pdf", "scan_0004.pdf",
+    "scan_0005.pdf", "untitled.docx", "untitled (1).docx", "Document1.docx",
+    "IMG_2041.jpg", "IMG_2042.jpg", "IMG_2043.jpg", "IMG_2044.jpg",
+    "Screenshot 2026-10-02 at 09.14.33.png", "Screenshot 2026-10-02 at 09.14.41.png",
+    "Screenshot 2026-10-19 at 17.02.10.png", "download.pdf", "download (1).pdf",
+    "download (2).pdf", "export.csv", "export (1).csv", "report_final.xlsx",
+    "report_final_v2.xlsx", "report_final_v2 (1).xlsx", "invoice.pdf", "invoice (1).pdf",
+    "boleto.pdf", "boleto (1).pdf", "comprovante.pdf", "file.zip", "archive.zip",
+    "presentation-new.pptx", "notes.txt", "notes (1).txt", "installer.dmg",
+    "setup-latest.dmg", "2f9c1e7a.pdf", "0b41d2c8.pdf", "attachment.eml",
+    "contract_signed_FINAL.pdf", "contract_signed_FINAL (1).pdf",
+)  # fmt: skip
+
+
+def messy(demo: Demo) -> Path:
+    """A cluttered folder named Downloads, beside the demo's home: for filming only.
+
+    flib never reads it (it is outside every folder of the demo's configuration);
+    the files are a few bytes each and their dates are spread over three months.
+    """
+    folder = demo.before
+    folder.mkdir(parents=True)
+    now = datetime.now().astimezone()
+    for n, name in enumerate(MESSY):
+        path = folder / name
+        path.write_bytes(b"A placeholder for the flib demo: nothing to read here.\n")
+        stamp = (now - timedelta(days=(n * 7) % 90, minutes=n * 13)).timestamp()
+        os.utime(path, (stamp, stamp))
+    return folder
+
+
 # --- Building it -------------------------------------------------------------------------
 
 
@@ -745,9 +786,11 @@ class Demo:
     output: Path = field(init=False)
     config_path: Path = field(init=False)
     database: Path = field(init=False)
+    before: Path = field(init=False)
 
     def __post_init__(self) -> None:
         self.home = self.root / "home"
+        self.before = self.root / "before" / "Downloads"
         self.downloads = self.home / "Downloads"
         organized = "Organizado" if self.language == "pt-BR" else "Organized"
         self.output = self.downloads / organized
@@ -864,9 +907,16 @@ def arrive(demo: Demo, items: list[Item], when: datetime) -> None:
             os.utime(target, (stamp, stamp))
 
 
-def build(root: Path, language: Language = "en", *, home: Path | None = None) -> Demo:
+def build(
+    root: Path,
+    language: Language = "en",
+    *,
+    home: Path | None = None,
+    with_mess: bool = False,
+) -> Demo:
     """Build the demo library in ``root`` (refused where ``check_target`` refuses);
-    a demo already there is replaced. ``home``: the real home folder to stay out of."""
+    a demo already there is replaced. ``home``: the real home folder to stay out of.
+    ``with_mess``: also the cluttered folder of ``messy``."""
     from file_librarian import pipeline
     from file_librarian.config import load_config
     from file_librarian.db.store import Store
@@ -913,6 +963,8 @@ def build(root: Path, language: Language = "en", *, home: Path | None = None) ->
         now = datetime.now().astimezone()
         arrive(demo, TODAY, now - timedelta(minutes=30))
         pipeline.run(config, provider, simulate=True, now=now.timestamp())
+    if with_mess:
+        messy(demo)
     return demo
 
 
@@ -976,6 +1028,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("folder", type=Path, help="a new folder for it, e.g. /tmp/flib-demo")
     parser.add_argument("--pt-BR", dest="pt", action="store_true", help="Brazilian Portuguese")
+    parser.add_argument(
+        "--messy",
+        action="store_true",
+        help="also a cluttered before/Downloads to film; flib never reads it",
+    )
     parser.add_argument("--clean", action="store_true", help="remove the demo in FOLDER")
     args = parser.parse_args(argv)
     try:
@@ -983,7 +1040,7 @@ def main(argv: list[str] | None = None) -> int:
             removed = clean(args.folder)
             print("Removed." if removed else "Nothing there.")
             return 0
-        demo = build(args.folder, "pt-BR" if args.pt else "en")
+        demo = build(args.folder, "pt-BR" if args.pt else "en", with_mess=args.messy)
     except DemoError as exc:
         print(f"demo: {exc}", file=sys.stderr)
         return 2
@@ -992,6 +1049,9 @@ def main(argv: list[str] | None = None) -> int:
     print("\n".join(variables(demo)))
     for what, command in commands(demo):
         print(f"\n# {what}" if what else "", command, sep="\n" if what else "")
+    if args.messy:
+        print("\n# the cluttered folder to film first (flib never reads it)")
+        print(f"open {shlex.quote(str(demo.before))}")
     return 0
 
 

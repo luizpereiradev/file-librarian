@@ -4,7 +4,8 @@ A 60 to 90 second sequence for the presentation video, step by step, on the
 [demo library](getting-started.md#try-it-on-a-demo-library): every file, name
 and amount on screen is invented, and nothing touches your own Downloads,
 configuration, index or Keychain. Each take starts from a fresh demo, so a take
-can be redone exactly.
+can be redone exactly. The [video script](video-script.md) is the shorter
+version with narration, in English and Portuguese.
 
 ## Before each take
 
@@ -12,6 +13,10 @@ can be redone exactly.
 uv sync
 uv run python -m scripts.demo /tmp/flib-demo        # rebuilds it from scratch if it is there
 ```
+
+Add `--messy` for a cluttered `before/Downloads` folder to film before anything
+else: forty files named the way downloads arrive. flib never reads it, so
+nothing below changes.
 
 Paste the three lines it prints (`DEMO_HOME=…`, `FLIB=…`, `CFG=…`) into the
 terminal you will record, then clear the screen. For a shorter command line on
