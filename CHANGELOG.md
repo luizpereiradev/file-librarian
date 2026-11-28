@@ -561,12 +561,15 @@ All notable changes to this project are documented here. The format follows
 
 - The test suite runs in parallel (#139): `uv run pytest` starts one
   pytest-xdist worker per core (`-n 0` runs in one process). On a 12-core
-  Mac it takes about 45 s instead of 5 min 40 s. `coverage run` measures
-  every worker: run `coverage combine` before `coverage report`. Each call
-  of a fake system tool costs 30–40% less: the shims start Python directly
-  with `-I -S`, without `/bin/sh`, and the fakes import less. The tests that
-  waited out End session's 1.5 s linger or a 0.3–0.5 s timeout set it short.
-  The opt-in tests of real tools still run one at a time.
+  Mac it takes about 50 s instead of 5 min 37 s, and 3 min 39 s in one
+  process; CI's test step went from 7–8 min to about 3 min. `coverage run`
+  measures every worker: run `coverage combine` before `coverage report`.
+  Each call of a fake system tool costs 30–40% less: the shims start Python
+  directly with `-I -S`, without `/bin/sh`, the fakes import less, and the
+  shims are written once per worker (macOS checks a new executable the first
+  time it runs). The tests that waited out End session's 1.5 s linger or a
+  0.3–0.5 s timeout set it short. The opt-in tests of real tools still never
+  run at the same time. `flib doctor` reads each key from the Keychain once.
 
 ### Fixed
 
