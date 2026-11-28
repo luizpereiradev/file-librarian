@@ -14,6 +14,7 @@ import random
 import stat
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
@@ -332,6 +333,31 @@ def test_key_sources_and_env_file(
     assert "env_file: missing" in build_report(Options(config_path=config))
     monkeypatch.setenv("ANTHROPIC_API_KEY", key)
     assert "source: environment" in build_report(Options(config_path=config))
+
+
+def test_each_key_is_read_from_the_keychain_once(
+    fake_home: Path, downloads: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every Keychain read runs ``security``: the provider's key was read twice."""
+    key = "sk-ant-api03-" + "r" * 40
+    keychain.write(key)
+    config = fake_home / "config.yaml"
+    config.write_text(
+        f"inputs: [{json.dumps(str(downloads))}]\nprovider: {{name: anthropic, model: m}}\n",
+        encoding="utf-8",
+    )
+    reads: list[str] = []
+    real = keychain._security
+
+    def counted(*args: str, stdin: str | None = None) -> Any:
+        if args[0] == "find-generic-password":
+            reads.append(args[args.index("-a") + 1])
+        return real(*args, stdin=stdin)
+
+    monkeypatch.setattr(keychain, "_security", counted)
+    report = build_report(Options(config_path=config))
+    assert "source: keychain" in report and key not in report
+    assert reads and sorted(reads) == sorted(set(reads))  # each account once
 
 
 def test_install_kind_and_mcp_extra(monkeypatch: pytest.MonkeyPatch) -> None:
