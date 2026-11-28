@@ -14,7 +14,7 @@ interface altera o essencial para você, com as mesmas verificações.
 
 | Opção | Padrão | O que faz |
 | --- | --- | --- |
-| `language` | `en` | `en` ou `pt-BR`: o idioma dos nomes e descrições gerados, das pastas padrão (`Organized`/`_Review` ou `Organizado`/`_Revisar`) e das categorias, e da interface web (`flib ui`) e do item da barra de menus; a linha de comando continua em inglês |
+| `language` | `en` | `en` ou `pt-BR`: o idioma dos nomes e descrições gerados, das pastas padrão (`Organized`/`_Review` ou `Organizado`/`_Revisar`) e das categorias, da interface web (`flib ui`), do item da barra de menus, das notificações e do que a linha de comando mostra para você ([Idioma](https://luizpereiradev.github.io/file-librarian/configuration/#language), em inglês) |
 | `inputs` | `[~/Downloads]` | As pastas a manter organizadas; cada uma pode ter regras próprias ([Mais de uma caixa de entrada](#more-than-one-inbox)) |
 | `output_root` | `~/Downloads/Organized` | Onde as pastas de categoria são criadas |
 | `categories` | 5 em `en`, 15 em `pt-BR` | A lista fechada da qual a IA escolhe; cada `hint` orienta a escolha, `rename: false` mantém os nomes originais, `layout` distribui em subpastas ([Subpastas](#sub-folders-by-year-or-issuer)) |
