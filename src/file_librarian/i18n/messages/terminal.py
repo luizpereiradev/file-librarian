@@ -42,7 +42,11 @@ ROW_IDS = (
     "term.row.skip", "term.row.keep", "term.row.move", "term.row.dup", "term.row.moved",
     "term.row.moved_review", "term.row.warning", "term.row.organized", "term.row.review",
     "term.row.skipped", "term.row.missing", "term.row.failed", "term.row.sensitive",
-    "term.row.duplicate",
+    "term.row.duplicate", "term.row.scrub", "term.row.fill", "term.row.leave", "term.row.rename",
+    "term.row.trial_review", "term.row.trial_dup", "term.row.trial_move",
+    "term.reconcile.learned", "term.reconcile.found", "term.reconcile.missing",
+    "term.reconcile.icloud", "term.reconcile.unread", "term.reconcile.locked",
+    "term.reconcile.orphan",
 )  # fmt: skip
 """The rows of a run's table, which line up in each language (a test checks it)."""
 UNDO_ROW_IDS = ("term.undo.row.restored", "term.undo.row.skipped", "term.undo.row.warning")
@@ -560,6 +564,7 @@ EN: dict[str, Entry] = {
     ),
     # what a run recorded, shown by ``i18n.core.detail``
     "term.reason.layout_not_used": "{base}; layout not used ({why})",
+    "term.reason.layout_not_used_alone": "layout not used ({why})",
     "term.reason.category_rule": "category {name} (input rule, no AI)",
     "term.reason.category_kept": "category {name}, original name kept",
     "term.reason.category": "category {name}",
@@ -750,6 +755,654 @@ EN: dict[str, Entry] = {
         "Menu bar: installed, not running ({quit} from its menu); `flib menu` shows it."
     ),
     "term.menu.line_not_loaded": "Menu bar: installed but not loaded; `flib menu` shows it.",
+    # the configuration's refusals (``config``; pydantic's own in ``i18n.core.refusal``)
+    "term.config.invalid": "invalid configuration:",
+    "term.config.problem": "  {where}: {why}",
+    "term.config.not_mapping": "the configuration must be a YAML mapping",
+    "term.config.missing": (
+        "no configuration at {path}; run `flib init`, or copy config.example.yaml there"
+    ),
+    "term.config.unreadable": "cannot read {path}: {error}",
+    "term.config.not_yaml": "{path} is not valid YAML: {error}",
+    "term.config.spaces": "must not start or end with spaces",
+    "term.config.plain_folder": "must be a plain folder name (no '/', ':' or '\\')",
+    "term.config.control_or_invisible": "must not contain control or invisible characters",
+    "term.config.leading_dot": "must not start with '.'",
+    "term.config.absolute": "must be an absolute path or start with '~': {value}",
+    "term.config.url_invalid": "{option} is not a valid URL: {error}",
+    "term.config.url_scheme": "{option} must be an http:// or https:// URL with a host",
+    "term.config.url_credentials": (
+        "{option} must not contain a user name or password; "
+        "the API key goes in the Keychain or an environment variable"
+    ),
+    "term.config.url_query": "{option} must not have a query (?) or fragment (#)",
+    "term.config.base_url_required": (
+        "provider.base_url is required for openai-compat (for example https://api.openai.com/v1)"
+    ),
+    "term.config.env_name": "{option} must be an environment variable name",
+    "term.config.unknown_provider": "unknown provider {value} (known: {known})",
+    "term.config.pattern_invalid": "naming.pattern is not a valid pattern: {error}",
+    "term.config.pattern_unknown": (
+        "naming.pattern: unknown placeholder(s) {unknown}; use {allowed}"
+    ),
+    "term.config.pattern_subject": "naming.pattern must contain {name}",
+    "term.config.pattern_spec": "naming.pattern placeholders take no format spec or conversion",
+    "term.config.pattern_path": "naming.pattern must produce a file name, not a path",
+    "term.config.pattern_control": "naming.pattern must not contain control characters",
+    "term.config.layout_depth": Plural(
+        one="layout may have at most {levels} levels of sub-folders",
+        other="layout may have at most {levels} levels of sub-folders",
+        by="levels",
+    ),
+    "term.config.layout_slashes": "layout must not start or end with '/' nor contain '//'",
+    "term.config.layout_invalid": "layout is not a valid pattern: {error}",
+    "term.config.layout_unknown": "layout: unknown placeholder(s) in {segment}; use {allowed}",
+    "term.config.layout_spec": "layout placeholders take no format spec or conversion",
+    "term.config.layout_issuer": ("layout: {name} must be a whole sub-folder, alone between '/'"),
+    "term.config.layout_separators": (
+        "layout: sub-folders are separated by '/' only (no ':' or '\\')"
+    ),
+    "term.config.layout_dots": "layout: {segment} is not a folder name",
+    "term.config.layout_folder": "layout: sub-folder {segment} {why}",
+    "term.config.layout_long": "layout: sub-folder {segment} is longer than 64 characters",
+    "term.config.layout_none": (
+        "layout needs at least one placeholder: {first}, {second} or {third}"
+    ),
+    "term.config.glob_empty": "a pattern must not be empty",
+    "term.config.glob_path": "{value}: patterns match a name, not a path (no '/')",
+    "term.config.input_option": "input {path}: {option} applies only with a fixed category",
+    "term.config.ocr_language": "{value} is not a language code like en-US or pt-BR",
+    "term.config.time_form": "schedule.time must look like 12:30",
+    "term.config.time_invalid": "schedule.time must be a valid 24-hour time",
+    "term.config.done_tag": "due.done_tag must be a Finder tag name",
+    "term.config.same_folder.category": (
+        "category {name} is the same folder as {other} on macOS "
+        "(names are compared ignoring case and Unicode form)"
+    ),
+    "term.config.same_folder.review_folder": (
+        "review_folder {name} is the same folder as {other} on macOS "
+        "(names are compared ignoring case and Unicode form)"
+    ),
+    "term.config.same_folder.duplicates_folder": (
+        "duplicates_folder {name} is the same folder as {other} on macOS "
+        "(names are compared ignoring case and Unicode form)"
+    ),
+    "term.config.input_category": (
+        "input {path}: category {category} is not a configured category (configured: {known})"
+    ),
+    "term.config.input_broad": "input {folder} is too broad; pick specific folders",
+    "term.config.input_in_output": (
+        "input {folder} must not be inside output_root ({output}): "
+        "flib would pick up the files it has just filed"
+    ),
+    "term.config.input_twice": "input {path} is listed twice (also as {other})",
+    "term.config.inputs_overlap": (
+        "inputs must not overlap: {inner} is inside {outer}; list only one of them"
+    ),
+    "term.config.database_inside": "database must be outside the input folders and output_root",
+    "term.config.p.missing": "Field required",
+    "term.config.p.extra": "Extra inputs are not permitted",
+    "term.config.p.int": "Input should be a valid integer",
+    "term.config.p.int_fraction": (
+        "Input should be a valid integer, got a number with a fractional part"
+    ),
+    "term.config.p.number": "Input should be a valid number",
+    "term.config.p.bool": "Input should be a valid boolean",
+    "term.config.p.string": "Input should be a valid string",
+    "term.config.p.gt": "Input should be greater than {gt}",
+    "term.config.p.ge": "Input should be greater than or equal to {ge}",
+    "term.config.p.lt": "Input should be less than {lt}",
+    "term.config.p.le": "Input should be less than or equal to {le}",
+    "term.config.p.string_short": Plural(
+        one="String should have at least {min_length} character",
+        other="String should have at least {min_length} characters",
+        by="min_length",
+    ),
+    "term.config.p.string_long": Plural(
+        one="String should have at most {max_length} character",
+        other="String should have at most {max_length} characters",
+        by="max_length",
+    ),
+    "term.config.p.too_short": Plural(
+        one="{field_type} should have at least {min_length} item after validation, "
+        "not {actual_length}",
+        other="{field_type} should have at least {min_length} items after validation, "
+        "not {actual_length}",
+        by="min_length",
+    ),
+    "term.config.p.too_long": Plural(
+        one="{field_type} should have at most {max_length} item after validation, "
+        "not {actual_length}",
+        other="{field_type} should have at most {max_length} items after validation, "
+        "not {actual_length}",
+        by="max_length",
+    ),
+    "term.config.p.literal": "Input should be {expected}",
+    "term.config.p.list": "Input should be a valid list",
+    "term.config.p.dict": "Input should be a valid dictionary",
+    # flib check-config (and what flib doctor says about it, in English)
+    "term.check.key": "  api key: {source} ({hint})",
+    "term.check.key_missing": (
+        "  api key: not found (run `flib key set`, or set ANTHROPIC_API_KEY)"
+    ),
+    "term.check.key_none": (
+        "  api key: none (fine for a server that needs none; otherwise run "
+        "`flib key set --provider {provider}`, or set {env})"
+    ),
+    "term.check.fixed_no_only": (
+        "input {path} has a fixed category and no `only`: everything "
+        "in this folder is filed as {category} without being looked at."
+    ),
+    "term.check.env_file_open": "{path} is readable by other users; run chmod 600 on it",
+    "term.check.later_milestone": "a later milestone",
+    "term.check.planned_provider": (
+        "provider {provider} is planned for {when}; classification commands will not run "
+        "until then."
+    ),
+    "term.check.inactive_option": (
+        "{option} is planned for {when} and does nothing yet; your value is accepted but ignored."
+    ),
+    "term.check.compat_only": (
+        "provider.{option} applies to openai-compat and ollama only; {provider} ignores it."
+    ),
+    "term.check.this_mac_no_limit": "this Mac; no rate limit, never_send still applies",
+    "term.check.base_url": "  base_url: {url} ({where})",
+    "term.check.http_provider": (
+        "provider.base_url uses http:// to another machine; file content "
+        "would travel unencrypted. Use https://."
+    ),
+    "term.check.ollama_remote": (
+        "provider.base_url is not this Mac: file content leaves it, and Ollama "
+        "is treated as a remote provider."
+    ),
+    "term.check.no_prices": (
+        "provider.price_input_per_mtok and price_output_per_mtok are not set, so "
+        "the cost of each file counts as 0 and limits.max_cost_usd_per_run cannot stop a "
+        "run. Set them to your provider's prices."
+    ),
+    "term.check.vision_off": (
+        "  vision: off for this model (set provider.vision: true if it reads images)"
+    ),
+    "term.check.ocr_off": "  ocr: off",
+    "term.check.ocr_unavailable": "  ocr: unavailable",
+    "term.check.ocr_cannot_run": (
+        "OCR is on but cannot run here ({reason}); images and scanned "
+        "PDFs are classified with vision if it is on, else from their name and metadata."
+    ),
+    "term.check.ocr_on": Plural(
+        one="  ocr: on, on this Mac ({languages}; first {count} pages of a scanned PDF)",
+        other="  ocr: on, on this Mac ({languages}; first {count} pages of a scanned PDF)",
+    ),
+    "term.check.ocr_languages": "ocr.languages: macOS cannot recognise {unknown}; it can: {known}",
+    "term.check.semantic_off": "  semantic search: off",
+    "term.check.semantic": "  semantic search: {model} at {url} ({where})",
+    "term.check.semantic_remote": (
+        "search.semantic.base_url is not this Mac: the names, categories, tags "
+        "and descriptions in the index, and every semantic query, leave it. Embeddings are "
+        "not priced; check your server's rates."
+    ),
+    "term.check.http_semantic": (
+        "search.semantic.base_url uses http:// to another machine; the index "
+        "text would travel unencrypted. Use https://."
+    ),
+    "term.check.embeddings_key": "  embeddings api key: {source} ({hint})",
+    "term.check.claude_missing": "  claude: not found",
+    "term.check.install_claude": (
+        "install Claude Code, or set provider.command to the `claude` executable"
+    ),
+    "term.check.claude_unknown": "could not ask Claude Code whether it is logged in",
+    "term.check.claude_ok": "  claude login: ok",
+    "term.check.claude_logged_out": "Claude Code is not logged in; {hint}",
+    "term.claude.login_hint": "run `claude` once and sign in with /login (or `claude auth login`)",
+    "term.local.yes": (
+        "fully local: yes (classification, text recognition and search run on this Mac)"
+    ),
+    "term.local.no": "fully local: no",
+    "term.local.leaves": "  leaves this Mac: {what}, to {where}",
+    "term.local.remote": "a remote server",
+    "term.local.content": "file names, metadata and text excerpts",
+    "term.local.content_pages": (
+        "file names, metadata and text excerpts, and images and scanned pages"
+    ),
+    "term.local.content_images": "file names, metadata and text excerpts, and images",
+    "term.local.to_classify": "{content} to classify",
+    "term.local.api": "the Anthropic API",
+    "term.local.claude_code": "Anthropic (Claude Code)",
+    "term.local.index": "the index's names, tags and descriptions, and search queries",
+    "term.input.patterns": Plural(one="{count} pattern(s)", other="{count} pattern(s)"),
+    "term.ollama.down": (
+        "{error}; is Ollama running? Start it with `ollama serve` or the Ollama app"
+    ),
+    "term.ollama.no_model": "Ollama has no model {model}; {hint}",
+    "term.ollama.pull": "run `ollama pull {model}`",
+    "term.ollama.ready": "Ollama at {url} has {model}",
+    "term.ollama.install_hint": (
+        "install Ollama with `brew install ollama` (then `brew services start ollama`) or the "
+        "app from https://ollama.com/download, and open it"
+    ),
+    # flib reconcile
+    "term.reconcile.learned": _en("learned", "{path}: {old} -> {new}"),
+    "term.reconcile.found": _en("found", "{path}"),
+    "term.reconcile.missing": _en("missing", "{path}"),
+    "term.reconcile.icloud": _en("icloud", "{path}  ({why}, not checked)"),
+    "term.reconcile.unread": _en("unread", "{path}  (cannot be read now, not checked)"),
+    "term.reconcile.locked": _en("locked", "{path}  ({why}, not checked)"),
+    "term.reconcile.orphan": _en(
+        "orphan",
+        "{path}  (its original {original} is missing; "
+        "move this copy to an input folder to have it filed)",
+    ),
+    "term.reconcile.checked": Plural(one="{count} checked", other="{count} checked"),
+    "term.reconcile.moved_by_hand": Plural(
+        one="{count} moved by hand", other="{count} moved by hand"
+    ),
+    "term.reconcile.found_again": Plural(one="{count} found again", other="{count} found again"),
+    "term.reconcile.missing_count": Plural(one="{count} missing", other="{count} missing"),
+    "term.reconcile.icloud_count": Plural(
+        one="{count} in iCloud only", other="{count} in iCloud only"
+    ),
+    "term.reconcile.orphans": Plural(
+        one="{count} duplicate(s) of missing files", other="{count} duplicate(s) of missing files"
+    ),
+    "term.reconcile.locked_count": Plural(
+        one="{count} could not be read while the Mac is locked; "
+        "run `flib reconcile` again once it is unlocked.",
+        other="{count} could not be read while the Mac is locked; "
+        "run `flib reconcile` again once it is unlocked.",
+    ),
+    "term.reconcile.summary": "Reconcile: {checked}, {moved}, {found}, {missing}, {icloud}.",
+    "term.reconcile.summary_orphans": (
+        "Reconcile: {checked}, {moved}, {found}, {missing}, {icloud}, {orphans}."
+    ),
+    "term.reconcile.summary_locked": "{summary} {locked}",
+    # flib reprocess: what it leaves and keeps (``reprocess``)
+    "term.reprocess.still_configured": (
+        "{name} is still a category in the configuration; "
+        "rename or remove it there first, then run this again"
+    ),
+    "term.reprocess.no_files_in": "no organized file has the category {name}; nothing to migrate",
+    "term.reprocess.correction_kept": "your correction is kept",
+    "term.reprocess.rule_filed": "filed by its input's fixed category; no AI is asked about it",
+    "term.reprocess.cloud_only": "only in iCloud; download it to reprocess it",
+    "term.reprocess.not_there": "not at its recorded place; run `flib reconcile`",
+    "term.reprocess.partly_cloud": (
+        "something inside is only in iCloud; download it to reprocess it"
+    ),
+    "term.reprocess.changed": "changed or moved since it was indexed; run `flib reconcile`",
+    "term.reprocess.left_as_is": "{why}; left as it is",
+    "term.reprocess.stays_in": "stays in {category} ({why})",
+    "term.reprocess.cost_limit": "cost limit reached; run `flib reprocess` again",
+    "term.reprocess.category_kept": "{why}, your category kept",
+    "term.reprocess.not_a_category": (
+        "{name} is not a category in the configuration (configured: {known}); add it there first"
+    ),
+    "term.reprocess.renamed": "category {old} renamed to {new}",
+    "term.reprocess.removed": "its category was removed",
+    "term.reprocess.not_in_folder": "not in the {category} folder",
+    "term.reprocess.by_hand": "you moved or renamed it; it stays (`flib fix` hands it back)",
+    "term.reprocess.own_layout": "filed under its input's own layout; it stays",
+    "term.reprocess.issuer_unknown_ask": (
+        "issuer unknown; `--ask-issuer` asks the provider (it may cost)"
+    ),
+    "term.reprocess.no_issuer": "the provider named no issuer",
+    "term.reprocess.never_sent": "sensitive: never sent",
+    "term.reprocess.it_stays": "{why}; it stays",
+    "term.reprocess.cost_limit_again": "cost limit reached; run it again",
+    "term.reprocess.issuer_unknown": "issuer unknown; it stays",
+    "term.reprocess.layout_of": "layout of {category}: {where}",
+    "term.reprocess.nothing_filled": "{why}; nothing filled",
+    "term.reprocess.no_fields": "the document states none of the fields",
+    # flib reprocess: the command
+    "term.reprocess.ask_issuer_alone": "--ask-issuer goes with --apply-layout",
+    "term.reprocess.fill_fields_alone": (
+        "--fill-fields only records fields in the index; it takes --category, --ext, "
+        "--since, --until, --simulate and --yes"
+    ),
+    "term.reprocess.apply_layout_alone": (
+        "--apply-layout only moves files into their layout; it takes --category, "
+        "--ask-issuer, --simulate and --yes, and no category migration"
+    ),
+    "term.reprocess.scrub_alone": (
+        "--scrub-descriptions takes the whole index; leave out the other options"
+    ),
+    "term.reprocess.rename_or_remove": (
+        "use either --rename-category or --remove-category, not both"
+    ),
+    "term.reprocess.migration_filters": (
+        "a category migration takes the whole category; leave out the filters"
+    ),
+    "term.reprocess.migration_rename": (
+        "a category migration keeps file names; leave out --rename"
+    ),
+    "term.reprocess.to_review_alone": "--to-review goes with --remove-category",
+    "term.row.scrub": _en("scrub", "{path}  ({fields})"),
+    "term.row.fill": _en("fill", "{path}  ({fields})"),
+    "term.row.leave": _en("leave", "{path}  ({why})"),
+    "term.row.rename": _en(
+        "rename", "category {old} -> {new} in the index (the same folder on macOS)"
+    ),
+    "term.reprocess.scrub_simulation": Plural(
+        one="Simulation: {count} file(s) to scrub; nothing changed.",
+        other="Simulation: {count} file(s) to scrub; nothing changed.",
+    ),
+    "term.reprocess.scrub_question": Plural(
+        one="Scrub {count} file(s) in the index? `flib undo` reverts it",
+        other="Scrub {count} file(s) in the index? `flib undo` reverts it",
+    ),
+    "term.reprocess.nothing_changed": "Nothing changed.",
+    "term.reprocess.scrub_cached": Plural(
+        one="{count} cached answer(s) scrubbed.", other="{count} cached answer(s) scrubbed."
+    ),
+    "term.reprocess.nothing_to_scrub": (
+        "Nothing to scrub: no stored description holds an identifier flib recognizes."
+    ),
+    "term.reprocess.scrub_files": Plural(one="{count} file(s)", other="{count} file(s)"),
+    "term.reprocess.scrub_values": Plural(
+        one="{count} value(s) changed", other="{count} value(s) changed"
+    ),
+    "term.reprocess.scrub_embeddings": Plural(
+        one="{count} embedding(s) removed; the next run makes them again.",
+        other="{count} embedding(s) removed; the next run makes them again.",
+    ),
+    "term.reprocess.scrub_done": "Scrub run {run}: {files}, {values}. `flib undo` reverts it.",
+    "term.reprocess.scrub_done_embeddings": (
+        "Scrub run {run}: {files}, {values}. `flib undo` reverts it. {embeddings}"
+    ),
+    "term.reprocess.all_have_fields": "Every file in the library already has its fields.",
+    "term.reprocess.cached": Plural(
+        one="{count} answered by the cache", other="{count} answered by the cache"
+    ),
+    "term.reprocess.to_ask": Plural(
+        one="{count} to send to {provider}", other="{count} to send to {provider}"
+    ),
+    "term.reprocess.fields_estimate": Plural(
+        one="{count} file(s) without fields: {cached}, {to_ask} (estimated {cost}).",
+        other="{count} file(s) without fields: {cached}, {to_ask} (estimated {cost}).",
+    ),
+    "term.reprocess.send_question": Plural(
+        one="Send {count} file(s) to {provider}?", other="Send {count} file(s) to {provider}?"
+    ),
+    "term.reprocess.nothing_sent": "Nothing sent, nothing changed.",
+    "term.reprocess.simulation_nothing_changed": "Simulation: nothing changed.",
+    "term.reprocess.nothing_to_record": "Nothing to record.",
+    "term.reprocess.fields_question": Plural(
+        one="Record the fields of {count} file(s) in the index? `flib undo` reverts it",
+        other="Record the fields of {count} file(s) in the index? `flib undo` reverts it",
+    ),
+    "term.reprocess.issuer_estimate": Plural(
+        one="{count} file(s) need their issuer: {cached}, {to_ask} (estimated {cost}).",
+        other="{count} file(s) need their issuer: {cached}, {to_ask} (estimated {cost}).",
+    ),
+    "term.reprocess.nothing_sent_issuer": (
+        "Nothing sent; files without an issuer stay where they are."
+    ),
+    "term.reprocess.in_layout": Plural(
+        one="{count} file(s) already follow their category's layout.",
+        other="{count} file(s) already follow their category's layout.",
+    ),
+    "term.reprocess.simulation_nothing_moved": "Simulation: nothing moved or changed.",
+    "term.reprocess.layout_nothing": "Nothing to move: the library already follows its layouts.",
+    "term.reprocess.layout_question": Plural(
+        one="Move {count} file(s) into their layout? `flib undo` reverts it",
+        other="Move {count} file(s) into their layout? `flib undo` reverts it",
+    ),
+    "term.reprocess.layout_record_question": Plural(
+        one="Record in the index what {count} file(s) are filed by? Nothing moves",
+        other="Record in the index what {count} file(s) are filed by? Nothing moves",
+    ),
+    "term.reprocess.rules_nothing": "Nothing to move: the library already follows the rules.",
+    "term.reprocess.move_question": Plural(
+        one="Move {count} file(s)? `flib undo` reverts it",
+        other="Move {count} file(s)? `flib undo` reverts it",
+    ),
+    "term.reprocess.rename_question": "Rename the category in the index? `flib undo` reverts it",
+    "term.reprocess.nothing": "Nothing to reprocess.",
+    "term.reprocess.estimate": Plural(
+        one="{count} file(s) to reclassify: {cached}, {to_ask} (estimated {cost}).",
+        other="{count} file(s) to reclassify: {cached}, {to_ask} (estimated {cost}).",
+    ),
+    "term.reprocess.estimate_cap": Plural(
+        one="{count} file(s) to reclassify: {cached}, {to_ask} "
+        "(estimated {cost}; the limit per run is {cap}).",
+        other="{count} file(s) to reclassify: {cached}, {to_ask} "
+        "(estimated {cost}; the limit per run is {cap}).",
+    ),
+    "term.reprocess.plan": Plural(
+        one="Plan: {count} would move, {unchanged}, {kept}.",
+        other="Plan: {count} would move, {unchanged}, {kept}.",
+    ),
+    "term.reprocess.in_place": Plural(
+        one="{count} already in place", other="{count} already in place"
+    ),
+    "term.reprocess.kept": Plural(one="{count} kept as they are", other="{count} kept as they are"),
+    "term.reprocess.deferred": Plural(
+        one="{count} file(s) were not sent: the cost limit was reached. "
+        "Run `flib reprocess` again to go on.",
+        other="{count} file(s) were not sent: the cost limit was reached. "
+        "Run `flib reprocess` again to go on.",
+    ),
+    "term.reprocess.filed": Plural(one="{count} filed", other="{count} filed"),
+    "term.reprocess.index_changes": Plural(
+        one="{count} index change(s)", other="{count} index change(s)"
+    ),
+    "term.reprocess.undoable": "`flib undo` reverts it.",
+    "term.reprocess.unchanged": "Nothing changed.",
+    "term.reprocess.summary": "Reprocess run {run}: {filed}, {review}, {failed}, {skipped}. {end}",
+    "term.reprocess.summary_changes": (
+        "Reprocess run {run}: {filed}, {review}, {failed}, {skipped}, {changes}. {end}"
+    ),
+    "term.reprocess.empty_folder": (
+        "The folder {folder} is empty now. Keep it until you are sure of "
+        "the change; `flib undo` moves the files back into it."
+    ),
+    "term.column.description": "description",
+    "term.column.tags": "tags",
+    "term.column.kind": "kind",
+    "term.column.issuer": "issuer",
+    "term.column.amount": "amount",
+    "term.column.currency": "currency",
+    "term.column.document_date": "document date",
+    "term.column.due_date": "due date",
+    "term.column.period": "period",
+    "term.column.name_choice_reason": "name choice reason",
+    "term.column.layout_date": "layout date",
+    # flib init
+    "term.yes_no.yes": "y",
+    "term.yes_no.no": "n",
+    "term.init.welcome": (
+        "Setting up file-librarian. Press Enter to take the suggestion in brackets."
+    ),
+    "term.init.replace": "A configuration already exists at {path}. Replace it?",
+    "term.init.keeping": "Keeping {path}.",
+    "term.init.wrote": "Wrote {path} (only you can read it). `flib check-config` validates it.",
+    "term.init.no_trial": "Skipping the trial. `flib simulate` shows the plan once flib can run.",
+    "term.init.local_quality": (
+        "What to expect, measured on flib's test corpus (docs/quality.md): {model} files "
+        "92% (English) and 97% (Portuguese) of items in a right category against 99% and 100% "
+        "for the hosted default, and sends 7 of 9 doubtful items to review against 9 of 9, so "
+        "check the review folder and `flib simulate` more often at first."
+    ),
+    "term.init.next": (
+        "Next:\n"
+        "  flib simulate   the plan for your real folders; nothing moves\n"
+        "  flib run        organize now; `flib undo` reverts it\n"
+        "  flib status     what waits for you in review or failed, and the last and next run\n"
+        "Optional: let Claude search your library through the MCP server; enable it with "
+        "`./scripts/install.sh --with-mcp` from the file-librarian folder."
+    ),
+    "term.init.language": "Language of names, descriptions and folders",
+    "term.init.choose_one": "choose one of {options}.",
+    "term.init.folders_again": "Let's try the folders again.",
+    "term.init.other_provider": "Choose another provider for now.",
+    "term.init.vision_note": (
+        "Vision lets the model look at photos, screenshots and scanned PDFs. What is sent: "
+        "the image shrunk to 1568 px with its EXIF and GPS metadata removed, or the first 3 "
+        "pages of a PDF with no text. About US$0.0005 per image and US$0.001 per scanned PDF "
+        "on the default model. Off, they are classified from their name and metadata."
+    ),
+    "term.init.vision_question": "Send images and scanned PDFs to the model?",
+    "term.init.no_vision": "Images and scanned PDFs are classified from their name and metadata.",
+    "term.init.no_ollama": (
+        "Ollama is not installed: it runs the local model. flib does not install it "
+        "for you; {hint}. Then run `flib init --local` again."
+    ),
+    "term.init.ollama_stopped": (
+        "Ollama is installed ({command}) but not running. Start it with "
+        "`ollama serve`, `brew services start ollama` or the Ollama app, then run "
+        "`flib init --local` again."
+    ),
+    "term.init.ollama_running": (
+        "Ollama is running. The local setup uses {model} to classify and "
+        "{embedding} for semantic search."
+    ),
+    "term.init.models_there": "Both models are already downloaded.",
+    "term.init.model_size": "{model} ({size} GB)",
+    "term.init.not_downloaded": "Not downloaded yet: {sizes}.",
+    "term.init.download_question": "Download them now ({size} GB)?",
+    "term.init.download_later": "Download them later with: {pulls}",
+    "term.init.pull_failed": "{error}; try `ollama pull {model}`.",
+    "term.init.not_adding": "Not adding {what}: {error}",
+    "term.init.the_desktop": "the Desktop",
+    "term.init.the_shots": "the screenshots folder",
+    "term.init.desktop": (
+        "flib can also tidy the Desktop. People keep work in progress there, so it would "
+        "take only documents and images that have not changed for "
+        "{days} days, and leave folders alone. macOS asks once "
+        "whether flib may read the Desktop."
+    ),
+    "term.init.desktop_question": "Also tidy the Desktop?",
+    "term.init.shots_shared": (
+        "Screenshots are saved to {where}, which holds other files too, so flib does not "
+        "offer to file it by a fixed category. To have screenshots filed on their own, "
+        "choose a folder just for them in the Screenshot app (Cmd+Shift+5 > Options > "
+        "Other Location), then run `flib init` again or add it to `inputs` "
+        "(see config.example.yaml)."
+    ),
+    "term.init.shots": Plural(
+        one="Screenshots are saved in {where} ({count} item(s) there look like screenshots or "
+        "screen recordings now). flib can file those into {category}/<year>/<month> without "
+        "asking the AI (no cost), keeping their names; anything else there, and folders, "
+        "are left alone.",
+        other="Screenshots are saved in {where} ({count} item(s) there look like screenshots or "
+        "screen recordings now). flib can file those into {category}/<year>/<month> without "
+        "asking the AI (no cost), keeping their names; anything else there, and folders, "
+        "are left alone.",
+    ),
+    "term.init.shots_none": (
+        "Nothing there has a name flib knows for a screenshot (in English, Portuguese, "
+        "Spanish, French, German, Italian or Japanese), so it may never file anything "
+        "from it; the answer you probably want is no."
+    ),
+    "term.init.shots_question": "File screenshots too?",
+    "term.init.folder": "Folder to organize",
+    "term.init.not_a_folder_yes": (
+        "{folder} is not a folder; run `flib init` without --yes to pick another"
+    ),
+    "term.init.not_a_folder": "{folder} is not a folder.",
+    "term.init.output": "Where organized files go",
+    "term.init.review": "Folder in it for files to review",
+    "term.init.claude_not_found": "not found",
+    "term.init.claude_logged_in": "found, logged in",
+    "term.init.claude_logged_out": "found, not logged in",
+    "term.init.option.claude_code": (
+        "  claude-code    your Claude subscription through Claude Code ({state}); no API key"
+    ),
+    "term.init.option.anthropic": (
+        "  anthropic      the Anthropic API with an API key, billed per use "
+        "(a fraction of a cent per file)"
+    ),
+    "term.init.option.ollama": Plural(
+        one="  ollama         a local model through Ollama ({count} pulled); "
+        "nothing leaves this Mac",
+        other="  ollama         a local model through Ollama ({count} pulled); "
+        "nothing leaves this Mac",
+    ),
+    "term.init.option.openai_compat": (
+        "  openai-compat  any OpenAI-compatible API, with its URL and an optional key"
+    ),
+    "term.init.option.local": (
+        "  local          nothing leaves this Mac: {model} in Ollama, local "
+        "search; slower and less accurate (needs Ollama, ~10 GB, 16 GB of memory)"
+    ),
+    "term.init.which_ai": "Which AI classifies your files?",
+    "term.init.provider": "Provider",
+    "term.init.ollama_model": "Ollama model",
+    "term.init.base_url": "API base URL (the part before /chat/completions)",
+    "term.init.model": "Model",
+    "term.init.key_found": "API key: found in the {source} ({hint}).",
+    "term.init.store_key": "No Anthropic API key found. Store one in the macOS Keychain now?",
+    "term.init.no_key_yet": "no API key yet; run `flib key set` to add one.",
+    "term.init.store_server_key": (
+        "No API key found for this server (a local one usually needs none). "
+        "Store one in the macOS Keychain now?"
+    ),
+    "term.init.sentence": "{text}.",
+    "term.init.claude_missing": "Claude Code was not found; install it or set provider.command.",
+    "term.init.claude_logged_out_warning": "Claude Code is not logged in; {hint}.",
+    "term.init.not_available": "provider {provider} is not available yet.",
+    "term.init.nothing_to_try": (
+        "No files to try it on in {where}: it is empty, or holds only hidden, sensitive "
+        "or large items. `flib simulate` shows the plan once files arrive."
+    ),
+    "term.init.try_question": Plural(
+        one="Try it on copies of your {count} most recent item(s)? They are copied to a "
+        "temporary folder and classified with {provider}; nothing in {where} moves.",
+        other="Try it on copies of your {count} most recent item(s)? They are copied to a "
+        "temporary folder and classified with {provider}; nothing in {where} moves.",
+    ),
+    "term.init.classifying": Plural(
+        one="Classifying {count} copies; this can take a minute...",
+        other="Classifying {count} copies; this can take a minute...",
+    ),
+    "term.init.trial_stopped": "the trial stopped: {error}",
+    "term.init.trial": Plural(
+        one="Trial on {count} copies (destinations are inside {root}):",
+        other="Trial on {count} copies (destinations are inside {root}):",
+    ),
+    "term.row.trial_review": _en("review", "{name}  ->  {destination}"),
+    "term.row.trial_dup": _en("dup", "{name}  ->  {destination}"),
+    "term.row.trial_move": _en("move", "{name}  ->  {destination}"),
+    "term.init.trial_summary": "Summary: {organized}, {review}, {stay}.",
+    "term.init.to_categories": Plural(one="{count} to categories", other="{count} to categories"),
+    "term.init.to_review": Plural(
+        one="{count} to {folder} for you to decide", other="{count} to {folder} for you to decide"
+    ),
+    "term.init.not_tried": Plural(
+        one="  {count} not tried: the cost cap was reached.",
+        other="  {count} not tried: the cost cap was reached.",
+    ),
+    "term.init.trial_cost": (
+        "Estimated cost of the trial: {cost}. Nothing in your folders "
+        "moved; the copies and the trial's index are already deleted."
+    ),
+    "term.init.schedule_unreadable": "cannot read the schedule: {error}",
+    "term.init.watch_already": "Watch mode is already on; `flib schedule` changes it.",
+    "term.init.both_already": (
+        "A daily run is already scheduled at {time}, with watch mode; `flib schedule` changes it."
+    ),
+    "term.init.daily_already": (
+        "A daily run is already scheduled at {time}; `flib schedule` changes it."
+    ),
+    "term.init.schedule_question": "Organize new files automatically every day at {time}?",
+    "term.init.schedule_later": (
+        "You can schedule it later with `flib schedule` (--at HH:MM for another time)."
+    ),
+    "term.init.watch_explained": (
+        "Watch mode organizes files a few minutes after they arrive (once downloads "
+        "finish) instead of once a day; both keeps the daily run as a safety net."
+    ),
+    "term.init.mode_question": "Run daily, on arrival (watch), or both?",
+    "term.init.set_mode": (
+        "Set schedule.mode: {mode} in {path} so `flib schedule` keeps this choice."
+    ),
+    "term.init.not_scheduled": "could not schedule the daily run: {error}",
+    "term.init.menu_already": (
+        "flib is already in the menu bar; `flib menu --remove` takes it away."
+    ),
+    "term.init.menu_question": (
+        "Show flib in the menu bar (what needs you, and a menu that opens flib)?"
+    ),
+    "term.init.menu_later": "You can add it later with `flib menu`.",
     # flib ui
     "term.ui.started": "flib ui: session started in the browser.",
     "term.ui.stolen": (
@@ -1417,6 +2070,7 @@ PT_BR: dict[str, Entry] = {
     ),
     # o que uma execução registrou, mostrado por ``i18n.core.detail``
     "term.reason.layout_not_used": "{base}; layout não usado ({why})",
+    "term.reason.layout_not_used_alone": "layout não usado ({why})",
     "term.reason.category_rule": "categoria {name} (regra da entrada, sem IA)",
     "term.reason.category_kept": "categoria {name}, nome original mantido",
     "term.reason.category": "categoria {name}",
@@ -1638,6 +2292,743 @@ PT_BR: dict[str, Entry] = {
     "term.menu.line_not_loaded": (
         "Barra de menus: o item está instalado, mas não carregado; `flib menu` o mostra."
     ),
+    # as recusas da configuração
+    "term.config.invalid": "configuração inválida:",
+    "term.config.problem": "  {where}: {why}",
+    "term.config.not_mapping": "a configuração precisa ser um mapeamento YAML (chave: valor)",
+    "term.config.missing": (
+        "não há configuração em {path}; rode `flib init`, ou copie o config.example.yaml para lá"
+    ),
+    "term.config.unreadable": "não foi possível ler {path}: {error}",
+    "term.config.not_yaml": "{path} não é um YAML válido: {error}",
+    "term.config.spaces": "não pode começar nem terminar com espaços",
+    "term.config.plain_folder": "precisa ser um nome de pasta simples (sem '/', ':' nem '\\')",
+    "term.config.control_or_invisible": "não pode ter caracteres de controle ou invisíveis",
+    "term.config.leading_dot": "não pode começar com '.'",
+    "term.config.absolute": "precisa ser um caminho absoluto ou começar com '~': {value}",
+    "term.config.url_invalid": "{option} não é uma URL válida: {error}",
+    "term.config.url_scheme": "{option} precisa ser uma URL http:// ou https:// com um host",
+    "term.config.url_credentials": (
+        "{option} não pode ter usuário nem senha; "
+        "a chave de API vai no Keychain ou numa variável de ambiente"
+    ),
+    "term.config.url_query": "{option} não pode ter consulta (?) nem fragmento (#)",
+    "term.config.base_url_required": (
+        "o openai-compat precisa de provider.base_url (por exemplo https://api.openai.com/v1)"
+    ),
+    "term.config.env_name": "{option} precisa ser o nome de uma variável de ambiente",
+    "term.config.unknown_provider": "provedor desconhecido {value} (existentes: {known})",
+    "term.config.pattern_invalid": "naming.pattern não é um padrão válido: {error}",
+    "term.config.pattern_unknown": (
+        "naming.pattern: marcador(es) desconhecido(s) {unknown}; use {allowed}"
+    ),
+    "term.config.pattern_subject": "naming.pattern precisa conter {name}",
+    "term.config.pattern_spec": (
+        "os marcadores de naming.pattern não aceitam especificação de formato nem conversão"
+    ),
+    "term.config.pattern_path": "naming.pattern precisa gerar um nome de arquivo, não um caminho",
+    "term.config.pattern_control": "naming.pattern não pode ter caracteres de controle",
+    "term.config.layout_depth": Plural(
+        zero="o layout não pode ter subpastas",
+        one="o layout pode ter no máximo {levels} nível de subpastas",
+        other="o layout pode ter no máximo {levels} níveis de subpastas",
+        by="levels",
+    ),
+    "term.config.layout_slashes": (
+        "o layout não pode começar nem terminar com '/' nem conter '//'"
+    ),
+    "term.config.layout_invalid": "o layout não é um padrão válido: {error}",
+    "term.config.layout_unknown": (
+        "layout: marcador(es) desconhecido(s) em {segment}; use {allowed}"
+    ),
+    "term.config.layout_spec": (
+        "os marcadores do layout não aceitam especificação de formato nem conversão"
+    ),
+    "term.config.layout_issuer": (
+        "layout: {name} precisa ser uma subpasta inteira, sozinho entre '/'"
+    ),
+    "term.config.layout_separators": (
+        "layout: as subpastas são separadas só por '/' (sem ':' nem '\\')"
+    ),
+    "term.config.layout_dots": "layout: {segment} não é um nome de pasta",
+    "term.config.layout_folder": "layout: a subpasta {segment} {why}",
+    "term.config.layout_long": "layout: a subpasta {segment} tem mais de 64 caracteres",
+    "term.config.layout_none": (
+        "o layout precisa de pelo menos um marcador: {first}, {second} ou {third}"
+    ),
+    "term.config.glob_empty": "um padrão não pode ficar vazio",
+    "term.config.glob_path": "{value}: os padrões comparam um nome, não um caminho (sem '/')",
+    "term.config.input_option": "entrada {path}: {option} só vale com uma categoria fixa",
+    "term.config.ocr_language": "{value} não é um código de idioma como en-US ou pt-BR",
+    "term.config.time_form": "schedule.time precisa ser como 12:30",
+    "term.config.time_invalid": "schedule.time precisa ser um horário válido de 24 horas",
+    "term.config.done_tag": "due.done_tag precisa ser um nome de tag do Finder",
+    "term.config.same_folder.category": (
+        "a categoria {name} é a mesma pasta que {other} no macOS "
+        "(os nomes são comparados ignorando maiúsculas e a forma Unicode)"
+    ),
+    "term.config.same_folder.review_folder": (
+        "review_folder {name} é a mesma pasta que {other} no macOS "
+        "(os nomes são comparados ignorando maiúsculas e a forma Unicode)"
+    ),
+    "term.config.same_folder.duplicates_folder": (
+        "duplicates_folder {name} é a mesma pasta que {other} no macOS "
+        "(os nomes são comparados ignorando maiúsculas e a forma Unicode)"
+    ),
+    "term.config.input_category": (
+        "entrada {path}: a categoria {category} não está configurada (configuradas: {known})"
+    ),
+    "term.config.input_broad": "a entrada {folder} é ampla demais; escolha pastas específicas",
+    "term.config.input_in_output": (
+        "a entrada {folder} não pode ficar dentro de output_root ({output}): "
+        "o flib pegaria de novo os arquivos que acabou de organizar"
+    ),
+    "term.config.input_twice": "a entrada {path} aparece duas vezes (também como {other})",
+    "term.config.inputs_overlap": (
+        "as entradas não podem se sobrepor: {inner} está dentro de {outer}; deixe só uma delas"
+    ),
+    "term.config.database_inside": (
+        "database precisa ficar fora das pastas de entrada e de output_root"
+    ),
+    "term.config.p.missing": "campo obrigatório",
+    "term.config.p.extra": "esta chave não existe na configuração",
+    "term.config.p.int": "precisa ser um número inteiro",
+    "term.config.p.int_fraction": "precisa ser um número inteiro, sem casas decimais",
+    "term.config.p.number": "precisa ser um número",
+    "term.config.p.bool": "precisa ser true ou false",
+    "term.config.p.string": "precisa ser um texto",
+    "term.config.p.gt": "precisa ser maior que {gt}",
+    "term.config.p.ge": "precisa ser pelo menos {ge}",
+    "term.config.p.lt": "precisa ser menor que {lt}",
+    "term.config.p.le": "pode ser no máximo {le}",
+    "term.config.p.string_short": Plural(
+        zero="pode ficar vazio",
+        one="precisa ter pelo menos {min_length} caractere",
+        other="precisa ter pelo menos {min_length} caracteres",
+        by="min_length",
+    ),
+    "term.config.p.string_long": Plural(
+        zero="precisa ficar vazio",
+        one="pode ter no máximo {max_length} caractere",
+        other="pode ter no máximo {max_length} caracteres",
+        by="max_length",
+    ),
+    "term.config.p.too_short": Plural(
+        zero="{field_type} pode ficar vazia (tem {actual_length})",
+        one="{field_type} precisa ter pelo menos {min_length} item, não {actual_length}",
+        other="{field_type} precisa ter pelo menos {min_length} itens, não {actual_length}",
+        by="min_length",
+    ),
+    "term.config.p.too_long": Plural(
+        zero="{field_type} precisa ficar vazia (tem {actual_length})",
+        one="{field_type} pode ter no máximo {max_length} item, não {actual_length}",
+        other="{field_type} pode ter no máximo {max_length} itens, não {actual_length}",
+        by="max_length",
+    ),
+    "term.config.p.literal": "precisa ser {expected}",
+    "term.config.p.list": "precisa ser uma lista",
+    "term.config.p.dict": "precisa ser um mapeamento (chave: valor)",
+    # flib check-config
+    "term.check.key": "  chave de API: {source} ({hint})",
+    "term.check.key_missing": (
+        "  chave de API: não encontrada (rode `flib key set`, ou defina ANTHROPIC_API_KEY)"
+    ),
+    "term.check.key_none": (
+        "  chave de API: nenhuma (tudo bem para um servidor que não precisa de chave; senão "
+        "rode `flib key set --provider {provider}`, ou defina {env})"
+    ),
+    "term.check.fixed_no_only": (
+        "a entrada {path} tem uma categoria fixa e nenhum `only`: tudo nesta pasta é "
+        "organizado como {category} sem ser examinado."
+    ),
+    "term.check.env_file_open": "{path} pode ser lido por outros usuários; rode chmod 600 nele",
+    "term.check.later_milestone": "uma etapa futura",
+    "term.check.planned_provider": (
+        "o provedor {provider} está previsto para {when}; os comandos de classificação não "
+        "rodam até lá."
+    ),
+    "term.check.inactive_option": (
+        "{option} está previsto para {when} e ainda não faz nada; seu valor é aceito, mas ignorado."
+    ),
+    "term.check.compat_only": (
+        "provider.{option} só vale para openai-compat e ollama; {provider} o ignora."
+    ),
+    "term.check.this_mac_no_limit": "este Mac; sem limite de taxa, never_send continua valendo",
+    "term.check.base_url": "  base_url: {url} ({where})",
+    "term.check.http_provider": (
+        "provider.base_url usa http:// para outra máquina; o conteúdo dos arquivos viajaria "
+        "sem criptografia. Use https://."
+    ),
+    "term.check.ollama_remote": (
+        "provider.base_url não é este Mac: o conteúdo dos arquivos sai dele, e o Ollama é "
+        "tratado como um provedor remoto."
+    ),
+    "term.check.no_prices": (
+        "provider.price_input_per_mtok e price_output_per_mtok não estão definidos, então o "
+        "custo de cada arquivo conta como 0 e limits.max_cost_usd_per_run não consegue parar "
+        "uma execução. Defina os preços do seu provedor."
+    ),
+    "term.check.vision_off": (
+        "  vision: desligada para este modelo (defina provider.vision: true se ele lê imagens)"
+    ),
+    "term.check.ocr_off": "  ocr: desligado",
+    "term.check.ocr_unavailable": "  ocr: indisponível",
+    "term.check.ocr_cannot_run": (
+        "o OCR está ligado, mas não consegue rodar aqui ({reason}); imagens e PDFs escaneados "
+        "são classificados com vision se ela estiver ligada, senão pelo nome e pelos metadados."
+    ),
+    "term.check.ocr_on": Plural(
+        zero="  ocr: ligado, neste Mac ({languages}; nenhuma página de um PDF escaneado)",
+        one="  ocr: ligado, neste Mac ({languages}; a primeira página de um PDF escaneado)",
+        other="  ocr: ligado, neste Mac ({languages}; as {count} primeiras páginas de um PDF "
+        "escaneado)",
+    ),
+    "term.check.ocr_languages": (
+        "ocr.languages: o macOS não reconhece {unknown}; ele reconhece: {known}"
+    ),
+    "term.check.semantic_off": "  busca por significado: desligada",
+    "term.check.semantic": "  busca por significado: {model} em {url} ({where})",
+    "term.check.semantic_remote": (
+        "search.semantic.base_url não é este Mac: os nomes, categorias, tags e descrições do "
+        "índice, e cada busca por significado, saem dele. Os embeddings não têm preço; confira "
+        "as tarifas do seu servidor."
+    ),
+    "term.check.http_semantic": (
+        "search.semantic.base_url usa http:// para outra máquina; o texto do índice viajaria "
+        "sem criptografia. Use https://."
+    ),
+    "term.check.embeddings_key": "  chave de API dos embeddings: {source} ({hint})",
+    "term.check.claude_missing": "  claude: não encontrado",
+    "term.check.install_claude": (
+        "instale o Claude Code, ou defina provider.command com o executável `claude`"
+    ),
+    "term.check.claude_unknown": "não foi possível perguntar ao Claude Code se ele está logado",
+    "term.check.claude_ok": "  login do claude: ok",
+    "term.check.claude_logged_out": "o Claude Code não está logado; {hint}",
+    "term.claude.login_hint": "rode `claude` uma vez e entre com /login (ou `claude auth login`)",
+    "term.local.yes": (
+        "totalmente local: sim (classificação, reconhecimento de texto e busca rodam neste Mac)"
+    ),
+    "term.local.no": "totalmente local: não",
+    "term.local.leaves": "  sai deste Mac: {what}, para {where}",
+    "term.local.remote": "um servidor remoto",
+    "term.local.content": "nomes de arquivo, metadados e trechos de texto",
+    "term.local.content_pages": (
+        "nomes de arquivo, metadados e trechos de texto, e imagens e páginas escaneadas"
+    ),
+    "term.local.content_images": "nomes de arquivo, metadados e trechos de texto, e imagens",
+    "term.local.to_classify": "{content} para classificar",
+    "term.local.api": "a API da Anthropic",
+    "term.local.claude_code": "Anthropic (Claude Code)",
+    "term.local.index": "os nomes, tags e descrições do índice, e as consultas de busca",
+    "term.input.patterns": Plural(
+        zero="nenhum padrão", one="{count} padrão", other="{count} padrões"
+    ),
+    "term.ollama.down": (
+        "{error}; o Ollama está rodando? Inicie com `ollama serve` ou com o app do Ollama"
+    ),
+    "term.ollama.no_model": "o Ollama não tem o modelo {model}; {hint}",
+    "term.ollama.pull": "rode `ollama pull {model}`",
+    "term.ollama.ready": "o Ollama em {url} tem {model}",
+    "term.ollama.install_hint": (
+        "instale o Ollama com `brew install ollama` (depois `brew services start ollama`) ou o "
+        "app de https://ollama.com/download, e abra-o"
+    ),
+    # flib reconcile
+    "term.reconcile.learned": _pt("aprendido", "{path}: {old} -> {new}"),
+    "term.reconcile.found": _pt("encontrado", "{path}"),
+    "term.reconcile.missing": _pt("ausente", "{path}"),
+    "term.reconcile.icloud": _pt("icloud", "{path}  ({why}, não verificado)"),
+    "term.reconcile.unread": _pt("ilegível", "{path}  (não dá para ler agora, não verificado)"),
+    "term.reconcile.locked": _pt("bloqueado", "{path}  ({why}, não verificado)"),
+    "term.reconcile.orphan": _pt(
+        "órfão",
+        "{path}  (o original dele, {original}, sumiu; "
+        "mova esta cópia para uma pasta de entrada para que seja organizada)",
+    ),
+    "term.reconcile.checked": Plural(
+        zero="nenhum verificado", one="{count} verificado", other="{count} verificados"
+    ),
+    "term.reconcile.moved_by_hand": Plural(
+        zero="nenhum movido à mão", one="{count} movido à mão", other="{count} movidos à mão"
+    ),
+    "term.reconcile.found_again": Plural(
+        zero="nenhum reencontrado", one="{count} reencontrado", other="{count} reencontrados"
+    ),
+    "term.reconcile.missing_count": Plural(
+        zero="nenhum ausente", one="{count} ausente", other="{count} ausentes"
+    ),
+    "term.reconcile.icloud_count": Plural(
+        zero="nenhum só no iCloud", one="{count} só no iCloud", other="{count} só no iCloud"
+    ),
+    "term.reconcile.orphans": Plural(
+        zero="nenhuma cópia de arquivo ausente",
+        one="{count} cópia de arquivo ausente",
+        other="{count} cópias de arquivos ausentes",
+    ),
+    "term.reconcile.locked_count": Plural(
+        zero="Nenhum ficou bloqueado.",
+        one="{count} não pôde ser lido com o Mac bloqueado; rode `flib reconcile` de novo "
+        "depois de desbloqueá-lo.",
+        other="{count} não puderam ser lidos com o Mac bloqueado; rode `flib reconcile` de novo "
+        "depois de desbloqueá-lo.",
+    ),
+    "term.reconcile.summary": "Reconciliação: {checked}, {moved}, {found}, {missing}, {icloud}.",
+    "term.reconcile.summary_orphans": (
+        "Reconciliação: {checked}, {moved}, {found}, {missing}, {icloud}, {orphans}."
+    ),
+    "term.reconcile.summary_locked": "{summary} {locked}",
+    # flib reprocess: o que fica de fora
+    "term.reprocess.still_configured": (
+        "{name} ainda é uma categoria da configuração; renomeie ou remova lá primeiro, "
+        "depois rode isto de novo"
+    ),
+    "term.reprocess.no_files_in": (
+        "nenhum arquivo organizado tem a categoria {name}; nada para migrar"
+    ),
+    "term.reprocess.correction_kept": "sua correção é mantida",
+    "term.reprocess.rule_filed": (
+        "organizado pela categoria fixa da entrada; a IA não é consultada sobre ele"
+    ),
+    "term.reprocess.cloud_only": "só no iCloud; baixe-o para reclassificá-lo",
+    "term.reprocess.not_there": "não está no lugar registrado; rode `flib reconcile`",
+    "term.reprocess.partly_cloud": (
+        "algo dentro dele está só no iCloud; baixe-o para reclassificá-lo"
+    ),
+    "term.reprocess.changed": "mudou ou foi movido desde que foi indexado; rode `flib reconcile`",
+    "term.reprocess.left_as_is": "{why}; fica como está",
+    "term.reprocess.stays_in": "fica em {category} ({why})",
+    "term.reprocess.cost_limit": "limite de custo atingido; rode `flib reprocess` de novo",
+    "term.reprocess.category_kept": "{why}, sua categoria mantida",
+    "term.reprocess.not_a_category": (
+        "{name} não é uma categoria da configuração (configuradas: {known}); adicione lá primeiro"
+    ),
+    "term.reprocess.renamed": "categoria {old} renomeada para {new}",
+    "term.reprocess.removed": "a categoria dele foi removida",
+    "term.reprocess.not_in_folder": "não está na pasta {category}",
+    "term.reprocess.by_hand": "você o moveu ou renomeou; ele fica (`flib fix` o devolve ao flib)",
+    "term.reprocess.own_layout": "organizado pelo layout da própria entrada; ele fica",
+    "term.reprocess.issuer_unknown_ask": (
+        "emissor desconhecido; `--ask-issuer` pergunta ao provedor (pode ter custo)"
+    ),
+    "term.reprocess.no_issuer": "o provedor não indicou o emissor",
+    "term.reprocess.never_sent": "sensível: nunca enviado",
+    "term.reprocess.it_stays": "{why}; ele fica",
+    "term.reprocess.cost_limit_again": "limite de custo atingido; rode de novo",
+    "term.reprocess.issuer_unknown": "emissor desconhecido; ele fica",
+    "term.reprocess.layout_of": "layout de {category}: {where}",
+    "term.reprocess.nothing_filled": "{why}; nada preenchido",
+    "term.reprocess.no_fields": "o documento não informa nenhum dos campos",
+    # flib reprocess: o comando
+    "term.reprocess.ask_issuer_alone": "--ask-issuer só funciona com --apply-layout",
+    "term.reprocess.fill_fields_alone": (
+        "--fill-fields só registra campos no índice; ele aceita --category, --ext, --since, "
+        "--until, --simulate e --yes"
+    ),
+    "term.reprocess.apply_layout_alone": (
+        "--apply-layout só move arquivos para o layout deles; ele aceita --category, "
+        "--ask-issuer, --simulate e --yes, e nenhuma migração de categoria"
+    ),
+    "term.reprocess.scrub_alone": (
+        "--scrub-descriptions vale para o índice inteiro; deixe de fora as outras opções"
+    ),
+    "term.reprocess.rename_or_remove": "use --rename-category ou --remove-category, não os dois",
+    "term.reprocess.migration_filters": (
+        "uma migração de categoria vale para a categoria inteira; deixe de fora os filtros"
+    ),
+    "term.reprocess.migration_rename": (
+        "uma migração de categoria mantém os nomes dos arquivos; deixe de fora o --rename"
+    ),
+    "term.reprocess.to_review_alone": "--to-review só funciona com --remove-category",
+    "term.row.scrub": _pt("limpar", "{path}  ({fields})"),
+    "term.row.fill": _pt("preencher", "{path}  ({fields})"),
+    "term.row.leave": _pt("de fora", "{path}  ({why})"),
+    "term.row.rename": _pt(
+        "renomear", "categoria {old} -> {new} no índice (a mesma pasta no macOS)"
+    ),
+    "term.reprocess.scrub_simulation": Plural(
+        zero="Simulação: nenhum arquivo para limpar; nada mudou.",
+        one="Simulação: {count} arquivo para limpar; nada mudou.",
+        other="Simulação: {count} arquivos para limpar; nada mudou.",
+    ),
+    "term.reprocess.scrub_question": Plural(
+        zero="Nada para limpar no índice",
+        one="Limpar {count} arquivo no índice? `flib undo` desfaz",
+        other="Limpar {count} arquivos no índice? `flib undo` desfaz",
+    ),
+    "term.reprocess.nothing_changed": "Nada mudou.",
+    "term.reprocess.scrub_cached": Plural(
+        zero="Nenhuma resposta em cache limpa.",
+        one="{count} resposta em cache limpa.",
+        other="{count} respostas em cache limpas.",
+    ),
+    "term.reprocess.nothing_to_scrub": (
+        "Nada para limpar: nenhuma descrição guardada tem um identificador que o flib reconheça."
+    ),
+    "term.reprocess.scrub_files": Plural(
+        zero="nenhum arquivo", one="{count} arquivo", other="{count} arquivos"
+    ),
+    "term.reprocess.scrub_values": Plural(
+        zero="nenhum valor alterado",
+        one="{count} valor alterado",
+        other="{count} valores alterados",
+    ),
+    "term.reprocess.scrub_embeddings": Plural(
+        zero="Nenhum embedding removido.",
+        one="{count} embedding removido; a próxima execução o recria.",
+        other="{count} embeddings removidos; a próxima execução os recria.",
+    ),
+    "term.reprocess.scrub_done": (
+        "Execução de limpeza {run}: {files}, {values}. `flib undo` desfaz."
+    ),
+    "term.reprocess.scrub_done_embeddings": (
+        "Execução de limpeza {run}: {files}, {values}. `flib undo` desfaz. {embeddings}"
+    ),
+    "term.reprocess.all_have_fields": "Todos os arquivos da biblioteca já têm os campos.",
+    "term.reprocess.cached": Plural(
+        zero="nenhum respondido pelo cache",
+        one="{count} respondido pelo cache",
+        other="{count} respondidos pelo cache",
+    ),
+    "term.reprocess.to_ask": Plural(
+        zero="nenhum para enviar a {provider}",
+        one="{count} para enviar a {provider}",
+        other="{count} para enviar a {provider}",
+    ),
+    "term.reprocess.fields_estimate": Plural(
+        zero="Nenhum arquivo sem campos.",
+        one="{count} arquivo sem campos: {cached}, {to_ask} (estimativa: {cost}).",
+        other="{count} arquivos sem campos: {cached}, {to_ask} (estimativa: {cost}).",
+    ),
+    "term.reprocess.send_question": Plural(
+        zero="Nada para enviar a {provider}",
+        one="Enviar {count} arquivo para {provider}?",
+        other="Enviar {count} arquivos para {provider}?",
+    ),
+    "term.reprocess.nothing_sent": "Nada enviado, nada mudou.",
+    "term.reprocess.simulation_nothing_changed": "Simulação: nada mudou.",
+    "term.reprocess.nothing_to_record": "Nada para registrar.",
+    "term.reprocess.fields_question": Plural(
+        zero="Nada para registrar no índice",
+        one="Registrar os campos de {count} arquivo no índice? `flib undo` desfaz",
+        other="Registrar os campos de {count} arquivos no índice? `flib undo` desfaz",
+    ),
+    "term.reprocess.issuer_estimate": Plural(
+        zero="Nenhum arquivo precisa do emissor.",
+        one="{count} arquivo precisa do emissor: {cached}, {to_ask} (estimativa: {cost}).",
+        other="{count} arquivos precisam do emissor: {cached}, {to_ask} (estimativa: {cost}).",
+    ),
+    "term.reprocess.nothing_sent_issuer": (
+        "Nada enviado; os arquivos sem emissor ficam onde estão."
+    ),
+    "term.reprocess.in_layout": Plural(
+        zero="Nenhum arquivo já segue o layout da categoria.",
+        one="{count} arquivo já segue o layout da categoria dele.",
+        other="{count} arquivos já seguem o layout da categoria deles.",
+    ),
+    "term.reprocess.simulation_nothing_moved": "Simulação: nada foi movido nem mudou.",
+    "term.reprocess.layout_nothing": "Nada para mover: a biblioteca já segue os layouts.",
+    "term.reprocess.layout_question": Plural(
+        zero="Nenhum arquivo para mover para o layout",
+        one="Mover {count} arquivo para o layout dele? `flib undo` desfaz",
+        other="Mover {count} arquivos para o layout deles? `flib undo` desfaz",
+    ),
+    "term.reprocess.layout_record_question": Plural(
+        zero="Nada para registrar no índice",
+        one="Registrar no índice como {count} arquivo está organizado? Nada é movido",
+        other="Registrar no índice como {count} arquivos estão organizados? Nada é movido",
+    ),
+    "term.reprocess.rules_nothing": "Nada para mover: a biblioteca já segue as regras.",
+    "term.reprocess.move_question": Plural(
+        zero="Nenhum arquivo para mover",
+        one="Mover {count} arquivo? `flib undo` desfaz",
+        other="Mover {count} arquivos? `flib undo` desfaz",
+    ),
+    "term.reprocess.rename_question": "Renomear a categoria no índice? `flib undo` desfaz",
+    "term.reprocess.nothing": "Nada para reclassificar.",
+    "term.reprocess.estimate": Plural(
+        zero="Nenhum arquivo para reclassificar.",
+        one="{count} arquivo para reclassificar: {cached}, {to_ask} (estimativa: {cost}).",
+        other="{count} arquivos para reclassificar: {cached}, {to_ask} (estimativa: {cost}).",
+    ),
+    "term.reprocess.estimate_cap": Plural(
+        zero="Nenhum arquivo para reclassificar (o limite por execução é {cap}).",
+        one="{count} arquivo para reclassificar: {cached}, {to_ask} "
+        "(estimativa: {cost}; o limite por execução é {cap}).",
+        other="{count} arquivos para reclassificar: {cached}, {to_ask} "
+        "(estimativa: {cost}; o limite por execução é {cap}).",
+    ),
+    "term.reprocess.plan": Plural(
+        zero="Plano: nenhum seria movido, {unchanged}, {kept}.",
+        one="Plano: {count} seria movido, {unchanged}, {kept}.",
+        other="Plano: {count} seriam movidos, {unchanged}, {kept}.",
+    ),
+    "term.reprocess.in_place": Plural(
+        zero="nenhum já no lugar", one="{count} já no lugar", other="{count} já no lugar"
+    ),
+    "term.reprocess.kept": Plural(
+        zero="nenhum mantido como está",
+        one="{count} mantido como está",
+        other="{count} mantidos como estão",
+    ),
+    "term.reprocess.deferred": Plural(
+        zero="Todos os arquivos foram enviados.",
+        one="{count} arquivo não foi enviado: o limite de custo foi atingido. "
+        "Rode `flib reprocess` de novo para continuar.",
+        other="{count} arquivos não foram enviados: o limite de custo foi atingido. "
+        "Rode `flib reprocess` de novo para continuar.",
+    ),
+    "term.reprocess.filed": Plural(
+        zero="nenhum organizado", one="{count} organizado", other="{count} organizados"
+    ),
+    "term.reprocess.index_changes": Plural(
+        zero="nenhuma alteração no índice",
+        one="{count} alteração no índice",
+        other="{count} alterações no índice",
+    ),
+    "term.reprocess.undoable": "`flib undo` desfaz.",
+    "term.reprocess.unchanged": "Nada mudou.",
+    "term.reprocess.summary": (
+        "Reclassificação {run}: {filed}, {review}, {failed}, {skipped}. {end}"
+    ),
+    "term.reprocess.summary_changes": (
+        "Reclassificação {run}: {filed}, {review}, {failed}, {skipped}, {changes}. {end}"
+    ),
+    "term.reprocess.empty_folder": (
+        "A pasta {folder} está vazia agora. Mantenha-a até ter certeza da mudança; "
+        "`flib undo` devolve os arquivos para ela."
+    ),
+    "term.column.description": "descrição",
+    "term.column.tags": "tags",
+    "term.column.kind": "tipo",
+    "term.column.issuer": "emissor",
+    "term.column.amount": "valor",
+    "term.column.currency": "moeda",
+    "term.column.document_date": "data do documento",
+    "term.column.due_date": "vencimento",
+    "term.column.period": "período",
+    "term.column.name_choice_reason": "motivo da escolha do nome",
+    "term.column.layout_date": "data do layout",
+    # flib init
+    "term.yes_no.yes": "s",
+    "term.yes_no.no": "n",
+    "term.init.welcome": (
+        "Configurando o file-librarian. Aperte Enter para aceitar a sugestão entre colchetes."
+    ),
+    "term.init.replace": "Já existe uma configuração em {path}. Substituir?",
+    "term.init.keeping": "Mantendo {path}.",
+    "term.init.wrote": "Gravei {path} (só você pode lê-lo). `flib check-config` o valida.",
+    "term.init.no_trial": (
+        "Pulando o teste. `flib simulate` mostra o plano quando o flib puder rodar."
+    ),
+    "term.init.local_quality": (
+        "O que esperar, medido no corpus de teste do flib (docs/quality.md): {model} coloca "
+        "92% (inglês) e 97% (português) dos itens numa categoria certa, contra 99% e 100% do "
+        "padrão hospedado, e manda para revisão 7 de 9 itens duvidosos, contra 9 de 9; então "
+        "confira a pasta de revisão e o `flib simulate` com mais frequência no começo."
+    ),
+    "term.init.next": (
+        "Próximos passos:\n"
+        "  flib simulate   o plano para as suas pastas de verdade; nada é movido\n"
+        "  flib run        organiza agora; `flib undo` desfaz\n"
+        "  flib status     o que espera por você em revisão ou com falha, e a última e a "
+        "próxima execução\n"
+        "Opcional: deixe o Claude buscar na sua biblioteca pelo servidor MCP; ative com "
+        "`./scripts/install.sh --with-mcp` na pasta do file-librarian."
+    ),
+    "term.init.language": "Idioma dos nomes, descrições e pastas",
+    "term.init.choose_one": "escolha um de {options}.",
+    "term.init.folders_again": "Vamos tentar as pastas de novo.",
+    "term.init.other_provider": "Escolha outro provedor por enquanto.",
+    "term.init.vision_note": (
+        "A visão (vision) deixa o modelo olhar fotos, capturas de tela e PDFs escaneados. O que "
+        "é enviado: a imagem reduzida para 1568 px, sem os metadados EXIF e GPS, ou as 3 "
+        "primeiras páginas de um PDF sem texto. Cerca de US$ 0,0005 por imagem e US$ 0,001 por "
+        "PDF escaneado no modelo padrão. Desligada, eles são classificados pelo nome e pelos "
+        "metadados."
+    ),
+    "term.init.vision_question": "Enviar imagens e PDFs escaneados ao modelo?",
+    "term.init.no_vision": (
+        "Imagens e PDFs escaneados são classificados pelo nome e pelos metadados."
+    ),
+    "term.init.no_ollama": (
+        "O Ollama não está instalado: é ele que roda o modelo local. O flib não o instala para "
+        "você; {hint}. Depois rode `flib init --local` de novo."
+    ),
+    "term.init.ollama_stopped": (
+        "O Ollama está instalado ({command}), mas não está rodando. Inicie com `ollama serve`, "
+        "`brew services start ollama` ou o app do Ollama, e rode `flib init --local` de novo."
+    ),
+    "term.init.ollama_running": (
+        "O Ollama está rodando. A configuração local usa {model} para classificar e "
+        "{embedding} para a busca por significado."
+    ),
+    "term.init.models_there": "Os dois modelos já estão baixados.",
+    "term.init.model_size": "{model} ({size} GB)",
+    "term.init.not_downloaded": "Ainda não baixados: {sizes}.",
+    "term.init.download_question": "Baixar agora ({size} GB)?",
+    "term.init.download_later": "Baixe depois com: {pulls}",
+    "term.init.pull_failed": "{error}; tente `ollama pull {model}`.",
+    "term.init.not_adding": "Não vou adicionar {what}: {error}",
+    "term.init.the_desktop": "a Mesa",
+    "term.init.the_shots": "a pasta de capturas de tela",
+    "term.init.desktop": (
+        "O flib também pode arrumar a Mesa. As pessoas guardam trabalho em andamento lá, então "
+        "ele pegaria só documentos e imagens que não mudam há {days} dias, e deixaria as pastas "
+        "em paz. O macOS pergunta uma vez se o flib pode ler a Mesa."
+    ),
+    "term.init.desktop_question": "Arrumar a Mesa também?",
+    "term.init.shots_shared": (
+        "As capturas de tela são salvas em {where}, que guarda outros arquivos também, então o "
+        "flib não oferece organizá-la por uma categoria fixa. Para organizar as capturas à "
+        "parte, escolha uma pasta só para elas no app Captura de Tela (Cmd+Shift+5 > Opções > "
+        "Outro Local), e depois rode `flib init` de novo ou adicione-a em `inputs` "
+        "(veja config.example.yaml)."
+    ),
+    "term.init.shots": Plural(
+        zero="As capturas de tela são salvas em {where} (nada lá parece captura ou gravação de "
+        "tela agora). O flib pode organizá-las em {category}/<ano>/<mês> sem perguntar à IA "
+        "(sem custo), mantendo os nomes; o resto, e as pastas, fica como está.",
+        one="As capturas de tela são salvas em {where} ({count} item lá parece captura ou "
+        "gravação de tela agora). O flib pode organizá-las em {category}/<ano>/<mês> sem "
+        "perguntar à IA (sem custo), mantendo os nomes; o resto, e as pastas, fica como está.",
+        other="As capturas de tela são salvas em {where} ({count} itens lá parecem capturas ou "
+        "gravações de tela agora). O flib pode organizá-las em {category}/<ano>/<mês> sem "
+        "perguntar à IA (sem custo), mantendo os nomes; o resto, e as pastas, fica como está.",
+    ),
+    "term.init.shots_none": (
+        "Nada lá tem um nome que o flib reconheça como captura de tela (em inglês, português, "
+        "espanhol, francês, alemão, italiano ou japonês), então ele talvez nunca organize nada "
+        "dali; a resposta que você provavelmente quer é não."
+    ),
+    "term.init.shots_question": "Organizar as capturas de tela também?",
+    "term.init.folder": "Pasta a organizar",
+    "term.init.not_a_folder_yes": (
+        "{folder} não é uma pasta; rode `flib init` sem --yes para escolher outra"
+    ),
+    "term.init.not_a_folder": "{folder} não é uma pasta.",
+    "term.init.output": "Para onde vão os arquivos organizados",
+    "term.init.review": "Pasta, dentro dela, para os arquivos a revisar",
+    "term.init.claude_not_found": "não encontrado",
+    "term.init.claude_logged_in": "encontrado, logado",
+    "term.init.claude_logged_out": "encontrado, não logado",
+    "term.init.option.claude_code": (
+        "  claude-code    sua assinatura do Claude pelo Claude Code ({state}); sem chave de API"
+    ),
+    "term.init.option.anthropic": (
+        "  anthropic      a API da Anthropic com uma chave de API, cobrada por uso "
+        "(uma fração de centavo por arquivo)"
+    ),
+    "term.init.option.ollama": Plural(
+        zero="  ollama         um modelo local pelo Ollama (nenhum baixado); nada sai deste Mac",
+        one="  ollama         um modelo local pelo Ollama ({count} baixado); nada sai deste Mac",
+        other="  ollama         um modelo local pelo Ollama ({count} baixados); nada sai deste Mac",
+    ),
+    "term.init.option.openai_compat": (
+        "  openai-compat  qualquer API compatível com a da OpenAI, com a URL dela e uma "
+        "chave opcional"
+    ),
+    "term.init.option.local": (
+        "  local          nada sai deste Mac: {model} no Ollama, busca local; mais lento e "
+        "menos preciso (precisa do Ollama, ~10 GB, 16 GB de memória)"
+    ),
+    "term.init.which_ai": "Qual IA classifica seus arquivos?",
+    "term.init.provider": "Provedor",
+    "term.init.ollama_model": "Modelo do Ollama",
+    "term.init.base_url": "URL base da API (a parte antes de /chat/completions)",
+    "term.init.model": "Modelo",
+    "term.init.key_found": "Chave de API: encontrada em {source} ({hint}).",
+    "term.init.store_key": (
+        "Nenhuma chave de API da Anthropic encontrada. Guardar uma no Keychain do macOS agora?"
+    ),
+    "term.init.no_key_yet": "ainda não há chave de API; rode `flib key set` para adicionar uma.",
+    "term.init.store_server_key": (
+        "Nenhuma chave de API encontrada para este servidor (um servidor local normalmente não "
+        "precisa). Guardar uma no Keychain do macOS agora?"
+    ),
+    "term.init.sentence": "{text}.",
+    "term.init.claude_missing": (
+        "o Claude Code não foi encontrado; instale-o ou defina provider.command."
+    ),
+    "term.init.claude_logged_out_warning": "o Claude Code não está logado; {hint}.",
+    "term.init.not_available": "o provedor {provider} ainda não está disponível.",
+    "term.init.nothing_to_try": (
+        "Nenhum arquivo para testar em {where}: está vazia, ou só tem itens ocultos, sensíveis "
+        "ou grandes. `flib simulate` mostra o plano quando chegarem arquivos."
+    ),
+    "term.init.try_question": Plural(
+        zero="Nada para testar em {where} com {provider}.",
+        one="Testar numa cópia do seu item mais recente? Ele é copiado para uma pasta "
+        "temporária e classificado com {provider}; nada em {where} é movido.",
+        other="Testar em cópias dos seus {count} itens mais recentes? Eles são copiados para "
+        "uma pasta temporária e classificados com {provider}; nada em {where} é movido.",
+    ),
+    "term.init.classifying": Plural(
+        zero="Nada para classificar.",
+        one="Classificando {count} cópia; isso pode levar um minuto...",
+        other="Classificando {count} cópias; isso pode levar um minuto...",
+    ),
+    "term.init.trial_stopped": "o teste parou: {error}",
+    "term.init.trial": Plural(
+        zero="Teste sem nenhuma cópia (os destinos ficariam dentro de {root}):",
+        one="Teste em {count} cópia (os destinos ficam dentro de {root}):",
+        other="Teste em {count} cópias (os destinos ficam dentro de {root}):",
+    ),
+    "term.row.trial_review": _pt("revisão", "{name}  ->  {destination}"),
+    "term.row.trial_dup": _pt("duplicado", "{name}  ->  {destination}"),
+    "term.row.trial_move": _pt("mover", "{name}  ->  {destination}"),
+    "term.init.trial_summary": "Resumo: {organized}, {review}, {stay}.",
+    "term.init.to_categories": Plural(
+        zero="nenhum para as categorias",
+        one="{count} para as categorias",
+        other="{count} para as categorias",
+    ),
+    "term.init.to_review": Plural(
+        zero="nenhum para {folder}, para você decidir",
+        one="{count} para {folder}, para você decidir",
+        other="{count} para {folder}, para você decidir",
+    ),
+    "term.init.not_tried": Plural(
+        zero="  nenhum ficou sem testar.",
+        one="  {count} não testado: o limite de custo foi atingido.",
+        other="  {count} não testados: o limite de custo foi atingido.",
+    ),
+    "term.init.trial_cost": (
+        "Custo estimado do teste: {cost}. Nada nas suas pastas foi movido; as cópias e o "
+        "índice do teste já foram apagados."
+    ),
+    "term.init.schedule_unreadable": "não foi possível ler o agendamento: {error}",
+    "term.init.watch_already": "O modo de observação já está ativo; `flib schedule` muda isso.",
+    "term.init.both_already": (
+        "Já há uma execução diária agendada para {time}, com o modo de observação; "
+        "`flib schedule` muda isso."
+    ),
+    "term.init.daily_already": (
+        "Já há uma execução diária agendada para {time}; `flib schedule` muda isso."
+    ),
+    "term.init.schedule_question": (
+        "Organizar os arquivos novos automaticamente todo dia às {time}?"
+    ),
+    "term.init.schedule_later": (
+        "Você pode agendar depois com `flib schedule` (--at HH:MM para outro horário)."
+    ),
+    "term.init.watch_explained": (
+        "O modo de observação organiza os arquivos alguns minutos depois que eles chegam "
+        "(quando os downloads terminam) em vez de uma vez por dia; both mantém a execução "
+        "diária como rede de segurança."
+    ),
+    "term.init.mode_question": "Rodar todo dia (daily), na chegada (watch), ou os dois (both)?",
+    "term.init.set_mode": (
+        "Defina schedule.mode: {mode} em {path} para que o `flib schedule` mantenha essa escolha."
+    ),
+    "term.init.not_scheduled": "não foi possível agendar a execução diária: {error}",
+    "term.init.menu_already": (
+        "O flib já está na barra de menus; `flib menu --remove` o tira de lá."
+    ),
+    "term.init.menu_question": (
+        "Mostrar o flib na barra de menus (o que precisa de você, e um menu que abre o flib)?"
+    ),
+    "term.init.menu_later": "Você pode adicioná-lo depois com `flib menu`.",
     # flib ui
     "term.ui.started": "flib ui: sessão iniciada no navegador.",
     "term.ui.stolen": (

@@ -69,6 +69,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from file_librarian.config import OLLAMA_BASE_URL, ProviderConfig
+from file_librarian.i18n import t
 from file_librarian.models import Classification, FileContext, Rules
 from file_librarian.providers.base import FatalProviderError, ProviderError, Usage
 from file_librarian.providers.http import RETRYABLE_STATUS, JsonClient, error_detail
@@ -384,10 +385,8 @@ def check(config: ProviderConfig) -> tuple[bool, str]:
     try:
         models = OllamaProvider(config).list_models()
     except ProviderError as exc:
-        return False, f"{exc}; is Ollama running? Start it with `ollama serve` or the Ollama app"
+        return False, t("term.ollama.down", error=str(exc))
     if not has_model(models, config.model):
-        return (
-            False,
-            f"Ollama has no model {config.model!r}; {PULL_HINT.format(model=config.model)}",
-        )
-    return True, f"Ollama at {url} has {config.model!r}"
+        hint = t("term.ollama.pull", model=config.model)
+        return False, t("term.ollama.no_model", model=repr(config.model), hint=hint)
+    return True, t("term.ollama.ready", url=url, model=repr(config.model))

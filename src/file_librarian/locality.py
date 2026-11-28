@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from file_librarian.config import Config, is_loopback_url
+from file_librarian.i18n import english, t
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,23 +43,23 @@ def what_leaves(config: Config) -> list[Leaves]:
     """Everything this configuration sends off this Mac; empty when nothing does."""
     found: list[Leaves] = []
     provider = config.provider
-    content = "file names, metadata and text excerpts"
+    content = t("term.local.content")
     compat = provider.name in ("openai-compat", "ollama")
     if config.vision.enabled and provider.name == "anthropic":
-        content += ", and images and scanned pages"
+        content = t("term.local.content_pages")
     elif config.vision.enabled and compat and provider.vision:
-        content += ", and images"
+        content = t("term.local.content_images")
+    classify = t("term.local.to_classify", content=content)
     if provider.name in ("anthropic", "claude-code"):
-        via = "the Anthropic API" if provider.name == "anthropic" else "Anthropic (Claude Code)"
-        found.append(Leaves(f"{content} to classify", via))
+        via = t("term.local.api" if provider.name == "anthropic" else "term.local.claude_code")
+        found.append(Leaves(classify, via))
     elif compat:
         url = provider.base_url or ""
         if not is_loopback_url(url):
-            found.append(Leaves(f"{content} to classify", host(url)))
+            found.append(Leaves(classify, host(url)))
     semantic = config.search.semantic
     if semantic.enabled and not is_loopback_url(semantic.base_url):
-        index = "the index's names, tags and descriptions, and search queries"
-        found.append(Leaves(index, host(semantic.base_url)))
+        found.append(Leaves(t("term.local.index"), host(semantic.base_url)))
     return found
 
 
@@ -67,11 +68,11 @@ def summary_lines(config: Config, *, hosts: bool = True) -> list[str]:
     writes "a remote server" instead of a host name (for ``flib doctor``)."""
     leaving = what_leaves(config)
     if not leaving:
-        return ["fully local: yes (classification, text recognition and search run on this Mac)"]
-    lines = ["fully local: no"]
+        return [t("term.local.yes")]
+    lines: list[str] = [t("term.local.no")]
     for item in leaving:
         where = item.where
-        if not hosts and "Anthropic" not in where:
-            where = "a remote server"
-        lines.append(f"  leaves this Mac: {item.what}, to {where}")
+        if not hosts and "Anthropic" not in english(where):
+            where = t("term.local.remote")
+        lines.append(t("term.local.leaves", what=item.what, where=where))
     return lines

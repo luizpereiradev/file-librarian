@@ -180,6 +180,11 @@ ALLOWED = frozenset(
         # the command line (#141): a command's name before its link, a launchd key's value
         "flib ui: ",
         "Background",
+        "ollama pull ",  # a command to paste
+        # English on purpose: ``str(ConfigError)`` (the Settings page reads its lines), and
+        # a note recorded in English that ``i18n.core.detail`` shows in the user's words
+        "invalid configuration:\n",
+        "cannot plan: ",
     }
 )
 """Literals that look like words but are not the interface's text."""
@@ -262,6 +267,17 @@ CLI_FUNCTIONS = {
     # flib ui, flib menu
     "ui", "menu", "_menu_config", "_install_menu", "_refresh_menu", "_print_menu_status",
     "_organize_from_menu",
+    # flib check-config, flib reconcile
+    "check_config", "_report_watch", "_warn_compat_only_options", "_report_compat",
+    "_report_ocr", "_report_semantic", "_report_claude", "reconcile",
+    # flib init
+    "text", "choice", "confirm", "_init_language", "init", "_ask_answers", "_local_setup",
+    "_with_inbox", "_ask_more_inboxes", "_ask_folders", "_ask_provider", "_provider_ready",
+    "_trial", "_print_trial", "_offer_schedule", "_offer_menu",
+    # flib reprocess
+    "reprocess", "_scrub_descriptions", "_fill_fields", "_apply_layout", "_layout_run",
+    "_reprocess", "_reprocess_plan", "_column", "_leave_row", "_estimate_parts",
+    "_send_question", "_print_reprocess_plan", "_print_reprocess_report",
 }  # fmt: skip
 """The command line's functions in the configuration's language (#141). ``init``,
 ``reprocess``, ``reconcile`` and ``check-config`` follow; ``inspect``, ``doctor``,
@@ -281,6 +297,9 @@ SCANNED = (
     SRC / "menubar.py",
     SRC / "scheduler" / "__init__.py",
     SRC / "reprocess.py",
+    SRC / "config.py",
+    SRC / "locality.py",
+    SRC / "providers" / "ollama.py",
 )
 SCANNED_FUNCTIONS = {
     SRC / "menubar_state.py": {"describe", "next_line"},
@@ -344,7 +363,45 @@ SCANNED_FUNCTIONS = {
         "stale_watch_message",
         "check_access",
     },
-    SRC / "reprocess.py": {"orphan_message"},
+    SRC / "reprocess.py": {
+        "orphan_message",
+        "_orphan",
+        "select",
+        "_check",
+        "plan_reprocess",
+        "_reason",
+        "plan_rename",
+        "plan_to_review",
+        "select_layout",
+        "plan_layout",
+        "_place_in_layout",
+        "select_fields",
+        "plan_fields",
+    },
+    SRC / "config.py": {
+        "text",
+        "_safe_folder_name",
+        "_normalize_path",
+        "_check_url",
+        "_openai_compat_needs_a_url",
+        "_env_name",
+        "_known_provider",
+        "_pattern_is_a_file_name",
+        "_layout",
+        "_glob",
+        "_needs_a_category",
+        "_ocr_language",
+        "_hh_mm",
+        "_tag_name",
+        "_check_folder_names",
+        "_check_input_categories",
+        "_check_paths",
+        "input_summary",
+        "parse_config",
+        "load_config",
+    },
+    SRC / "locality.py": {"what_leaves", "summary_lines"},
+    SRC / "providers" / "ollama.py": {"check"},
 }
 """In these files only these functions say things to people in the configuration's
 language; the rest is the other commands', a log's, the JSON's or English by design."""

@@ -508,6 +508,21 @@ run's summary from the same ids (`js.last_run`, `js.trigger.*`, `activity.*`).
 The rows of a run's table pad their first word to one width per language, and
 `formats.width` and `ljust` measure terminal columns, not code points.
 
+`flib init` speaks before any configuration exists: `_init_language` uses the
+language of the configuration it would replace, else `onboarding.detect_language()`
+(the shell's locale, the same signal that picks the Portuguese folders), and then
+the language the user answers.
+
+`ConfigError` keeps `str(exc)` English, the format the Settings page reads, and
+holds `problems`: each refused field with its reason. `ConfigError.text()` says
+them in the language in use. `i18n.core.refusal` keeps pydantic's English
+exactly and gives the catalogue's words for flib's own validators (they raise a
+`Msg`) and for the common pydantic error types; any other type stays English.
+The Settings page shows the same reasons in its own language.
+
+`check-config`'s input rules reuse the Settings page's messages
+(`settings.rules.*`).
+
 Tests (`tests/unit/test_i18n.py`) scan the command line's functions for words
 outside the catalogue. `tests/unit/test_i18n_terminal.py` and
 `tests/integration/test_cli_language.py` check each command in pt-BR.
