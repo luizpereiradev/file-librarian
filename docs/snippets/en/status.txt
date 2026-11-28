@@ -1,0 +1,12 @@
+Review: 5 files in _Review, the oldest for 2 days
+    4  the AI was not sure enough; it suggested Work
+    1  the AI chose a category that is not configured: Recipes
+Failed: 1 file
+    1  classification failed (1 of 3 attempts; the next run tries again; for 1 day)
+Due: 2 documents within 7 days, 1 overdue (`flib due`).
+Left in place as sensitive: 1 file
+Note: files with the same content as one already filed were moved to _Duplicates in the organized folder; nothing was deleted. `flib undo` puts them back, and `duplicates: leave` in the configuration leaves copies where they are.
+Duplicates set aside in _Duplicates: 1 file (nothing is deleted; review them when you like)
+Last run: 2026-11-27 12:30, scheduled: 3 organized, 0 to review, 1 failed; US$ 0.0067
+Next run: none scheduled (`flib schedule` sets up a daily run).
+This month: US$ 0.0591
