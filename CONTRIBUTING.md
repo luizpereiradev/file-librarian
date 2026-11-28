@@ -17,16 +17,17 @@ uv run pytest        # all tests, offline, in temporary folders, on every core
 
 The tests run in parallel, one worker per core
 ([pytest-xdist](https://pytest-xdist.readthedocs.io/), `-n auto` in
-`pyproject.toml`): about a minute on a 12-core Mac, against six in one
+`pyproject.toml`): under a minute on a 12-core Mac, against five in one
 process. Each worker has its own temporary folders and its own copy of every
-safety guard, so a test that passes alone passes there too. To run in one
-process, for a debugger, `print` output in order or a test that only fails
-next to others, add `-n 0`:
+safety guard. To run in one process (a debugger, `print` output in order, a
+single test without starting a worker per core), add `-n 0`:
 
 ```sh
 uv run pytest -n 0 tests/unit/test_init.py -k trial   # one process
 uv run pytest -n 4                                     # four workers
 ```
+
+`PYTEST_XDIST_AUTO_NUM_WORKERS=6` changes what `-n auto` means on your Mac.
 
 Before opening a pull request, run the same checks as CI:
 
@@ -55,7 +56,7 @@ and newest supported Python, 3.11 and 3.15; every push to `main` is tested on
 images (APFS, HFS+, exFAT); run them locally with
 `FLIB_TEST_VOLUMES=1 uv run pytest -m volumes -n 0`. These opt-in tests of real
 macOS tools and resources (`volumes`, `ocr`, `notifier`, `menu`, `browser`)
-always run one at a time: under workers they share one. The one required check is
+never run at the same time, with workers or without. The one required check is
 `CI passed`, which passes only when every Python version passed. A separate
 Security workflow reviews new dependencies, audits `uv.lock` and lints the
 workflows (see [SECURITY.md](SECURITY.md#supply-chain)).

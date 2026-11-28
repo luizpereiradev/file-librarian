@@ -116,8 +116,8 @@ skip_covered = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # In parallel, one worker per core (pytest-xdist); `-n 0` runs everything in one
-# process. `loadgroup`: the tests of real system tools share one worker (conftest.py).
-addopts = "-ra --strict-markers -n auto --dist loadgroup"
+# process. The tests of real system tools still run one at a time (conftest.py).
+addopts = "-ra --strict-markers -n auto"
 markers = [
     "integration: exercises several pipeline stages together (still offline, still in temp dirs)",
     "volumes: creates and attaches disk images with hdiutil; opt-in with FLIB_TEST_VOLUMES=1",

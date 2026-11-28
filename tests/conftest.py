@@ -16,6 +16,7 @@ helper functions live in ``tests/_helpers.py``.
 from __future__ import annotations
 
 import errno
+import fcntl
 import os
 import socket
 import sys
@@ -35,7 +36,7 @@ from tests.fake_openai import FakeOpenAI
 #
 # ``-n auto`` (the default, see pyproject.toml) runs the tests in worker processes, each
 # with its own temporary folders (tmp_path_factory is per worker) and its own copy of
-# every guard below. The tests that use real macOS tools run one at a time, on one worker.
+# every guard below. The tests that use real macOS tools run one at a time.
 
 COVERAGE_CONFIG = "COVERAGE_PROCESS_CONFIG"
 """Set for the workers when ``coverage run`` runs pytest with workers: coverage's own
@@ -63,14 +64,25 @@ def pytest_configure(config: pytest.Config) -> None:
         os.environ[COVERAGE_CONFIG] = cov.config.serialize()
 
 
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """The tests that use real system tools (opt-in) run in one group, one at a time
-    (``--dist loadgroup``)."""
-    if not config.pluginmanager.hasplugin("xdist"):
+@pytest.fixture(autouse=True)
+def _real_tools_one_at_a_time(
+    request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[None]:
+    """The opt-in tests of real system tools (disk images, Vision, Chrome...) never run
+    at the same time: under xdist, each holds a lock file in the run's temporary folder,
+    which every worker shares. (Not ``--dist loadgroup``: with it, a worker that dies
+    leaves the whole run waiting forever, pytest-xdist 3.8.)"""
+    worker = os.environ.get("PYTEST_XDIST_WORKER")
+    if worker is None or not any(request.node.get_closest_marker(n) for n in REAL_TOOLS):
+        yield
         return
-    for item in items:
-        if any(item.get_closest_marker(name) for name in REAL_TOOLS):
-            item.add_marker(pytest.mark.xdist_group("real-tools"))
+    lock = tmp_path_factory.getbasetemp().parent / "real-tools.lock"
+    with lock.open("a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(held, fcntl.LOCK_UN)
 
 
 class NetworkBlockedError(RuntimeError):
