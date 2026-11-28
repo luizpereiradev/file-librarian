@@ -1645,7 +1645,7 @@ def test_end_session_asks_to_stop_before_it_replies(
 ) -> None:
     """The cause of #134, checked by order, not by timing: the stop is queued before a
     byte of the reply goes, so nothing the browser does after it can come first."""
-    c = start(serve, cfg)
+    c = start(serve, cfg, end_linger=0.0)  # ends at once; the linger: the tests above
     ui = serve[0]
     seen: list[str] = []
     stop, reply = ui.stop, ui_server._Handler._reply

@@ -148,7 +148,7 @@ def test_access_check_that_never_reports_times_out(
 ) -> None:
     monkeypatch.setattr("file_librarian.scheduler.program", lambda: ["/usr/bin/true"])
     with pytest.raises(scheduler.ScheduleError, match="did not report back"):
-        scheduler.check_access(config_file, timeout=0.3)
+        scheduler.check_access(config_file, timeout=0.0)  # no result now: never one
     assert not scheduler.plist_path(scheduler.CHECK_LABEL).exists()  # cleaned up anyway
 
 

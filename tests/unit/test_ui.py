@@ -801,6 +801,7 @@ def test_an_upgrade_request_is_refused(client: UiClient, ui: Ui) -> None:
 
 
 def test_a_post_with_only_fetch_metadata_is_accepted(client: UiClient, ui: Ui) -> None:
+    ui.end_linger = 0.0  # ends at once; the linger itself: test_ui_pages.py
     token = client.csrf()
     sent = {"Sec-Fetch-Site": "same-origin", "Content-Type": "application/x-www-form-urlencoded"}
     reply = client.request("POST", "/session/end", body=f"csrf={token}".encode(), headers=sent)
@@ -841,6 +842,7 @@ def test_the_csrf_token_of_the_page_is_not_enough_without_the_session(
 
 
 def test_the_csrf_token_is_in_a_form_field_or_a_header(client: UiClient, ui: Ui) -> None:
+    ui.end_linger = 0.0  # ends at once; the linger itself: test_ui_pages.py
     token = client.csrf()
     page = client.get("/status").text
     assert f'<meta name="flib-csrf" content="{token}">' in page
@@ -917,6 +919,7 @@ def test_a_post_to_an_unknown_path_is_not_found(client: UiClient, ui: Ui) -> Non
 
 
 def test_end_session_shows_the_ended_page_and_stops_the_server(client: UiClient, ui: Ui) -> None:
+    ui.end_linger = 0.0  # ends at once; the linger itself: test_ui_pages.py
     session_id = client.cookies[ui.cookie_name]
     reply = client.post_form("/session/end", {"csrf": client.csrf()})
     assert reply.status == 200
@@ -1682,8 +1685,13 @@ def interrupt_when_listening(signum: int) -> Background:
 
 
 def test_flib_ui_opens_a_handoff_file_and_ends_with_the_session(
-    loopback_network: None, tmp_path: Path, downloads: Path, fake_browser: Path
+    loopback_network: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    downloads: Path,
+    fake_browser: Path,
 ) -> None:
+    monkeypatch.setattr(ui_server, "END_LINGER", 0.0)  # the linger itself: test_ui_pages.py
     path = write_config(tmp_path, downloads)
     browser = end_from_the_browser(fake_browser)
     result = runner.invoke(app, ["ui", "-c", str(path)])
@@ -1723,6 +1731,7 @@ def test_flib_ui_says_when_the_browser_cannot_open(
     fake_browser: Path,
 ) -> None:
     monkeypatch.setenv("FAKE_OPEN_FAIL", "1")
+    monkeypatch.setattr(ui_server, "END_LINGER", 0.0)  # the linger itself: test_ui_pages.py
     path = write_config(tmp_path, downloads)
     browser = end_from_the_browser(fake_browser)
     result = runner.invoke(app, ["ui", "-c", str(path)])
@@ -1842,12 +1851,14 @@ def test_a_flib_ui_removes_only_its_own_records(cfg: Config) -> None:
 
 
 def test_the_theft_linger_outlasts_end_sessions(ui: Ui, events: list[str]) -> None:
-    """After a theft the stolen page is served past End session's 1.5 s (a mutant set
+    """After a theft the stolen page is served past End session's linger (a mutant set
     both lingers alike), until a signal ends it."""
+    assert ui_server.STOLEN_LINGER > 10 * ui_server.END_LINGER  # the values, alike or not
+    ui.end_linger = 0.1  # the server's own, shortened: a theft must not use it
     UiClient(ui.port, ui.host_name).launch(ui.launch_url)
     thief = UiClient(ui.port, ui.host_name)
     assert thief.launch(ui.launch_url).status == 403
-    assert ui.wait(ui_server.END_LINGER + 0.5) is None  # past End session's linger
+    assert ui.wait(ui.end_linger + 0.4) is None  # past End session's linger
     late = thief.get("/status", headers={"Accept": "text/html"})
     assert late.status == 403 and STOLEN in late.text
     ui.stop("signal")
