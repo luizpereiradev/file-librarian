@@ -1069,4 +1069,4 @@ Everything is in `src/file_librarian/`:
 
 ## Decisions
 
-Architecture decisions are recorded as ADRs in [decisions/](decisions/).
+Architecture decisions are recorded as ADRs in [decisions/](https://github.com/luizpereiradev/file-librarian/tree/main/docs/decisions).

@@ -73,5 +73,5 @@ before 1.0, a minor bump may break things and must say so).
 - **Do not bump dependencies in the release pull request.** It changes the
   CHANGELOG, the version and the lock's own entry, nothing else.
 - **Do not release with the quarantine bypassed.** An `exclude-newer-package`
-  exception from [Urgent security fixes](../SECURITY.md#urgent-security-fixes)
+  exception from [Urgent security fixes](https://github.com/luizpereiradev/file-librarian/blob/main/SECURITY.md#urgent-security-fixes)
   may ship if the advisory needs it, but say so in the release notes.

@@ -1,0 +1,7 @@
+  move    events-export.csv  ->  Outros/2026-11-27_events-export.csv  (category Outros, original name kept)
+  move    scan_0007.pdf  ->  Financeiro/2026/2026-11-28_recibo-farmacia.pdf  (category Financeiro)
+  move    container-networking-notes.pdf  ->  Estudos/2026-11-28_container-networking-notes.pdf  (category Estudos, original name kept)
+  move    untitled.docx  ->  Contratos/2026-11-28_escopo-de-trabalho-northbeam.docx  (category Contratos)
+  (2 item(s) already processed earlier were left alone)
+Simulation: 4 would move, 0 would stay. Nothing changed.
+3 classification(s) reused from the cache at no cost.

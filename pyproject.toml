@@ -43,7 +43,7 @@ mcp = ["mcp>=2.3"]
 [project.urls]
 Homepage = "https://github.com/luizpereiradev/file-librarian"
 Source = "https://github.com/luizpereiradev/file-librarian"
-Documentation = "https://github.com/luizpereiradev/file-librarian/tree/main/docs"
+Documentation = "https://luizpereiradev.github.io/file-librarian/"
 Issues = "https://github.com/luizpereiradev/file-librarian/issues"
 Changelog = "https://github.com/luizpereiradev/file-librarian/blob/main/CHANGELOG.md"
 
@@ -59,6 +59,11 @@ dev = [
     "pytest-xdist>=3.8",  # parallel test runs (CONTRIBUTING.md); brings only execnet
     "ruff>=0.6",
     "types-PyYAML>=6.0",
+]
+# The documentation site (docs/decisions/0005-documentation-site.md): MkDocs and
+# the Material theme, never installed with flib. `uv sync --group docs`.
+docs = [
+    "mkdocs-material>=9.8.2",
 ]
 
 [build-system]
@@ -98,7 +103,9 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PTH", "S"]
 python_version = "3.11"
 strict = true
 mypy_path = "src"
-files = ["src", "tests"]
+files = ["src", "tests", "scripts"]
+# Runs inside MkDocs only, which the test environment does not install.
+exclude = ["^scripts/mkdocs_hooks\\.py$"]
 plugins = ["pydantic.mypy"]
 
 [tool.coverage.run]

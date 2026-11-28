@@ -1,0 +1,126 @@
+# The documentation site, English at the root. The Brazilian Portuguese site is
+# a second build of docs/pt-BR/ (mkdocs.pt-BR.yml, which inherits this file)
+# into site/pt-BR/. Build and preview both:
+#   uv run --group docs python -m scripts.docs serve
+site_name: flib
+site_description: >-
+  Keeps your Mac's Downloads folder organized: an AI decides each file's
+  category and name, deterministic code moves it, a local index finds it again.
+site_url: https://luizpereiradev.github.io/file-librarian/
+repo_url: https://github.com/luizpereiradev/file-librarian
+repo_name: luizpereiradev/file-librarian
+edit_uri: edit/main/docs/
+copyright: MIT licence. Every file, name and amount in the screenshots is invented.
+
+docs_dir: docs
+site_dir: site
+# The Portuguese pages build separately; the terminal samples are included into
+# pages, not published on their own.
+exclude_docs: |
+  pt-BR/
+  snippets/
+  decisions/template.md
+
+strict: true
+validation:
+  nav:
+    omitted_files: warn
+    not_found: warn
+    absolute_links: warn
+  links:
+    not_found: warn
+    anchors: warn
+    absolute_links: warn
+    unrecognized_links: warn
+
+# Pages built but deliberately left out of the navigation.
+not_in_nav: |
+  PRD.md
+  acceptance.md
+
+theme:
+  name: material
+  language: en
+  logo: assets/icon.png
+  favicon: assets/icon.png
+  # No web fonts: the site loads nothing from Google (or anyone else).
+  font: false
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep orange
+      accent: deep orange
+      toggle:
+        icon: material/weather-night
+        name: Dark
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep orange
+      accent: deep orange
+      toggle:
+        icon: material/weather-sunny
+        name: Light
+  features:
+    - content.code.copy
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+    - toc.follow
+
+extra:
+  alternate:
+    - name: English
+      link: ./
+      lang: en
+    - name: Português (Brasil)
+      link: pt-BR/
+      lang: pt-BR
+  generator: false
+
+extra_css:
+  - assets/extra.css
+
+hooks:
+  - scripts/mkdocs_hooks.py
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.snippets:
+      base_path: [docs/snippets, .]
+      check_paths: true
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Daily use: daily-use.md
+  - Privacy and safety: privacy.md
+  - Providers: providers.md
+  - Use it from Claude: mcp.md
+  - Reference:
+      - Configuration: configuration.md
+      - CLI: cli.md
+      - In depth: guide.md
+  - Troubleshooting: troubleshooting.md
+  - Project: project.md
+  - For contributors:
+      - Architecture: architecture.md
+      - Measuring quality: quality.md
+      - Adding a file format: adding-an-extractor.md
+      - Adding a provider: adding-a-provider.md
+      - Requirements: requirements.md
+      - Decisions:
+          - decisions/0001-record-architecture-decisions.md
+          - decisions/0002-current-macos-and-user-language.md
+          - decisions/0003-supply-chain.md
+          - decisions/0004-menu-bar-item.md
+          - decisions/0005-documentation-site.md
+  - For maintainers:
+      - Releasing: releasing.md
+      - Demo walkthrough: demo-walkthrough.md

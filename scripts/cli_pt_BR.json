@@ -1,0 +1,442 @@
+{
+  "init": {
+    "en": "Set flib up step by step, then try it on copies of your recent files.\n\nNothing in your folders moves: the trial runs on copies in a temporary\nfolder, with a throwaway index. With --local, nothing leaves this Mac:\nit checks that Ollama is installed and running (it never installs it),\noffers to download the recommended models, and says what quality to expect.",
+    "pt": "Configura o flib passo a passo e depois o testa em cópias dos seus arquivos recentes.\n\nNada nas suas pastas sai do lugar: o teste roda em cópias numa pasta temporária, com um índice descartável. Com --local, nada sai deste Mac: ele verifica se o Ollama está instalado e rodando (nunca o instala), oferece baixar os modelos recomendados e diz que qualidade esperar."
+  },
+  "init --yes": {
+    "en": "Accept every default without asking.",
+    "pt": "Aceita todos os padrões sem perguntar."
+  },
+  "init --force": {
+    "en": "Replace an existing configuration without asking.",
+    "pt": "Substitui uma configuração existente sem perguntar."
+  },
+  "init --sample": {
+    "en": "Recent items to try it on; 0 skips the trial.",
+    "pt": "Quantos itens recentes usar no teste; 0 pula o teste."
+  },
+  "init --local": {
+    "en": "Keep everything on this Mac: a local model through Ollama, local text recognition and local semantic search.",
+    "pt": "Mantém tudo neste Mac: um modelo local pelo Ollama, reconhecimento de texto local e busca por significado local."
+  },
+  "check-config": {
+    "en": "Validate the configuration file without touching any file.",
+    "pt": "Valida o arquivo de configuração sem mexer em nenhum arquivo."
+  },
+  "key": {
+    "en": "Store an API key in the macOS Keychain (anthropic, openai-compat, embeddings).",
+    "pt": "Guarda uma chave de API no Keychain do macOS (anthropic, openai-compat, embeddings)."
+  },
+  "key set": {
+    "en": "Save the API key in the Keychain (asked for, never shown).",
+    "pt": "Salva a chave de API no Keychain (ela é pedida e nunca exibida)."
+  },
+  "key set --provider": {
+    "en": "anthropic, openai-compat, or embeddings (semantic search's server) (default: the configured provider, else anthropic).",
+    "pt": "anthropic, openai-compat ou embeddings (o servidor da busca por significado) (padrão: o provedor configurado; se não houver, anthropic)."
+  },
+  "key status": {
+    "en": "Show where the configured provider's key would come from, without showing the key.",
+    "pt": "Mostra de onde viria a chave do provedor configurado, sem mostrar a chave."
+  },
+  "key delete": {
+    "en": "Remove the API key from the Keychain.",
+    "pt": "Remove a chave de API do Keychain."
+  },
+  "key delete --provider": {
+    "en": "anthropic, openai-compat, or embeddings (semantic search's server) (default: the configured provider, else anthropic).",
+    "pt": "anthropic, openai-compat ou embeddings (o servidor da busca por significado) (padrão: o provedor configurado; se não houver, anthropic)."
+  },
+  "simulate": {
+    "en": "Print the full plan without changing anything.",
+    "pt": "Mostra o plano completo sem alterar nada."
+  },
+  "run": {
+    "en": "Organize the input folders now: classify, rename, move and index new files.",
+    "pt": "Organiza as pastas de entrada agora: classifica, renomeia, move e indexa os arquivos novos."
+  },
+  "undo": {
+    "en": "Revert the last run, a given run, or a single file.",
+    "pt": "Desfaz a última execução, uma execução específica ou um único arquivo."
+  },
+  "undo --file": {
+    "en": "Undo the last operation on this file.",
+    "pt": "Desfaz a última operação neste arquivo."
+  },
+  "undo --run": {
+    "en": "Undo this run.",
+    "pt": "Desfaz esta execução."
+  },
+  "status": {
+    "en": "Show what waits for you: files in review and why, failures, the last and next run.\n\nAlso files left in place as sensitive and this month's provider cost. It\nonly reads: no lock, nothing created, and it works before the first run.\n``--sensitive`` lists those files by path, here only: never in `flib doctor`,\na notification or the MCP server.",
+    "pt": "Mostra o que espera por você: arquivos em revisão e o motivo, falhas, a última e a próxima execução.\n\nMostra também os arquivos deixados no lugar por serem sensíveis e o custo do provedor neste mês. Só lê: não trava nada, não cria nada e funciona antes da primeira execução. ``--sensitive`` lista esses arquivos pelo caminho, só aqui: nunca no `flib doctor`, numa notificação ou no servidor MCP."
+  },
+  "status --json": {
+    "en": "Print JSON.",
+    "pt": "Imprime JSON."
+  },
+  "status --sensitive": {
+    "en": "List each file left in place as sensitive, and why (names!).",
+    "pt": "Lista cada arquivo deixado no lugar por ser sensível, e o motivo (mostra nomes!)."
+  },
+  "search": {
+    "en": "Find organized files by name, description or tags, and by category, period or type.\n\nWithout a query, the files matching the filters are listed newest first.\nWith --semantic, files are also found by meaning (\"invoice\" finds a \"bill\"),\nif close enough (search.semantic.min_similarity); --no-semantic turns it off\nfor one search when search.semantic.default is true.\nDuplicates are left out unless --duplicates is given.\n--issuer, --kind, --min-amount/--max-amount, --currency, --due-before/--due-after\nand --period filter by what the AI read in the document. --sum adds up the\namounts of every match instead (never mixing currencies), --by groups them;\n--sum with no words or filter adds up every filed document.",
+    "pt": "Encontra arquivos organizados por nome, descrição ou tags, e por categoria, período ou tipo.\n\nSem consulta, lista os arquivos que atendem aos filtros, do mais novo para o mais antigo. Com --semantic, os arquivos também são encontrados pelo significado (\"invoice\" encontra uma \"bill\"), se forem parecidos o bastante (search.semantic.min_similarity); --no-semantic desliga isso numa busca quando search.semantic.default é true. Duplicados ficam de fora, a não ser com --duplicates. --issuer, --kind, --min-amount/--max-amount, --currency, --due-before/--due-after e --period filtram pelo que a IA leu no documento. --sum, em vez de listar, soma os valores de todos os resultados (sem nunca misturar moedas), e --by os agrupa; --sum sem palavras nem filtros soma todos os documentos arquivados."
+  },
+  "search QUERY": {
+    "en": "What you remember about the file (optional with filters).",
+    "pt": "O que você lembra do arquivo (opcional se houver filtros)."
+  },
+  "search --category": {
+    "en": "Only this category, any case. Repeat it or use commas for any of several.",
+    "pt": "Só esta categoria, sem diferenciar maiúsculas. Repita a opção ou use vírgulas para aceitar qualquer uma de várias."
+  },
+  "search --since": {
+    "en": "Processed on or after this day (YYYY-MM-DD, local time).",
+    "pt": "Processados neste dia ou depois (YYYY-MM-DD, horário local)."
+  },
+  "search --until": {
+    "en": "Processed on or before this day (YYYY-MM-DD, local time).",
+    "pt": "Processados neste dia ou antes (YYYY-MM-DD, horário local)."
+  },
+  "search --ext": {
+    "en": "Only this extension (pdf or .pdf). Repeat it or use commas for several.",
+    "pt": "Só esta extensão (pdf ou .pdf). Repita a opção ou use vírgulas para várias."
+  },
+  "search --json": {
+    "en": "Print JSON for other programs.",
+    "pt": "Imprime JSON para outros programas."
+  },
+  "search --limit": {
+    "en": "Most results.",
+    "pt": "Número máximo de resultados."
+  },
+  "search --semantic": {
+    "en": "Also find files by meaning, with embeddings (needs search.semantic.enabled); --no-semantic searches by words only. [default: search.semantic.default]",
+    "pt": "Também encontra arquivos pelo significado, com embeddings (requer search.semantic.enabled); --no-semantic busca só por palavras. [padrão: search.semantic.default]"
+  },
+  "search --reindex": {
+    "en": "First embed every file whose vector is missing or stale (semantic search).",
+    "pt": "Antes, gera o embedding de todo arquivo cujo vetor esteja faltando ou desatualizado (busca por significado)."
+  },
+  "search --duplicates": {
+    "en": "Also list duplicates set aside in the duplicates folder.",
+    "pt": "Lista também os duplicados separados na pasta de duplicados."
+  },
+  "search --issuer": {
+    "en": "Only documents from this organisation (case, accents, Inc/Ltd... ignored).",
+    "pt": "Só documentos desta organização (ignora maiúsculas, acentos, Inc/Ltd...)."
+  },
+  "search --kind": {
+    "en": "Only this kind of document: bill, receipt, invoice, statement, contract, payslip, tax, ticket, policy, report, form, letter, manual, other. Repeat it or use commas.",
+    "pt": "Só este tipo de documento: bill, receipt, invoice, statement, contract, payslip, tax, ticket, policy, report, form, letter, manual, other. Repita a opção ou use vírgulas."
+  },
+  "search --min-amount": {
+    "en": "Only amounts of at least this much.",
+    "pt": "Só valores maiores ou iguais a este."
+  },
+  "search --max-amount": {
+    "en": "Only amounts of at most this much.",
+    "pt": "Só valores menores ou iguais a este."
+  },
+  "search --currency": {
+    "en": "Only amounts in this currency (USD, BRL...).",
+    "pt": "Só valores nesta moeda (USD, BRL...)."
+  },
+  "search --due-before": {
+    "en": "Only due before this day (YYYY-MM-DD).",
+    "pt": "Só com vencimento antes deste dia (YYYY-MM-DD)."
+  },
+  "search --due-after": {
+    "en": "Only due after this day (YYYY-MM-DD).",
+    "pt": "Só com vencimento depois deste dia (YYYY-MM-DD)."
+  },
+  "search --period": {
+    "en": "Only documents about this year or month (2026, 2026-09): the period they refer to, else their date.",
+    "pt": "Só documentos sobre este ano ou mês (2026, 2026-09): o período a que se referem ou, se não houver, a data deles."
+  },
+  "search --sum": {
+    "en": "Add up the amounts of every match, per currency, instead of listing.",
+    "pt": "Soma os valores de todos os resultados, por moeda, em vez de listá-los."
+  },
+  "search --by": {
+    "en": "With --sum: totals per issuer, per month, per year, per kind, per category.",
+    "pt": "Com --sum: totais por emissor, por mês, por ano, por tipo, por categoria."
+  },
+  "due": {
+    "en": "List bills and other documents with a due date: overdue first, then the next 7 days.\n\nOnly due dates the AI read in a document count; nothing is guessed. By\ndefault the bills, invoices, statements and taxes (due.kinds) from 30 days ago to 7 days\nahead that are not marked done (`flib fix PATH --done`), soonest first, with\ntotals per currency. It only reads: no lock, and it works before the first run.",
+    "pt": "Lista contas e outros documentos com vencimento: primeiro os atrasados, depois os dos próximos 7 dias.\n\nSó contam vencimentos que a IA leu num documento; nada é adivinhado. Por padrão, as contas, faturas, extratos e impostos (due.kinds) de 30 dias atrás até 7 dias à frente que não foram marcados como concluídos (`flib fix PATH --done`), do mais próximo ao mais distante, com totais por moeda. Só lê: não trava nada e funciona antes da primeira execução."
+  },
+  "due --within": {
+    "en": "How far ahead: 7d, 2w, 1m (days, weeks, calendar months). [default: 7d]",
+    "pt": "Até quando olhar à frente: 7d, 2w, 1m (dias, semanas, meses do calendário). [padrão: 7d]"
+  },
+  "due --overdue": {
+    "en": "Only what is past due, however long ago.",
+    "pt": "Só o que está atrasado, não importa há quanto tempo."
+  },
+  "due --all": {
+    "en": "Also documents marked done, and due dates on kinds outside due.kinds.",
+    "pt": "Inclui também documentos marcados como concluídos e vencimentos de tipos fora de due.kinds."
+  },
+  "due --issuer": {
+    "en": "Only documents from this organisation (case, accents, Inc/Ltd... ignored).",
+    "pt": "Só documentos desta organização (ignora maiúsculas, acentos, Inc/Ltd...)."
+  },
+  "due --kind": {
+    "en": "Only this kind of document: bill, receipt, invoice, statement, contract, payslip, tax, ticket, policy, report, form, letter, manual, other. Repeat it or use commas.",
+    "pt": "Só este tipo de documento: bill, receipt, invoice, statement, contract, payslip, tax, ticket, policy, report, form, letter, manual, other. Repita a opção ou use vírgulas."
+  },
+  "due --json": {
+    "en": "Print JSON for other programs.",
+    "pt": "Imprime JSON para outros programas."
+  },
+  "fix": {
+    "en": "Correct a file's category or name; flib learns from it. `flib undo` reverts it.\n\n--done marks a bill or other document with a due date as paid or done, so\n`flib due` leaves it out; --not-done opens it again. Both are journaled\ntoo: `flib undo` reverts them.",
+    "pt": "Corrige a categoria ou o nome de um arquivo; o flib aprende com isso. `flib undo` desfaz a correção.\n\n--done marca uma conta ou outro documento com vencimento como pago ou concluído, e assim o `flib due` deixa de mostrá-lo; --not-done o reabre. As duas ações também ficam registradas no histórico: `flib undo` as desfaz."
+  },
+  "fix FILE": {
+    "en": "An organized file, by its current path.",
+    "pt": "Um arquivo organizado, pelo caminho atual."
+  },
+  "fix --category": {
+    "en": "The category it belongs to.",
+    "pt": "A categoria a que ele pertence."
+  },
+  "fix --name": {
+    "en": "Its new file name; the extension is kept if left out.",
+    "pt": "O novo nome do arquivo; se você omitir a extensão, a atual é mantida."
+  },
+  "fix --done": {
+    "en": "Mark a document with a due date paid or done (it leaves `flib due`), or open again.",
+    "pt": "Marca um documento com vencimento como pago ou concluído (ele sai do `flib due`), ou o reabre."
+  },
+  "reconcile": {
+    "en": "Update the index for files moved, renamed or deleted by hand. Moves nothing.",
+    "pt": "Atualiza o índice com arquivos movidos, renomeados ou apagados à mão. Não move nada."
+  },
+  "reprocess": {
+    "en": "Reclassify organized files after the rules change (categories, hints, names, model).\n\nShows the estimated cost and asks before sending anything, then shows the\nplan and asks before moving. File names are kept unless --rename. Files\nyou corrected keep your choice. It is one run: `flib undo` reverts all of\nit. A category renamed or removed in the configuration needs\n--rename-category or --remove-category first. --scrub-descriptions only\ncleans what the index already stores, without asking the AI.\n--apply-layout only moves files into their category's sub-folders.\n--fill-fields only records the structured fields of files filed before them.",
+    "pt": "Reclassifica arquivos organizados depois que as regras mudam (categorias, dicas, nomes, modelo).\n\nMostra o custo estimado e pergunta antes de enviar qualquer coisa; depois mostra o plano e pergunta antes de mover. Os nomes dos arquivos são mantidos, a não ser com --rename. Arquivos que você corrigiu mantêm a sua escolha. É uma única execução: `flib undo` desfaz tudo. Uma categoria renomeada ou removida na configuração exige antes --rename-category ou --remove-category. --scrub-descriptions só limpa o que o índice já guarda, sem consultar a IA. --apply-layout só move os arquivos para as subpastas da sua categoria. --fill-fields só registra os campos estruturados dos arquivos guardados antes de esses campos existirem."
+  },
+  "reprocess --category": {
+    "en": "Only files of this category. Repeat it or use commas for several.",
+    "pt": "Só arquivos desta categoria. Repita a opção ou use vírgulas para várias."
+  },
+  "reprocess --since": {
+    "en": "Only files processed on or after this day (YYYY-MM-DD).",
+    "pt": "Só arquivos processados neste dia ou depois (YYYY-MM-DD)."
+  },
+  "reprocess --until": {
+    "en": "Only files processed on or before this day (YYYY-MM-DD).",
+    "pt": "Só arquivos processados neste dia ou antes (YYYY-MM-DD)."
+  },
+  "reprocess --ext": {
+    "en": "Only this extension (pdf or .pdf). Repeat it or use commas.",
+    "pt": "Só esta extensão (pdf ou .pdf). Repita a opção ou use vírgulas."
+  },
+  "reprocess --rename": {
+    "en": "Also rename files under the current naming rules (default: names are kept).",
+    "pt": "Também renomeia os arquivos segundo as regras de nomes atuais (padrão: os nomes são mantidos)."
+  },
+  "reprocess --override-corrections": {
+    "en": "Reclassify files you corrected (flib fix) too; by default your choice stays.",
+    "pt": "Reclassifica também os arquivos que você corrigiu (flib fix); por padrão, a sua escolha fica."
+  },
+  "reprocess --rename-category": {
+    "en": "You renamed category OLD to NEW in the config: move its files over.",
+    "pt": "Você renomeou a categoria OLD para NEW na configuração: move os arquivos dela para a nova."
+  },
+  "reprocess --remove-category": {
+    "en": "You removed category OLD from the config: reclassify its files.",
+    "pt": "Você removeu a categoria OLD da configuração: reclassifica os arquivos dela."
+  },
+  "reprocess --to-review": {
+    "en": "With --remove-category: send its files to review, no AI.",
+    "pt": "Com --remove-category: manda os arquivos dela para revisão, sem IA."
+  },
+  "reprocess --scrub-descriptions": {
+    "en": "Replace phone numbers, e-mails and document numbers in the descriptions and tags already stored. Local only: no AI, no cost, nothing moves.",
+    "pt": "Substitui números de telefone, e-mails e números de documentos nas descrições e tags já guardadas. Tudo local: sem IA, sem custo, nada é movido."
+  },
+  "reprocess --apply-layout": {
+    "en": "Move organized files into their category's layout (sub-folders by year, month or issuer) from what the index stores. No AI unless --ask-issuer.",
+    "pt": "Move os arquivos organizados para o layout da categoria deles (subpastas por ano, mês ou emissor) a partir do que o índice guarda. Sem IA, a não ser com --ask-issuer."
+  },
+  "reprocess --ask-issuer": {
+    "en": "With --apply-layout: ask the AI for the issuer of files the index has none for (shows the cost and asks first); without it they stay.",
+    "pt": "Com --apply-layout: pergunta à IA o emissor dos arquivos para os quais o índice não tem nenhum (mostra o custo e pergunta antes); sem esta opção, eles ficam onde estão."
+  },
+  "reprocess --fill-fields": {
+    "en": "Ask the AI only for the amount, dates, issuer, period and kind of files the index has none for (shows the cost and asks first). Nothing moves.",
+    "pt": "Pergunta à IA só o valor, as datas, o emissor, o período e o tipo dos arquivos para os quais o índice não tem esses dados (mostra o custo e pergunta antes). Nada é movido."
+  },
+  "reprocess --simulate": {
+    "en": "Classify (after asking: it may cost) and show the plan; move nothing.",
+    "pt": "Classifica (depois de perguntar: pode ter custo) e mostra o plano; não move nada."
+  },
+  "reprocess --yes": {
+    "en": "Do not ask: send the files and apply the plan.",
+    "pt": "Não pergunta: envia os arquivos e aplica o plano."
+  },
+  "schedule": {
+    "en": "Run flib every day at a fixed time, or as files arrive (launchd agents), and check\nit can work.",
+    "pt": "Roda o flib todo dia num horário fixo, ou conforme os arquivos chegam (agentes do launchd), e verifica se ele consegue trabalhar."
+  },
+  "schedule --at": {
+    "en": "Time of day, HH:MM (default: schedule.time).",
+    "pt": "Horário do dia, HH:MM (padrão: schedule.time)."
+  },
+  "schedule --mode": {
+    "en": "daily, watch (run when something arrives) or both (default: schedule.mode).",
+    "pt": "daily, watch (roda quando algo chega) ou both (padrão: schedule.mode)."
+  },
+  "schedule --status": {
+    "en": "Show the schedule and exit.",
+    "pt": "Mostra o agendamento e sai."
+  },
+  "schedule --remove": {
+    "en": "Stop the daily run and watch mode.",
+    "pt": "Para a execução diária e o modo watch."
+  },
+  "schedule --refresh": {
+    "en": "Re-install the existing schedule as is (used after updates).",
+    "pt": "Reinstala o agendamento existente como está (usado após atualizações)."
+  },
+  "schedule --save-key": {
+    "en": "Copy the API key from this shell's environment to the Keychain (default: ask).",
+    "pt": "Copia a chave de API do ambiente deste shell para o Keychain (padrão: pergunta)."
+  },
+  "schedule --check": {
+    "en": "Test folder access as launchd will.",
+    "pt": "Testa o acesso às pastas como o launchd fará."
+  },
+  "ui": {
+    "en": "Open the local interface in your browser: Status, Review, Search, Activity, Due and\nSettings.\n\nA server on loopback only, for this Mac, under a random .localhost name of\nits own, so other servers on the Mac never get its cookie. The browser gets a one-time\ntoken through a file only you can read (`--no-browser` prints a link that\nworks once instead). It ends after `ui.idle_minutes` without use, with End\nsession, or with Ctrl-C. A second `flib ui` while one runs says so and exits.",
+    "pt": "Abre a interface local no navegador: Status, Revisão, Busca, Atividade, Vencimentos e Configurações.\n\nUm servidor só em loopback, para este Mac, sob um nome .localhost aleatório só dele, para que outros servidores no Mac nunca recebam o cookie dele. O navegador recebe um token de uso único por um arquivo que só você pode ler (`--no-browser`, em vez disso, imprime um link que funciona uma vez). Ele termina após `ui.idle_minutes` sem uso, com Encerrar sessão ou com Ctrl-C. Se você rodar outro `flib ui` enquanto um já estiver aberto, ele avisa e sai."
+  },
+  "ui --open": {
+    "en": "Page to open.",
+    "pt": "Página a abrir."
+  },
+  "ui --no-browser": {
+    "en": "Print the link without opening a browser.",
+    "pt": "Imprime o link sem abrir um navegador."
+  },
+  "ui --port": {
+    "en": "Port on 127.0.0.1 and ::1 [default: a free one].",
+    "pt": "Porta em 127.0.0.1 e ::1 [padrão: uma livre]."
+  },
+  "menu": {
+    "en": "Show flib in the menu bar: the cat's pose says what needs you, and its menu opens\n`flib ui` on the right page.\n\nBuilt from tools that ship with macOS and started at login; nothing is\ndownloaded. The menu shows counts only, never a file name. `--remove` takes\nit away again.",
+    "pt": "Mostra o flib na barra de menus: a pose do gato diz o que precisa de você, e o menu dele abre o `flib ui` na página certa.\n\nFeito com ferramentas que já vêm no macOS e iniciado no login; nada é baixado. O menu mostra só contagens, nunca um nome de arquivo. `--remove` tira o item de lá."
+  },
+  "menu --install": {
+    "en": "Install it and show it (what plain `flib menu` does).",
+    "pt": "Instala e mostra o item (o que o `flib menu` sozinho faz)."
+  },
+  "menu --remove": {
+    "en": "Take it out of the menu bar and uninstall it.",
+    "pt": "Tira o item da barra de menus e o desinstala."
+  },
+  "menu --status": {
+    "en": "Say whether it is installed and running.",
+    "pt": "Diz se ele está instalado e rodando."
+  },
+  "menu --refresh": {
+    "en": "Rebuild it if an update needs it (install.sh).",
+    "pt": "Recria o item se uma atualização exigir (install.sh)."
+  },
+  "inspect": {
+    "en": "Show what flib reads from a file before any AI is involved: hash, size, download origin.\n\nWith a configuration, also how much text a run would send and where it\ncomes from (read from the file, or recognised by OCR on this Mac), never\nthe text itself.\n\nA file or folder that exists only in iCloud is reported as such, not hashed:\nreading it would download it. If the file is in flib's index, also show its\nstatus, category, why it is in review (if it is), and which name the AI\njudged better (original or its own) and why.",
+    "pt": "Mostra o que o flib lê de um arquivo antes de qualquer IA entrar em cena: hash, tamanho, origem do download.\n\nCom uma configuração, mostra também quanto texto uma execução enviaria e de onde ele vem (lido do arquivo ou reconhecido por OCR neste Mac), nunca o texto em si.\n\nUm arquivo ou pasta que existe só no iCloud é informado como tal, sem calcular o hash: lê-lo faria o download. Se o arquivo estiver no índice do flib, mostra também o status, a categoria, por que está em revisão (se estiver) e qual nome a IA julgou melhor (o original ou o dela) e por quê."
+  },
+  "inspect PATHS": {
+    "en": "Files to inspect.",
+    "pt": "Arquivos a inspecionar."
+  },
+  "inspect --json": {
+    "en": "Print JSON.",
+    "pt": "Imprime JSON."
+  },
+  "mcp": {
+    "en": "Serve the library to AI assistants: a local MCP server over stdio.",
+    "pt": "Disponibiliza a biblioteca para assistentes de IA: um servidor MCP local via stdio."
+  },
+  "eval": {
+    "en": "Measure classification quality on a built-in synthetic corpus of about 150 files.\n\nThe corpus is written to a temporary folder and run through the real\npipeline in simulate mode with a throwaway database: your configuration,\nlibrary, index and cache are never read, and nothing of yours moves.\nBefore sending anything to a provider that is not local, it shows the\nestimated cost and asks. Reports category accuracy, the review rate,\nwhether descriptive names were kept, and cost and speed. See docs/quality.md.",
+    "pt": "Mede a qualidade da classificação num corpus sintético embutido de cerca de 150 arquivos.\n\nO corpus é gravado numa pasta temporária e passa pelo pipeline real em modo de simulação, com um banco de dados descartável: sua configuração, biblioteca, índice e cache nunca são lidos, e nada seu é movido. Antes de enviar qualquer coisa a um provedor que não seja local, mostra o custo estimado e pergunta. Informa a precisão das categorias, a taxa de revisão, se os nomes descritivos foram mantidos, além de custo e velocidade. Veja docs/quality.md."
+  },
+  "eval --provider": {
+    "en": "anthropic, claude-code, ollama, openai-compat or fake (offline).",
+    "pt": "anthropic, claude-code, ollama, openai-compat ou fake (offline)."
+  },
+  "eval --model": {
+    "en": "The model [default: the provider's default, as `flib init` picks].",
+    "pt": "O modelo [padrão: o padrão do provedor, como o `flib init` escolhe]."
+  },
+  "eval --base-url": {
+    "en": "openai-compat (required) or ollama: the API root.",
+    "pt": "openai-compat (obrigatório) ou ollama: a raiz da API."
+  },
+  "eval --language": {
+    "en": "en or pt-BR: the categories and names to use.",
+    "pt": "en ou pt-BR: as categorias e os nomes a usar."
+  },
+  "eval --limit": {
+    "en": "Only a fixed sample of this many items.",
+    "pt": "Só uma amostra fixa com esta quantidade de itens."
+  },
+  "eval --max-cost": {
+    "en": "Stop sending once this much (US$) is spent.",
+    "pt": "Para de enviar quando este valor (US$) for gasto."
+  },
+  "eval --vision": {
+    "en": "Send images and scanned PDFs to the model.",
+    "pt": "Envia imagens e PDFs escaneados ao modelo."
+  },
+  "eval --ocr": {
+    "en": "Use the text recognised in images (recorded).",
+    "pt": "Usa o texto reconhecido nas imagens (gravado previamente)."
+  },
+  "eval --case": {
+    "en": "Only the items with this hard-case tag (e.g. image-text).",
+    "pt": "Só os itens com esta tag de caso difícil (ex.: image-text)."
+  },
+  "eval --json": {
+    "en": "Print the result as JSON.",
+    "pt": "Imprime o resultado como JSON."
+  },
+  "eval --out": {
+    "en": "Save the result as JSON here, for --compare.",
+    "pt": "Salva o resultado como JSON aqui, para o --compare."
+  },
+  "eval --compare": {
+    "en": "A saved result: compare this run with it. Twice: compare the two saved results, without running.",
+    "pt": "Um resultado salvo: compara esta execução com ele. Duas vezes: compara os dois resultados salvos, sem executar."
+  },
+  "eval --yes": {
+    "en": "Do not ask before sending to a paid provider.",
+    "pt": "Não pergunta antes de enviar a um provedor pago."
+  },
+  "doctor": {
+    "en": "Write a diagnostics report for a bug report, with names, paths and secrets redacted.\n\nIt holds versions, the configuration (no API key, not even part of it), the\nschedule, database counts and the last run logs. Read it before you attach it.",
+    "pt": "Gera um relatório de diagnóstico para um relato de bug, com nomes, caminhos e segredos ocultados.\n\nEle traz versões, a configuração (sem a chave de API, nem parte dela), o agendamento, contagens do banco de dados e os logs das últimas execuções. Leia o relatório antes de anexá-lo."
+  },
+  "doctor --output": {
+    "en": "Write the report here [default: a new doctor-<time> file in flib's logs folder].",
+    "pt": "Grava o relatório aqui [padrão: um novo arquivo doctor-<time> na pasta de logs do flib]."
+  },
+  "doctor --stdout": {
+    "en": "Print the report instead of writing a file.",
+    "pt": "Imprime o relatório em vez de gravar um arquivo."
+  },
+  "doctor --format": {
+    "en": "text or markdown (paste-ready for a GitHub issue).",
+    "pt": "text ou markdown (pronto para colar numa issue do GitHub)."
+  },
+  "doctor --logs": {
+    "en": "How many recent run logs to include.",
+    "pt": "Quantos logs de execuções recentes incluir."
+  }
+}

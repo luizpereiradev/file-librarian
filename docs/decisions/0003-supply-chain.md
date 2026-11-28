@@ -33,7 +33,7 @@ uv, which still refuses a release younger than 7 days. For an urgent fix the
 maintainer adds a temporary, reviewed exception for that one package
 (`exclude-newer-package = { <name> = false }` under `[tool.uv]`) and removes it
 once the release is older than the quarantine. The procedure is in
-[SECURITY.md](../../SECURITY.md#urgent-security-fixes).
+[SECURITY.md](https://github.com/luizpereiradev/file-librarian/blob/main/SECURITY.md#urgent-security-fixes).
 
 When releases to PyPI start (v1.0), they will use Trusted Publishing from a
 dedicated workflow with build attestations, never a long-lived token.

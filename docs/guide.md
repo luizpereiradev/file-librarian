@@ -1,6 +1,6 @@
 # Guide: the details
 
-The [README](../README.md) covers what most people need. This page holds the
+The [rest of this site](index.md) covers what most people need. This page holds the
 details behind some of its sections.
 
 ## Names
@@ -20,7 +20,7 @@ stays `boarding-pass` with `language: pt-BR`), and informal or abbreviated
 names count as descriptive (`extrato_out_2026.pdf`, `resume_final_v2.docx`).
 The proposed subject does not pile the issuer or other fields onto a name:
 those are kept as
-[structured fields](../README.md#amounts-dates-and-issuers) and can file the
+[structured fields](daily-use.md#amounts-dates-and-issuers) and can file the
 document into a folder by issuer instead.
 
 ```text
@@ -452,7 +452,7 @@ file as it was.
 Corrections, these and the moves or renames `flib reconcile` finds, are sent
 as examples with later requests, so the classifier stops repeating the
 mistake. `provider.max_examples` caps how many (10 by default, up to 50; `0`
-sends none). [Privacy](../README.md#privacy) says what an example contains.
+sends none). [Privacy](privacy.md#what-leaves-your-mac) says what an example contains.
 
 ## Changing your rules
 
@@ -519,7 +519,7 @@ with `--run ID` if you meant it.
 ### Cleaning stored descriptions
 
 Descriptions written before flib kept identifiers out of them (see
-[Privacy](../README.md#privacy)) may hold a phone number or a document
+[Privacy](privacy.md#what-leaves-your-mac)) may hold a phone number or a document
 number the AI copied from a picture. Clean them without asking the AI again:
 
 ```sh
@@ -536,7 +536,7 @@ again by the next run. It is one run: `flib undo` puts the old text back.
 ## Amounts, dates and issuers
 
 With each answer the AI fills in what the document itself states (see
-[Amounts, dates and issuers](../README.md#amounts-dates-and-issuers)): its
+[Amounts, dates and issuers](daily-use.md#amounts-dates-and-issuers)): its
 kind, issuer, amount and currency, document date, due date and the period it
 refers to. A field the document does not state stays empty; the prompt asks
 for that explicitly, and for the amount to be the document's total or amount
@@ -563,7 +563,7 @@ How flib reads what the AI wrote:
   plural as its singular, anything else is dropped.
 
 None of this is an identifier: the privacy scrub (see
-[Privacy](../README.md#privacy)) leaves amounts and dates in descriptions,
+[Privacy](privacy.md#what-leaves-your-mac)) leaves amounts and dates in descriptions,
 and document, account and ID numbers never get a field of their own.
 
 `--period` and `--sum --by month|year` use the period a document refers to,
@@ -624,7 +624,7 @@ works before the first run.
 (the default window), and `--json` the same counts.
 
 **The reminder.** After a scheduled run, the [periodic
-summary](../README.md#staying-on-top-of-it) also counts the open documents of
+summary](daily-use.md#what-waits-for-you) also counts the open documents of
 `due.kinds` that are due within `due.remind_days_before` days (3 by default)
 or overdue (up to 30 days ago): "1 document is due within 3 days, 1 document
 overdue". The rule, so it never nags:

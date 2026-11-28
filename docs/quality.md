@@ -56,7 +56,7 @@ The comparison shows each number side by side with the difference, every
 category whose accuracy moved, and the items whose verdict changed
 (`fixed` or `broke`). It warns when the two runs scored different corpus
 versions, languages or samples. Saved baselines live in
-[`docs/quality/`](quality/), so `--compare docs/quality/anthropic-claude-haiku-5-5-en.json`
+[`docs/quality/`](https://github.com/luizpereiradev/file-librarian/tree/main/docs/quality), so `--compare docs/quality/anthropic-claude-haiku-5-5-en.json`
 works from a fresh clone.
 
 ## What it reports
@@ -95,7 +95,7 @@ works from a fresh clone.
 
 ## The corpus
 
-[`src/file_librarian/evals/corpus.py`](../src/file_librarian/evals/corpus.py)
+[`src/file_librarian/evals/corpus.py`](https://github.com/luizpereiradev/file-librarian/blob/main/src/file_librarian/evals/corpus.py)
 writes it; nothing is committed as a binary fixture, and nothing comes from a
 real document. Organisations are fictitious, there are no people's names and
 no real document numbers. The same seed writes the same bytes every time.
@@ -105,14 +105,14 @@ no real document numbers. The same seed writes the same bytes every time.
   audio and installers that flib reads by name only; scans with no text layer;
   ZIP archives; four folder units and an `.app` bundle.
 - **Images with text** (#100, tag `image-text`): six PNGs drawn by code
-  ([`evals/pictures.py`](../src/file_librarian/evals/pictures.py), with a 5x7
-  bitmap font of its own in [`evals/raster.py`](../src/file_librarian/evals/raster.py):
+  ([`evals/pictures.py`](https://github.com/luizpereiradev/file-librarian/blob/main/src/file_librarian/evals/pictures.py), with a 5x7
+  bitmap font of its own in [`evals/raster.py`](https://github.com/luizpereiradev/file-librarian/blob/main/src/file_librarian/evals/raster.py):
   no dependency, no platform font, the same bytes everywhere): four pictures
   that happen to contain words (a flyer, a group-chat screenshot, a meme, a
   landscape photo with a small caption; tag `picture`) and two documents that
   happen to be images (a photographed till receipt, a scanned A4 page; tag
   `document-image`). The text macOS recognised in each is recorded in
-  [`evals/ocr.json`](../src/file_librarian/evals/ocr.json) with its line boxes
+  [`evals/ocr.json`](https://github.com/luizpereiradev/file-librarian/blob/main/src/file_librarian/evals/ocr.json) with its line boxes
   summary and the image's size; `flib eval` replays it instead of running the
   helper, so a run scores the same on every Mac, in CI and anywhere without
   macOS's text recognition. Every other file has no text, as a photo would.
@@ -131,7 +131,7 @@ no real document numbers. The same seed writes the same bytes every time.
   little to go on, which should go to review; ten credential files (by name,
   by a secret inside, and a folder with a `.env`) that must never be sent.
 
-The gold labels are in [`src/file_librarian/evals/gold.json`](../src/file_librarian/evals/gold.json),
+The gold labels are in [`src/file_librarian/evals/gold.json`](https://github.com/luizpereiradev/file-librarian/blob/main/src/file_librarian/evals/gold.json),
 generated from the code (a test keeps the two equal; after changing an item,
 run `uv run python -m file_librarian.evals.corpus`, and bump `CORPUS_VERSION`).
 For each item: the acceptable categories per language, whether the original
@@ -171,7 +171,7 @@ reported apart below.
 | `anthropic` / `claude-haiku-5-5` | `pt-BR` | 5 | 100.0% (144/144) | 13 sent, 9/9 expected | 100.0% / 75.0% | 0 | 29.9 | 332,147 / 32,141 | US$ 0.049 |
 | `ollama` (local models) | | 8 | see [Local models](#local-models-92) | | | 0 | | | US$ 0 |
 
-The prompt version 8 runs are the ones saved in [`docs/quality/`](quality/)
+The prompt version 8 runs are the ones saved in [`docs/quality/`](https://github.com/luizpereiradev/file-librarian/tree/main/docs/quality)
 (`anthropic-claude-haiku-5-5-en.json`, `anthropic-claude-haiku-5-5-pt-BR.json`).
 
 ### How much is noise
@@ -438,7 +438,7 @@ providers' requests are unchanged):
   tokens or more (Ollama's default 4096 would cut the start of a long
   Portuguese prompt with an excerpt), and a 300-second timeout.
 
-The saved runs of the recommended model are in [`docs/quality/`](quality/)
+The saved runs of the recommended model are in [`docs/quality/`](https://github.com/luizpereiradev/file-librarian/tree/main/docs/quality)
 (`ollama-gemma4-e4b-en.json`, `ollama-gemma4-e4b-pt-BR.json`).
 
 ## In CI
