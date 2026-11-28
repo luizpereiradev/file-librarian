@@ -167,6 +167,29 @@ def _speak_from(config: Path | None) -> None:
         _speak(None)
 
 
+YES = frozenset({"s", "sim", "y", "yes"})
+NO = frozenset({"n", "não", "nao", "no"})
+"""The answers a Portuguese yes/no question takes (English ones too, by habit)."""
+
+
+def _confirm(question: str, *, default: bool, err: bool = False) -> bool:
+    """A yes/no question in the language of the moment. English is typer's own
+    (``[y/N]``); pt-BR shows ``[S/n]`` and takes ``s``/``sim`` or ``n``/``não``."""
+    if i18n.current() == i18n.DEFAULT:
+        return typer.confirm(question, default=default, err=err)
+    hint = t("term.yes_no.default_yes" if default else "term.yes_no.default_no")
+    while True:
+        said = typer.prompt(f"{question} {hint}", default="", show_default=False, err=err)
+        answer = str(said).strip().casefold()
+        if not answer:
+            return default
+        if answer in YES:
+            return True
+        if answer in NO:
+            return False
+        _echo(t("term.error", text=t("term.yes_no.invalid")), err=True)
+
+
 # --- Inspection ------------------------------------------------------------------
 
 
@@ -1856,7 +1879,7 @@ def _ensure_key_for_schedule(cfg: Config, save_key: bool | None) -> None:
     if in_keychain:
         return
     if save_key is None:
-        save_key = typer.confirm(t("term.schedule.save_key"), default=True)
+        save_key = _confirm(t("term.schedule.save_key"), default=True)
     if save_key:
         try:
             keychain.write(found.value, spec.account)

@@ -244,7 +244,8 @@ def _skipped(tree: ast.AST) -> set[int]:
 
 CLI_FUNCTIONS = {
     # the machinery
-    "_echo", "_warn", "_speak", "_speak_from", "_fatal", "_load", "_warn_orphan_categories",
+    "_echo", "_warn", "_speak", "_speak_from", "_confirm", "_fatal", "_load",
+    "_warn_orphan_categories",
     # flib status, flib key
     "status", "_key_spec", "key_set", "_save_key", "key_status", "key_delete",
     # flib run, flib simulate (and what a run started by launchd says)

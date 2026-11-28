@@ -478,3 +478,16 @@ def test_a_core_message_is_matched_by_its_english_on_the_pages() -> None:
         )
         assert detail("confidence 0.42 < 0.70") == "confiança 0,42 < 0,70"
         assert detail("something flib never wrote") == "something flib never wrote"
+
+
+@pytest.mark.parametrize(
+    ("typed", "default", "said"),
+    [("s\n", False, True), ("sim\n", False, True), ("não\n", True, False),
+     ("\n", True, True), ("\n", False, False), ("talvez\nn\n", True, False)],
+)  # fmt: skip
+def test_a_yes_no_question_in_portuguese(typed: str, default: bool, said: bool) -> None:
+    with i18n.using("pt-BR"), runner.isolation(input=typed) as (out, err, *_):
+        assert cli._confirm("Salvar?", default=default) is said
+        shown, refused = out.getvalue().decode(), err.getvalue().decode()
+    assert ("Salvar? [S/n]" if default else "Salvar? [s/N]") in shown
+    assert ("responda s ou n" in refused) is typed.startswith("talvez")
