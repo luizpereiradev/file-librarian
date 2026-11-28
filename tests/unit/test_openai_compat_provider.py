@@ -59,11 +59,9 @@ def ollama(server: FakeOpenAI, **kw: Any) -> OllamaProvider:
     return OllamaProvider(ProviderConfig.model_validate(data))
 
 
-def closed_port_url() -> str:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    return f"http://127.0.0.1:{port}/v1"
+CLOSED = "http://127.0.0.1:9/v1"
+"""Nothing listens on the discard port. Not a free port found and closed again: a test
+running at the same time in another worker could be given it and answer there."""
 
 
 # --- the request ----------------------------------------------------------------------
@@ -289,7 +287,7 @@ def test_timeout_is_retryable(fake_openai: FakeOpenAI) -> None:
 
 def test_unreachable_server_is_retryable(loopback_network: None) -> None:
     provider = OpenAICompatProvider(
-        ProviderConfig(name="openai-compat", model="m", base_url=closed_port_url())
+        ProviderConfig(name="openai-compat", model="m", base_url=CLOSED)
     )
     with pytest.raises(ProviderError, match="cannot reach the server") as info:
         provider.classify(CTX, RULES)
@@ -465,9 +463,7 @@ def test_installed_models_and_check(fake_openai: FakeOpenAI) -> None:
 
 
 def test_check_reports_an_unreachable_ollama(loopback_network: None) -> None:
-    ready, line = ollama_module.check(
-        ProviderConfig(name="ollama", model="m", base_url=closed_port_url())
-    )
+    ready, line = ollama_module.check(ProviderConfig(name="ollama", model="m", base_url=CLOSED))
     assert not ready and "ollama serve" in line
 
 
