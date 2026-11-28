@@ -10,11 +10,10 @@ from __future__ import annotations
 import json
 import os
 import sys
-from pathlib import Path
 
 
 def main(argv: list[str]) -> int:
-    with Path(os.environ["FAKE_OSASCRIPT_LOG"]).open("a", encoding="utf-8") as log:
+    with open(os.environ["FAKE_OSASCRIPT_LOG"], "a", encoding="utf-8") as log:
         log.write(json.dumps(argv, ensure_ascii=False) + "\n")
     if os.environ.get("FAKE_OSASCRIPT_FAIL") == "1":
         print("execution error: Notifications are not allowed. (-1743)", file=sys.stderr)

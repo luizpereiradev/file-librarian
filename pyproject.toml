@@ -53,9 +53,10 @@ flib = "file_librarian.cli:main"
 [dependency-groups]
 dev = [
     "file-librarian[mcp]",  # tests and mypy cover the MCP server
-    "coverage>=7",
+    "coverage>=7.10",  # 7.10: COVERAGE_PROCESS_CONFIG, how xdist workers are measured
     "mypy>=1.11",
     "pytest>=8.0",
+    "pytest-xdist>=3.8",  # parallel test runs (CONTRIBUTING.md); brings only execnet
     "ruff>=0.6",
     "types-PyYAML>=6.0",
 ]
@@ -89,6 +90,9 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PTH", "S"]
 [tool.ruff.lint.per-file-ignores]
 # Tests use assert by design.
 "tests/**" = ["S101", "S311"]
+# The fake system tools start a fresh interpreter on every call: os and open() instead
+# of pathlib, which would add its imports to every call of every test.
+"tests/fake_*.py" = ["PTH"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -100,6 +104,9 @@ plugins = ["pydantic.mypy"]
 [tool.coverage.run]
 branch = true
 source = ["file_librarian"]
+# One data file per process (the pytest-xdist workers, see tests/conftest.py):
+# `coverage combine` joins them before `coverage report`.
+parallel = true
 
 [tool.coverage.report]
 fail_under = 93
@@ -108,7 +115,9 @@ skip_covered = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers"
+# In parallel, one worker per core (pytest-xdist); `-n 0` runs everything in one
+# process. The tests of real system tools still run one at a time (conftest.py).
+addopts = "-ra --strict-markers -n auto"
 markers = [
     "integration: exercises several pipeline stages together (still offline, still in temp dirs)",
     "volumes: creates and attaches disk images with hdiutil; opt-in with FLIB_TEST_VOLUMES=1",

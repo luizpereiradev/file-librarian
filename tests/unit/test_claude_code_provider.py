@@ -210,8 +210,8 @@ def test_non_zero_exit_fails_this_file(fake_claude: FakeClaude) -> None:
 
 def test_timeout_is_retryable(fake_claude: FakeClaude) -> None:
     fake_claude.reply(result(), sleep=5)
-    with pytest.raises(ProviderError, match=r"within 0\.5s") as info:
-        provider(timeout_seconds=0.5).classify(CTX, RULES)
+    with pytest.raises(ProviderError, match=r"within 0\.1s") as info:
+        provider(timeout_seconds=0.1).classify(CTX, RULES)
     assert info.value.retryable
 
 

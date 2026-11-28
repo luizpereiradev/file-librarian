@@ -21,12 +21,13 @@ from __future__ import annotations
 
 import json
 import os
-import plistlib
 import sys
-from pathlib import Path
 
 
 def _osacompile(argv: list[str]) -> None:
+    import plistlib  # only here: every call of every tool pays for what is imported at the top
+    from pathlib import Path
+
     app = Path(argv[argv.index("-o") + 1])
     source = Path(argv[-1])
     contents = app / "Contents"
@@ -55,17 +56,18 @@ def _osacompile(argv: list[str]) -> None:
 
 def _sips(argv: list[str]) -> None:
     size = argv[argv.index("-z") + 1]
-    Path(argv[argv.index("--out") + 1]).write_text(f"FAKE {size}", encoding="utf-8")
+    with open(argv[argv.index("--out") + 1], "w", encoding="utf-8") as out:
+        out.write(f"FAKE {size}")
 
 
 def _iconutil(argv: list[str]) -> None:
-    iconset = Path(argv[-1])
-    names = sorted(path.name for path in iconset.iterdir())
-    Path(argv[argv.index("-o") + 1]).write_text("\n".join(names), encoding="utf-8")
+    names = sorted(os.listdir(argv[-1]))
+    with open(argv[argv.index("-o") + 1], "w", encoding="utf-8") as out:
+        out.write("\n".join(names))
 
 
 def main(tool: str, argv: list[str]) -> int:
-    with Path(os.environ["FAKE_NOTIFIER_LOG"]).open("a", encoding="utf-8") as log:
+    with open(os.environ["FAKE_NOTIFIER_LOG"], "a", encoding="utf-8") as log:
         log.write(json.dumps([tool, *argv], ensure_ascii=False) + "\n")
     if os.environ.get("FAKE_NOTIFIER_FAIL") == tool:
         print(f"{tool}: something went wrong", file=sys.stderr)

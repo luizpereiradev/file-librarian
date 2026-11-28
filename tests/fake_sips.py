@@ -22,16 +22,16 @@ from __future__ import annotations
 import json
 import os
 import sys
-from pathlib import Path
 
 
 def _segment(marker: int, payload: bytes) -> bytes:
     return bytes([0xFF, marker]) + (len(payload) + 2).to_bytes(2, "big") + payload
 
 
-def _size(path: Path) -> tuple[int, int] | None:
+def _size(path: str) -> tuple[int, int] | None:
     try:
-        head = path.read_bytes()[:64]
+        with open(path, "rb") as image:
+            head = image.read(64)
     except OSError:
         return None
     if head[:8] == b"\x89PNG\r\n\x1a\n" and head[12:16] == b"IHDR":
@@ -43,17 +43,17 @@ def _size(path: Path) -> tuple[int, int] | None:
 
 
 def main(argv: list[str]) -> int:
-    with Path(os.environ["FAKE_SIPS_LOG"]).open("a") as log:
+    with open(os.environ["FAKE_SIPS_LOG"], "a", encoding="utf-8") as log:
         log.write(json.dumps(argv) + "\n")
     if argv[:1] == ["-g"]:
-        size = _size(Path(argv[-1]))
+        size = _size(argv[-1])
         if size is None:
             print("Error: Cannot extract image from file.", file=sys.stderr)
             return 13
         print(f"{argv[-1]}\n  pixelWidth: {size[0]}\n  pixelHeight: {size[1]}")
         return 0
-    out = Path(argv[argv.index("--out") + 1])
-    source = Path(argv[argv.index("--out") - 1])
+    out = argv[argv.index("--out") + 1]
+    source = argv[argv.index("--out") - 1]
     size = _size(source)
     if size is None:
         return 13
@@ -74,7 +74,8 @@ def main(argv: list[str]) -> int:
         + b"scan-data\xff\x00more"
         + b"\xff\xd9"
     )
-    out.write_bytes(jpeg)
+    with open(out, "wb") as converted:
+        converted.write(jpeg)
     return 0
 
 

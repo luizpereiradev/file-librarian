@@ -501,7 +501,7 @@ class Ui:
         request_timeout: float = REQUEST_TIMEOUT,
         request_deadline: float = REQUEST_DEADLINE,
         close_grace: float = CLOSE_GRACE,
-        end_linger: float = END_LINGER,
+        end_linger: float | None = None,
         stolen_linger: float | None = None,
         on_event: Callable[[str], None] = lambda event: None,
         config_path: Path | None = None,
@@ -518,7 +518,7 @@ class Ui:
         self.request_timeout = request_timeout
         self.request_deadline = request_deadline
         self._grace = min(close_grace, request_timeout)
-        self.end_linger = end_linger
+        self.end_linger = END_LINGER if end_linger is None else end_linger
         self.stolen_linger = STOLEN_LINGER if stolen_linger is None else stolen_linger
         self._searches: OrderedDict[str, tuple[str, dict[str, list[str]]]] = OrderedDict()
         self._outcomes: OrderedDict[str, tuple[str, actions.Outcome]] = OrderedDict()

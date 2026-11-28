@@ -13,24 +13,32 @@ from __future__ import annotations
 
 import json
 import os
-import plistlib
-import subprocess
 import sys
-from pathlib import Path
+
+
+def _save(state: str, loaded: dict[str, str]) -> None:
+    with open(state, "w", encoding="utf-8") as fh:
+        json.dump(loaded, fh)
 
 
 def main(argv: list[str]) -> int:
-    state = Path(os.environ["FAKE_LAUNCHD"])
-    loaded: dict[str, str] = json.loads(state.read_text()) if state.exists() else {}
+    state = os.environ["FAKE_LAUNCHD"]
+    loaded: dict[str, str] = {}
+    if os.path.exists(state):
+        with open(state, encoding="utf-8") as fh:
+            loaded = json.load(fh)
     command, args = argv[0], argv[1:]
     if os.environ.get("FAKE_LAUNCHD_FAIL") == command:
         print(f"{command}: simulated failure", file=sys.stderr)
         return 5
     if command == "bootstrap":
-        plist = Path(args[1])
-        data = plistlib.loads(plist.read_bytes())
-        loaded[data["Label"]] = str(plist)
-        state.write_text(json.dumps(loaded))
+        import plistlib  # only here: every call pays for what is imported at the top
+        import subprocess
+
+        with open(args[1], "rb") as fh:
+            data = plistlib.load(fh)
+        loaded[data["Label"]] = args[1]
+        _save(state, loaded)
         if data.get("RunAtLoad"):
             env = {**os.environ, **data.get("EnvironmentVariables", {})}
             subprocess.run(data["ProgramArguments"], env=env, check=False)  # noqa: S603
@@ -40,7 +48,7 @@ def main(argv: list[str]) -> int:
         if label not in loaded:
             return 3
         del loaded[label]
-        state.write_text(json.dumps(loaded))
+        _save(state, loaded)
         return 0
     if command == "print":
         label = args[0].rsplit("/", 1)[-1]
@@ -54,7 +62,9 @@ def main(argv: list[str]) -> int:
         if label not in loaded:
             print("Could not find service", file=sys.stderr)
             return 113
-        with state.with_name("kicks.jsonl").open("a", encoding="utf-8") as kicks:
+        with open(
+            os.path.join(os.path.dirname(state), "kicks.jsonl"), "a", encoding="utf-8"
+        ) as kicks:
             kicks.write(json.dumps([label, "-k" in args]) + "\n")
         return 0
     return 2

@@ -519,13 +519,15 @@ def _api_key(section: Section, r: Redactor, config: Config | None) -> None:
     if config is None:
         section.lines.append("source: unknown (the configuration did not load)")
         return
-    specs = credentials.all_specs(config.provider)
-    for spec in specs:  # every key flib could find, so none can leak through a log line
-        value = credentials.resolve(config.provider, spec).value
-        if value:
-            r.secrets.append(value)
+    # Every key flib could find, so none can leak through a log line; each read once
+    # (a read from the Keychain is a run of ``security``).
+    keys = [
+        credentials.resolve(config.provider, spec)
+        for spec in credentials.all_specs(config.provider)
+    ]
+    r.secrets += [key.value for key in keys if key.value]
     # A provider without a key reports the Anthropic one, as before keys were per provider.
-    found = credentials.resolve(config.provider, specs[0])
+    found = keys[0]
     section.lines.append(f"provider: {config.provider.name}")
     section.lines.append(f"api_key_source setting: {config.provider.api_key_source}")
     section.lines.append(f"source: {found.source}")

@@ -9,12 +9,11 @@ from __future__ import annotations
 import json
 import os
 import sys
-from pathlib import Path
 
 
-def main() -> int:
-    with Path(os.environ["FAKE_OPEN_LOG"]).open("a", encoding="utf-8") as log:
-        log.write(json.dumps(sys.argv[1:]) + "\n")
+def main(argv: list[str]) -> int:
+    with open(os.environ["FAKE_OPEN_LOG"], "a", encoding="utf-8") as log:
+        log.write(json.dumps(argv) + "\n")
     if os.environ.get("FAKE_OPEN_FAIL"):
         print("LSOpenURLsWithRole() failed", file=sys.stderr)
         return 1
@@ -22,4 +21,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

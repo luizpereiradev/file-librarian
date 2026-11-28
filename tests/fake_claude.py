@@ -19,7 +19,6 @@ import json
 import os
 import sys
 import time
-from pathlib import Path
 
 
 def success(schema: dict[str, object]) -> dict[str, object]:
@@ -55,26 +54,27 @@ def success(schema: dict[str, object]) -> dict[str, object]:
 
 
 def main(argv: list[str]) -> int:
-    state = Path(os.environ["FAKE_CLAUDE_DIR"])
+    state = os.environ["FAKE_CLAUDE_DIR"]
     stdin = "" if argv[:2] == ["auth", "status"] else sys.stdin.read()
     call = {
         "argv": argv,
         "stdin": stdin,
         "env": sorted(k for k in os.environ if k != "FAKE_CLAUDE_DIR"),
         "path": os.environ.get("PATH", ""),
-        "cwd": str(Path.cwd()),
+        "cwd": os.getcwd(),
     }
-    with (state / "calls.jsonl").open("a") as log:
+    with open(os.path.join(state, "calls.jsonl"), "a", encoding="utf-8") as log:
         log.write(json.dumps(call) + "\n")
     if argv[:2] == ["auth", "status"]:
-        if (state / "logged_out").exists():
+        if os.path.exists(os.path.join(state, "logged_out")):
             print(json.dumps({"loggedIn": False, "authMethod": "none"}))
             return 1
         print(json.dumps({"loggedIn": True, "authMethod": "claude.ai"}))
         return 0
-    reply_file = state / "reply.json"
-    if reply_file.exists():
-        reply = json.loads(reply_file.read_text())
+    reply_file = os.path.join(state, "reply.json")
+    if os.path.exists(reply_file):
+        with open(reply_file, encoding="utf-8") as fh:
+            reply = json.load(fh)
         time.sleep(reply.get("sleep", 0))
         sys.stdout.write(reply.get("stdout", ""))
         sys.stderr.write(reply.get("stderr", ""))

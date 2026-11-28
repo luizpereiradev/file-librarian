@@ -119,7 +119,7 @@ no real document numbers. The same seed writes the same bytes every time.
   After changing a picture or `ocr.js`, record it again on a Mac with
   `uv run python -m file_librarian.evals.corpus --record-ocr`; a test fails
   until you do, and the opt-in OCR test (`FLIB_TEST_OCR=1 uv run pytest -m
-  ocr`) checks that this Mac still reads them as recorded.
+  ocr -n 0`) checks that this Mac still reads them as recorded.
 - **Languages**: 71 items in Portuguese, 35 in English, and 54 with no text
   (images, installers, media, binary files, credential files).
 - **Categories**: every default category of both locales has items

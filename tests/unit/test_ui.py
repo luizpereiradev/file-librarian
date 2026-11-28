@@ -801,6 +801,7 @@ def test_an_upgrade_request_is_refused(client: UiClient, ui: Ui) -> None:
 
 
 def test_a_post_with_only_fetch_metadata_is_accepted(client: UiClient, ui: Ui) -> None:
+    ui.end_linger = 0.0  # ends at once; the linger itself: test_ui_pages.py
     token = client.csrf()
     sent = {"Sec-Fetch-Site": "same-origin", "Content-Type": "application/x-www-form-urlencoded"}
     reply = client.request("POST", "/session/end", body=f"csrf={token}".encode(), headers=sent)
@@ -841,6 +842,7 @@ def test_the_csrf_token_of_the_page_is_not_enough_without_the_session(
 
 
 def test_the_csrf_token_is_in_a_form_field_or_a_header(client: UiClient, ui: Ui) -> None:
+    ui.end_linger = 0.0  # ends at once; the linger itself: test_ui_pages.py
     token = client.csrf()
     page = client.get("/status").text
     assert f'<meta name="flib-csrf" content="{token}">' in page
@@ -917,6 +919,7 @@ def test_a_post_to_an_unknown_path_is_not_found(client: UiClient, ui: Ui) -> Non
 
 
 def test_end_session_shows_the_ended_page_and_stops_the_server(client: UiClient, ui: Ui) -> None:
+    ui.end_linger = 0.0  # ends at once; the linger itself: test_ui_pages.py
     session_id = client.cookies[ui.cookie_name]
     reply = client.post_form("/session/end", {"csrf": client.csrf()})
     assert reply.status == 200
@@ -960,18 +963,28 @@ def test_a_signal_handler_never_waits_on_a_lock(loopback_network: None, cfg: Con
 def test_two_quick_signals_end_flib_ui_once(
     loopback_network: None, cfg: Config, fake_browser: Path
 ) -> None:
-    original = signal.getsignal(signal.SIGINT)
+    # The second signal may come after flib ui has put the previous handler back
+    # (the sending thread can be paused between the two): that handler is this
+    # test's, never pytest's, whose KeyboardInterrupt would end the whole run.
+    late: list[int] = []
+    pytests = signal.signal(signal.SIGINT, lambda signum, frame: late.append(signum))
+    try:
+        original = signal.getsignal(signal.SIGINT)
 
-    def twice() -> None:
-        wait_for(lambda: signal.getsignal(signal.SIGINT) is not original, timeout=10)
-        os.kill(os.getpid(), signal.SIGINT)
-        os.kill(os.getpid(), signal.SIGINT)
+        def twice() -> None:
+            wait_for(lambda: signal.getsignal(signal.SIGINT) is not original, timeout=10)
+            os.kill(os.getpid(), signal.SIGINT)
+            os.kill(os.getpid(), signal.SIGINT)
 
-    sender = Background(twice)
-    lines: list[str] = []
-    assert ui_server.run(cfg, browser=False, echo=lines.append) == "signal"
-    sender.join()
+        sender = Background(twice)
+        lines: list[str] = []
+        assert ui_server.run(cfg, browser=False, echo=lines.append) == "signal"
+        sender.join()
+    finally:
+        signal.signal(signal.SIGINT, pytests)
     assert lines[-1] == "flib ui ended: interrupted."
+    assert [line for line in lines if line.startswith("flib ui ended")] == [lines[-1]]
+    assert len(late) <= 1
 
 
 def test_close_cuts_off_a_request_in_progress(loopback_network: None, cfg: Config) -> None:
@@ -1618,8 +1631,9 @@ class Background:
     """Runs ``work`` beside a ``flib ui`` that blocks the test until it ends.
 
     If ``work`` fails, ``flib ui`` would serve on for its ten idle minutes: so
-    it is ended with SIGTERM (once its handler is in place, never pytest's), and
-    ``join`` raises the failure.
+    its SIGTERM handler is called (once it is in place), and ``join`` raises the
+    failure. Called, not sent: a signal sent just as ``flib ui`` puts the old
+    handler back would end the test process (an xdist worker, or pytest itself).
     """
 
     def __init__(self, work: Callable[[], None]) -> None:
@@ -1637,8 +1651,9 @@ class Background:
             self._work()
         except BaseException as exc:
             self.error = exc
-            if self.listening():
-                os.kill(os.getpid(), signal.SIGTERM)
+            handler = signal.getsignal(signal.SIGTERM)
+            if handler is not self._original and callable(handler):
+                handler(signal.SIGTERM, None)  # flib ui's: it only asks the server to stop
 
     def join(self) -> None:
         self._thread.join(10)
@@ -1682,8 +1697,13 @@ def interrupt_when_listening(signum: int) -> Background:
 
 
 def test_flib_ui_opens_a_handoff_file_and_ends_with_the_session(
-    loopback_network: None, tmp_path: Path, downloads: Path, fake_browser: Path
+    loopback_network: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    downloads: Path,
+    fake_browser: Path,
 ) -> None:
+    monkeypatch.setattr(ui_server, "END_LINGER", 0.0)  # the linger itself: test_ui_pages.py
     path = write_config(tmp_path, downloads)
     browser = end_from_the_browser(fake_browser)
     result = runner.invoke(app, ["ui", "-c", str(path)])
@@ -1723,6 +1743,7 @@ def test_flib_ui_says_when_the_browser_cannot_open(
     fake_browser: Path,
 ) -> None:
     monkeypatch.setenv("FAKE_OPEN_FAIL", "1")
+    monkeypatch.setattr(ui_server, "END_LINGER", 0.0)  # the linger itself: test_ui_pages.py
     path = write_config(tmp_path, downloads)
     browser = end_from_the_browser(fake_browser)
     result = runner.invoke(app, ["ui", "-c", str(path)])
@@ -1842,12 +1863,14 @@ def test_a_flib_ui_removes_only_its_own_records(cfg: Config) -> None:
 
 
 def test_the_theft_linger_outlasts_end_sessions(ui: Ui, events: list[str]) -> None:
-    """After a theft the stolen page is served past End session's 1.5 s (a mutant set
+    """After a theft the stolen page is served past End session's linger (a mutant set
     both lingers alike), until a signal ends it."""
+    assert ui_server.STOLEN_LINGER > 10 * ui_server.END_LINGER  # the values, alike or not
+    ui.end_linger = 0.1  # the server's own, shortened: a theft must not use it
     UiClient(ui.port, ui.host_name).launch(ui.launch_url)
     thief = UiClient(ui.port, ui.host_name)
     assert thief.launch(ui.launch_url).status == 403
-    assert ui.wait(ui_server.END_LINGER + 0.5) is None  # past End session's linger
+    assert ui.wait(ui.end_linger + 0.4) is None  # past End session's linger
     late = thief.get("/status", headers={"Accept": "text/html"})
     assert late.status == 403 and STOLEN in late.text
     ui.stop("signal")

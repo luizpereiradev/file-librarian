@@ -12,8 +12,22 @@ You need the current major release of macOS and
 ```sh
 git clone https://github.com/luizpereiradev/file-librarian.git && cd file-librarian
 uv sync              # creates .venv with the package, the optional MCP SDK and dev tools (use `uv run flib ...`)
-uv run pytest        # all tests, offline, in temporary folders
+uv run pytest        # all tests, offline, in temporary folders, on every core
 ```
+
+The tests run in parallel, one worker per core
+([pytest-xdist](https://pytest-xdist.readthedocs.io/), `-n auto` in
+`pyproject.toml`): under a minute on a 12-core Mac, against five in one
+process. Each worker has its own temporary folders and its own copy of every
+safety guard. To run in one process (a debugger, `print` output in order, a
+single test without starting a worker per core), add `-n 0`:
+
+```sh
+uv run pytest -n 0 tests/unit/test_init.py -k trial   # one process
+uv run pytest -n 4                                     # four workers
+```
+
+`PYTEST_XDIST_AUTO_NUM_WORKERS=6` changes what `-n auto` means on your Mac.
 
 Before opening a pull request, run the same checks as CI:
 
@@ -21,8 +35,13 @@ Before opening a pull request, run the same checks as CI:
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy          # strict, over src/ and tests/
-uv run coverage run -m pytest && uv run coverage report   # fails under 93% branch coverage
+uv run coverage run -m pytest && uv run coverage combine && uv run coverage report   # fails under 93% branch coverage
 ```
+
+`coverage run` measures every worker: each writes its own `.coverage.*` file,
+and `coverage combine` joins them into `.coverage` (with `-n 0` there is one
+file, and `combine` is still needed). `coverage report` without `combine`
+fails with "No data to report".
 
 A new branch of behaviour, especially a failure path, comes with a test.
 `coverage report` lists the missing lines.
@@ -35,7 +54,9 @@ CI runs those checks on `macos-15`. A pull request is tested on the oldest
 and newest supported Python, 3.11 and 3.15; every push to `main` is tested on
 3.11 through 3.15. Python 3.15 also runs the cross-volume tests on real disk
 images (APFS, HFS+, exFAT); run them locally with
-`FLIB_TEST_VOLUMES=1 uv run pytest -m volumes`. The one required check is
+`FLIB_TEST_VOLUMES=1 uv run pytest -m volumes -n 0`. These opt-in tests of real
+macOS tools and resources (`volumes`, `ocr`, `notifier`, `menu`, `browser`)
+never run at the same time, with workers or without. The one required check is
 `CI passed`, which passes only when every Python version passed. A separate
 Security workflow reviews new dependencies, audits `uv.lock` and lints the
 workflows (see [SECURITY.md](SECURITY.md#supply-chain)).
@@ -83,6 +104,20 @@ workflows (see [SECURITY.md](SECURITY.md#supply-chain)).
   this.
 - A helper needed by more than one test module goes into `tests/_helpers.py`;
   test modules never import from each other.
+- **Tests run in parallel, in any order.** Other tests run at the same time
+  in other processes: write only under `tmp_path` (or the fake `HOME`), let
+  the system pick ports (`port=0`), and never count on a port you found free
+  and closed again (another worker may get it). A test that needs a real
+  system tool or resource gets one of the opt-in markers in `pyproject.toml`,
+  which run one at a time.
+- **No waiting on the clock.** Wait for an event (`threading.Event`,
+  `wait_for` on a condition) and keep timeouts as failure bounds. When the
+  code under test waits on a timer, make it short for the test (an argument,
+  or a module constant set with `monkeypatch`) rather than wait it out.
+- **The fakes are cheap on purpose.** Every call of a `tests/fake_*.py` tool
+  starts a new interpreter (the shims in `conftest.py` start it with `-I -S`,
+  without a shell): they import only `json`, `os` and `sys` at the top, and
+  anything else where it is needed.
 
 ## Changing the prompt or the classifier
 

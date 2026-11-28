@@ -272,7 +272,7 @@ def test_a_failing_helper_raises_ocr_error(
 def test_a_helper_that_hangs_is_stopped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     scan = make_scan(tmp_path / "scan.png", RECEIPT)
     monkeypatch.setenv("FAKE_OCR_MODE", "hang")
-    monkeypatch.setattr(ocr, "TIMEOUT", 0.5)
+    monkeypatch.setattr(ocr, "TIMEOUT", 0.1)  # the fake sleeps for a minute
     with pytest.raises(ocr.OcrError, match="longer than"):
         ocr.recognize(scan, fake_config().ocr, 1000)
 
@@ -312,7 +312,7 @@ def test_availability_reports_why_not(tmp_path: Path, monkeypatch: pytest.Monkey
 
     ocr.availability.cache_clear()
     monkeypatch.setenv("FAKE_OCR_MODE", "hang")
-    monkeypatch.setattr(ocr, "PROBE_TIMEOUT", 0.5)
+    monkeypatch.setattr(ocr, "PROBE_TIMEOUT", 0.1)  # the fake sleeps for a minute
     assert "longer than" in (ocr.availability().reason or "")
 
     ocr.availability.cache_clear()
