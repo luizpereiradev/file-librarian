@@ -1005,8 +1005,9 @@ def parse_config(raw: object) -> Config:
         problems: list[tuple[str, object]] = []
         for err in exc.errors():
             where = ".".join(str(part) for part in err["loc"]) or "(root)"
-            lines.append(f"  {where}: {err['msg']}")
-            problems.append((where, refusal(err)))
+            said = refusal(err)
+            lines.append(f"  {where}: {said.english}")  # English, whatever the language
+            problems.append((where, said))
         raise ConfigError("invalid configuration:\n" + "\n".join(lines), problems) from exc
 
 

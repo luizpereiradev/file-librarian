@@ -520,9 +520,7 @@ def test_init_asks_the_mode_and_keeps_it_in_the_config(
 def test_init_under_yes_keeps_the_daily_default(downloads: Path, tmp_path: Path) -> None:
     path = write_config(tmp_path, downloads)
     result = runner.invoke(app, ["init", "--yes", "-c", str(path), "--sample", "0"])
-    assert "Run daily, on arrival (watch), or both? (daily, watch, both) [daily]: daily" in (
-        result.stdout
-    )
+    assert "Run daily, on arrival (watch), or both? [daily]: daily" in (result.stdout)
     assert scheduler.status().mode == "daily"
 
 

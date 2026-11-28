@@ -46,9 +46,12 @@ All notable changes to this project are documented here. The format follows
 
 - **`flib init`, `check-config`, `reconcile`, `reprocess` and the configuration's
   refusals speak the configured language** (#141, second part).
-  - `flib init` starts in the language of the configuration it would replace,
-    or of the shell's locale, so a Brazilian user's first run is in Portuguese.
-    It then follows the answer to its first question.
+  - `flib init` starts in, and suggests for its language question, the
+    language of the configuration it would replace (also with `--yes --force`),
+    so replacing a configuration never switches a library's folders and
+    categories to another language because the shell's locale differs. With no
+    configuration it uses the shell's locale, so a Brazilian user's first run
+    is in Portuguese. It then follows the answer to its first question.
   - The parser's reasons for refusing a value are in Portuguese, on the command
     line and on the Settings page: flib's own reasons and pydantic's common ones.
     `str(ConfigError)` stays English.
@@ -619,6 +622,8 @@ All notable changes to this project are documented here. The format follows
     - "gave up after 1 attempt" (was "1 attempts");
     - "Watch: 1 file waits" (was "wait");
     - "within 1 day" in a due reminder (was "within 1 days").
+  - `flib init`'s schedule question no longer repeats "(daily, watch, both)"
+    after "Run daily, on arrival (watch), or both?".
   - File names that hold control characters are printed as escapes (`\x1b`,
     `\x0d`, `\u202e`) rather than raw.
 

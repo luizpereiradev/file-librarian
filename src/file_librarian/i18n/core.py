@@ -413,7 +413,11 @@ def refusal(error: object) -> Refusal:
     if kind == "value_error":
         raised = ctx.get("error")
         said = raised.args[0] if isinstance(raised, ValueError) and raised.args else None
-        return Refusal(message, said if isinstance(said, Msg) else None)
+        if isinstance(said, Msg):
+            # pydantic wrote the message in the language of the moment it was raised:
+            # the English comes from the message itself, with pydantic's own prefix.
+            return Refusal("Value error, " + said.text("en"), said)
+        return Refusal(message, None)
     msg_id = _PYDANTIC.get(str(kind))
     if msg_id is None:
         return Refusal(message, None)

@@ -64,6 +64,11 @@ arquivos organizados, o provedor e, com `anthropic`, se deve ativar a
 pergunta tem um padrão, então apertar Enter até o fim já dá uma configuração
 que funciona (`flib init --yes` aceita todos sem perguntar):
 
+- **Idioma:** o sugerido, e o que o `flib init` fala até você responder, é o
+  idioma da configuração que ele substituiria, quando há uma que ele consegue
+  ler: substituí-la nunca troca o idioma das pastas e categorias da sua
+  biblioteca só porque o idioma deste shell é outro. Sem configuração, é o
+  idioma do shell (`LANG`): português dá `pt-BR`, qualquer outro dá `en`.
 - **Provedor:** `claude-code` quando o Claude Code está instalado e logado
   (nada mais a configurar); depois `ollama` quando o Ollama está rodando neste
   Mac com um modelo baixado (só é oferecido nesse caso, e o teste confere se o

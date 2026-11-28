@@ -18,6 +18,7 @@ from typer.testing import CliRunner
 from file_librarian import cli, i18n
 from file_librarian.config import ConfigError, load_config, parse_config
 from file_librarian.db.store import Store
+from file_librarian.i18n import t
 from tests._helpers import answer, organize, write_config
 
 runner = CliRunner()
@@ -55,7 +56,7 @@ def test_init_with_a_portuguese_locale_speaks_portuguese(
     assert "Idioma dos nomes, descrições e pastas (en, pt-BR) [pt-BR]: pt-BR" in out
     assert "Pasta a organizar [~/Downloads]: ~/Downloads" in out
     assert "Para onde vão os arquivos organizados [~/Downloads/Organizado]" in out
-    assert f"Gravei {path} (só você pode lê-lo)." in out
+    assert f"Configuração gravada em {path} (só você pode lê-la)." in out
     assert "Organizar os arquivos novos automaticamente todo dia às 12:30? [S/n]: s" in out
     assert "Próximos passos:" in out
     assert load_config(path).language == "pt-BR"
@@ -219,3 +220,67 @@ def test_reprocess_log_stays_english(pt: Path, downloads: Path) -> None:
     log = Path(next(x for x in result.stdout.splitlines() if x.startswith("Log: "))[5:])
     text = log.read_text(encoding="utf-8")
     assert "Reprocess run " in text and "Reclassificação" not in text
+
+
+# --- the review of part 2 ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("shell", "configured", "folder", "review"),
+    [
+        ("en_US.UTF-8", "pt-BR", "Organizado", "_Revisar"),
+        ("pt_BR.UTF-8", "en", "Organized", "_Review"),
+    ],
+)
+def test_replacing_a_configuration_keeps_its_language(
+    downloads: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    shell: str,
+    configured: str,
+    folder: str,
+    review: str,
+) -> None:
+    """A library's folders never flip language because the shell's locale differs."""
+    monkeypatch.setenv("LANG", shell)
+    path = write_config(tmp_path, downloads, extra=f"language: {configured}\n")
+    result = flib("init", "--yes", "--force", "-c", str(path), "--sample", "0")
+    assert result.exit_code == 0, result.output
+    cfg = load_config(path)
+    assert cfg.language == configured
+    assert cfg.output_root == downloads / folder
+    assert cfg.review_folder == review
+
+
+def test_the_english_of_a_refusal_never_depends_on_the_language_in_use() -> None:
+    raw = {
+        "provider": {"name": "fake", "model": "x"},
+        "schedule": {"time": "25:00"},
+        "inputs": ["relative"],
+        "limits": {"max_attempts": 0},
+    }
+    found: dict[str, str] = {}
+    for lang in ("en", "pt-BR"):
+        with i18n.using(lang), pytest.raises(ConfigError) as caught:
+            parse_config(raw)
+        found[lang] = str(caught.value)
+        assert all(i18n.english(why) for _, why in caught.value.problems)
+    assert found["pt-BR"].encode() == found["en"].encode()
+    assert "Value error, schedule.time must be a valid 24-hour time" in found["pt-BR"]
+
+
+def test_the_trial_summary_in_portuguese() -> None:
+    summary = t(
+        "term.init.trial_summary",
+        organized=t("term.init.to_categories", count=3),
+        review=t("term.init.to_review", count=0, folder="_Revisar"),
+        stay=t("term.init.stay", count=0),
+    )
+    assert summary.text("pt-BR") == (
+        "Resumo: 3 iriam para as categorias, nenhum para _Revisar (para você decidir), "
+        "nenhum ficaria onde está."
+    )
+    assert (
+        summary.text("en")
+        == "Summary: 3 to categories, 0 to _Revisar for you to decide, 0 would stay."
+    )

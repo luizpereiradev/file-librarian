@@ -1367,6 +1367,7 @@ EN: dict[str, Entry] = {
     "term.init.to_review": Plural(
         one="{count} to {folder} for you to decide", other="{count} to {folder} for you to decide"
     ),
+    "term.init.stay": Plural(one="{count} would stay", other="{count} would stay"),
     "term.init.not_tried": Plural(
         one="  {count} not tried: the cost cap was reached.",
         other="  {count} not tried: the cost cap was reached.",
@@ -2817,10 +2818,11 @@ PT_BR: dict[str, Entry] = {
     ),
     "term.init.replace": "Já existe uma configuração em {path}. Substituir?",
     "term.init.keeping": "Mantendo {path}.",
-    "term.init.wrote": "Gravei {path} (só você pode lê-lo). `flib check-config` o valida.",
-    "term.init.no_trial": (
-        "Pulando o teste. `flib simulate` mostra o plano quando o flib puder rodar."
+    "term.init.wrote": (
+        "Configuração gravada em {path} (só você pode lê-la). `flib check-config` confere se "
+        "está tudo certo."
     ),
+    "term.init.no_trial": "Teste pulado.",
     "term.init.local_quality": (
         "O que esperar, medido no corpus de teste do flib (docs/quality.md): {model} coloca "
         "92% (inglês) e 97% (português) dos itens numa categoria certa, contra 99% e 100% do "
@@ -2837,7 +2839,7 @@ PT_BR: dict[str, Entry] = {
         "`./scripts/install.sh --with-mcp` na pasta do file-librarian."
     ),
     "term.init.language": "Idioma dos nomes, descrições e pastas",
-    "term.init.choose_one": "escolha um de {options}.",
+    "term.init.choose_one": "escolha uma opção: {options}.",
     "term.init.folders_again": "Vamos tentar as pastas de novo.",
     "term.init.other_provider": "Escolha outro provedor por enquanto.",
     "term.init.vision_note": (
@@ -2899,7 +2901,7 @@ PT_BR: dict[str, Entry] = {
     "term.init.shots_none": (
         "Nada lá tem um nome que o flib reconheça como captura de tela (em inglês, português, "
         "espanhol, francês, alemão, italiano ou japonês), então ele talvez nunca organize nada "
-        "dali; a resposta que você provavelmente quer é não."
+        "dali; provavelmente a melhor resposta é não."
     ),
     "term.init.shots_question": "Organizar as capturas de tela também?",
     "term.init.folder": "Pasta a organizar",
@@ -2910,8 +2912,8 @@ PT_BR: dict[str, Entry] = {
     "term.init.output": "Para onde vão os arquivos organizados",
     "term.init.review": "Pasta, dentro dela, para os arquivos a revisar",
     "term.init.claude_not_found": "não encontrado",
-    "term.init.claude_logged_in": "encontrado, logado",
-    "term.init.claude_logged_out": "encontrado, não logado",
+    "term.init.claude_logged_in": "encontrado, com login feito",
+    "term.init.claude_logged_out": "encontrado, sem login",
     "term.init.option.claude_code": (
         "  claude-code    sua assinatura do Claude pelo Claude Code ({state}); sem chave de API"
     ),
@@ -2979,14 +2981,19 @@ PT_BR: dict[str, Entry] = {
     "term.row.trial_move": _pt("mover", "{name}  ->  {destination}"),
     "term.init.trial_summary": "Resumo: {organized}, {review}, {stay}.",
     "term.init.to_categories": Plural(
-        zero="nenhum para as categorias",
-        one="{count} para as categorias",
-        other="{count} para as categorias",
+        zero="nenhum iria para as categorias",
+        one="{count} iria para as categorias",
+        other="{count} iriam para as categorias",
     ),
     "term.init.to_review": Plural(
-        zero="nenhum para {folder}, para você decidir",
-        one="{count} para {folder}, para você decidir",
-        other="{count} para {folder}, para você decidir",
+        zero="nenhum para {folder} (para você decidir)",
+        one="{count} para {folder} (para você decidir)",
+        other="{count} para {folder} (para você decidir)",
+    ),
+    "term.init.stay": Plural(
+        zero="nenhum ficaria onde está",
+        one="{count} ficaria onde está",
+        other="{count} ficariam onde estão",
     ),
     "term.init.not_tried": Plural(
         zero="  nenhum ficou sem testar.",
@@ -3017,7 +3024,9 @@ PT_BR: dict[str, Entry] = {
         "(quando os downloads terminam) em vez de uma vez por dia; both mantém a execução "
         "diária como rede de segurança."
     ),
-    "term.init.mode_question": "Rodar todo dia (daily), na chegada (watch), ou os dois (both)?",
+    "term.init.mode_question": (
+        "Quando rodar: todo dia (daily), na chegada (watch) ou os dois (both)?"
+    ),
     "term.init.set_mode": (
         "Defina schedule.mode: {mode} em {path} para que o `flib schedule` mantenha essa escolha."
     ),

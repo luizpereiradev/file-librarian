@@ -74,7 +74,7 @@ from file_librarian.fix import FixError, fix_file
 from file_librarian.hashing import file_sha256, unit_manifest
 from file_librarian.i18n import Msg, english, formats, t
 from file_librarian.i18n.core import detail, refusal
-from file_librarian.locales import LOCALES, Language
+from file_librarian.locales import DEFAULT_LANGUAGE, LOCALES, Language
 from file_librarian.lock import AlreadyRunningError, holder, instance_lock, reprocess_lock
 from file_librarian.models import FileStatus, RunTrigger, explain_review
 from file_librarian.planner import Plan
@@ -2004,12 +2004,16 @@ class _Asker:
         answer = str(typer.prompt(question, default=default)).strip()
         return answer or default
 
-    def choice(self, question: str, options: list[str], default: str) -> str:
+    def choice(
+        self, question: str, options: list[str], default: str, *, listed: bool = True
+    ) -> str:
+        """``listed=False``: the question names its options itself."""
+        asked = f"{question} ({', '.join(options)})" if listed else question
         if self.yes:
-            _echo(f"{question} ({', '.join(options)}) [{default}]: {default}")
+            _echo(f"{asked} [{default}]: {default}")
             return default
         while True:
-            answer = self.text(f"{question} ({', '.join(options)})", default)
+            answer = self.text(asked, default)
             if answer in options:
                 return answer
             _echo(t("term.error", text=t("term.init.choose_one", options=", ".join(options))),
@@ -2024,15 +2028,21 @@ class _Asker:
         return _confirm(question, default=default)
 
 
-def _init_language(path: Path) -> None:
-    """``flib init`` speaks the language of the configuration it would replace, when
-    one can be read; otherwise the shell's (``onboarding.detect_language``, the same
-    signal that picks Portuguese folders and categories), so a Brazilian user's first
-    run is in Portuguese. Its first answer, the language, then decides (#141)."""
+def _init_language(path: Path) -> Language:
+    """The language ``flib init`` starts in and suggests for its first question.
+
+    Replacing a configuration it can read, that configuration's language: a library's
+    folders and categories must not flip language because this shell's locale differs
+    from the one the library was set up in. With none (or one it cannot read), the
+    shell's locale (``onboarding.detect_language``, the same signal that picks the
+    Portuguese folders), so a Brazilian user's first run is in Portuguese. The answer
+    to the question then decides (#141)."""
     try:
-        _speak(load_config(path))
+        language = load_config(path).language
     except ConfigError:
-        i18n.use(onboarding.detect_language())
+        language = onboarding.detect_language()
+    i18n.use(language)
+    return language
 
 
 @app.command()
@@ -2068,7 +2078,7 @@ def init(
     """
     ask = _Asker(yes)
     path = config or default_config_path()
-    _init_language(path)
+    suggested = _init_language(path)
     _echo(t("term.init.welcome"))
     _echo("")
     if local and not _local_setup(ask):
@@ -2079,7 +2089,7 @@ def init(
     if path.exists() and not overwrite:
         _echo(t("term.init.keeping", path=str(path)))
     else:
-        answers = _ask_answers(ask, local=local)
+        answers = _ask_answers(ask, local=local, language=suggested)
         onboarding.write_config(path, onboarding.render_config(answers))
         _echo("")
         _echo(t("term.init.wrote", path=str(path)))
@@ -2098,11 +2108,11 @@ def init(
     _echo(t("term.init.next"))
 
 
-def _ask_answers(ask: _Asker, *, local: bool = False) -> onboarding.Answers:
-    language = cast(
-        Language,
-        ask.choice(t("term.init.language"), list(LOCALES), i18n.current()),
-    )
+def _ask_answers(
+    ask: _Asker, *, local: bool = False, language: Language = DEFAULT_LANGUAGE
+) -> onboarding.Answers:
+    """The answers, starting with the language (``language``: the suggestion)."""
+    language = cast(Language, ask.choice(t("term.init.language"), list(LOCALES), language))
     i18n.use(language)  # from its first answer on, flib init speaks the chosen language
     while True:
         answers = _ask_folders(ask, language)
@@ -2417,7 +2427,7 @@ def _print_trial(trial: onboarding.Trial, cfg: Config) -> None:
             "term.init.trial_summary",
             organized=t("term.init.to_categories", count=organized),
             review=t("term.init.to_review", count=review, folder=cfg.review_folder),
-            stay=t("term.simulate.stay", count=stay),
+            stay=t("term.init.stay", count=stay),
         )
     )
     categories = trial.by_category()
@@ -2447,7 +2457,9 @@ def _offer_schedule(path: Path, cfg: Config, ask: _Asker) -> None:
         _echo(t("term.init.schedule_later"))
         return
     _echo(t("term.init.watch_explained"))
-    mode = ask.choice(t("term.init.mode_question"), list(scheduler.MODES), cfg.schedule.mode)
+    mode = ask.choice(
+        t("term.init.mode_question"), list(scheduler.MODES), cfg.schedule.mode, listed=False
+    )
     if mode == "watch":
         _echo(WATCH_ONLY_NOTE)
     if mode != cfg.schedule.mode and not onboarding.set_schedule_mode(path, mode):
