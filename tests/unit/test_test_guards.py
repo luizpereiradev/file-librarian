@@ -47,6 +47,7 @@ def test_the_safety_fixtures_outlive_a_monkeypatch_context(
     fake_keychain: Path,
     fake_launchd: Path,
     fake_osascript: Path,
+    fake_tools: Path,
 ) -> None:
     with monkeypatch.context() as m:
         m.setenv("HOME", "/nowhere")
@@ -60,7 +61,8 @@ def test_the_safety_fixtures_outlive_a_monkeypatch_context(
     with pytest.raises(NetworkBlockedError), socket.socket() as sock:
         sock.connect(("192.0.2.1", 443))
     assert os.environ["FAKE_KEYCHAIN"] == str(fake_keychain)
-    assert Path(keychain.SECURITY).parent == fake_keychain.parent
+    assert Path(keychain.SECURITY) == fake_tools / "keychain" / "security"
     assert os.environ["FAKE_LAUNCHD"] == str(fake_launchd)
-    assert Path(scheduler.LAUNCHCTL).parent == fake_launchd.parent
-    assert Path(status.OSASCRIPT).parent == fake_osascript.parent
+    assert Path(scheduler.LAUNCHCTL) == fake_tools / "launchd" / "launchctl"
+    assert os.environ["FAKE_OSASCRIPT_LOG"] == str(fake_osascript)
+    assert Path(status.OSASCRIPT) == fake_tools / "osascript" / "osascript"

@@ -169,23 +169,62 @@ def _shim(
     return shim
 
 
+NOTIFIER_TOOLS = {
+    "osacompile": "OSACOMPILE",
+    "codesign": "CODESIGN",
+    "sips": "SIPS",
+    "iconutil": "ICONUTIL",
+    "open": "OPEN",
+    "lsregister": "LSREGISTER",
+}
+FAKE_TOOLS: dict[tuple[str, str], tuple[str, str]] = {
+    ("keychain", "security"): ("fake_security.py", "main(sys.argv[1:])"),
+    ("launchd", "launchctl"): ("fake_launchctl.py", "main(sys.argv[1:])"),
+    ("sips", "sips"): ("fake_sips.py", "main(sys.argv[1:])"),
+    ("ocr", "osascript"): ("fake_ocr.py", "main(sys.argv[1:])"),
+    ("osascript", "osascript"): ("fake_osascript.py", "main(sys.argv[1:])"),
+    ("open", "open"): ("fake_open.py", "main(sys.argv[1:])"),
+    ("defaults", "defaults"): ("fake_defaults.py", "main(sys.argv[1:])"),
+    **{
+        ("notifier", tool): ("fake_notifier_tools.py", f"main({tool!r}, sys.argv[1:])")
+        for tool in NOTIFIER_TOOLS
+    },
+}
+"""(folder, name) -> (fake, call): the shims of ``fake_tools``."""
+
+
+@pytest.fixture(scope="session")
+def fake_tools(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The shims of the fake tools, written once per process (each xdist worker has its
+    own). They hold no state: every test points them at its own folder through
+    ``FAKE_*`` variables. Written once, not per test, because macOS checks a new
+    executable the first time it runs it, which costs about 40 ms."""
+    root = tmp_path_factory.mktemp("tools")
+    for (folder, name), (script, call) in FAKE_TOOLS.items():
+        (root / folder).mkdir(exist_ok=True)
+        _shim(root / folder, name, script, call=call)
+    return root
+
+
 @pytest.fixture(autouse=True)
 def fake_keychain(
-    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch, fake_tools: Path
 ) -> Path:
     """Every test talks to a throwaway keychain, never the user's login Keychain."""
     folder = tmp_path_factory.mktemp("keychain")
-    script = _shim(folder, "security", "fake_security.py")
+    script = fake_tools / "keychain" / "security"
     monkeypatch.setenv("FAKE_KEYCHAIN", str(folder / "items.json"))
     monkeypatch.setattr("file_librarian.keychain.SECURITY", str(script))
     return folder / "items.json"
 
 
 @pytest.fixture(autouse=True)
-def fake_launchd(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
+def fake_launchd(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch, fake_tools: Path
+) -> Path:
     """Every test talks to a fake launchctl; no real agent is ever loaded."""
     folder = tmp_path_factory.mktemp("launchd")
-    script = _shim(folder, "launchctl", "fake_launchctl.py")
+    script = fake_tools / "launchd" / "launchctl"
     monkeypatch.setenv("FAKE_LAUNCHD", str(folder / "loaded.json"))
     monkeypatch.delenv("FAKE_LAUNCHD_STOPPED", raising=False)
     monkeypatch.setattr("file_librarian.scheduler.LAUNCHCTL", str(script))
@@ -202,10 +241,12 @@ def fake_launchd(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.M
 
 
 @pytest.fixture(autouse=True)
-def fake_sips(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
+def fake_sips(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch, fake_tools: Path
+) -> Path:
     """Every test converts images with a fake sips; returns the log of its calls."""
     folder = tmp_path_factory.mktemp("sips")
-    script = _shim(folder, "sips", "fake_sips.py")
+    script = fake_tools / "sips" / "sips"
     monkeypatch.setenv("FAKE_SIPS_LOG", str(folder / "calls.jsonl"))
     monkeypatch.delenv("FAKE_SIPS_SILENT", raising=False)
     monkeypatch.setattr("file_librarian.extractors.visual.SIPS", str(script))
@@ -213,13 +254,15 @@ def fake_sips(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Monk
 
 
 @pytest.fixture(autouse=True)
-def fake_ocr(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
+def fake_ocr(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch, fake_tools: Path
+) -> Path:
     """Text recognition goes to a fake helper (tests/fake_ocr.py); returns the log of its calls.
 
     It finds only the text ``make_scan`` hides in a synthetic file.
     """
     folder = tmp_path_factory.mktemp("ocr")
-    script = _shim(folder, "osascript", "fake_ocr.py")
+    script = fake_tools / "ocr" / "osascript"
     monkeypatch.setenv("FAKE_OCR_LOG", str(folder / "calls.jsonl"))
     monkeypatch.delenv("FAKE_OCR_MODE", raising=False)
     monkeypatch.setattr("file_librarian.extractors.ocr.OSASCRIPT", str(script))
@@ -229,37 +272,27 @@ def fake_ocr(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.Monke
 
 @pytest.fixture(autouse=True)
 def fake_osascript(
-    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch, fake_tools: Path
 ) -> Path:
     """Every notification goes to a fake osascript; returns the log of its calls."""
     folder = tmp_path_factory.mktemp("osascript")
-    script = _shim(folder, "osascript", "fake_osascript.py")
+    script = fake_tools / "osascript" / "osascript"
     monkeypatch.setenv("FAKE_OSASCRIPT_LOG", str(folder / "calls.jsonl"))
     monkeypatch.delenv("FAKE_OSASCRIPT_FAIL", raising=False)
     monkeypatch.setattr("file_librarian.status.OSASCRIPT", str(script))
     return folder / "calls.jsonl"
 
 
-NOTIFIER_TOOLS = {
-    "osacompile": "OSACOMPILE",
-    "codesign": "CODESIGN",
-    "sips": "SIPS",
-    "iconutil": "ICONUTIL",
-    "open": "OPEN",
-    "lsregister": "LSREGISTER",
-}
-
-
 @pytest.fixture(autouse=True)
 def fake_notifier_tools(
-    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch, fake_tools: Path
 ) -> Path:
     """The notifier app is built and launched with fakes (tests/fake_notifier_tools.py);
     returns the log of their calls. It goes into the throwaway environment of
     ``fake_launchd``, never into the developer's."""
     folder = tmp_path_factory.mktemp("notifier")
     for tool, constant in NOTIFIER_TOOLS.items():
-        shim = _shim(folder, tool, "fake_notifier_tools.py", call=f"main({tool!r}, sys.argv[1:])")
+        shim = fake_tools / "notifier" / tool
         monkeypatch.setattr(f"file_librarian.notifier.{constant}", str(shim))
     monkeypatch.setenv("FAKE_NOTIFIER_LOG", str(folder / "calls.jsonl"))
     monkeypatch.delenv("FAKE_NOTIFIER_FAIL", raising=False)
@@ -281,12 +314,14 @@ def menu_nudges(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 
 @pytest.fixture(autouse=True)
-def fake_browser(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
+def fake_browser(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch, fake_tools: Path
+) -> Path:
     """``flib ui`` opens its handoff file with a fake ``open``; no test opens a real browser.
 
     Returns the log of its calls (tests/fake_open.py)."""
     folder = tmp_path_factory.mktemp("open")
-    script = _shim(folder, "open", "fake_open.py")
+    script = fake_tools / "open" / "open"
     monkeypatch.setenv("FAKE_OPEN_LOG", str(folder / "calls.jsonl"))
     monkeypatch.delenv("FAKE_OPEN_FAIL", raising=False)
     monkeypatch.setattr("file_librarian.ui.server.OPEN", str(script))
@@ -303,14 +338,14 @@ def fake_browser(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.M
 
 @pytest.fixture(autouse=True)
 def fake_defaults(
-    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch, fake_tools: Path
 ) -> Path:
     """``flib init`` reads where screenshots go from a fake ``defaults``; returns its call log.
 
     Unset, screenshots go to the Desktop; a test sets ``FAKE_SCREENSHOT_LOCATION``.
     """
     folder = tmp_path_factory.mktemp("defaults")
-    script = _shim(folder, "defaults", "fake_defaults.py")
+    script = fake_tools / "defaults" / "defaults"
     monkeypatch.setenv("FAKE_DEFAULTS_LOG", str(folder / "calls.jsonl"))
     monkeypatch.delenv("FAKE_SCREENSHOT_LOCATION", raising=False)
     monkeypatch.setattr("file_librarian.onboarding.DEFAULTS", str(script))
