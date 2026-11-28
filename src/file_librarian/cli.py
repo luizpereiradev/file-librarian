@@ -143,9 +143,12 @@ def _root(
 
 
 def _echo(text: str, *, err: bool = False) -> None:
-    """Print a line in the language of the moment: a message made earlier (a module
-    constant, made at import) is rendered again."""
-    typer.echo(text.text() if isinstance(text, Msg) else text, err=err)
+    """Print a line for a person, in the language of the moment: a message made earlier
+    (a module constant, made at import) is rendered again, and what a file's name could
+    hold that a terminal acts on (ESC, CR, BEL, a right-to-left override) is shown as an
+    escape (``formats.printable``). ``--json`` goes out with ``typer.echo``, as it is."""
+    said = text.text() if isinstance(text, Msg) else text
+    typer.echo(formats.printable(said, lines=True), err=err)
 
 
 def _warn(text: str) -> None:
@@ -200,32 +203,32 @@ def check_config(config: ConfigOption = None) -> None:
     try:
         cfg = load_config(path)
     except ConfigError as exc:
-        typer.echo(f"error: {exc}", err=True)
+        _echo(f"error: {exc}", err=True)
         raise typer.Exit(EXIT_ERROR) from exc
-    typer.echo(f"{path}: OK")
-    typer.echo(f"  language: {cfg.language}")
-    typer.echo("  inputs:")
+    _echo(f"{path}: OK")
+    _echo(f"  language: {cfg.language}")
+    _echo("  inputs:")
     for entry in cfg.inputs:
-        typer.echo(f"    {entry.path}: {cfg.input_summary(entry)}")
-    typer.echo(f"  output_root: {cfg.output_root}")
-    typer.echo(f"  review_folder: {cfg.review_folder}")
-    typer.echo(f"  categories: {', '.join(c.name for c in cfg.categories)}")
-    typer.echo(f"  provider: {cfg.provider.name} ({cfg.provider.model})")
+        _echo(f"    {entry.path}: {cfg.input_summary(entry)}")
+    _echo(f"  output_root: {cfg.output_root}")
+    _echo(f"  review_folder: {cfg.review_folder}")
+    _echo(f"  categories: {', '.join(c.name for c in cfg.categories)}")
+    _echo(f"  provider: {cfg.provider.name} ({cfg.provider.model})")
     spec = credentials.key_spec(cfg.provider)
     if spec is not None:
         found = credentials.resolve(cfg.provider)
         if found.value:
-            typer.echo(f"  api key: {found.source} ({found.hint})")
+            _echo(f"  api key: {found.source} ({found.hint})")
         elif spec.provider == "anthropic":
-            typer.echo("  api key: not found (run `flib key set`, or set ANTHROPIC_API_KEY)")
+            _echo("  api key: not found (run `flib key set`, or set ANTHROPIC_API_KEY)")
         else:
-            typer.echo(
+            _echo(
                 "  api key: none (fine for a server that needs none; otherwise run "
                 f"`flib key set --provider {spec.provider}`, or set {spec.env_var})"
             )
     for entry in cfg.inputs:
         if entry.category is not None and entry.only is None:
-            typer.echo(
+            _echo(
                 f"warning: input {entry.path} has a fixed category and no `only`: everything "
                 f"in this folder is filed as {entry.category} without being looked at.",
                 err=True,
@@ -238,10 +241,10 @@ def check_config(config: ConfigOption = None) -> None:
         _warn_compat_only_options(cfg.provider)
     env_file = cfg.provider.env_file
     if env_file is not None and env_file.exists() and not credentials.env_file_is_private(env_file):
-        typer.echo(f"warning: {env_file} is readable by other users; run chmod 600 on it", err=True)
+        _echo(f"warning: {env_file} is readable by other users; run chmod 600 on it", err=True)
     if not is_implemented(cfg.provider.name):
         milestone = PLANNED.get(cfg.provider.name, "a later milestone")
-        typer.echo(
+        _echo(
             f"warning: provider {cfg.provider.name!r} is planned for {milestone}; "
             "classification commands will not run until then.",
             err=True,
@@ -249,15 +252,13 @@ def check_config(config: ConfigOption = None) -> None:
     _report_ocr(cfg)
     _report_semantic(cfg)
     for line in locality.summary_lines(cfg):
-        typer.echo(f"  {line}")
+        _echo(f"  {line}")
     for line in status_mod.cost_cap_lines(cfg):
-        typer.echo(
-            line if line.startswith("warning") else f"  {line}", err=line.startswith("warning")
-        )
+        _echo(line if line.startswith("warning") else f"  {line}", err=line.startswith("warning"))
     _report_watch(cfg, path)
     _warn_orphan_categories(cfg)
     for option, milestone in inactive_options_set(cfg):
-        typer.echo(
+        _echo(
             f"warning: {option} is planned for {milestone} and does nothing yet; "
             "your value is accepted but ignored.",
             err=True,
@@ -275,7 +276,7 @@ def _report_watch(cfg: Config, path: Path) -> None:
         return
     stale = scheduler.stale_watch_message(state, cfg.input_paths)
     if stale:
-        typer.echo(f"warning: {stale}", err=True)
+        _echo(f"warning: {stale}", err=True)
 
 
 COMPAT_PROVIDERS = ("openai-compat", "ollama")
@@ -287,7 +288,7 @@ COMPAT_ONLY_OPTIONS = (
 def _warn_compat_only_options(provider: ProviderConfig) -> None:
     for option in COMPAT_ONLY_OPTIONS:
         if option in provider.model_fields_set:
-            typer.echo(
+            _echo(
                 f"warning: provider.{option} applies to openai-compat and ollama only; "
                 f"{provider.name} ignores it.",
                 err=True,
@@ -300,61 +301,61 @@ def _report_compat(cfg: Config) -> None:
     url = p.base_url or ""
     local = is_loopback_url(url)
     where = "this Mac; no rate limit, never_send still applies" if local else "a remote server"
-    typer.echo(f"  base_url: {url} ({where})")
+    _echo(f"  base_url: {url} ({where})")
     if not local and url.startswith("http://"):
-        typer.echo(
+        _echo(
             "warning: provider.base_url uses http:// to another machine; file content "
             "would travel unencrypted. Use https://.",
             err=True,
         )
     if p.name == "ollama" and not local:
-        typer.echo(
+        _echo(
             "warning: provider.base_url is not this Mac: file content leaves it, and Ollama "
             "is treated as a remote provider.",
             err=True,
         )
     priced = p.price_input_per_mtok > 0 or p.price_output_per_mtok > 0
     if not priced and not local and cfg.limits.max_cost_usd_per_run is not None:
-        typer.echo(
+        _echo(
             "warning: provider.price_input_per_mtok and price_output_per_mtok are not set, so "
             "the cost of each file counts as 0 and limits.max_cost_usd_per_run cannot stop a "
             "run. Set them to your provider's prices.",
             err=True,
         )
     if cfg.vision.enabled and not p.vision:
-        typer.echo("  vision: off for this model (set provider.vision: true if it reads images)")
+        _echo("  vision: off for this model (set provider.vision: true if it reads images)")
     if p.name == "ollama":
         from file_librarian.providers import ollama
 
         ready, line = ollama.check(p)
         if ready:
-            typer.echo(f"  ollama: {line}")
+            _echo(f"  ollama: {line}")
         else:
-            typer.echo(f"warning: {line}", err=True)
+            _echo(f"warning: {line}", err=True)
 
 
 def _report_ocr(cfg: Config) -> None:
     """OCR: off, or on with its languages; a warning when this Mac cannot run it."""
     settings = cfg.ocr
     if not settings.enabled:
-        typer.echo("  ocr: off")
+        _echo("  ocr: off")
         return
     found = ocr.availability()
     if not found.available:
-        typer.echo("  ocr: unavailable")
-        typer.echo(
+        _echo("  ocr: unavailable")
+        _echo(
             f"warning: OCR is on but cannot run here ({found.reason}); images and scanned "
             "PDFs are classified with vision if it is on, else from their name and metadata.",
             err=True,
         )
         return
-    typer.echo(
+    _echo(
         f"  ocr: on, on this Mac ({', '.join(settings.languages)}; "
         f"first {settings.max_pages} pages of a scanned PDF)"
     )
     unknown = [lang for lang in settings.languages if lang not in found.languages]
     if unknown:
-        typer.echo(
+        _echo(
             f"warning: ocr.languages: macOS cannot recognise {', '.join(unknown)}; "
             f"it can: {', '.join(found.languages)}",
             err=True,
@@ -365,28 +366,28 @@ def _report_semantic(cfg: Config) -> None:
     """Semantic search: off, or where the index's text goes to be embedded."""
     semantic = cfg.search.semantic
     if not semantic.enabled:
-        typer.echo("  semantic search: off")
+        _echo("  semantic search: off")
         return
     url = semantic.base_url
     local = is_loopback_url(url)
     where = "this Mac" if local else "a remote server"
-    typer.echo(f"  semantic search: {semantic.model} at {url} ({where})")
+    _echo(f"  semantic search: {semantic.model} at {url} ({where})")
     if not local:
-        typer.echo(
+        _echo(
             "warning: search.semantic.base_url is not this Mac: the names, categories, tags "
             "and descriptions in the index, and every semantic query, leave it. Embeddings are "
             "not priced; check your server's rates.",
             err=True,
         )
         if url.startswith("http://"):
-            typer.echo(
+            _echo(
                 "warning: search.semantic.base_url uses http:// to another machine; the index "
                 "text would travel unencrypted. Use https://.",
                 err=True,
             )
     found = credentials.resolve_embeddings(semantic)
     if found.value:
-        typer.echo(f"  embeddings api key: {found.source} ({found.hint})")
+        _echo(f"  embeddings api key: {found.source} ({found.hint})")
 
 
 def _report_claude(cfg: Config) -> None:
@@ -395,20 +396,20 @@ def _report_claude(cfg: Config) -> None:
 
     executable = claude_code.find_claude(cfg.provider)
     if executable is None:
-        typer.echo("  claude: not found")
-        typer.echo(
+        _echo("  claude: not found")
+        _echo(
             "warning: install Claude Code, or set provider.command to the `claude` executable",
             err=True,
         )
         return
-    typer.echo(f"  claude: {executable}")
+    _echo(f"  claude: {executable}")
     login = claude_code.logged_in(executable)
     if login is None:
-        typer.echo("warning: could not ask Claude Code whether it is logged in", err=True)
+        _echo("warning: could not ask Claude Code whether it is logged in", err=True)
     elif login:
-        typer.echo("  claude login: ok")
+        _echo("  claude login: ok")
     else:
-        typer.echo(f"warning: Claude Code is not logged in; {claude_code.LOGIN_HINT}", err=True)
+        _echo(f"warning: Claude Code is not logged in; {claude_code.LOGIN_HINT}", err=True)
 
 
 @app.command()
@@ -465,44 +466,44 @@ def inspect(
         typer.echo(json.dumps(results, indent=2, ensure_ascii=False))
         return
     for item in results:
-        typer.echo(str(item["path"]))
-        typer.echo(f"  kind:   {item['kind']}")
+        _echo(str(item["path"]))
+        _echo(f"  kind:   {item['kind']}")
         if item["icloud_only"]:
-            typer.echo(f"  sha256: ({SkipReason.CLOUD_ONLY.value}; download it to inspect it)")
+            _echo(f"  sha256: ({SkipReason.CLOUD_ONLY.value}; download it to inspect it)")
         else:
-            typer.echo(f"  sha256: {item['sha256']}")
+            _echo(f"  sha256: {item['sha256']}")
         if item["size_bytes"] is not None:
-            typer.echo(f"  size:   {item['size_bytes']} bytes")
+            _echo(f"  size:   {item['size_bytes']} bytes")
         urls = item["source_urls"]
         if isinstance(urls, list) and urls:
             for url in urls:
-                typer.echo(f"  from:   {url}")
+                _echo(f"  from:   {url}")
         else:
-            typer.echo("  from:   (no download origin recorded)")
+            _echo("  from:   (no download origin recorded)")
         summary = item["text"]
         if isinstance(summary, dict):
-            typer.echo(f"  text:   {_describe_text(summary)}")
+            _echo(f"  text:   {_describe_text(summary)}")
         entry = item["index"]
         if isinstance(entry, dict):
             where = f", {entry['category']}" if entry["category"] else ""
-            typer.echo(f"  index:  {entry['status']}{where}")
+            _echo(f"  index:  {entry['status']}{where}")
             review = entry["review"]
             if review is not None:
-                typer.echo(f"  review: {review}")
+                _echo(f"  review: {review}")
             if entry["duplicate_of"] is not None:
-                typer.echo(f"  duplicate of: {entry['duplicate_of']}")
+                _echo(f"  duplicate of: {entry['duplicate_of']}")
             choice = entry["name_choice"]
             if choice is not None:
                 said = "original name kept" if choice == "original" else "new name from the AI"
                 reason = entry["name_choice_reason"]
-                typer.echo(f"  name:   {said}" + (f" ({reason})" if reason else ""))
+                _echo(f"  name:   {said}" + (f" ({reason})" if reason else ""))
             fields = entry["fields"]
             if isinstance(fields, dict):
                 for key, value in fields.items():
                     if value is not None and key != "currency":
                         if key == "amount":
                             value = f"{value} {fields['currency']}"
-                        typer.echo(f"  {key.replace('_', ' ') + ':':<8}{value}")
+                        _echo(f"  {key.replace('_', ' ') + ':':<8}{value}")
 
 
 @app.command()
@@ -530,7 +531,7 @@ def status(
         except (status_mod.StatusError, sqlite3.Error) as exc:
             _fatal(t("term.index.unreadable", error=str(exc)))
         for line in status_mod.render_sensitive(found):
-            typer.echo(line)
+            _echo(line)
         return
     try:
         state = status_mod.collect(cfg)
@@ -693,7 +694,7 @@ def _save_key(spec: credentials.KeySpec) -> str | None:
         keychain.write(value, spec.account)
     except (keychain.KeychainError, ValueError) as exc:
         return str(exc)
-    typer.echo(t("term.key.saved", service=repr(keychain.SERVICE), account=repr(spec.account)))
+    _echo(t("term.key.saved", service=repr(keychain.SERVICE), account=repr(spec.account)))
     return None
 
 
@@ -703,16 +704,16 @@ def key_status(config: ConfigOption = None) -> None:
     cfg = _load(config)
     spec = credentials.key_spec(cfg.provider)
     if spec is None:
-        typer.echo(t("term.key.none_needed", provider=cfg.provider.name))
+        _echo(t("term.key.none_needed", provider=cfg.provider.name))
         return
     found = credentials.resolve(cfg.provider)
     if found.value is None:
         if spec.provider == "anthropic":
-            typer.echo(t("term.key.not_found", env=spec.env_var))
+            _echo(t("term.key.not_found", env=spec.env_var))
         else:
-            typer.echo(t("term.key.not_found_for", env=spec.env_var, provider=spec.provider))
+            _echo(t("term.key.not_found_for", env=spec.env_var, provider=spec.provider))
         raise typer.Exit(EXIT_ERROR)
-    typer.echo(t("term.key.using", source=found.source, hint=found.hint))
+    _echo(t("term.key.using", source=found.source, hint=found.hint))
 
 
 @key_app.command("delete")
@@ -723,7 +724,7 @@ def key_delete(provider: KeyProviderOption = None, config: ConfigOption = None) 
         removed = keychain.delete(spec.account)
     except keychain.KeychainError as exc:
         _fatal(str(exc))
-    typer.echo(t("term.key.removed") if removed else t("term.key.none_there"))
+    _echo(t("term.key.removed") if removed else t("term.key.none_there"))
 
 
 # --- Organizing, searching and undoing ----------------------------------------------
@@ -819,7 +820,7 @@ def _pipeline(
             menubar_state.note_problem(cfg.database, "run_failed")
         _fatal(str(exc))
     if outcome.recovered:
-        typer.echo(t("term.recovered", count=outcome.recovered))
+        _echo(t("term.recovered", count=outcome.recovered))
     skipped = _skipped_lines(outcome.scan, cfg)
     cost = _cost_line(outcome.cost_usd, known=outcome.cost_known)
     hint = _access_hint(outcome.scan) if trigger.automatic else None
@@ -831,7 +832,7 @@ def _pipeline(
     if simulate:
         _print_plan(outcome.plan, outcome.deferred, cfg, skipped)
         if cost:
-            typer.echo(cost)
+            _echo(cost)
     elif outcome.report is not None:
         menubar_state.note_problem(cfg.database, "no_access" if hint else None)
         # The periodic summary (and its reminders) stays with the daily run: watch runs
@@ -858,7 +859,7 @@ def _pipeline(
             outcome.report, cfg, skipped, cost, hint, summary, watch=trigger is RunTrigger.WATCH
         )
     if outcome.cached:
-        typer.echo(t("term.cached", count=outcome.cached))
+        _echo(t("term.cached", count=outcome.cached))
     if outcome.embedding is not None and outcome.embedding.error:
         _warn(t("term.run.embedding_failed", error=outcome.embedding.error))
     if will_wait and wait and outcome.report is not None:
@@ -966,7 +967,7 @@ def _note_backlog(cfg: Config, watched: watch_mod.Watched, last: pipeline.Outcom
 
 def _say(line: str) -> None:
     """A line about the scheduled run's waiting, with the time: it goes to schedule.out.log."""
-    typer.echo(f"[{datetime.now().astimezone():%Y-%m-%d %H:%M}] {english(line)}")
+    _echo(f"[{datetime.now().astimezone():%Y-%m-%d %H:%M}] {english(line)}")
 
 
 def _wait_and_catch_up(
@@ -1044,6 +1045,8 @@ def _cost_line(cost_usd: float, *, known: bool) -> Msg | None:
 
 
 def _short(path: Path, cfg: Config) -> str:
+    """``path`` from the library or an input folder. The real name: a run's log keeps
+    it, and ``_echo`` makes it safe for the terminal."""
     for root in (cfg.output_root, *cfg.input_paths):
         if path.is_relative_to(root):
             return str(path.relative_to(root))
@@ -1102,16 +1105,16 @@ def _access_hint(scan: ScanResult) -> Msg | None:
 
 def _print_plan(plan: Plan, deferred: int, cfg: Config, skipped: list[str]) -> None:
     if not plan.items:
-        typer.echo(t("term.simulate.nothing"))
+        _echo(t("term.simulate.nothing"))
     for item in plan.items:
         source = _short(item.context.path, cfg)
         if item.destination is None:
-            typer.echo(t("term.row.keep", source=source, why=detail(item.reason)))
+            _echo(t("term.row.keep", source=source, why=detail(item.reason)))
         elif item.status is FileStatus.DUPLICATE and item.original is not None:
-            typer.echo(_dup_line(source, item.destination, item.original, cfg))
+            _echo(_dup_line(source, item.destination, item.original, cfg))
         else:
             destination = _short(item.destination, cfg)
-            typer.echo(
+            _echo(
                 t("term.row.move", source=source, destination=destination, why=detail(item.reason))
             )
     for line in skipped:
@@ -1121,11 +1124,11 @@ def _print_plan(plan: Plan, deferred: int, cfg: Config, skipped: list[str]) -> N
     stay = t("term.simulate.stay", count=len(plan.items) - moves)
     if duplicates:
         among = t("term.simulate.duplicates", count=duplicates, folder=cfg.duplicates_folder)
-        typer.echo(t("term.simulate.summary_duplicates", count=moves, duplicates=among, stay=stay))
+        _echo(t("term.simulate.summary_duplicates", count=moves, duplicates=among, stay=stay))
     else:
-        typer.echo(t("term.simulate.summary", count=moves, stay=stay))
+        _echo(t("term.simulate.summary", count=moves, stay=stay))
     if deferred:
-        typer.echo(t("term.simulate.deferred", count=deferred))
+        _echo(t("term.simulate.deferred", count=deferred))
 
 
 def _dup_line(source: str, destination: Path, original: Path, cfg: Config) -> Msg:
@@ -1209,7 +1212,7 @@ def _print_report(
     if report.run_id is not None:
         try:
             log = write_log(cfg.database, report.run_id, lines, watch=watch)  # in English
-            typer.echo(t("term.log", path=str(log)))
+            _echo(t("term.log", path=str(log)))
         except OSError as exc:
             _warn(t("term.log_failed", error=str(exc)))
 
@@ -1409,31 +1412,32 @@ def search(
                     store, query, filters=filters, limit=limit, include_duplicates=duplicates
                 )
     if notice:
-        typer.echo(t("term.note", text=notice), err=True)
+        _echo(t("term.note", text=notice), err=True)
     # Results the relevance floor left out are only mentioned when none is left.
     if as_json:
         if weak and not hits:
-            typer.echo(t("term.note", text=t("term.search.no_close")), err=True)
+            _echo(t("term.note", text=t("term.search.no_close")), err=True)
         typer.echo(search_json(hits))
         return
     if not hits:
         if weak:
-            typer.echo(t("term.search.no_close_matches"))
+            _echo(t("term.search.no_close_matches"))
         else:
-            typer.echo(t("term.search.no_matches"))
+            _echo(t("term.search.no_matches"))
         return
+    shown = formats.printable
     for hit in hits:
-        where = str(hit.path) if hit.exists else t("term.search.missing", path=str(hit.path))
-        label = hit.category or hit.status
-        typer.echo(where)
-        typer.echo(t("term.search.was", label=label, name=hit.original_name))
+        path = shown(str(hit.path))
+        _echo(path if hit.exists else t("term.search.missing", path=path))
+        label = shown(hit.category or hit.status)
+        _echo(t("term.search.was", label=label, name=shown(hit.original_name)))
         if hit.duplicate_of is not None:
-            typer.echo(t("term.search.duplicate_of", path=str(hit.duplicate_of)))
+            _echo(t("term.search.duplicate_of", path=shown(str(hit.duplicate_of))))
         line = hit.fields_line()
         if line:
-            typer.echo(f"  {line}")
+            _echo(f"  {shown(line)}")
         if hit.description:
-            typer.echo(f"  {hit.description}")
+            _echo(f"  {shown(hit.description)}")
 
 
 def _sum(
@@ -1450,7 +1454,7 @@ def _sum(
     if by is not None and by not in GROUPS:
         _fatal(t("term.search.bad_by", groups=", ".join(GROUPS), value=repr(by)))
     if semantic:
-        typer.echo(t("term.note", text=t("term.search.sum_words")), err=True)
+        _echo(t("term.note", text=t("term.search.sum_words")), err=True)
     configured = [c.name for c in cfg.categories]
     sums = Sums(by, [], [], 0)
     if not cfg.database.exists():
@@ -1463,16 +1467,19 @@ def _sum(
         typer.echo(json.dumps(sums.to_dict(), ensure_ascii=False, indent=2))
         return
     if not sums.totals:
-        typer.echo(t("term.sum.none"))
+        _echo(t("term.sum.none"))
     if sums.groups:
-        typer.echo(t("term.sum.by", by=t(f"term.sum.group.{by}")))
+        _echo(t("term.sum.by", by=t(f"term.sum.group.{by}")))
         none = t("term.sum.no_group")
-        labels = [formats.clip(item.group or none, 40) for item in sums.groups]
+        labels = [
+            formats.clip(formats.printable(item.group) if item.group else none, 40)
+            for item in sums.groups
+        ]
         width = min(max(max(formats.width(label) for label in labels), formats.width(none)), 40)
         for label, item in zip(labels, sums.groups, strict=True):
             amount = formats.amount(item.total_minor, item.currency)
             files = t("term.sum.files", count=item.files)
-            typer.echo(
+            _echo(
                 t(
                     "term.sum.row",
                     label=formats.ljust(label, width),
@@ -1492,9 +1499,9 @@ def _sum(
         joined = overall[0]
         for part in overall[1:]:
             joined = t("term.then", first=joined, second=part)
-        typer.echo(t("term.sum.total", overall=joined))
+        _echo(t("term.sum.total", overall=joined))
     if sums.without_amount:
-        typer.echo(t("term.sum.without_amount", count=sums.without_amount))
+        _echo(t("term.sum.without_amount", count=sums.without_amount))
 
 
 def _reindex(cfg: Config) -> None:
@@ -1508,7 +1515,7 @@ def _reindex(cfg: Config) -> None:
     except AlreadyRunningError as exc:
         _fatal(str(exc))
     where = t("term.this_mac") if is_loopback_url(semantic.base_url) else semantic.base_url
-    typer.echo(t("term.reindex.done", count=report.embedded, model=semantic.model, where=where))
+    _echo(t("term.reindex.done", count=report.embedded, model=semantic.model, where=where))
     if report.error:
         _fatal(t("term.reindex.failed", error=report.error, count=report.pending))
 
@@ -1537,21 +1544,27 @@ def undo(
     except (NothingToUndoError, AlreadyRunningError) as exc:
         _fatal(str(exc))
     if recovered:
-        typer.echo(t("term.recovered", count=recovered))
+        _echo(t("term.recovered", count=recovered))
     for dst, src in report.restored:
-        typer.echo(t("term.undo.row.restored", source=_short(dst, cfg), destination=str(src)))
+        _echo(
+            t(
+                "term.undo.row.restored",
+                source=_short(dst, cfg),
+                destination=formats.printable(str(src)),
+            )
+        )
     for path, reason in report.skipped:
-        typer.echo(t("term.undo.row.skipped", path=_short(path, cfg), why=detail(reason)))
+        _echo(t("term.undo.row.skipped", path=_short(path, cfg), why=detail(reason)))
     for path, warning in report.warnings:
-        typer.echo(t("term.undo.row.warning", path=_short(path, cfg), why=detail(warning)))
+        _echo(t("term.undo.row.warning", path=_short(path, cfg), why=detail(warning)))
     restored = t("undo.restored", count=len(report.restored))
     skipped = t("undo.skipped_count", count=len(report.skipped))
     if report.reverted:
         reverted = t("undo.reverted", count=report.reverted)
-        typer.echo(t("term.undo.summary_reverted", restored=restored, skipped=skipped,
+        _echo(t("term.undo.summary_reverted", restored=restored, skipped=skipped,
                      reverted=reverted))  # fmt: skip
     else:
-        typer.echo(t("term.undo.summary", restored=restored, skipped=skipped))
+        _echo(t("term.undo.summary", restored=restored, skipped=skipped))
 
 
 @app.command()
@@ -1595,15 +1608,21 @@ def fix(
     except (FixError, AlreadyRunningError) as exc:
         _fatal(str(exc))
     source, destination = _short(report.source, cfg), _short(report.destination, cfg)
-    typer.echo(t("term.row.moved", source=source, destination=destination))
+    _echo(t("term.row.moved", source=source, destination=destination))
     if report.category is not None:
         old, new = report.category
-        typer.echo(t("term.fix.learned_category", old=old or "-", new=new))
+        _echo(t("term.fix.learned_category", old=old or "-", new=new))
     if report.name is not None:
-        typer.echo(t("term.fix.learned_name", old=report.name[0], new=report.name[1]))
+        _echo(
+            t(
+                "term.fix.learned_name",
+                old=formats.printable(report.name[0]),
+                new=formats.printable(report.name[1]),
+            )
+        )
     for warning in report.warnings:
-        typer.echo(t("term.fix.warning", warning=detail(warning)))
-    typer.echo(t("term.fix.done", run=str(report.run_id)))
+        _echo(t("term.fix.warning", warning=detail(warning)))
+    _echo(t("term.fix.done", run=str(report.run_id)))
 
 
 def _settle(config: Path | None, file: Path, *, done: bool) -> None:
@@ -1617,8 +1636,8 @@ def _settle(config: Path | None, file: Path, *, done: bool) -> None:
         _fatal(str(exc))
     marked = "term.fix.marked_done" if report.done else "term.fix.marked_open"
     due_date = formats.day_text(report.due_date)
-    typer.echo(t(marked, path=_short(report.path, cfg), due=due_date))
-    typer.echo(t("term.fix.recorded", run=str(report.run_id)))
+    _echo(t(marked, path=_short(report.path, cfg), due=due_date))
+    _echo(t("term.fix.recorded", run=str(report.run_id)))
 
 
 @app.command()
@@ -1676,8 +1695,8 @@ def due(
     if as_json:
         typer.echo(json.dumps(found.to_dict(), ensure_ascii=False, indent=2))
         return
-    for line in due_mod.render(found):
-        typer.echo(line)
+    for line in due_mod.render(found, show=lambda path: formats.printable(str(path))):
+        _echo(line)
 
 
 @app.command()
@@ -1722,7 +1741,7 @@ def schedule(
     if remove:
         removed = scheduler.remove()
         notifier.remove()
-        typer.echo(t("term.schedule.removed") if removed else t("term.schedule.nothing_removed"))
+        _echo(t("term.schedule.removed") if removed else t("term.schedule.nothing_removed"))
         return
     if show:
         _print_schedule_status()
@@ -1734,7 +1753,7 @@ def schedule(
     if refresh:
         _refresh_menu(quiet=True)
         if not current.installed:
-            typer.echo(t("term.schedule.nothing_to_refresh"))
+            _echo(t("term.schedule.nothing_to_refresh"))
             return
         config = config or scheduler.scheduled_config()
         at = at or current.time
@@ -1770,10 +1789,10 @@ def _install_schedule(
     _ensure_claude_for_schedule(cfg)
     installed = scheduler.install_for(path, cfg, when, mode)
     if mode in ("daily", "both"):
-        typer.echo(t("term.schedule.daily", time=when, plist=str(installed[0])))
-        typer.echo(t("term.schedule.on_wake"))
+        _echo(t("term.schedule.daily", time=when, plist=str(installed[0])))
+        _echo(t("term.schedule.on_wake"))
     if mode in ("watch", "both"):
-        typer.echo(
+        _echo(
             t(
                 "term.schedule.watch_on",
                 plist=str(installed[-1]),
@@ -1781,23 +1800,23 @@ def _install_schedule(
                 minutes=cfg.schedule.watch_min_interval_minutes,
             )
         )
-        typer.echo(t("term.schedule.top_level"))
+        _echo(t("term.schedule.top_level"))
         fallback = cfg.schedule.watch_fallback_minutes
         if fallback:
-            typer.echo(t("term.schedule.fallback", minutes=fallback))
+            _echo(t("term.schedule.fallback", minutes=fallback))
         if mode == "watch":
             _echo(WATCH_ONLY_NOTE)
         for line in status_mod.cost_cap_lines(cfg):
             _echo(line, err=status_mod.is_warning(line))
     _prepare_notifier(cfg)
-    typer.echo(t("term.schedule.remove_hint"))
+    _echo(t("term.schedule.remove_hint"))
 
 
 def _prepare_notifier(cfg: Config) -> None:
     """Build or refresh flib's notifier app; never fails the schedule (``notifier``)."""
     problem = notifier.ensure()
     if problem is not None:
-        typer.echo(t("term.note", text=t("term.schedule.script_editor", problem=problem)),
+        _echo(t("term.note", text=t("term.schedule.script_editor", problem=problem)),
                    err=True)  # fmt: skip
         return
     logs = logs_dir(cfg.database)
@@ -1806,7 +1825,7 @@ def _prepare_notifier(cfg: Config) -> None:
         and not notifier.introduced(logs)
         and notifier.introduce(logs, language=i18n.language_of(cfg)) is None
     ):
-        typer.echo(t("term.schedule.allow_notifications"))
+        _echo(t("term.schedule.allow_notifications"))
 
 
 WATCH_ONLY_NOTE = t("term.schedule.watch_only")
@@ -1819,16 +1838,16 @@ def _print_schedule_status() -> None:
     except scheduler.ScheduleError as exc:
         _fatal(str(exc))
     if not state.installed:
-        typer.echo(t("term.schedule.status_none"))
+        _echo(t("term.schedule.status_none"))
         return
     stale = _stale_watch_note(state)
     loaded = t("term.schedule.active") if state.loaded else t("term.schedule.not_loaded")
-    typer.echo(t("term.schedule.mode", mode=state.mode))
+    _echo(t("term.schedule.mode", mode=state.mode))
     if state.time is not None:
-        typer.echo(t("term.schedule.daily_at", time=state.time, state=loaded))
+        _echo(t("term.schedule.daily_at", time=state.time, state=loaded))
     if state.watch_paths:
         if state.watch_fallback_minutes:
-            typer.echo(
+            _echo(
                 t(
                     "term.schedule.watching_fallback",
                     state=loaded,
@@ -1837,12 +1856,10 @@ def _print_schedule_status() -> None:
                 )
             )
         else:
-            typer.echo(
-                t("term.schedule.watching", state=loaded, minutes=state.watch_interval_minutes)
-            )
+            _echo(t("term.schedule.watching", state=loaded, minutes=state.watch_interval_minutes))
         for folder in state.watch_paths:
-            typer.echo(f"  {folder}")
-    typer.echo(t("term.schedule.runs", program=" ".join(state.program)))
+            _echo(f"  {folder}")
+    _echo(t("term.schedule.runs", program=" ".join(state.program)))
     if stale:
         _warn(stale)
     if not state.interpreter_current:
@@ -1883,7 +1900,7 @@ def _ensure_key_for_schedule(cfg: Config, save_key: bool | None) -> None:
     if save_key:
         try:
             keychain.write(found.value, spec.account)
-            typer.echo(t("term.schedule.key_saved"))
+            _echo(t("term.schedule.key_saved"))
         except (keychain.KeychainError, ValueError) as exc:
             _warn(t("term.schedule.key_not_saved", error=str(exc)))
     else:
@@ -1907,7 +1924,7 @@ def _ensure_claude_for_schedule(cfg: Config) -> None:
 
 def _report_access(config_path: Path) -> bool:
     """Run the access check and explain any denial; ``False`` when macOS blocks a folder."""
-    typer.echo(t("term.access.checking"))
+    _echo(t("term.access.checking"))
     try:
         report = scheduler.check_access(config_path)
     except scheduler.ScheduleError as exc:
@@ -1917,12 +1934,12 @@ def _report_access(config_path: Path) -> bool:
     denied = {folder: state for folder, state in report.items() if state != "ok"}
     for folder, state in report.items():
         shown = t("term.access.ok") if state == "ok" else detail(state)
-        typer.echo(f"  {folder}: {shown}")
+        _echo(f"  {folder}: {shown}")
     if denied:
         binary = scheduler.dedicated_interpreter()
-        typer.echo("\n" + t("term.access.denied", binary=str(binary)), err=True)
+        _echo("\n" + t("term.access.denied", binary=str(binary)), err=True)
         return False
-    typer.echo(t("term.access.all_ok"))
+    _echo(t("term.access.all_ok"))
     return True
 
 
@@ -1953,28 +1970,28 @@ def reconcile(config: ConfigOption = None) -> None:
     except AlreadyRunningError as exc:
         _fatal(str(exc))
     if recovered:
-        typer.echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
+        _echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
     for old, new in report.moved:
-        typer.echo(f"  moved   {_short(old, cfg)}  ->  {_short(new, cfg)}")
+        _echo(f"  moved   {_short(old, cfg)}  ->  {_short(new, cfg)}")
     for path, old_category, new_category in report.recategorized:
-        typer.echo(f"  learned {_short(path, cfg)}: {old_category or '-'} -> {new_category}")
+        _echo(f"  learned {_short(path, cfg)}: {old_category or '-'} -> {new_category}")
     for path in report.found_again:
-        typer.echo(f"  found   {_short(path, cfg)}")
+        _echo(f"  found   {_short(path, cfg)}")
     for path in report.missing:
-        typer.echo(f"  missing {_short(path, cfg)}")
+        _echo(f"  missing {_short(path, cfg)}")
     for path in report.cloud_only:
-        typer.echo(f"  icloud  {_short(path, cfg)}  ({SkipReason.CLOUD_ONLY.value}, not checked)")
+        _echo(f"  icloud  {_short(path, cfg)}  ({SkipReason.CLOUD_ONLY.value}, not checked)")
     for path in report.unchecked:
-        typer.echo(f"  unread  {_short(path, cfg)}  (cannot be read now, not checked)")
+        _echo(f"  unread  {_short(path, cfg)}  (cannot be read now, not checked)")
     for path in report.locked:
-        typer.echo(f"  locked  {_short(path, cfg)}  ({SkipReason.LOCKED.value}, not checked)")
+        _echo(f"  locked  {_short(path, cfg)}  ({SkipReason.LOCKED.value}, not checked)")
     for path, original in report.orphaned:
-        typer.echo(
+        _echo(
             f"  orphan  {_short(path, cfg)}  (its original {_short(original, cfg)} is missing; "
             "move this copy to an input folder to have it filed)"
         )
     orphaned = f", {len(report.orphaned)} duplicate(s) of missing files" if report.orphaned else ""
-    typer.echo(
+    _echo(
         f"Reconcile: {report.checked} checked, {len(report.moved)} moved by hand, "
         f"{len(report.found_again)} found again, {len(report.missing)} missing, "
         f"{len(report.cloud_only)} in iCloud only{orphaned}."
@@ -2005,25 +2022,25 @@ class _Asker:
 
     def text(self, question: str, default: str) -> str:
         if self.yes:
-            typer.echo(f"{question} [{default}]: {default}")
+            _echo(f"{question} [{default}]: {default}")
             return default
         answer = str(typer.prompt(question, default=default)).strip()
         return answer or default
 
     def choice(self, question: str, options: list[str], default: str) -> str:
         if self.yes:
-            typer.echo(f"{question} ({', '.join(options)}) [{default}]: {default}")
+            _echo(f"{question} ({', '.join(options)}) [{default}]: {default}")
             return default
         while True:
             answer = self.text(f"{question} ({', '.join(options)})", default)
             if answer in options:
                 return answer
-            typer.echo(f"error: choose one of {', '.join(options)}.", err=True)
+            _echo(f"error: choose one of {', '.join(options)}.", err=True)
 
     def confirm(self, question: str, default: bool) -> bool:
         if self.yes:
             hint = "[Y/n]" if default else "[y/N]"
-            typer.echo(f"{question} {hint}: {'y' if default else 'n'}")
+            _echo(f"{question} {hint}: {'y' if default else 'n'}")
             return default
         return typer.confirm(question, default=default)
 
@@ -2061,7 +2078,7 @@ def init(
     """
     ask = _Asker(yes)
     path = config or default_config_path()
-    typer.echo("Setting up file-librarian. Press Enter to take the suggestion in brackets.\n")
+    _echo("Setting up file-librarian. Press Enter to take the suggestion in brackets.\n")
     if local and not _local_setup(ask):
         raise typer.Exit(EXIT_ERROR)
     overwrite = force or (
@@ -2069,23 +2086,23 @@ def init(
         and ask.confirm(f"A configuration already exists at {path}. Replace it?", default=False)
     )
     if path.exists() and not overwrite:
-        typer.echo(f"Keeping {path}.")
+        _echo(f"Keeping {path}.")
     else:
         answers = _ask_answers(ask, local=local)
         onboarding.write_config(path, onboarding.render_config(answers))
-        typer.echo(f"\nWrote {path} (only you can read it). `flib check-config` validates it.")
+        _echo(f"\nWrote {path} (only you can read it). `flib check-config` validates it.")
     cfg = _load(path, speak=False)  # English until it is translated (#141)
-    typer.echo("")
+    _echo("")
     if _provider_ready(cfg, ask) and sample:
         _trial(cfg, sample, ask)
     else:
-        typer.echo("Skipping the trial. `flib simulate` shows the plan once flib can run.")
+        _echo("Skipping the trial. `flib simulate` shows the plan once flib can run.")
     if cfg.provider.name == "ollama" and cfg.provider.model == onboarding.LOCAL_MODEL:
-        typer.echo(onboarding.LOCAL_QUALITY)
-    typer.echo("")
+        _echo(onboarding.LOCAL_QUALITY)
+    _echo("")
     _offer_schedule(path, cfg, ask)
     _offer_menu(path, cfg, ask)
-    typer.echo(
+    _echo(
         "\nNext:\n"
         "  flib simulate   the plan for your real folders; nothing moves\n"
         "  flib run        organize now; `flib undo` reverts it\n"
@@ -2112,13 +2129,13 @@ def _ask_answers(ask: _Asker, *, local: bool = False) -> onboarding.Answers:
         except ConfigError as exc:
             if ask.yes:
                 _fatal(str(exc))
-            typer.echo(f"error: {exc}\nLet's try the folders again.", err=True)
+            _echo(f"error: {exc}\nLet's try the folders again.", err=True)
     answers = _ask_more_inboxes(ask, answers)
     choice = _ProviderChoice("local") if local else _ask_provider(ask)
     while choice.provider == "local" and not local:
         local = _local_setup(ask)  # the "local" answer: set up as `flib init --local` does
         if not local:
-            typer.echo("Choose another provider for now.")
+            _echo("Choose another provider for now.")
             choice = _ask_provider(ask)
     if choice.provider == "local":
         return dataclasses.replace(
@@ -2130,10 +2147,10 @@ def _ask_answers(ask: _Asker, *, local: bool = False) -> onboarding.Answers:
         )
     vision = False
     if choice.provider == "anthropic":
-        typer.echo(VISION_NOTE)
+        _echo(VISION_NOTE)
         vision = ask.confirm("Send images and scanned PDFs to the model?", default=False)
     else:
-        typer.echo("Images and scanned PDFs are classified from their name and metadata.")
+        _echo("Images and scanned PDFs are classified from their name and metadata.")
     return dataclasses.replace(
         answers,
         provider=choice.provider,
@@ -2153,40 +2170,40 @@ def _local_setup(ask: _Asker) -> bool:
     state = onboarding.local_state()
     if state.models is None:
         if state.command is None:
-            typer.echo(
+            _echo(
                 "Ollama is not installed: it runs the local model. flib does not install it "
                 f"for you; {INSTALL_HINT}. Then run `flib init --local` again.",
                 err=True,
             )
         else:
-            typer.echo(
+            _echo(
                 f"Ollama is installed ({state.command}) but not running. Start it with "
                 "`ollama serve`, `brew services start ollama` or the Ollama app, then run "
                 "`flib init --local` again.",
                 err=True,
             )
         return False
-    typer.echo(
+    _echo(
         f"Ollama is running. The local setup uses {onboarding.LOCAL_MODEL} to classify and "
         f"{onboarding.LOCAL_EMBEDDING_MODEL} for semantic search."
     )
     missing = state.missing
     if not missing:
-        typer.echo("Both models are already downloaded.")
+        _echo("Both models are already downloaded.")
         return True
     sizes = ", ".join(f"{m} ({onboarding.LOCAL_MODELS[m]:.1f} GB)" for m in missing)
     total = sum(onboarding.LOCAL_MODELS[m] for m in missing)
-    typer.echo(f"Not downloaded yet: {sizes}.")
+    _echo(f"Not downloaded yet: {sizes}.")
     # --yes takes defaults; a download of several gigabytes is never one of them.
     if not ask.confirm(f"Download them now ({total:.1f} GB)?", default=not ask.yes):
         pulls = "; ".join(f"ollama pull {m}" for m in missing)
-        typer.echo(f"Download them later with: {pulls}")
+        _echo(f"Download them later with: {pulls}")
         return True
     for model in missing:
         try:
-            onboarding.pull_model(model, lambda line: typer.echo(f"  {line}"))
+            onboarding.pull_model(model, lambda line: _echo(f"  {line}"))
         except ProviderError as exc:
-            typer.echo(f"warning: {exc}; try `ollama pull {model}`.", err=True)
+            _echo(f"warning: {exc}; try `ollama pull {model}`.", err=True)
     return True
 
 
@@ -2197,7 +2214,7 @@ def _with_inbox(
     try:
         onboarding.check_answers(candidate)
     except ConfigError as exc:
-        typer.echo(f"Not adding {what}: {exc}", err=True)
+        _echo(f"Not adding {what}: {exc}", err=True)
         return answers
     return candidate
 
@@ -2206,7 +2223,7 @@ def _ask_more_inboxes(ask: _Asker, answers: onboarding.Answers) -> onboarding.An
     """Offer the Desktop and the screenshots folder as more inputs (#89); no by default."""
     desktop = onboarding.desktop_folder()
     if desktop is not None and not is_within(desktop, answers.input_folder):
-        typer.echo(
+        _echo(
             f"\nflib can also tidy the Desktop. People keep work in progress there, so it would "
             f"take only documents and images that have not changed for "
             f"{onboarding.DESKTOP_MIN_AGE_DAYS} days, and leave folders alone. macOS asks once "
@@ -2222,7 +2239,7 @@ def _ask_more_inboxes(ask: _Asker, answers: onboarding.Answers) -> onboarding.An
     category = LOCALES[answers.language].screenshots_category
     where = onboarding.display_path(shots)
     if onboarding.shared_folder(shots):
-        typer.echo(
+        _echo(
             f"\nScreenshots are saved to {where}, which holds other files too, so flib does not "
             "offer to file it by a fixed category. To have screenshots filed on their own, "
             "choose a folder just for them in the Screenshot app (Cmd+Shift+5 > Options > "
@@ -2231,14 +2248,14 @@ def _ask_more_inboxes(ask: _Asker, answers: onboarding.Answers) -> onboarding.An
         )
         return answers
     found = onboarding.count_matching(shots, onboarding.SCREENSHOT_ONLY)
-    typer.echo(
+    _echo(
         f"\nScreenshots are saved in {where} ({found} item(s) there look like screenshots or "
         f"screen recordings now). flib can file those into {category}/<year>/<month> without "
         "asking the AI (no cost), keeping their names; anything else there, and folders, "
         "are left alone."
     )
     if not found:
-        typer.echo(
+        _echo(
             "Nothing there has a name flib knows for a screenshot (in English, Portuguese, "
             "Spanish, French, German, Italian or Japanese), so it may never file anything "
             "from it; the answer you probably want is no."
@@ -2263,7 +2280,7 @@ def _ask_folders(ask: _Asker, language: Language) -> onboarding.Answers:
             break
         if ask.yes:
             _fatal(f"{folder} is not a folder; run `flib init` without --yes to pick another")
-        typer.echo(f"error: {folder} is not a folder.", err=True)
+        _echo(f"error: {folder} is not a folder.", err=True)
     out = ask.text(
         "Where organized files go",
         onboarding.display_path(onboarding.default_output_root(folder, language)),
@@ -2315,7 +2332,7 @@ def _ask_provider(ask: _Asker) -> _ProviderChoice:
         f"  local          nothing leaves this Mac: {onboarding.LOCAL_MODEL} in Ollama, local "
         "search; slower and less accurate (needs Ollama, ~10 GB, 16 GB of memory)"
     )
-    typer.echo("\nWhich AI classifies your files?\n" + "\n".join(lines))
+    _echo("\nWhich AI classifies your files?\n" + "\n".join(lines))
     default = "claude-code" if ready else ("ollama" if local_models else "anthropic")
     name = ask.choice("Provider", options, default)
     if name == "ollama" and local_models:
@@ -2334,7 +2351,7 @@ def _ask_provider(ask: _Asker) -> _ProviderChoice:
                 problem = exc.errors()[0]["msg"].removeprefix("Value error, ")
                 if ask.yes:  # pragma: no cover - --yes never picks openai-compat
                     _fatal(problem)
-                typer.echo(f"error: {problem}", err=True)
+                _echo(f"error: {problem}", err=True)
         model = ask.text("Model", onboarding.DEFAULT_MODELS["openai-compat"])
         return _ProviderChoice(name, model=model, base_url=url)
     if name != "claude-code" or executable is None:
@@ -2350,7 +2367,7 @@ def _provider_ready(cfg: Config, ask: _Asker) -> bool:
     if name == "anthropic":
         found = credentials.resolve(cfg.provider)
         if found.value is not None:
-            typer.echo(f"API key: found in the {found.source} ({found.hint}).")
+            _echo(f"API key: found in the {found.source} ({found.hint}).")
             return True
         if not ask.yes and ask.confirm(
             "No Anthropic API key found. Store one in the macOS Keychain now?", default=True
@@ -2358,13 +2375,13 @@ def _provider_ready(cfg: Config, ask: _Asker) -> bool:
             problem = _save_key(cast(credentials.KeySpec, credentials.key_spec(cfg.provider)))
             if problem is None:
                 return True
-            typer.echo(f"warning: {problem}", err=True)
-        typer.echo("warning: no API key yet; run `flib key set` to add one.", err=True)
+            _echo(f"warning: {problem}", err=True)
+        _echo("warning: no API key yet; run `flib key set` to add one.", err=True)
         return False
     if name == "openai-compat":
         found = credentials.resolve(cfg.provider)
         if found.value is not None:
-            typer.echo(f"API key: found in the {found.source} ({found.hint}).")
+            _echo(f"API key: found in the {found.source} ({found.hint}).")
             return True
         local = is_loopback_url(cfg.provider.base_url or "")
         if not ask.yes and ask.confirm(
@@ -2375,33 +2392,31 @@ def _provider_ready(cfg: Config, ask: _Asker) -> bool:
             spec = cast(credentials.KeySpec, credentials.key_spec(cfg.provider))
             problem = _save_key(spec)
             if problem is not None:
-                typer.echo(f"warning: {problem}", err=True)
+                _echo(f"warning: {problem}", err=True)
         return True
     if name == "ollama":
         from file_librarian.providers import ollama
 
         ready, line = ollama.check(cfg.provider)
         if not ready:
-            typer.echo(f"warning: {line}.", err=True)
+            _echo(f"warning: {line}.", err=True)
         return ready
     if name == "claude-code":
         from file_librarian.providers import claude_code
 
         executable = claude_code.find_claude(cfg.provider)
         if executable is None:
-            typer.echo(
+            _echo(
                 "warning: Claude Code was not found; install it or set provider.command.",
                 err=True,
             )
             return False
         if claude_code.logged_in(executable) is False:
-            typer.echo(
-                f"warning: Claude Code is not logged in; {claude_code.LOGIN_HINT}.", err=True
-            )
+            _echo(f"warning: Claude Code is not logged in; {claude_code.LOGIN_HINT}.", err=True)
             return False
         return True
     if not is_implemented(name):
-        typer.echo(f"warning: provider {name!r} is not available yet.", err=True)
+        _echo(f"warning: provider {name!r} is not available yet.", err=True)
         return False
     return True
 
@@ -2410,7 +2425,7 @@ def _trial(cfg: Config, size: int, ask: _Asker) -> None:
     picked = onboarding.pick_sample(cfg, size)
     where = ", ".join(onboarding.display_path(p) for p in cfg.input_paths)
     if not picked:
-        typer.echo(
+        _echo(
             f"No files to try it on in {where}: it is empty, or holds only hidden, sensitive "
             "or large items. `flib simulate` shows the plan once files arrive."
         )
@@ -2421,39 +2436,39 @@ def _trial(cfg: Config, size: int, ask: _Asker) -> None:
     )
     if not ask.confirm(question, default=True):
         return
-    typer.echo(f"Classifying {len(picked)} copies; this can take a minute...")
+    _echo(f"Classifying {len(picked)} copies; this can take a minute...")
     try:
         result = onboarding.run_trial(cfg, get_provider(cfg.provider), picked)
     except (ProviderError, ScanError) as exc:
-        typer.echo(f"warning: the trial stopped: {exc}", err=True)
+        _echo(f"warning: the trial stopped: {exc}", err=True)
         return
     _print_trial(result, cfg)
 
 
 def _print_trial(trial: onboarding.Trial, cfg: Config) -> None:
     root = onboarding.display_path(cfg.output_root)
-    typer.echo(f"\nTrial on {trial.sampled} copies (destinations are inside {root}):")
+    _echo(f"\nTrial on {trial.sampled} copies (destinations are inside {root}):")
     for item in trial.items:
         if item.destination is None:
-            typer.echo(f"  keep    {item.name}  ({item.reason})")
+            _echo(f"  keep    {item.name}  ({item.reason})")
         else:
             label = {FileStatus.REVIEW: "review", FileStatus.DUPLICATE: "dup"}.get(
                 item.status, "move"
             )
-            typer.echo(f"  {label:<8}{item.name}  ->  {item.destination}")
+            _echo(f"  {label:<8}{item.name}  ->  {item.destination}")
     organized = trial.count(FileStatus.ORGANIZED)
     review = trial.count(FileStatus.REVIEW)
     stay = len(trial.items) - organized - review
-    typer.echo(
+    _echo(
         f"Summary: {organized} to categories, {review} to {cfg.review_folder} for you to "
         f"decide, {stay} would stay."
     )
     categories = trial.by_category()
     if categories:
-        typer.echo("  " + ", ".join(f"{name}: {n}" for name, n in sorted(categories.items())))
+        _echo("  " + ", ".join(f"{name}: {n}" for name, n in sorted(categories.items())))
     if trial.deferred:
-        typer.echo(f"  {trial.deferred} not tried: the cost cap was reached.")
-    typer.echo(
+        _echo(f"  {trial.deferred} not tried: the cost cap was reached.")
+    _echo(
         f"Estimated cost of the trial: US$ {trial.cost_usd:.4f}. Nothing in your folders "
         "moved; the copies and the trial's index are already deleted."
     )
@@ -2463,7 +2478,7 @@ def _offer_schedule(path: Path, cfg: Config, ask: _Asker) -> None:
     try:
         state = scheduler.status()
     except scheduler.ScheduleError as exc:
-        typer.echo(f"warning: cannot read the schedule: {exc}", err=True)
+        _echo(f"warning: cannot read the schedule: {exc}", err=True)
         return
     if state.installed:
         what = f"A daily run is already scheduled at {state.time}"
@@ -2471,13 +2486,13 @@ def _offer_schedule(path: Path, cfg: Config, ask: _Asker) -> None:
             what = "Watch mode is already on"
         elif state.mode == "both":
             what += ", with watch mode"
-        typer.echo(f"{what}; `flib schedule` changes it.")
+        _echo(f"{what}; `flib schedule` changes it.")
         return
     question = f"Organize new files automatically every day at {cfg.schedule.time}?"
     if not ask.confirm(question, default=True):
-        typer.echo("You can schedule it later with `flib schedule` (--at HH:MM for another time).")
+        _echo("You can schedule it later with `flib schedule` (--at HH:MM for another time).")
         return
-    typer.echo(
+    _echo(
         "Watch mode organizes files a few minutes after they arrive (once downloads "
         "finish) instead of once a day; both keeps the daily run as a safety net."
     )
@@ -2485,9 +2500,9 @@ def _offer_schedule(path: Path, cfg: Config, ask: _Asker) -> None:
         "Run daily, on arrival (watch), or both?", list(scheduler.MODES), cfg.schedule.mode
     )
     if mode == "watch":
-        typer.echo(WATCH_ONLY_NOTE)
+        _echo(WATCH_ONLY_NOTE)
     if mode != cfg.schedule.mode and not onboarding.set_schedule_mode(path, mode):
-        typer.echo(
+        _echo(
             f"Set schedule.mode: {mode} in {path} so `flib schedule` keeps this choice.", err=True
         )
     try:
@@ -2495,7 +2510,7 @@ def _offer_schedule(path: Path, cfg: Config, ask: _Asker) -> None:
             path, cfg, cfg.schedule.time, save_key=True if ask.yes else None, mode=mode
         )
     except scheduler.ScheduleError as exc:
-        typer.echo(f"warning: could not schedule the daily run: {exc}", err=True)
+        _echo(f"warning: could not schedule the daily run: {exc}", err=True)
         return
     _report_access(path.resolve())
 
@@ -2505,11 +2520,11 @@ def _offer_menu(path: Path, cfg: Config, ask: _Asker) -> None:
     if menubar.missing_tools():
         return
     if menubar.installed():
-        typer.echo("flib is already in the menu bar; `flib menu --remove` takes it away.")
+        _echo("flib is already in the menu bar; `flib menu --remove` takes it away.")
         return
     question = "Show flib in the menu bar (what needs you, and a menu that opens flib)?"
     if not ask.confirm(question, default=True):
-        typer.echo("You can add it later with `flib menu`.")
+        _echo("You can add it later with `flib menu`.")
         return
     _install_menu(path, cfg)
 
@@ -2606,7 +2621,7 @@ def menu(
             found = menubar.remove()
         except menubar.MenuError as exc:
             _fatal(t("term.menu.not_removed", error=str(exc)))
-        typer.echo(t("term.menu.removed") if found else t("term.menu.was_not_installed"))
+        _echo(t("term.menu.removed") if found else t("term.menu.was_not_installed"))
         return
     if show:
         _print_menu_status()
@@ -2648,8 +2663,8 @@ def _install_menu(path: Path, cfg: Config) -> bool:
     except menubar.MenuError as exc:
         _echo(t("term.error", text=t("term.menu.not_set_up_error", error=str(exc))), err=True)
         return False
-    typer.echo(t("term.menu.installed"))
-    typer.echo(t("term.menu.at_login", plist=str(plist)))
+    _echo(t("term.menu.installed"))
+    _echo(t("term.menu.at_login", plist=str(plist)))
     return True
 
 
@@ -2661,9 +2676,9 @@ def _refresh_menu(*, quiet: bool) -> None:
         _warn(t("term.menu.not_rebuilt", error=str(exc)))
         return
     if done is not None:
-        typer.echo(t("term.menu.done", what=done))
+        _echo(t("term.menu.done", what=done))
     elif not quiet:
-        typer.echo(
+        _echo(
             t("term.menu.up_to_date") if menubar.installed() else t("term.menu.nothing_to_refresh")
         )
 
@@ -2672,14 +2687,14 @@ def _print_menu_status() -> None:
     found = menubar.summary(full=True)
     line = menubar.status_line(found)
     if line is None:
-        typer.echo(t("term.menu.status_none"))
+        _echo(t("term.menu.status_none"))
         return
-    typer.echo(line)
+    _echo(line)
     if found.config is not None:
-        typer.echo(t("term.menu.for", path=str(found.config)))
+        _echo(t("term.menu.for", path=str(found.config)))
     if found.seen is not None:
         seen = found.seen
-        typer.echo(t("term.menu.shows", pose=str(seen["pose"]), line=repr(seen["line"])))
+        _echo(t("term.menu.shows", pose=str(seen["pose"]), line=repr(seen["line"])))
 
 
 def _organize_from_menu(config: Path | None) -> None:
@@ -2689,7 +2704,7 @@ def _organize_from_menu(config: Path | None) -> None:
     cfg = _load(config, warn_orphans=False)
     if holder(cfg.database) is not None:
         menubar_state.changed(cfg.database)
-        typer.echo(t("term.menu.running"))
+        _echo(t("term.menu.running"))
         return
     scheduled = scheduler.scheduled_config()
     path = config or default_config_path()
@@ -2702,7 +2717,7 @@ def _organize_from_menu(config: Path | None) -> None:
             scheduler.kickstart(scheduler.LABEL)
         except scheduler.ScheduleError as exc:
             _fatal(str(exc))
-        typer.echo(t("term.menu.kickstarted"))
+        _echo(t("term.menu.kickstarted"))
         return
     _pipeline(config, simulate=False, trigger=RunTrigger.MANUAL)
 
@@ -2910,23 +2925,23 @@ def _scrub_descriptions(cfg: Config, *, simulate: bool, yes: bool) -> None:
                 planned = reprocess_mod.plan_scrub(store)
             for item in planned:
                 fields = ", ".join(c.replace("_", " ") for c in item.values)
-                typer.echo(f"  scrub   {_short(item.path, cfg)}  ({fields})")
+                _echo(f"  scrub   {_short(item.path, cfg)}  ({fields})")
             if simulate:
-                typer.echo(f"Simulation: {len(planned)} file(s) to scrub; nothing changed.")
+                _echo(f"Simulation: {len(planned)} file(s) to scrub; nothing changed.")
                 return
             if planned and not yes:
                 question = f"Scrub {len(planned)} file(s) in the index? `flib undo` reverts it"
                 if not typer.confirm(question, default=False):
-                    typer.echo("Nothing changed.")
+                    _echo("Nothing changed.")
                     return
             with instance_lock(cfg.database), Store.open(cfg.database) as store:
                 report = reprocess_mod.apply_scrub(store)
     except AlreadyRunningError as exc:
         _fatal(str(exc))
     if report.cached:
-        typer.echo(f"{report.cached} cached answer(s) scrubbed.")
+        _echo(f"{report.cached} cached answer(s) scrubbed.")
     if report.run_id is None:
-        typer.echo("Nothing to scrub: no stored description holds an identifier flib recognizes.")
+        _echo("Nothing to scrub: no stored description holds an identifier flib recognizes.")
         return
     line = (
         f"Scrub run {report.run_id}: {report.files} file(s), {report.values} value(s) changed. "
@@ -2934,7 +2949,7 @@ def _scrub_descriptions(cfg: Config, *, simulate: bool, yes: bool) -> None:
     )
     if report.embeddings:
         line += f" {report.embeddings} embedding(s) removed; the next run makes them again."
-    typer.echo(line)
+    _echo(line)
 
 
 def _fill_fields(
@@ -2954,19 +2969,19 @@ def _fill_fields(
             with instance_lock(cfg.database), Store.open(cfg.database) as store:
                 recovered = recover(store, cfg)
             if recovered:
-                typer.echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
+                _echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
             with Store.open(cfg.database) as store:
                 known = [c.name for c in cfg.categories] + store.categories()
                 selection = reprocess_mod.select_fields(
                     cfg, store, filters=_search_filters(known, *filters)
                 )
                 for path, reason in selection.left:
-                    typer.echo(f"  leave   {_short(path, cfg)}  ({reason})")
+                    _echo(f"  leave   {_short(path, cfg)}  ({reason})")
                 if not selection.targets:
-                    typer.echo("Every file in the library already has its fields.")
+                    _echo("Every file in the library already has its fields.")
                     return
                 estimate = reprocess_mod.estimate(selection.targets, provider, cfg, store)
-                typer.echo(
+                _echo(
                     f"{estimate.files} file(s) without fields: {estimate.cached} answered by "
                     f"the cache, {estimate.to_ask} to send to {provider.name} "
                     f"(estimated US$ {estimate.cost_usd:.4f})."
@@ -2978,30 +2993,30 @@ def _fill_fields(
                         f"Send {estimate.to_ask} file(s) to {provider.name}?", default=False
                     )
                 ):
-                    typer.echo("Nothing sent, nothing changed.")
+                    _echo("Nothing sent, nothing changed.")
                     return
                 planned = reprocess_mod.plan_fields(selection.targets, provider, cfg, store)
             for file_id, values in planned.learned.items():
                 path = next(t.row.current_path for t in selection.targets if t.row.id == file_id)
                 names = ", ".join(c.replace("_minor", "").replace("_", " ") for c in values)
-                typer.echo(f"  fill    {_short(path, cfg)}  ({names})")
+                _echo(f"  fill    {_short(path, cfg)}  ({names})")
             for path, reason in planned.kept:
-                typer.echo(f"  keep    {_short(path, cfg)}  ({reason})")
+                _echo(f"  keep    {_short(path, cfg)}  ({reason})")
             cost = _cost_line(planned.cost_usd, known=planned.cost_known)
             if cost:
-                typer.echo(cost)
+                _echo(cost)
             if simulate:
-                typer.echo("Simulation: nothing changed.")
+                _echo("Simulation: nothing changed.")
                 return
             if not planned.learned:
-                typer.echo("Nothing to record.")
+                _echo("Nothing to record.")
                 return
             question = (
                 f"Record the fields of {len(planned.learned)} file(s) in the index? "
                 "`flib undo` reverts it"
             )
             if not yes and not typer.confirm(question, default=False):
-                typer.echo("Nothing changed.")
+                _echo("Nothing changed.")
                 return
             with instance_lock(cfg.database), Store.open(cfg.database) as store:
                 applied = reprocess_mod.apply(
@@ -3040,16 +3055,16 @@ def _layout_run(
     with instance_lock(cfg.database), Store.open(cfg.database) as store:
         recovered = recover(store, cfg)
     if recovered:
-        typer.echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
+        _echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
     with Store.open(cfg.database) as store:
         selection = reprocess_mod.select_layout(
             cfg, store, categories=categories, ask=provider is not None
         )
         for path, reason in selection.left:
-            typer.echo(f"  leave   {_short(path, cfg)}  ({reason})")
+            _echo(f"  leave   {_short(path, cfg)}  ({reason})")
         if provider is not None and selection.missing:
             estimate = reprocess_mod.estimate(selection.missing, provider, cfg, store)
-            typer.echo(
+            _echo(
                 f"{estimate.files} file(s) need their issuer: {estimate.cached} answered by the "
                 f"cache, {estimate.to_ask} to send to {provider.name} "
                 f"(estimated US$ {estimate.cost_usd:.4f})."
@@ -3061,29 +3076,29 @@ def _layout_run(
                     f"Send {estimate.to_ask} file(s) to {provider.name}?", default=False
                 )
             ):
-                typer.echo("Nothing sent; files without an issuer stay where they are.")
+                _echo("Nothing sent; files without an issuer stay where they are.")
                 provider = None
         planned = reprocess_mod.plan_layout(selection, cfg, store, provider=provider)
     _print_reprocess_plan(planned, cfg)
     if planned.in_place:
-        typer.echo(f"{planned.in_place} file(s) already follow their category's layout.")
+        _echo(f"{planned.in_place} file(s) already follow their category's layout.")
     if simulate:
-        typer.echo("Simulation: nothing moved or changed.")
+        _echo("Simulation: nothing moved or changed.")
         return None, planned
     if not planned.moves() and not planned.learned and not planned.respelled:
-        typer.echo("Nothing to move: the library already follows its layouts.")
+        _echo("Nothing to move: the library already follows its layouts.")
         return None, planned
     question = f"Move {len(planned.moves())} file(s) into their layout? `flib undo` reverts it"
     if not planned.moves():
         count = len(planned.learned.keys() | planned.respelled.keys())
         question = f"Record in the index what {count} file(s) are filed by? Nothing moves"
     if not yes and not typer.confirm(question, default=False):
-        typer.echo("Nothing changed.")
+        _echo("Nothing changed.")
         return None, planned
     with instance_lock(cfg.database), Store.open(cfg.database) as store:
         recovered = recover(store, cfg)
         if recovered:
-            typer.echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
+            _echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
         applied = reprocess_mod.apply(
             planned,
             cfg,
@@ -3111,7 +3126,7 @@ def _reprocess(
     with instance_lock(cfg.database), Store.open(cfg.database) as store:
         recovered = recover(store, cfg)
     if recovered:
-        typer.echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
+        _echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
     # Planning and both questions happen without the instance lock, so a
     # question left unanswered never blocks the scheduled run.
     with Store.open(cfg.database) as store:
@@ -3130,22 +3145,22 @@ def _reprocess(
         return None, None
     _print_reprocess_plan(planned, cfg)
     if simulate:
-        typer.echo("Simulation: nothing moved or changed.")
+        _echo("Simulation: nothing moved or changed.")
         return None, planned
     if not planned.moves() and not planned.same_folder:
-        typer.echo("Nothing to move: the library already follows the rules.")
+        _echo("Nothing to move: the library already follows the rules.")
         return None, planned
     question = f"Move {len(planned.moves())} file(s)? `flib undo` reverts it"
     if planned.same_folder:
         question = "Rename the category in the index? `flib undo` reverts it"
     if not yes and not typer.confirm(question, default=False):
-        typer.echo("Nothing changed.")
+        _echo("Nothing changed.")
         return None, planned
     # Each item is checked again under the lock (index row and file).
     with instance_lock(cfg.database), Store.open(cfg.database) as store:
         recovered = recover(store, cfg)
         if recovered:
-            typer.echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
+            _echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
         applied = reprocess_mod.apply(
             planned,
             cfg,
@@ -3182,16 +3197,16 @@ def _reprocess_plan(
         override_corrections=override_corrections,
     )
     for path, reason in selection.left:
-        typer.echo(f"  leave   {_short(path, cfg)}  ({reason})")
+        _echo(f"  leave   {_short(path, cfg)}  ({reason})")
     if not selection.targets:
-        typer.echo("Nothing to reprocess.")
+        _echo("Nothing to reprocess.")
         return None
     if provider is None:
         return reprocess_mod.plan_to_review(selection.targets, cfg)
     estimate = reprocess_mod.estimate(selection.targets, provider, cfg, store)
     cap = cfg.limits.max_cost_usd_per_run
     limit = f"; the limit per run is US$ {cap:.2f}" if cap is not None else ""
-    typer.echo(
+    _echo(
         f"{estimate.files} file(s) to reclassify: {estimate.cached} answered by the cache, "
         f"{estimate.to_ask} to send to {provider.name} "
         f"(estimated US$ {estimate.cost_usd:.4f}{limit})."
@@ -3201,14 +3216,14 @@ def _reprocess_plan(
         and not yes
         and not typer.confirm(f"Send {estimate.to_ask} file(s) to {provider.name}?", default=False)
     ):
-        typer.echo("Nothing sent, nothing changed.")
+        _echo("Nothing sent, nothing changed.")
         return None
     planned = reprocess_mod.plan_reprocess(selection.targets, provider, cfg, store)
     cost = _cost_line(planned.cost_usd, known=planned.cost_known)
     if cost:
-        typer.echo(cost)
+        _echo(cost)
     if planned.cached:
-        typer.echo(f"{planned.cached} classification(s) reused from the cache at no cost.")
+        _echo(f"{planned.cached} classification(s) reused from the cache at no cost.")
     return planned
 
 
@@ -3217,19 +3232,19 @@ def _print_reprocess_plan(planned: reprocess_mod.ReprocessPlan, cfg: Config) -> 
         item = change.relocation
         source = _short(item.context.path, cfg)
         target = _short(item.destination, cfg) if item.destination is not None else "?"
-        typer.echo(f"  move    {source}  ->  {target}  ({item.reason})")
+        _echo(f"  move    {source}  ->  {target}  ({item.reason})")
     for path, reason in planned.kept:
-        typer.echo(f"  keep    {_short(path, cfg)}  ({reason})")
+        _echo(f"  keep    {_short(path, cfg)}  ({reason})")
     if planned.rename is not None and planned.same_folder:
         old, new = planned.rename
-        typer.echo(f"  rename  category {old} -> {new} in the index (the same folder on macOS)")
+        _echo(f"  rename  category {old} -> {new} in the index (the same folder on macOS)")
     unchanged = len(planned.changes) - len(planned.moves())
-    typer.echo(
+    _echo(
         f"Plan: {len(planned.moves())} would move, {unchanged} already in place, "
         f"{len(planned.kept)} kept as they are."
     )
     if planned.deferred:
-        typer.echo(
+        _echo(
             f"{planned.deferred} file(s) were not sent: the cost limit was reached. "
             "Run `flib reprocess` again to go on."
         )
@@ -3261,19 +3276,19 @@ def _print_reprocess_report(
     if cost:
         lines.append(cost)
     for line in lines:
-        typer.echo(line)
+        _echo(line)
     if planned.rename is not None and not planned.same_folder:
         folder = reprocess_mod.empty_folder(cfg, planned.rename[0])
         if folder is not None:
-            typer.echo(
+            _echo(
                 f"The folder {_short(folder, cfg)} is empty now. Keep it until you are sure of "
                 "the change; `flib undo` moves the files back into it."
             )
     if report.run_id is not None:
         try:
-            typer.echo(f"Log: {write_log(cfg.database, report.run_id, lines)}")
+            _echo(f"Log: {write_log(cfg.database, report.run_id, lines)}")
         except OSError as exc:
-            typer.echo(f"warning: could not write the run log: {exc}", err=True)
+            _echo(f"warning: could not write the run log: {exc}", err=True)
 
 
 @app.command()
@@ -3320,9 +3335,9 @@ def doctor(
         diagnostics.write_report(path, report)
     except OSError as exc:
         _fatal(f"cannot write {path}: {exc}; try --stdout or --output")
-    typer.echo(f"Report written to {path}")
-    typer.echo("Read it, then attach it to the issue. To show it in Finder:")
-    typer.echo(f"  open -R {shlex.quote(str(path))}")
+    _echo(f"Report written to {path}")
+    _echo("Read it, then attach it to the issue. To show it in Finder:")
+    _echo(f"  open -R {shlex.quote(str(path))}")
 
 
 @app.command("eval")
@@ -3407,7 +3422,7 @@ def eval_command(
         _fatal(str(exc))
     if len(runs) == 2:
         for line in scoring.compare(runs[0], runs[1]):
-            typer.echo(line)
+            _echo(line)
         return
     if language not in LOCALES:
         _fatal(f"--language must be one of {', '.join(LOCALES)}, not {language!r}")
@@ -3428,14 +3443,14 @@ def eval_command(
             if not provider.local:
                 estimate = harness.estimate(prep, provider)
                 price = f"US$ {estimate.cost_usd:.4f}" if estimate.prices_known else "unknown"
-                typer.echo(
+                _echo(
                     f"{estimate.to_send} synthetic item(s) to send to {provider.name} "
                     f"({prep.config.provider.model}): estimated cost {price}, stopping at "
                     f"US$ {max_cost:.2f}. {estimate.withheld} sensitive item(s) are never sent.",
                     err=True,
                 )
                 if not yes and not typer.confirm("Send them?", default=False, err=True):
-                    typer.echo("Nothing sent.", err=True)
+                    _echo("Nothing sent.", err=True)
                     return
             result = harness.run(prep, provider)
     except (harness.SettingsError, ProviderError, ScanError) as exc:
@@ -3450,13 +3465,13 @@ def eval_command(
         typer.echo(json.dumps(data, ensure_ascii=False, indent=1))
     else:
         for line in scoring.report_lines(result):
-            typer.echo(line)
+            _echo(line)
         if out is not None:
-            typer.echo(f"Saved to {out}.")
+            _echo(f"Saved to {out}.")
         if runs:
-            typer.echo("")
+            _echo("")
             for line in scoring.compare(runs[0], result):
-                typer.echo(line)
+                _echo(line)
     if result.leaked:
         _fatal(
             "a sensitive item reached the provider, which must never happen: "
@@ -3466,12 +3481,12 @@ def eval_command(
 
 def main() -> None:
     if sys.platform != "darwin":
-        typer.echo("file-librarian supports macOS only.", err=True)
+        _echo("file-librarian supports macOS only.", err=True)
         raise SystemExit(EXIT_ERROR)
     try:
         app()
     except Exception as exc:
-        typer.echo(
+        _echo(
             f"error: unexpected {type(exc).__name__}: {exc}\n"
             "This is a bug. Please report it with `flib --version` and the steps that led here: "
             "https://github.com/luizpereiradev/file-librarian/issues",

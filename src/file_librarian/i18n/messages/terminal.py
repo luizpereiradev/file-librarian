@@ -242,6 +242,26 @@ EN: dict[str, Entry] = {
         "A file sensitive only because of its name is looked at again once renamed, or "
         "when `sensitive.allow_names` lets its name through."
     ),
+    # why a file is sensitive (``sensitive.py``; ``i18n.core.sensitive``)
+    "term.sensitive.name": "name looks like a credential file",
+    "term.sensitive.name_words": "name looks like a credential file: {words}",
+    "term.sensitive.holds": "content: holds a file named like a credential file",
+    "term.sensitive.holds_words": "content: holds a file named like {words}",
+    "term.sensitive.secrets": "content: looks like {kinds}",
+    "term.secret.private_key": "private key",
+    "term.secret.aws_access_key": "AWS access key",
+    "term.secret.github_token": "GitHub token",
+    "term.secret.gitlab_token": "GitLab token",
+    "term.secret.slack_token": "Slack token",
+    "term.secret.stripe_key": "Stripe key",
+    "term.secret.google_api_key": "Google API key",
+    "term.secret.google_oauth_client_secret": "Google OAuth client secret",
+    "term.secret.anthropic_api_key": "Anthropic API key",
+    "term.secret.openai_api_key": "OpenAI API key",
+    "term.secret.json_web_token": "JSON web token",
+    "term.secret.connection_string_with_password": "connection string with password",
+    "term.secret.password_or_secret_assignment": "password or secret assignment",
+    "term.secret.password_or_secret_in_json": "password or secret in JSON",
     "term.summary": "Summary: {text}",
     "term.summary_not_shown": (
         "the notification could not be shown ({problem}); "
@@ -843,7 +863,7 @@ PT_BR: dict[str, Entry] = {
     "term.lock.reprocess": (
         "outra reclassificação do flib (pid {pid}) está rodando; tente de novo quando ela terminar"
     ),
-    "term.lock.ui": "O flib ui já está rodando (pid {pid})",
+    "term.lock.ui": "o flib ui já está rodando (pid {pid})",
     "term.not_organized": "{path} não é um arquivo que o flib organizou (veja `flib search`)",
     "term.issuer_none": "--issuer {value} não identifica nenhuma organização",
     "term.unknown_kind": "tipo desconhecido {value} (tipos: {kinds})",
@@ -1012,6 +1032,26 @@ PT_BR: dict[str, Entry] = {
         "Um arquivo sensível só por causa do nome é examinado de novo depois de renomeado, ou "
         "quando `sensitive.allow_names` libera o nome dele."
     ),
+    # por que um arquivo é sensível
+    "term.sensitive.name": "o nome parece de um arquivo de credenciais",
+    "term.sensitive.name_words": "o nome parece de um arquivo de credenciais: {words}",
+    "term.sensitive.holds": "conteúdo: contém um arquivo com nome de arquivo de credenciais",
+    "term.sensitive.holds_words": "conteúdo: contém um arquivo com nome como {words}",
+    "term.sensitive.secrets": "conteúdo: parece ter {kinds}",
+    "term.secret.private_key": "chave privada",
+    "term.secret.aws_access_key": "chave de acesso da AWS",
+    "term.secret.github_token": "token do GitHub",
+    "term.secret.gitlab_token": "token do GitLab",
+    "term.secret.slack_token": "token do Slack",
+    "term.secret.stripe_key": "chave do Stripe",
+    "term.secret.google_api_key": "chave de API do Google",
+    "term.secret.google_oauth_client_secret": "segredo de cliente OAuth do Google",
+    "term.secret.anthropic_api_key": "chave de API da Anthropic",
+    "term.secret.openai_api_key": "chave de API da OpenAI",
+    "term.secret.json_web_token": "JSON web token (JWT)",
+    "term.secret.connection_string_with_password": "string de conexão com senha",
+    "term.secret.password_or_secret_assignment": "senha ou segredo atribuído",
+    "term.secret.password_or_secret_in_json": "senha ou segredo em JSON",
     "term.summary": "Resumo: {text}",
     "term.summary_not_shown": (
         "não foi possível mostrar a notificação ({problem}); "
@@ -1134,7 +1174,7 @@ PT_BR: dict[str, Entry] = {
     ),
     "term.search.group_by": "não é possível agrupar por {value} (use um de: {groups})",
     "term.search.nothing": (
-        "diga palavras para buscar, um filtro, ou os dois. Filtros: --category, --ext, "
+        "informe palavras para buscar, um filtro ou os dois. Filtros: --category, --ext, "
         "--since, --until (quando o flib o processou), --issuer, --kind, --min-amount, "
         "--max-amount, --currency, --due-before, --due-after, --period. --sum sozinho soma tudo."
     ),
@@ -1149,7 +1189,7 @@ PT_BR: dict[str, Entry] = {
     "term.search.was": "  [{label}] antes: {name}",
     "term.search.duplicate_of": "  duplicado de {path}",
     "term.search.bad_by": "--by precisa ser um de {groups}, não {value}",
-    "term.search.sum_words": "--sum compara só as palavras, não o significado",
+    "term.search.sum_words": "--sum busca só pelas palavras, não pelo significado",
     "term.sum.none": "Nenhum valor entre os resultados.",
     "term.sum.by": "Totais por {by}:",
     "term.sum.group.issuer": "emissor",
@@ -1182,7 +1222,7 @@ PT_BR: dict[str, Entry] = {
         other="{error}; {count} arquivos ainda estão sem embedding",
     ),
     # flib fix
-    "term.fix.nothing": "diga o que mudar: uma categoria, um nome, ou os dois",
+    "term.fix.nothing": "informe o que mudar: uma categoria, um nome ou os dois",
     "term.fix.status": (
         "{path} está {status}; só arquivos organizados ou em revisão podem ser corrigidos"
     ),
@@ -1390,8 +1430,8 @@ PT_BR: dict[str, Entry] = {
     "term.reason.duplicate_stays": (
         "mesmo conteúdo de outro item desta execução, que fica onde está ({status})"
     ),
-    "term.reason.cannot_plan": "não deu para planejar: {why}",
-    "term.reason.cannot_plan_kind": "não deu para planejar",
+    "term.reason.cannot_plan": "não foi possível planejar: {why}",
+    "term.reason.cannot_plan_kind": "não foi possível planejar",
     "term.reason.duplicate": "duplicado",
     "term.reason.not_classified": "não classificado",
     "term.reason.classification_failed": "a classificação falhou: {why}",
@@ -1449,7 +1489,9 @@ PT_BR: dict[str, Entry] = {
         "comando instalado."
     ),
     "term.schedule.daily": "Execução diária agendada para {time} ({plist}).",
-    "term.schedule.on_wake": "Se o Mac estiver dormindo nessa hora, ela roda quando ele acordar.",
+    "term.schedule.on_wake": (
+        "Se o Mac estiver em repouso nesse horário, ela roda quando ele despertar."
+    ),
     "term.schedule.watch_on": Plural(
         zero="Modo de observação ativo ({plist}), mas sem nenhuma pasta de entrada.",
         one="Modo de observação ativo ({plist}): o flib roda quando algo chega em {count} pasta "
@@ -1529,7 +1571,7 @@ PT_BR: dict[str, Entry] = {
         "o agente de observação observa pastas diferentes das entradas da configuração; "
         "rode `flib schedule --refresh`"
     ),
-    "term.access.checking": "Verificando o acesso às pastas como a execução agendada vai vê-lo...",
+    "term.access.checking": "Verificando se a execução agendada consegue ler as pastas...",
     "term.access.ok": "ok",
     "term.access.denied": (
         "O macOS bloqueia a execução agendada nestas pastas. Abra Ajustes do Sistema > "
@@ -1563,7 +1605,9 @@ PT_BR: dict[str, Entry] = {
         "O gato está na barra de menus agora (pode levar alguns segundos para aparecer). A pose "
         "dele diz o que precisa de você; o menu dele abre o flib na página certa."
     ),
-    "term.menu.at_login": "Ele abre no login ({plist}). `flib menu --remove` o tira de lá.",
+    "term.menu.at_login": (
+        "Ele abre quando você inicia a sessão ({plist}). `flib menu --remove` o tira de lá."
+    ),
     "term.menu.not_rebuilt": "não foi possível recriar o item da barra de menus: {error}",
     "term.menu.done": "Item da barra de menus {what}.",
     "term.menu.rebuilt": "recriado e reiniciado",
@@ -1635,7 +1679,8 @@ PT_BR: dict[str, Entry] = {
         '(Outro navegador recebe a página "sessão encerrada".)'
     ),
     "term.ui.already_running": (
-        "{error}. Use a aba do navegador que ele abriu, ou encerre lá ({end}) ou com Ctrl-C no "
+        "Nada foi aberto de novo: {error}. Use a aba do navegador que ele abriu, ou encerre lá "
+        "({end}) ou com Ctrl-C no "
         "terminal dele, e rode `flib ui` de novo; ele também termina sozinho depois de "
         "{minutes} sem uso."
     ),

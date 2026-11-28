@@ -42,7 +42,7 @@ from file_librarian import notifier, scheduler
 from file_librarian.config import Config, canonical
 from file_librarian.db.store import RunRow, Store, WaitingRow, load_migrations
 from file_librarian.i18n import Msg, formats, language_of, t
-from file_librarian.i18n.core import detail
+from file_librarian.i18n.core import detail, sensitive
 from file_librarian.models import FileStatus, ReviewReason, RunTrigger, explain_review
 from file_librarian.runlog import log_path
 from file_librarian.scanner import SkipReason
@@ -338,8 +338,8 @@ def render_sensitive(found: list[tuple[Path, str | None]]) -> list[str]:
         return [t("term.sensitive.none")]
     lines: list[str] = [t("term.status.sensitive", files=_files(len(found)))]
     for path, reason in found:
-        why = detail(reason) if reason else t("term.sensitive.no_reason")
-        lines.append(t("term.sensitive.item", path=str(path), why=why))
+        why = sensitive(reason) if reason else t("term.sensitive.no_reason")
+        lines.append(t("term.sensitive.item", path=formats.printable(str(path)), why=why))
     lines.append(t("term.sensitive.renamed"))
     return lines
 

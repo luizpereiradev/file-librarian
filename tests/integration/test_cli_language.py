@@ -344,7 +344,7 @@ def test_search_refusals_in_portuguese(filed: Path) -> None:
     result = flib("search", "--since", "2026-13-01", "-c", str(filed))
     assert result.stderr == "erro: --since '2026-13-01' não é uma data válida\n"
     result = flib("search", "-c", str(filed))
-    assert result.stderr.startswith("erro: diga palavras para buscar, um filtro, ou os dois.")
+    assert result.stderr.startswith("erro: informe palavras para buscar, um filtro ou os dois.")
     assert flib("search", "--by", "kind", "-c", str(filed)).stderr == (
         "erro: --by só funciona com --sum\n"
     )
@@ -378,7 +378,7 @@ def test_fix_and_undo_of_a_file(filed: Path, downloads: Path) -> None:
     assert undone[0].startswith("  devolvido ")
     assert undone[-1] == "Desfeito: 1 devolvido, nenhum ignorado."
     refused = flib("fix", str(notes), "-c", str(filed))
-    assert refused.stderr == "erro: diga o que mudar: uma categoria, um nome, ou os dois\n"
+    assert refused.stderr == "erro: informe o que mudar: uma categoria, um nome ou os dois\n"
 
 
 # --- flib schedule, flib menu, flib key, flib ui ---------------------------------------------
@@ -401,7 +401,9 @@ def test_schedule_in_portuguese(pt: Path) -> None:
     result = flib("schedule", "-c", str(pt), "--no-check", "--at", "09:30")
     assert result.exit_code == 0, result.output
     assert "Execução diária agendada para 09:30 (" in result.stdout
-    assert "Se o Mac estiver dormindo nessa hora, ela roda quando ele acordar." in result.stdout
+    assert (
+        "Se o Mac estiver em repouso nesse horário, ela roda quando ele despertar." in result.stdout
+    )
     assert "`flib schedule --remove` desliga o agendamento." in result.stdout
     shown = flib("schedule", "--status", "-c", str(pt)).stdout
     assert "Agendamento diário às 09:30: ativo" in shown

@@ -97,8 +97,15 @@ def _lang(lang: Lang | None) -> Lang:
 
 
 def decimal(value: Decimal | float | int, places: int, lang: Lang | None = None) -> str:
-    """``value`` with ``places`` decimals and no thousands separator: ``0.0123``, ``0,0123``."""
-    text = f"{Decimal(str(value)):.{places}f}"
+    """``value`` with ``places`` decimals and no thousands separator: ``0.0123``, ``0,0123``.
+
+    A float is rounded as ``f"{value:.4f}"`` rounds its binary value, which is what
+    the command line and its logs always printed (``0.00285`` gives ``0.0029``,
+    ``5e-05`` gives ``0.0001``); both languages round alike (#141)."""
+    if isinstance(value, float):
+        text = f"{value:.{places}f}"
+    else:
+        text = f"{Decimal(str(value)):.{places}f}"
     return text.replace(".", DECIMAL[_lang(lang)])
 
 
@@ -236,11 +243,48 @@ def width(text: str) -> int:
     """How many terminal columns ``text`` takes: combining marks none, wide and
     full-width characters two, everything else one."""
     total = 0
+    joined = False
     for char in unicodedata.normalize("NFC", text):
+        if char == ZWJ:
+            joined = True
+            continue
         if unicodedata.combining(char) or unicodedata.category(char) in ("Mn", "Me", "Cf"):
             continue
-        total += 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+        if not joined:  # a character a ZWJ joins to the one before shares its cells
+            total += 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+        joined = False
     return total
+
+
+ZWJ = "\u200d"
+BIDI = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
+"""Characters that reorder text on screen (``invoice\u202efdp.command``)."""
+_KEPT_FORMAT = frozenset({ZWJ, "\u200c"})
+"""Format characters an emoji or a script needs (joiners)."""
+
+
+def printable(text: str, *, lines: bool = False) -> str:
+    """``text`` (a file name, a path, words from the index) safe to print on a terminal:
+    control characters (C0, DEL, C1: ESC, CR, BEL...) and bidirectional controls shown
+    as escapes (``\\x1b``, ``\\u202e``), other invisible format characters dropped,
+    joiners kept, so an emoji made of several (``👩\u200d💻``) stays one. ``lines``:
+    newlines and tabs pass (a whole message); otherwise they are shown as escapes too.
+    ``--json``, the logs and the index keep the real text."""
+    out: list[str] = []
+    for char in text:
+        if lines and char in "\n\t":
+            out.append(char)
+            continue
+        category = unicodedata.category(char)
+        if category == "Cc":
+            out.append(f"\\x{ord(char):02x}")
+        elif char in BIDI:
+            out.append(f"\\u{ord(char):04x}")
+        elif category == "Cf" and char not in _KEPT_FORMAT and not 0xE0020 <= ord(char) <= 0xE007F:
+            continue
+        else:
+            out.append(char)
+    return "".join(out)
 
 
 def ljust(text: str, columns: int) -> str:

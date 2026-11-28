@@ -235,11 +235,64 @@ def _state(status: str) -> object:
     return t(msg_id) if msg_id in CATALOGUE["en"] else status
 
 
+_SENSITIVE: list[tuple[re.Pattern[str], str, Callable[[dict[str, str]], dict[str, object]]]] = []
+"""Why a file is sensitive (``sensitive.py``, ``context.py``): fixed frames around the
+words its name matched (kept as they are: they are the name's) or the kinds of secret
+its content holds (``sensitive.SECRET_PATTERNS``, each one in the catalogue)."""
+
+
+def _secret_kinds(groups: dict[str, str]) -> dict[str, object]:
+    from file_librarian.i18n.messages import CATALOGUE
+
+    said: list[str] = []
+    for kind in groups["kinds"].split(", "):
+        msg_id = f"term.secret.{kind.casefold().replace(' ', '_')}"
+        said.append(t(msg_id) if msg_id in CATALOGUE["en"] else kind)
+    joined = said[0]
+    for part in said[1:]:
+        joined = t("term.and", first=joined, second=part)
+    return {"kinds": joined}
+
+
+for _pattern, _msg_id, _params in (
+    (r"name looks like a credential file", "term.sensitive.name", dict),
+    (r"name looks like a credential file: (?P<words>.+)", "term.sensitive.name_words", dict),
+    (r"content: holds a file named like a credential file", "term.sensitive.holds", dict),
+    (r"content: holds a file named like (?P<words>.+)", "term.sensitive.holds_words", dict),
+    (r"content: looks like (?P<kinds>.+)", "term.sensitive.secrets", _secret_kinds),
+):
+    _SENSITIVE.append((re.compile(_pattern, re.DOTALL), _msg_id, _params))
+
+
+def sensitive(text: str) -> str:
+    """Why a file is sensitive, as recorded in English, in the language in use when it
+    is one of flib's own reasons; else as recorded. The index keeps the English."""
+    if isinstance(text, Msg):
+        return text
+    for pattern, msg_id, params in _SENSITIVE:
+        match = pattern.fullmatch(text)
+        if match is not None:
+            return t(msg_id, **params(match.groupdict()))
+    return text
+
+
 def _nested(groups: dict[str, str]) -> dict[str, object]:
-    return {key: detail(value) for key, value in groups.items()}
+    return {key: sensitive(value) for key, value in groups.items()}
 
 
-_detail(r"(?P<base>.+); layout not used \((?P<why>.*)\)", "term.reason.layout_not_used",
+# A note around free text (a provider's or the OS's words) is matched by its own frame
+# first, and the free text is shown as it came: never searched for flib's phrases.
+_detail(r"cannot plan: (?P<why>.*)", "term.reason.cannot_plan")
+_detail(r"classification failed: (?P<why>.*)", "term.reason.classification_failed")
+_detail(r"invalid answer: (?P<why>.*)", "term.reason.invalid_answer")
+_detail(r"move failed: (?P<why>.*)", "term.reason.move_failed")
+_detail(r"not enough space at the destination; retried next run: (?P<why>.*)",
+        "term.reason.no_space")  # fmt: skip
+_detail(r"original folder is gone: (?P<path>.*)", "term.reason.folder_gone")
+_detail(r"original path is taken: (?P<path>.*)", "term.reason.path_taken")
+_detail(r"could not move back: (?P<why>.*)", "term.reason.not_moved_back")
+_detail(r"(?P<base>category .+); layout not used \((?P<why>.*)\)",
+        "term.reason.layout_not_used",
         lambda g: {"base": detail(g["base"]), "why": g["why"]})  # fmt: skip
 _detail(r"category (?P<name>.+) \(input rule, no AI\)", "term.reason.category_rule")
 _detail(r"category (?P<name>.+), original name kept", "term.reason.category_kept")
@@ -253,24 +306,15 @@ _detail(r"same content as another item of this run, which is left for a later ru
         "term.reason.duplicate_later")  # fmt: skip
 _detail(r"same content as another item of this run, which stays \((?P<status>[a-z]+)\)",
         "term.reason.duplicate_stays", lambda g: {"status": _state(g["status"])})  # fmt: skip
-_detail(r"cannot plan: (?P<why>.*)", "term.reason.cannot_plan")
 _detail(r"cannot plan", "term.reason.cannot_plan_kind")
 _detail(r"duplicate", "term.reason.duplicate")
 _detail(r"not classified", "term.reason.not_classified")
-_detail(r"classification failed: (?P<why>.*)", "term.reason.classification_failed")
 _detail(r"classification failed", "term.reason.classification_failed_kind")
-_detail(r"invalid answer: (?P<why>.*)", "term.reason.invalid_answer")
 _detail(r"invalid answer", "term.reason.invalid_answer_kind")
-_detail(r"move failed: (?P<why>.*)", "term.reason.move_failed")
 _detail(r"move failed", "term.reason.move_failed_kind")
-_detail(r"not enough space at the destination; retried next run: (?P<why>.*)",
-        "term.reason.no_space")  # fmt: skip
 _detail(r"not enough space at the destination; retried next run", "term.reason.no_space_kind")
 _detail(r"unknown error", "term.reason.unknown_error")
-# undo's reasons to skip a file (``undo.skip_reason``), with their path
-_detail(r"original folder is gone: (?P<path>.*)", "term.reason.folder_gone")
-_detail(r"original path is taken: (?P<path>.*)", "term.reason.path_taken")
-_detail(r"could not move back: (?P<why>.*)", "term.reason.not_moved_back")
+# undo's reason to skip a file that changed (``undo.skip_reason``)
 _detail(r"changed since it was moved", "term.reason.changed")
 # why a watch start left ready files in the inputs (``status.backlog_reason``)
 _detail(r"daily cap reached", "term.reason.day_cap")

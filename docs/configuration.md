@@ -53,15 +53,25 @@ The command line follows these rules:
 
 These stay English by design:
 
-- `--json` and every other machine format: CSV exports, the MCP server's tools
-  and their results, exit codes;
+- `--json` and every other machine format: the MCP server's tools and their
+  results, exit codes;
 - the log files, the `flib doctor` report (maintainers read it in bug reports)
   and what a run started by launchd prints (it goes to a log);
 - `flib inspect` and `flib eval`, which are diagnostics;
 - unexpected errors, configuration keys, command and option names.
 
-Notes that come from outside flib keep their own words: a provider's error, a
-macOS error, the reason a file was found sensitive. `flib init`, `flib
+The Search page's CSV export is a machine format with one exception: its
+column names and values stay as they are (English column names, ISO dates,
+decimal amounts, kind codes), but the last row, which says the list was cut, is
+in the page's language.
+
+The index and the logs keep a sensitive file's reason in English; the terminal
+shows it in your language. Notes that come from outside flib keep their own
+words: a provider's error, a macOS error, the words a file's name matched.
+File names that hold control characters (an escape sequence, a carriage
+return, a right-to-left override) are printed as escapes such as `\x1b`, so
+they cannot act on the terminal; `--json`, the logs and the index keep the real
+name. `flib init`, `flib
 reprocess`, `flib reconcile`, `flib check-config` and the configuration's error
 messages are still in English for now; they follow in the second part of #141.
 

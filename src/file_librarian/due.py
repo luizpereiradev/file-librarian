@@ -595,7 +595,7 @@ def _item_lines(item: DueItem, show: Callable[[Path], str]) -> list[str]:
         date=formats.day(item.due_date),
         when=when,
         amount=amount,
-        issuer=item.issuer or "-",
+        issuer=formats.printable(item.issuer) if item.issuer else "-",
         kind=kind,
     )
     where = show(item.path)
