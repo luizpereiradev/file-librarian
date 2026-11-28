@@ -230,7 +230,8 @@ def test_the_rows_of_a_run_line_up_in_each_language() -> None:
     for lang, width in widths:
         for msg_id in terminal.ROW_IDS:
             template = i18n.template(lang, msg_id, {})
-            prefix = template[: template.index("{")]
+            start = template.index("categ") if msg_id == "term.row.rename" else template.index("{")
+            prefix = template[:start]
             assert formats.width(prefix) >= width, (lang, msg_id)
             if lang == "pt-BR" or len(prefix.strip()) < terminal.EN_TAG:
                 assert formats.width(prefix) == width, (lang, msg_id)

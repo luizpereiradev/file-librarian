@@ -566,6 +566,13 @@ def test_a_scan_and_a_receipt_are_classified_and_renamed_from_their_text(
 def test_check_config_reports_ocr(tmp_path: Path, downloads: Path) -> None:
     on = write_config(tmp_path, downloads, extra="language: pt-BR\n")
     result = runner.invoke(app, ["check-config", "-c", str(on)])
+    # check-config speaks the configuration's language (#141)
+    assert (
+        "  ocr: ligado, neste Mac (pt-BR, en-US; as 3 primeiras páginas de um PDF escaneado)"
+        in result.stdout
+    )
+    english = write_config(tmp_path, downloads, extra="ocr: {languages: [pt-BR, en-US]}\n")
+    result = runner.invoke(app, ["check-config", "-c", str(english)])
     assert "  ocr: on, on this Mac (pt-BR, en-US; first 3 pages of a scanned PDF)" in result.stdout
     off = write_config(tmp_path, downloads, extra="ocr: {enabled: false}\n")
     assert "  ocr: off" in runner.invoke(app, ["check-config", "-c", str(off)]).stdout

@@ -73,8 +73,8 @@ from file_librarian.fields import KINDS, format_decimal
 from file_librarian.fix import FixError, fix_file
 from file_librarian.hashing import file_sha256, unit_manifest
 from file_librarian.i18n import Msg, english, formats, t
-from file_librarian.i18n.core import detail
-from file_librarian.locales import LOCALES, Language
+from file_librarian.i18n.core import detail, refusal
+from file_librarian.locales import DEFAULT_LANGUAGE, LOCALES, Language
 from file_librarian.lock import AlreadyRunningError, holder, instance_lock, reprocess_lock
 from file_librarian.models import FileStatus, RunTrigger, explain_review
 from file_librarian.planner import Plan
@@ -179,7 +179,9 @@ def _confirm(question: str, *, default: bool, err: bool = False) -> bool:
     """A yes/no question in the language of the moment. English is typer's own
     (``[y/N]``); pt-BR shows ``[S/n]`` and takes ``s``/``sim`` or ``n``/``não``."""
     if i18n.current() == i18n.DEFAULT:
-        return typer.confirm(question, default=default, err=err)
+        if err:
+            return typer.confirm(question, default=default, err=True)
+        return typer.confirm(question, default=default)
     hint = t("term.yes_no.default_yes" if default else "term.yes_no.default_no")
     while True:
         said = typer.prompt(f"{question} {hint}", default="", show_default=False, err=err)
@@ -203,8 +205,8 @@ def check_config(config: ConfigOption = None) -> None:
     try:
         cfg = load_config(path)
     except ConfigError as exc:
-        _echo(f"error: {exc}", err=True)
-        raise typer.Exit(EXIT_ERROR) from exc
+        _fatal(exc.text())  # English: the language could not be read (#141)
+    _speak(cfg)
     _echo(f"{path}: OK")
     _echo(f"  language: {cfg.language}")
     _echo("  inputs:")
@@ -218,21 +220,14 @@ def check_config(config: ConfigOption = None) -> None:
     if spec is not None:
         found = credentials.resolve(cfg.provider)
         if found.value:
-            _echo(f"  api key: {found.source} ({found.hint})")
+            _echo(t("term.check.key", source=found.source, hint=found.hint))
         elif spec.provider == "anthropic":
-            _echo("  api key: not found (run `flib key set`, or set ANTHROPIC_API_KEY)")
+            _echo(t("term.check.key_missing"))
         else:
-            _echo(
-                "  api key: none (fine for a server that needs none; otherwise run "
-                f"`flib key set --provider {spec.provider}`, or set {spec.env_var})"
-            )
+            _echo(t("term.check.key_none", provider=spec.provider, env=spec.env_var))
     for entry in cfg.inputs:
         if entry.category is not None and entry.only is None:
-            _echo(
-                f"warning: input {entry.path} has a fixed category and no `only`: everything "
-                f"in this folder is filed as {entry.category} without being looked at.",
-                err=True,
-            )
+            _warn(t("term.check.fixed_no_only", path=str(entry.path), category=entry.category))
     if cfg.provider.name == "claude-code":
         _report_claude(cfg)
     if cfg.provider.name in COMPAT_PROVIDERS:
@@ -241,28 +236,23 @@ def check_config(config: ConfigOption = None) -> None:
         _warn_compat_only_options(cfg.provider)
     env_file = cfg.provider.env_file
     if env_file is not None and env_file.exists() and not credentials.env_file_is_private(env_file):
-        _echo(f"warning: {env_file} is readable by other users; run chmod 600 on it", err=True)
+        _warn(t("term.check.env_file_open", path=str(env_file)))
     if not is_implemented(cfg.provider.name):
-        milestone = PLANNED.get(cfg.provider.name, "a later milestone")
-        _echo(
-            f"warning: provider {cfg.provider.name!r} is planned for {milestone}; "
-            "classification commands will not run until then.",
-            err=True,
-        )
+        milestone = PLANNED.get(cfg.provider.name) or t("term.check.later_milestone")
+        _warn(t("term.check.planned_provider", provider=repr(cfg.provider.name), when=milestone))
     _report_ocr(cfg)
     _report_semantic(cfg)
     for line in locality.summary_lines(cfg):
         _echo(f"  {line}")
     for line in status_mod.cost_cap_lines(cfg):
-        _echo(line if line.startswith("warning") else f"  {line}", err=line.startswith("warning"))
+        if status_mod.is_warning(line):
+            _echo(line, err=True)
+        else:
+            _echo(f"  {line}")
     _report_watch(cfg, path)
     _warn_orphan_categories(cfg)
     for option, milestone in inactive_options_set(cfg):
-        _echo(
-            f"warning: {option} is planned for {milestone} and does nothing yet; "
-            "your value is accepted but ignored.",
-            err=True,
-        )
+        _warn(t("term.check.inactive_option", option=option, when=milestone))
 
 
 def _report_watch(cfg: Config, path: Path) -> None:
@@ -276,7 +266,7 @@ def _report_watch(cfg: Config, path: Path) -> None:
         return
     stale = scheduler.stale_watch_message(state, cfg.input_paths)
     if stale:
-        _echo(f"warning: {stale}", err=True)
+        _warn(stale)
 
 
 COMPAT_PROVIDERS = ("openai-compat", "ollama")
@@ -288,11 +278,7 @@ COMPAT_ONLY_OPTIONS = (
 def _warn_compat_only_options(provider: ProviderConfig) -> None:
     for option in COMPAT_ONLY_OPTIONS:
         if option in provider.model_fields_set:
-            _echo(
-                f"warning: provider.{option} applies to openai-compat and ollama only; "
-                f"{provider.name} ignores it.",
-                err=True,
-            )
+            _warn(t("term.check.compat_only", option=option, provider=provider.name))
 
 
 def _report_compat(cfg: Config) -> None:
@@ -300,30 +286,17 @@ def _report_compat(cfg: Config) -> None:
     p = cfg.provider
     url = p.base_url or ""
     local = is_loopback_url(url)
-    where = "this Mac; no rate limit, never_send still applies" if local else "a remote server"
-    _echo(f"  base_url: {url} ({where})")
+    where = t("term.check.this_mac_no_limit") if local else t("term.local.remote")
+    _echo(t("term.check.base_url", url=url, where=where))
     if not local and url.startswith("http://"):
-        _echo(
-            "warning: provider.base_url uses http:// to another machine; file content "
-            "would travel unencrypted. Use https://.",
-            err=True,
-        )
+        _warn(t("term.check.http_provider"))
     if p.name == "ollama" and not local:
-        _echo(
-            "warning: provider.base_url is not this Mac: file content leaves it, and Ollama "
-            "is treated as a remote provider.",
-            err=True,
-        )
+        _warn(t("term.check.ollama_remote"))
     priced = p.price_input_per_mtok > 0 or p.price_output_per_mtok > 0
     if not priced and not local and cfg.limits.max_cost_usd_per_run is not None:
-        _echo(
-            "warning: provider.price_input_per_mtok and price_output_per_mtok are not set, so "
-            "the cost of each file counts as 0 and limits.max_cost_usd_per_run cannot stop a "
-            "run. Set them to your provider's prices.",
-            err=True,
-        )
+        _warn(t("term.check.no_prices"))
     if cfg.vision.enabled and not p.vision:
-        _echo("  vision: off for this model (set provider.vision: true if it reads images)")
+        _echo(t("term.check.vision_off"))
     if p.name == "ollama":
         from file_librarian.providers import ollama
 
@@ -331,34 +304,35 @@ def _report_compat(cfg: Config) -> None:
         if ready:
             _echo(f"  ollama: {line}")
         else:
-            _echo(f"warning: {line}", err=True)
+            _warn(line)
 
 
 def _report_ocr(cfg: Config) -> None:
     """OCR: off, or on with its languages; a warning when this Mac cannot run it."""
     settings = cfg.ocr
     if not settings.enabled:
-        _echo("  ocr: off")
+        _echo(t("term.check.ocr_off"))
         return
     found = ocr.availability()
     if not found.available:
-        _echo("  ocr: unavailable")
-        _echo(
-            f"warning: OCR is on but cannot run here ({found.reason}); images and scanned "
-            "PDFs are classified with vision if it is on, else from their name and metadata.",
-            err=True,
-        )
+        _echo(t("term.check.ocr_unavailable"))
+        _warn(t("term.check.ocr_cannot_run", reason=found.reason))
         return
     _echo(
-        f"  ocr: on, on this Mac ({', '.join(settings.languages)}; "
-        f"first {settings.max_pages} pages of a scanned PDF)"
+        t(
+            "term.check.ocr_on",
+            languages=", ".join(settings.languages),
+            count=settings.max_pages,
+        )
     )
     unknown = [lang for lang in settings.languages if lang not in found.languages]
     if unknown:
-        _echo(
-            f"warning: ocr.languages: macOS cannot recognise {', '.join(unknown)}; "
-            f"it can: {', '.join(found.languages)}",
-            err=True,
+        _warn(
+            t(
+                "term.check.ocr_languages",
+                unknown=", ".join(unknown),
+                known=", ".join(found.languages),
+            )
         )
 
 
@@ -366,28 +340,19 @@ def _report_semantic(cfg: Config) -> None:
     """Semantic search: off, or where the index's text goes to be embedded."""
     semantic = cfg.search.semantic
     if not semantic.enabled:
-        _echo("  semantic search: off")
+        _echo(t("term.check.semantic_off"))
         return
     url = semantic.base_url
     local = is_loopback_url(url)
-    where = "this Mac" if local else "a remote server"
-    _echo(f"  semantic search: {semantic.model} at {url} ({where})")
+    where = t("term.this_mac") if local else t("term.local.remote")
+    _echo(t("term.check.semantic", model=semantic.model, url=url, where=where))
     if not local:
-        _echo(
-            "warning: search.semantic.base_url is not this Mac: the names, categories, tags "
-            "and descriptions in the index, and every semantic query, leave it. Embeddings are "
-            "not priced; check your server's rates.",
-            err=True,
-        )
+        _warn(t("term.check.semantic_remote"))
         if url.startswith("http://"):
-            _echo(
-                "warning: search.semantic.base_url uses http:// to another machine; the index "
-                "text would travel unencrypted. Use https://.",
-                err=True,
-            )
+            _warn(t("term.check.http_semantic"))
     found = credentials.resolve_embeddings(semantic)
     if found.value:
-        _echo(f"  embeddings api key: {found.source} ({found.hint})")
+        _echo(t("term.check.embeddings_key", source=found.source, hint=found.hint))
 
 
 def _report_claude(cfg: Config) -> None:
@@ -396,20 +361,17 @@ def _report_claude(cfg: Config) -> None:
 
     executable = claude_code.find_claude(cfg.provider)
     if executable is None:
-        _echo("  claude: not found")
-        _echo(
-            "warning: install Claude Code, or set provider.command to the `claude` executable",
-            err=True,
-        )
+        _echo(t("term.check.claude_missing"))
+        _warn(t("term.check.install_claude"))
         return
     _echo(f"  claude: {executable}")
     login = claude_code.logged_in(executable)
     if login is None:
-        _echo("warning: could not ask Claude Code whether it is logged in", err=True)
+        _warn(t("term.check.claude_unknown"))
     elif login:
-        _echo("  claude login: ok")
+        _echo(t("term.check.claude_ok"))
     else:
-        _echo(f"warning: Claude Code is not logged in; {claude_code.LOGIN_HINT}", err=True)
+        _warn(t("term.check.claude_logged_out", hint=t("term.claude.login_hint")))
 
 
 @app.command()
@@ -762,7 +724,7 @@ def _load(config: Path | None, *, warn_orphans: bool = True, speak: bool = True)
     try:
         cfg = load_config(config)
     except ConfigError as exc:
-        _fatal(str(exc))
+        _fatal(exc.text())  # in English: the language could not be read
     _speak(cfg if speak else None)
     if warn_orphans:
         _warn_orphan_categories(cfg)
@@ -1961,7 +1923,7 @@ def check_access(
 @app.command()
 def reconcile(config: ConfigOption = None) -> None:
     """Update the index for files moved, renamed or deleted by hand. Moves nothing."""
-    cfg = _load(config, speak=False)  # English until it is translated (#141)
+    cfg = _load(config)
     try:
         with instance_lock(cfg.database), Store.open(cfg.database) as store:
             # flib's own interrupted moves are finished first, never taken for the user's.
@@ -1970,48 +1932,63 @@ def reconcile(config: ConfigOption = None) -> None:
     except AlreadyRunningError as exc:
         _fatal(str(exc))
     if recovered:
-        _echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
+        _echo(t("term.recovered", count=recovered))
     for old, new in report.moved:
-        _echo(f"  moved   {_short(old, cfg)}  ->  {_short(new, cfg)}")
+        _echo(t("term.row.moved", source=_short(old, cfg), destination=_short(new, cfg)))
     for path, old_category, new_category in report.recategorized:
-        _echo(f"  learned {_short(path, cfg)}: {old_category or '-'} -> {new_category}")
-    for path in report.found_again:
-        _echo(f"  found   {_short(path, cfg)}")
-    for path in report.missing:
-        _echo(f"  missing {_short(path, cfg)}")
-    for path in report.cloud_only:
-        _echo(f"  icloud  {_short(path, cfg)}  ({SkipReason.CLOUD_ONLY.value}, not checked)")
-    for path in report.unchecked:
-        _echo(f"  unread  {_short(path, cfg)}  (cannot be read now, not checked)")
-    for path in report.locked:
-        _echo(f"  locked  {_short(path, cfg)}  ({SkipReason.LOCKED.value}, not checked)")
-    for path, original in report.orphaned:
         _echo(
-            f"  orphan  {_short(path, cfg)}  (its original {_short(original, cfg)} is missing; "
-            "move this copy to an input folder to have it filed)"
+            t(
+                "term.reconcile.learned",
+                path=_short(path, cfg),
+                old=old_category or "-",
+                new=new_category,
+            )
         )
-    orphaned = f", {len(report.orphaned)} duplicate(s) of missing files" if report.orphaned else ""
-    _echo(
-        f"Reconcile: {report.checked} checked, {len(report.moved)} moved by hand, "
-        f"{len(report.found_again)} found again, {len(report.missing)} missing, "
-        f"{len(report.cloud_only)} in iCloud only{orphaned}."
-        + (
-            f" {len(report.locked)} could not be read while the Mac is locked; "
-            "run `flib reconcile` again once it is unlocked."
-            if report.locked
-            else ""
+    for path in report.found_again:
+        _echo(t("term.reconcile.found", path=_short(path, cfg)))
+    for path in report.missing:
+        _echo(t("term.reconcile.missing", path=_short(path, cfg)))
+    for path in report.cloud_only:
+        _echo(
+            t(
+                "term.reconcile.icloud",
+                path=_short(path, cfg),
+                why=skip_reason(SkipReason.CLOUD_ONLY),
+            )
         )
-    )
+    for path in report.unchecked:
+        _echo(t("term.reconcile.unread", path=_short(path, cfg)))
+    for path in report.locked:
+        _echo(
+            t("term.reconcile.locked", path=_short(path, cfg), why=skip_reason(SkipReason.LOCKED))
+        )
+    for path, original in report.orphaned:
+        _echo(t("term.reconcile.orphan", path=_short(path, cfg), original=_short(original, cfg)))
+    counts = {
+        "checked": t("term.reconcile.checked", count=report.checked),
+        "moved": t("term.reconcile.moved_by_hand", count=len(report.moved)),
+        "found": t("term.reconcile.found_again", count=len(report.found_again)),
+        "missing": t("term.reconcile.missing_count", count=len(report.missing)),
+        "icloud": t("term.reconcile.icloud_count", count=len(report.cloud_only)),
+    }
+    if report.orphaned:
+        orphans = t("term.reconcile.orphans", count=len(report.orphaned))
+        summary = t("term.reconcile.summary_orphans", orphans=orphans, **counts)
+    else:
+        summary = t("term.reconcile.summary", **counts)
+    if report.locked:
+        summary = t(
+            "term.reconcile.summary_locked",
+            summary=summary,
+            locked=t("term.reconcile.locked_count", count=len(report.locked)),
+        )
+    _echo(summary)
 
 
 # --- First run -------------------------------------------------------------------------
 
-VISION_NOTE = (
-    "Vision lets the model look at photos, screenshots and scanned PDFs. What is sent: "
-    "the image shrunk to 1568 px with its EXIF and GPS metadata removed, or the first 3 "
-    "pages of a PDF with no text. About US$0.0005 per image and US$0.001 per scanned PDF "
-    "on the default model. Off, they are classified from their name and metadata."
-)
+VISION_NOTE = t("term.init.vision_note")
+"""What vision sends and costs, said before the question (rendered again when printed)."""
 
 
 class _Asker:
@@ -2027,22 +2004,45 @@ class _Asker:
         answer = str(typer.prompt(question, default=default)).strip()
         return answer or default
 
-    def choice(self, question: str, options: list[str], default: str) -> str:
+    def choice(
+        self, question: str, options: list[str], default: str, *, listed: bool = True
+    ) -> str:
+        """``listed=False``: the question names its options itself."""
+        asked = f"{question} ({', '.join(options)})" if listed else question
         if self.yes:
-            _echo(f"{question} ({', '.join(options)}) [{default}]: {default}")
+            _echo(f"{asked} [{default}]: {default}")
             return default
         while True:
-            answer = self.text(f"{question} ({', '.join(options)})", default)
+            answer = self.text(asked, default)
             if answer in options:
                 return answer
-            _echo(f"error: choose one of {', '.join(options)}.", err=True)
+            _echo(t("term.error", text=t("term.init.choose_one", options=", ".join(options))),
+                  err=True)  # fmt: skip
 
     def confirm(self, question: str, default: bool) -> bool:
         if self.yes:
-            hint = "[Y/n]" if default else "[y/N]"
-            _echo(f"{question} {hint}: {'y' if default else 'n'}")
+            hint = t("term.yes_no.default_yes" if default else "term.yes_no.default_no")
+            said = t("term.yes_no.yes" if default else "term.yes_no.no")
+            _echo(f"{question} {hint}: {said}")
             return default
-        return typer.confirm(question, default=default)
+        return _confirm(question, default=default)
+
+
+def _init_language(path: Path) -> Language:
+    """The language ``flib init`` starts in and suggests for its first question.
+
+    Replacing a configuration it can read, that configuration's language: a library's
+    folders and categories must not flip language because this shell's locale differs
+    from the one the library was set up in. With none (or one it cannot read), the
+    shell's locale (``onboarding.detect_language``, the same signal that picks the
+    Portuguese folders), so a Brazilian user's first run is in Portuguese. The answer
+    to the question then decides (#141)."""
+    try:
+        language = load_config(path).language
+    except ConfigError:
+        language = onboarding.detect_language()
+    i18n.use(language)
+    return language
 
 
 @app.command()
@@ -2078,49 +2078,42 @@ def init(
     """
     ask = _Asker(yes)
     path = config or default_config_path()
-    _echo("Setting up file-librarian. Press Enter to take the suggestion in brackets.\n")
+    suggested = _init_language(path)
+    _echo(t("term.init.welcome"))
+    _echo("")
     if local and not _local_setup(ask):
         raise typer.Exit(EXIT_ERROR)
     overwrite = force or (
-        path.exists()
-        and ask.confirm(f"A configuration already exists at {path}. Replace it?", default=False)
+        path.exists() and ask.confirm(t("term.init.replace", path=str(path)), default=False)
     )
     if path.exists() and not overwrite:
-        _echo(f"Keeping {path}.")
+        _echo(t("term.init.keeping", path=str(path)))
     else:
-        answers = _ask_answers(ask, local=local)
+        answers = _ask_answers(ask, local=local, language=suggested)
         onboarding.write_config(path, onboarding.render_config(answers))
-        _echo(f"\nWrote {path} (only you can read it). `flib check-config` validates it.")
-    cfg = _load(path, speak=False)  # English until it is translated (#141)
+        _echo("")
+        _echo(t("term.init.wrote", path=str(path)))
+    cfg = _load(path)
     _echo("")
     if _provider_ready(cfg, ask) and sample:
         _trial(cfg, sample, ask)
     else:
-        _echo("Skipping the trial. `flib simulate` shows the plan once flib can run.")
+        _echo(t("term.init.no_trial"))
     if cfg.provider.name == "ollama" and cfg.provider.model == onboarding.LOCAL_MODEL:
         _echo(onboarding.LOCAL_QUALITY)
     _echo("")
     _offer_schedule(path, cfg, ask)
     _offer_menu(path, cfg, ask)
-    _echo(
-        "\nNext:\n"
-        "  flib simulate   the plan for your real folders; nothing moves\n"
-        "  flib run        organize now; `flib undo` reverts it\n"
-        "  flib status     what waits for you in review or failed, and the last and next run\n"
-        "Optional: let Claude search your library through the MCP server; enable it with "
-        "`./scripts/install.sh --with-mcp` from the file-librarian folder."
-    )
+    _echo("")
+    _echo(t("term.init.next"))
 
 
-def _ask_answers(ask: _Asker, *, local: bool = False) -> onboarding.Answers:
-    language = cast(
-        Language,
-        ask.choice(
-            "Language of names, descriptions and folders",
-            list(LOCALES),
-            onboarding.detect_language(),
-        ),
-    )
+def _ask_answers(
+    ask: _Asker, *, local: bool = False, language: Language = DEFAULT_LANGUAGE
+) -> onboarding.Answers:
+    """The answers, starting with the language (``language``: the suggestion)."""
+    language = cast(Language, ask.choice(t("term.init.language"), list(LOCALES), language))
+    i18n.use(language)  # from its first answer on, flib init speaks the chosen language
     while True:
         answers = _ask_folders(ask, language)
         try:
@@ -2128,14 +2121,15 @@ def _ask_answers(ask: _Asker, *, local: bool = False) -> onboarding.Answers:
             break
         except ConfigError as exc:
             if ask.yes:
-                _fatal(str(exc))
-            _echo(f"error: {exc}\nLet's try the folders again.", err=True)
+                _fatal(exc.text())
+            _echo(t("term.error", text=exc.text()), err=True)
+            _echo(t("term.init.folders_again"), err=True)
     answers = _ask_more_inboxes(ask, answers)
     choice = _ProviderChoice("local") if local else _ask_provider(ask)
     while choice.provider == "local" and not local:
         local = _local_setup(ask)  # the "local" answer: set up as `flib init --local` does
         if not local:
-            _echo("Choose another provider for now.")
+            _echo(t("term.init.other_provider"))
             choice = _ask_provider(ask)
     if choice.provider == "local":
         return dataclasses.replace(
@@ -2148,9 +2142,9 @@ def _ask_answers(ask: _Asker, *, local: bool = False) -> onboarding.Answers:
     vision = False
     if choice.provider == "anthropic":
         _echo(VISION_NOTE)
-        vision = ask.confirm("Send images and scanned PDFs to the model?", default=False)
+        vision = ask.confirm(t("term.init.vision_question"), default=False)
     else:
-        _echo("Images and scanned PDFs are classified from their name and metadata.")
+        _echo(t("term.init.no_vision"))
     return dataclasses.replace(
         answers,
         provider=choice.provider,
@@ -2165,45 +2159,42 @@ def _local_setup(ask: _Asker) -> bool:
     """The fully local setup's checks (#92): Ollama installed and running, and the models
     pulled, offering to download them. False when Ollama cannot be used yet."""
     from file_librarian.providers import ProviderError
-    from file_librarian.providers.ollama import INSTALL_HINT
 
     state = onboarding.local_state()
     if state.models is None:
         if state.command is None:
-            _echo(
-                "Ollama is not installed: it runs the local model. flib does not install it "
-                f"for you; {INSTALL_HINT}. Then run `flib init --local` again.",
-                err=True,
-            )
+            _echo(t("term.init.no_ollama", hint=t("term.ollama.install_hint")), err=True)
         else:
-            _echo(
-                f"Ollama is installed ({state.command}) but not running. Start it with "
-                "`ollama serve`, `brew services start ollama` or the Ollama app, then run "
-                "`flib init --local` again.",
-                err=True,
-            )
+            _echo(t("term.init.ollama_stopped", command=str(state.command)), err=True)
         return False
     _echo(
-        f"Ollama is running. The local setup uses {onboarding.LOCAL_MODEL} to classify and "
-        f"{onboarding.LOCAL_EMBEDDING_MODEL} for semantic search."
+        t(
+            "term.init.ollama_running",
+            model=onboarding.LOCAL_MODEL,
+            embedding=onboarding.LOCAL_EMBEDDING_MODEL,
+        )
     )
     missing = state.missing
     if not missing:
-        _echo("Both models are already downloaded.")
+        _echo(t("term.init.models_there"))
         return True
-    sizes = ", ".join(f"{m} ({onboarding.LOCAL_MODELS[m]:.1f} GB)" for m in missing)
+    sizes = ", ".join(
+        t("term.init.model_size", model=m, size=formats.decimal(onboarding.LOCAL_MODELS[m], 1))
+        for m in missing
+    )
     total = sum(onboarding.LOCAL_MODELS[m] for m in missing)
-    _echo(f"Not downloaded yet: {sizes}.")
+    _echo(t("term.init.not_downloaded", sizes=sizes))
     # --yes takes defaults; a download of several gigabytes is never one of them.
-    if not ask.confirm(f"Download them now ({total:.1f} GB)?", default=not ask.yes):
+    question = t("term.init.download_question", size=formats.decimal(total, 1))
+    if not ask.confirm(question, default=not ask.yes):
         pulls = "; ".join(f"ollama pull {m}" for m in missing)
-        _echo(f"Download them later with: {pulls}")
+        _echo(t("term.init.download_later", pulls=pulls))
         return True
     for model in missing:
         try:
             onboarding.pull_model(model, lambda line: _echo(f"  {line}"))
         except ProviderError as exc:
-            _echo(f"warning: {exc}; try `ollama pull {model}`.", err=True)
+            _warn(t("term.init.pull_failed", error=str(exc), model=model))
     return True
 
 
@@ -2214,7 +2205,7 @@ def _with_inbox(
     try:
         onboarding.check_answers(candidate)
     except ConfigError as exc:
-        _echo(f"Not adding {what}: {exc}", err=True)
+        _echo(t("term.init.not_adding", what=what, error=exc.text()), err=True)
         return answers
     return candidate
 
@@ -2223,15 +2214,11 @@ def _ask_more_inboxes(ask: _Asker, answers: onboarding.Answers) -> onboarding.An
     """Offer the Desktop and the screenshots folder as more inputs (#89); no by default."""
     desktop = onboarding.desktop_folder()
     if desktop is not None and not is_within(desktop, answers.input_folder):
-        _echo(
-            f"\nflib can also tidy the Desktop. People keep work in progress there, so it would "
-            f"take only documents and images that have not changed for "
-            f"{onboarding.DESKTOP_MIN_AGE_DAYS} days, and leave folders alone. macOS asks once "
-            "whether flib may read the Desktop."
-        )
-        if ask.confirm("Also tidy the Desktop?", default=False):
+        _echo("")
+        _echo(t("term.init.desktop", days=onboarding.DESKTOP_MIN_AGE_DAYS))
+        if ask.confirm(t("term.init.desktop_question"), default=False):
             answers = _with_inbox(
-                answers, dataclasses.replace(answers, desktop=desktop), "the Desktop"
+                answers, dataclasses.replace(answers, desktop=desktop), t("term.init.the_desktop")
             )
     shots = onboarding.screenshot_folder()
     if shots is None:
@@ -2239,30 +2226,17 @@ def _ask_more_inboxes(ask: _Asker, answers: onboarding.Answers) -> onboarding.An
     category = LOCALES[answers.language].screenshots_category
     where = onboarding.display_path(shots)
     if onboarding.shared_folder(shots):
-        _echo(
-            f"\nScreenshots are saved to {where}, which holds other files too, so flib does not "
-            "offer to file it by a fixed category. To have screenshots filed on their own, "
-            "choose a folder just for them in the Screenshot app (Cmd+Shift+5 > Options > "
-            "Other Location), then run `flib init` again or add it to `inputs` "
-            "(see config.example.yaml)."
-        )
+        _echo("")
+        _echo(t("term.init.shots_shared", where=where))
         return answers
     found = onboarding.count_matching(shots, onboarding.SCREENSHOT_ONLY)
-    _echo(
-        f"\nScreenshots are saved in {where} ({found} item(s) there look like screenshots or "
-        f"screen recordings now). flib can file those into {category}/<year>/<month> without "
-        "asking the AI (no cost), keeping their names; anything else there, and folders, "
-        "are left alone."
-    )
+    _echo("")
+    _echo(t("term.init.shots", where=where, count=found, category=category))
     if not found:
-        _echo(
-            "Nothing there has a name flib knows for a screenshot (in English, Portuguese, "
-            "Spanish, French, German, Italian or Japanese), so it may never file anything "
-            "from it; the answer you probably want is no."
-        )
-    if ask.confirm("File screenshots too?", default=False):
+        _echo(t("term.init.shots_none"))
+    if ask.confirm(t("term.init.shots_question"), default=False):
         answers = _with_inbox(
-            answers, dataclasses.replace(answers, screenshots=shots), "the screenshots folder"
+            answers, dataclasses.replace(answers, screenshots=shots), t("term.init.the_shots")
         )
     return answers
 
@@ -2274,18 +2248,18 @@ def _user_path(raw: str) -> Path:
 def _ask_folders(ask: _Asker, language: Language) -> onboarding.Answers:
     while True:
         folder = _user_path(
-            ask.text("Folder to organize", onboarding.display_path(Path.home() / "Downloads"))
+            ask.text(t("term.init.folder"), onboarding.display_path(Path.home() / "Downloads"))
         )
         if folder.is_dir():
             break
         if ask.yes:
-            _fatal(f"{folder} is not a folder; run `flib init` without --yes to pick another")
-        _echo(f"error: {folder} is not a folder.", err=True)
+            _fatal(t("term.init.not_a_folder_yes", folder=str(folder)))
+        _echo(t("term.error", text=t("term.init.not_a_folder", folder=str(folder))), err=True)
     out = ask.text(
-        "Where organized files go",
+        t("term.init.output"),
         onboarding.display_path(onboarding.default_output_root(folder, language)),
     )
-    review = ask.text("Folder in it for files to review", LOCALES[language].review_folder)
+    review = ask.text(t("term.init.review"), LOCALES[language].review_folder)
     return onboarding.Answers(language, folder, _user_path(out), review, "anthropic")
 
 
@@ -2309,50 +2283,45 @@ def _ask_provider(ask: _Asker) -> _ProviderChoice:
     executable = claude_code.find_claude(probe)
     ready = executable is not None and claude_code.logged_in(executable) is True
     if executable is None:
-        state = "not found"
+        state = t("term.init.claude_not_found")
     else:
-        state = "found, logged in" if ready else "found, not logged in"
+        state = t("term.init.claude_logged_in" if ready else "term.init.claude_logged_out")
     local_models = onboarding.probe_ollama()
     options = ["claude-code", "anthropic"]
-    lines = [
-        f"  claude-code    your Claude subscription through Claude Code ({state}); no API key",
-        "  anthropic      the Anthropic API with an API key, billed per use "
-        "(a fraction of a cent per file)",
+    lines: list[str] = [
+        t("term.init.option.claude_code", state=state),
+        t("term.init.option.anthropic"),
     ]
     if local_models:
         options.append("ollama")
-        lines.append(
-            f"  ollama         a local model through Ollama ({len(local_models)} pulled); "
-            "nothing leaves this Mac"
-        )
+        lines.append(t("term.init.option.ollama", count=len(local_models)))
     options.append("openai-compat")
-    lines.append("  openai-compat  any OpenAI-compatible API, with its URL and an optional key")
+    lines.append(t("term.init.option.openai_compat"))
     options.append("local")
-    lines.append(
-        f"  local          nothing leaves this Mac: {onboarding.LOCAL_MODEL} in Ollama, local "
-        "search; slower and less accurate (needs Ollama, ~10 GB, 16 GB of memory)"
-    )
-    _echo("\nWhich AI classifies your files?\n" + "\n".join(lines))
+    lines.append(t("term.init.option.local", model=onboarding.LOCAL_MODEL))
+    _echo("")
+    _echo(t("term.init.which_ai"))
+    for line in lines:
+        _echo(line)
     default = "claude-code" if ready else ("ollama" if local_models else "anthropic")
-    name = ask.choice("Provider", options, default)
+    name = ask.choice(t("term.init.provider"), options, default)
     if name == "ollama" and local_models:
         preferred = onboarding.DEFAULT_MODELS["ollama"]
         suggestion = next((m for m in local_models if m.split(":")[0] == preferred), None)
-        model = ask.text("Ollama model", suggestion or local_models[0])
+        model = ask.text(t("term.init.ollama_model"), suggestion or local_models[0])
         return _ProviderChoice(name, model=model)
     if name == "openai-compat":
         while True:
-            url = ask.text("API base URL (the part before /chat/completions)",
-                           onboarding.OPENAI_COMPAT_URL)  # fmt: skip
+            url = ask.text(t("term.init.base_url"), onboarding.OPENAI_COMPAT_URL)
             try:
                 url = ProviderConfig(name=name, model="-", base_url=url).base_url or url
                 break
             except ValidationError as exc:
-                problem = exc.errors()[0]["msg"].removeprefix("Value error, ")
+                problem = str(refusal(exc.errors()[0])).removeprefix("Value error, ")
                 if ask.yes:  # pragma: no cover - --yes never picks openai-compat
                     _fatal(problem)
-                _echo(f"error: {problem}", err=True)
-        model = ask.text("Model", onboarding.DEFAULT_MODELS["openai-compat"])
+                _echo(t("term.error", text=problem), err=True)
+        model = ask.text(t("term.init.model"), onboarding.DEFAULT_MODELS["openai-compat"])
         return _ProviderChoice(name, model=model, base_url=url)
     if name != "claude-code" or executable is None:
         return _ProviderChoice(name)
@@ -2367,56 +2336,47 @@ def _provider_ready(cfg: Config, ask: _Asker) -> bool:
     if name == "anthropic":
         found = credentials.resolve(cfg.provider)
         if found.value is not None:
-            _echo(f"API key: found in the {found.source} ({found.hint}).")
+            _echo(t("term.init.key_found", source=found.source, hint=found.hint))
             return True
-        if not ask.yes and ask.confirm(
-            "No Anthropic API key found. Store one in the macOS Keychain now?", default=True
-        ):
+        if not ask.yes and ask.confirm(t("term.init.store_key"), default=True):
             problem = _save_key(cast(credentials.KeySpec, credentials.key_spec(cfg.provider)))
             if problem is None:
                 return True
-            _echo(f"warning: {problem}", err=True)
-        _echo("warning: no API key yet; run `flib key set` to add one.", err=True)
+            _warn(problem)
+        _warn(t("term.init.no_key_yet"))
         return False
     if name == "openai-compat":
         found = credentials.resolve(cfg.provider)
         if found.value is not None:
-            _echo(f"API key: found in the {found.source} ({found.hint}).")
+            _echo(t("term.init.key_found", source=found.source, hint=found.hint))
             return True
         local = is_loopback_url(cfg.provider.base_url or "")
-        if not ask.yes and ask.confirm(
-            "No API key found for this server (a local one usually needs none). "
-            "Store one in the macOS Keychain now?",
-            default=not local,
-        ):
+        if not ask.yes and ask.confirm(t("term.init.store_server_key"), default=not local):
             spec = cast(credentials.KeySpec, credentials.key_spec(cfg.provider))
             problem = _save_key(spec)
             if problem is not None:
-                _echo(f"warning: {problem}", err=True)
+                _warn(problem)
         return True
     if name == "ollama":
         from file_librarian.providers import ollama
 
         ready, line = ollama.check(cfg.provider)
         if not ready:
-            _echo(f"warning: {line}.", err=True)
+            _warn(t("term.init.sentence", text=line))
         return ready
     if name == "claude-code":
         from file_librarian.providers import claude_code
 
         executable = claude_code.find_claude(cfg.provider)
         if executable is None:
-            _echo(
-                "warning: Claude Code was not found; install it or set provider.command.",
-                err=True,
-            )
+            _warn(t("term.init.claude_missing"))
             return False
         if claude_code.logged_in(executable) is False:
-            _echo(f"warning: Claude Code is not logged in; {claude_code.LOGIN_HINT}.", err=True)
+            _warn(t("term.init.claude_logged_out_warning", hint=t("term.claude.login_hint")))
             return False
         return True
     if not is_implemented(name):
-        _echo(f"warning: provider {name!r} is not available yet.", err=True)
+        _warn(t("term.init.not_available", provider=repr(name)))
         return False
     return True
 
@@ -2425,92 +2385,91 @@ def _trial(cfg: Config, size: int, ask: _Asker) -> None:
     picked = onboarding.pick_sample(cfg, size)
     where = ", ".join(onboarding.display_path(p) for p in cfg.input_paths)
     if not picked:
-        _echo(
-            f"No files to try it on in {where}: it is empty, or holds only hidden, sensitive "
-            "or large items. `flib simulate` shows the plan once files arrive."
-        )
+        _echo(t("term.init.nothing_to_try", where=where))
         return
-    question = (
-        f"Try it on copies of your {len(picked)} most recent item(s)? They are copied to a "
-        f"temporary folder and classified with {cfg.provider.name}; nothing in {where} moves."
-    )
+    question = t("term.init.try_question", count=len(picked), provider=cfg.provider.name,
+                 where=where)  # fmt: skip
     if not ask.confirm(question, default=True):
         return
-    _echo(f"Classifying {len(picked)} copies; this can take a minute...")
+    _echo(t("term.init.classifying", count=len(picked)))
     try:
         result = onboarding.run_trial(cfg, get_provider(cfg.provider), picked)
     except (ProviderError, ScanError) as exc:
-        _echo(f"warning: the trial stopped: {exc}", err=True)
+        _warn(t("term.init.trial_stopped", error=str(exc)))
         return
     _print_trial(result, cfg)
 
 
 def _print_trial(trial: onboarding.Trial, cfg: Config) -> None:
     root = onboarding.display_path(cfg.output_root)
-    _echo(f"\nTrial on {trial.sampled} copies (destinations are inside {root}):")
+    _echo("")
+    _echo(t("term.init.trial", count=trial.sampled, root=root))
     for item in trial.items:
         if item.destination is None:
-            _echo(f"  keep    {item.name}  ({item.reason})")
+            _echo(t("term.row.keep", source=item.name, why=detail(item.reason)))
         else:
-            label = {FileStatus.REVIEW: "review", FileStatus.DUPLICATE: "dup"}.get(
-                item.status, "move"
+            row = {
+                FileStatus.REVIEW: "term.row.trial_review",
+                FileStatus.DUPLICATE: "term.row.trial_dup",
+            }
+            _echo(
+                t(
+                    row.get(item.status, "term.row.trial_move"),
+                    name=item.name,
+                    destination=str(item.destination),
+                )
             )
-            _echo(f"  {label:<8}{item.name}  ->  {item.destination}")
     organized = trial.count(FileStatus.ORGANIZED)
     review = trial.count(FileStatus.REVIEW)
     stay = len(trial.items) - organized - review
     _echo(
-        f"Summary: {organized} to categories, {review} to {cfg.review_folder} for you to "
-        f"decide, {stay} would stay."
+        t(
+            "term.init.trial_summary",
+            organized=t("term.init.to_categories", count=organized),
+            review=t("term.init.to_review", count=review, folder=cfg.review_folder),
+            stay=t("term.init.stay", count=stay),
+        )
     )
     categories = trial.by_category()
     if categories:
         _echo("  " + ", ".join(f"{name}: {n}" for name, n in sorted(categories.items())))
     if trial.deferred:
-        _echo(f"  {trial.deferred} not tried: the cost cap was reached.")
-    _echo(
-        f"Estimated cost of the trial: US$ {trial.cost_usd:.4f}. Nothing in your folders "
-        "moved; the copies and the trial's index are already deleted."
-    )
+        _echo(t("term.init.not_tried", count=trial.deferred))
+    _echo(t("term.init.trial_cost", cost=formats.usd(trial.cost_usd)))
 
 
 def _offer_schedule(path: Path, cfg: Config, ask: _Asker) -> None:
     try:
         state = scheduler.status()
     except scheduler.ScheduleError as exc:
-        _echo(f"warning: cannot read the schedule: {exc}", err=True)
+        _warn(t("term.init.schedule_unreadable", error=str(exc)))
         return
     if state.installed:
-        what = f"A daily run is already scheduled at {state.time}"
         if state.mode == "watch":
-            what = "Watch mode is already on"
+            _echo(t("term.init.watch_already"))
         elif state.mode == "both":
-            what += ", with watch mode"
-        _echo(f"{what}; `flib schedule` changes it.")
+            _echo(t("term.init.both_already", time=str(state.time)))
+        else:
+            _echo(t("term.init.daily_already", time=str(state.time)))
         return
-    question = f"Organize new files automatically every day at {cfg.schedule.time}?"
+    question = t("term.init.schedule_question", time=cfg.schedule.time)
     if not ask.confirm(question, default=True):
-        _echo("You can schedule it later with `flib schedule` (--at HH:MM for another time).")
+        _echo(t("term.init.schedule_later"))
         return
-    _echo(
-        "Watch mode organizes files a few minutes after they arrive (once downloads "
-        "finish) instead of once a day; both keeps the daily run as a safety net."
-    )
+    _echo(t("term.init.watch_explained"))
     mode = ask.choice(
-        "Run daily, on arrival (watch), or both?", list(scheduler.MODES), cfg.schedule.mode
+        t("term.init.mode_question"), list(scheduler.MODES), cfg.schedule.mode, listed=False
     )
     if mode == "watch":
         _echo(WATCH_ONLY_NOTE)
     if mode != cfg.schedule.mode and not onboarding.set_schedule_mode(path, mode):
-        _echo(
-            f"Set schedule.mode: {mode} in {path} so `flib schedule` keeps this choice.", err=True
-        )
+        _echo(t("term.init.set_mode", mode=mode, path=str(path)), err=True)
     try:
         _install_schedule(
             path, cfg, cfg.schedule.time, save_key=True if ask.yes else None, mode=mode
         )
     except scheduler.ScheduleError as exc:
-        _echo(f"warning: could not schedule the daily run: {exc}", err=True)
+        _warn(t("term.init.not_scheduled", error=str(exc)))
         return
     _report_access(path.resolve())
 
@@ -2520,11 +2479,10 @@ def _offer_menu(path: Path, cfg: Config, ask: _Asker) -> None:
     if menubar.missing_tools():
         return
     if menubar.installed():
-        _echo("flib is already in the menu bar; `flib menu --remove` takes it away.")
+        _echo(t("term.init.menu_already"))
         return
-    question = "Show flib in the menu bar (what needs you, and a menu that opens flib)?"
-    if not ask.confirm(question, default=True):
-        _echo("You can add it later with `flib menu`.")
+    if not ask.confirm(t("term.init.menu_question"), default=True):
+        _echo(t("term.init.menu_later"))
         return
     _install_menu(path, cfg)
 
@@ -2833,19 +2791,17 @@ def reprocess(
     --apply-layout only moves files into their category's sub-folders.
     --fill-fields only records the structured fields of files filed before them.
     """
+    _speak_from(config)  # its refusals of options come before the configuration is loaded
     if ask_issuer and not apply_layout:
-        _fatal("--ask-issuer goes with --apply-layout")
+        _fatal(t("term.reprocess.ask_issuer_alone"))
     if fill_fields:
         if (
             rename or override_corrections or rename_category or remove_category or to_review
             or scrub_descriptions or apply_layout
         ):  # fmt: skip
-            _fatal(
-                "--fill-fields only records fields in the index; it takes --category, --ext, "
-                "--since, --until, --simulate and --yes"
-            )
+            _fatal(t("term.reprocess.fill_fields_alone"))
         _fill_fields(
-            _load(config, warn_orphans=False, speak=False),
+            _load(config, warn_orphans=False),
             (category, ext, since, until),
             simulate=simulate,
             yes=yes,
@@ -2857,12 +2813,9 @@ def reprocess(
             or rename_category or remove_category or to_review or scrub_descriptions
         )  # fmt: skip
         if others:
-            _fatal(
-                "--apply-layout only moves files into their layout; it takes --category, "
-                "--ask-issuer, --simulate and --yes, and no category migration"
-            )
+            _fatal(t("term.reprocess.apply_layout_alone"))
         _apply_layout(
-            _load(config, warn_orphans=False, speak=False),
+            _load(config, warn_orphans=False),
             split_values(category),
             ask=ask_issuer,
             simulate=simulate,
@@ -2875,22 +2828,20 @@ def reprocess(
             or override_corrections or rename_category or remove_category or to_review
         )  # fmt: skip
         if others:
-            _fatal("--scrub-descriptions takes the whole index; leave out the other options")
-        _scrub_descriptions(
-            _load(config, warn_orphans=False, speak=False), simulate=simulate, yes=yes
-        )
+            _fatal(t("term.reprocess.scrub_alone"))
+        _scrub_descriptions(_load(config, warn_orphans=False), simulate=simulate, yes=yes)
         return
     if rename_category is not None and remove_category is not None:
-        _fatal("use either --rename-category or --remove-category, not both")
+        _fatal(t("term.reprocess.rename_or_remove"))
     migrating = rename_category is not None or remove_category is not None
     has_filters = bool(split_values(category) or split_values(ext) or since or until)
     if migrating and (has_filters or override_corrections):
-        _fatal("a category migration takes the whole category; leave out the filters")
+        _fatal(t("term.reprocess.migration_filters"))
     if migrating and rename:
-        _fatal("a category migration keeps file names; leave out --rename")
+        _fatal(t("term.reprocess.migration_rename"))
     if to_review and remove_category is None:
-        _fatal("--to-review goes with --remove-category")
-    cfg = _load(config, warn_orphans=False, speak=False)  # English until it is translated (#141)
+        _fatal(t("term.reprocess.to_review_alone"))
+    cfg = _load(config, warn_orphans=False)
     provider: Provider | None = None
     if rename_category is None and not to_review:
         try:
@@ -2924,32 +2875,40 @@ def _scrub_descriptions(cfg: Config, *, simulate: bool, yes: bool) -> None:
             with Store.open(cfg.database) as store:
                 planned = reprocess_mod.plan_scrub(store)
             for item in planned:
-                fields = ", ".join(c.replace("_", " ") for c in item.values)
-                _echo(f"  scrub   {_short(item.path, cfg)}  ({fields})")
+                fields = ", ".join(_column(c) for c in item.values)
+                _echo(t("term.row.scrub", path=_short(item.path, cfg), fields=fields))
             if simulate:
-                _echo(f"Simulation: {len(planned)} file(s) to scrub; nothing changed.")
+                _echo(t("term.reprocess.scrub_simulation", count=len(planned)))
                 return
             if planned and not yes:
-                question = f"Scrub {len(planned)} file(s) in the index? `flib undo` reverts it"
-                if not typer.confirm(question, default=False):
-                    _echo("Nothing changed.")
+                question = t("term.reprocess.scrub_question", count=len(planned))
+                if not _confirm(question, default=False):
+                    _echo(t("term.reprocess.nothing_changed"))
                     return
             with instance_lock(cfg.database), Store.open(cfg.database) as store:
                 report = reprocess_mod.apply_scrub(store)
     except AlreadyRunningError as exc:
         _fatal(str(exc))
     if report.cached:
-        _echo(f"{report.cached} cached answer(s) scrubbed.")
+        _echo(t("term.reprocess.scrub_cached", count=report.cached))
     if report.run_id is None:
-        _echo("Nothing to scrub: no stored description holds an identifier flib recognizes.")
+        _echo(t("term.reprocess.nothing_to_scrub"))
         return
-    line = (
-        f"Scrub run {report.run_id}: {report.files} file(s), {report.values} value(s) changed. "
-        "`flib undo` reverts it."
-    )
+    files = t("term.reprocess.scrub_files", count=report.files)
+    values = t("term.reprocess.scrub_values", count=report.values)
     if report.embeddings:
-        line += f" {report.embeddings} embedding(s) removed; the next run makes them again."
-    _echo(line)
+        embeddings = t("term.reprocess.scrub_embeddings", count=report.embeddings)
+        _echo(
+            t(
+                "term.reprocess.scrub_done_embeddings",
+                run=str(report.run_id),
+                files=files,
+                values=values,
+                embeddings=embeddings,
+            )
+        )
+    else:
+        _echo(t("term.reprocess.scrub_done", run=str(report.run_id), files=files, values=values))
 
 
 def _fill_fields(
@@ -2969,54 +2928,51 @@ def _fill_fields(
             with instance_lock(cfg.database), Store.open(cfg.database) as store:
                 recovered = recover(store, cfg)
             if recovered:
-                _echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
+                _echo(t("term.recovered", count=recovered))
             with Store.open(cfg.database) as store:
                 known = [c.name for c in cfg.categories] + store.categories()
                 selection = reprocess_mod.select_fields(
                     cfg, store, filters=_search_filters(known, *filters)
                 )
                 for path, reason in selection.left:
-                    _echo(f"  leave   {_short(path, cfg)}  ({reason})")
+                    _echo(_leave_row(path, reason, cfg))
                 if not selection.targets:
-                    _echo("Every file in the library already has its fields.")
+                    _echo(t("term.reprocess.all_have_fields"))
                     return
                 estimate = reprocess_mod.estimate(selection.targets, provider, cfg, store)
                 _echo(
-                    f"{estimate.files} file(s) without fields: {estimate.cached} answered by "
-                    f"the cache, {estimate.to_ask} to send to {provider.name} "
-                    f"(estimated US$ {estimate.cost_usd:.4f})."
+                    t(
+                        "term.reprocess.fields_estimate",
+                        count=estimate.files,
+                        **_estimate_parts(estimate, provider.name),
+                    )
                 )
                 if (
                     estimate.to_ask
                     and not yes
-                    and not typer.confirm(
-                        f"Send {estimate.to_ask} file(s) to {provider.name}?", default=False
-                    )
+                    and not _confirm(_send_question(estimate.to_ask, provider.name), default=False)
                 ):
-                    _echo("Nothing sent, nothing changed.")
+                    _echo(t("term.reprocess.nothing_sent"))
                     return
                 planned = reprocess_mod.plan_fields(selection.targets, provider, cfg, store)
             for file_id, values in planned.learned.items():
-                path = next(t.row.current_path for t in selection.targets if t.row.id == file_id)
-                names = ", ".join(c.replace("_minor", "").replace("_", " ") for c in values)
-                _echo(f"  fill    {_short(path, cfg)}  ({names})")
+                path = next(x.row.current_path for x in selection.targets if x.row.id == file_id)
+                names = ", ".join(_column(c.replace("_minor", "")) for c in values)
+                _echo(t("term.row.fill", path=_short(path, cfg), fields=names))
             for path, reason in planned.kept:
-                _echo(f"  keep    {_short(path, cfg)}  ({reason})")
+                _echo(t("term.row.keep", source=_short(path, cfg), why=detail(reason)))
             cost = _cost_line(planned.cost_usd, known=planned.cost_known)
             if cost:
                 _echo(cost)
             if simulate:
-                _echo("Simulation: nothing changed.")
+                _echo(t("term.reprocess.simulation_nothing_changed"))
                 return
             if not planned.learned:
-                _echo("Nothing to record.")
+                _echo(t("term.reprocess.nothing_to_record"))
                 return
-            question = (
-                f"Record the fields of {len(planned.learned)} file(s) in the index? "
-                "`flib undo` reverts it"
-            )
-            if not yes and not typer.confirm(question, default=False):
-                _echo("Nothing changed.")
+            question = t("term.reprocess.fields_question", count=len(planned.learned))
+            if not yes and not _confirm(question, default=False):
+                _echo(t("term.reprocess.nothing_changed"))
                 return
             with instance_lock(cfg.database), Store.open(cfg.database) as store:
                 applied = reprocess_mod.apply(
@@ -3055,50 +3011,50 @@ def _layout_run(
     with instance_lock(cfg.database), Store.open(cfg.database) as store:
         recovered = recover(store, cfg)
     if recovered:
-        _echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
+        _echo(t("term.recovered", count=recovered))
     with Store.open(cfg.database) as store:
         selection = reprocess_mod.select_layout(
             cfg, store, categories=categories, ask=provider is not None
         )
         for path, reason in selection.left:
-            _echo(f"  leave   {_short(path, cfg)}  ({reason})")
+            _echo(_leave_row(path, reason, cfg))
         if provider is not None and selection.missing:
             estimate = reprocess_mod.estimate(selection.missing, provider, cfg, store)
             _echo(
-                f"{estimate.files} file(s) need their issuer: {estimate.cached} answered by the "
-                f"cache, {estimate.to_ask} to send to {provider.name} "
-                f"(estimated US$ {estimate.cost_usd:.4f})."
+                t(
+                    "term.reprocess.issuer_estimate",
+                    count=estimate.files,
+                    **_estimate_parts(estimate, provider.name),
+                )
             )
             if (
                 estimate.to_ask
                 and not yes
-                and not typer.confirm(
-                    f"Send {estimate.to_ask} file(s) to {provider.name}?", default=False
-                )
+                and not _confirm(_send_question(estimate.to_ask, provider.name), default=False)
             ):
-                _echo("Nothing sent; files without an issuer stay where they are.")
+                _echo(t("term.reprocess.nothing_sent_issuer"))
                 provider = None
         planned = reprocess_mod.plan_layout(selection, cfg, store, provider=provider)
     _print_reprocess_plan(planned, cfg)
     if planned.in_place:
-        _echo(f"{planned.in_place} file(s) already follow their category's layout.")
+        _echo(t("term.reprocess.in_layout", count=planned.in_place))
     if simulate:
-        _echo("Simulation: nothing moved or changed.")
+        _echo(t("term.reprocess.simulation_nothing_moved"))
         return None, planned
     if not planned.moves() and not planned.learned and not planned.respelled:
-        _echo("Nothing to move: the library already follows its layouts.")
+        _echo(t("term.reprocess.layout_nothing"))
         return None, planned
-    question = f"Move {len(planned.moves())} file(s) into their layout? `flib undo` reverts it"
+    question = t("term.reprocess.layout_question", count=len(planned.moves()))
     if not planned.moves():
         count = len(planned.learned.keys() | planned.respelled.keys())
-        question = f"Record in the index what {count} file(s) are filed by? Nothing moves"
-    if not yes and not typer.confirm(question, default=False):
-        _echo("Nothing changed.")
+        question = t("term.reprocess.layout_record_question", count=count)
+    if not yes and not _confirm(question, default=False):
+        _echo(t("term.reprocess.nothing_changed"))
         return None, planned
     with instance_lock(cfg.database), Store.open(cfg.database) as store:
         recovered = recover(store, cfg)
         if recovered:
-            _echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
+            _echo(t("term.recovered", count=recovered))
         applied = reprocess_mod.apply(
             planned,
             cfg,
@@ -3126,7 +3082,7 @@ def _reprocess(
     with instance_lock(cfg.database), Store.open(cfg.database) as store:
         recovered = recover(store, cfg)
     if recovered:
-        _echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
+        _echo(t("term.recovered", count=recovered))
     # Planning and both questions happen without the instance lock, so a
     # question left unanswered never blocks the scheduled run.
     with Store.open(cfg.database) as store:
@@ -3145,22 +3101,22 @@ def _reprocess(
         return None, None
     _print_reprocess_plan(planned, cfg)
     if simulate:
-        _echo("Simulation: nothing moved or changed.")
+        _echo(t("term.reprocess.simulation_nothing_moved"))
         return None, planned
     if not planned.moves() and not planned.same_folder:
-        _echo("Nothing to move: the library already follows the rules.")
+        _echo(t("term.reprocess.rules_nothing"))
         return None, planned
-    question = f"Move {len(planned.moves())} file(s)? `flib undo` reverts it"
+    question = t("term.reprocess.move_question", count=len(planned.moves()))
     if planned.same_folder:
-        question = "Rename the category in the index? `flib undo` reverts it"
-    if not yes and not typer.confirm(question, default=False):
-        _echo("Nothing changed.")
+        question = t("term.reprocess.rename_question")
+    if not yes and not _confirm(question, default=False):
+        _echo(t("term.reprocess.nothing_changed"))
         return None, planned
     # Each item is checked again under the lock (index row and file).
     with instance_lock(cfg.database), Store.open(cfg.database) as store:
         recovered = recover(store, cfg)
         if recovered:
-            _echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
+            _echo(t("term.recovered", count=recovered))
         applied = reprocess_mod.apply(
             planned,
             cfg,
@@ -3197,34 +3153,63 @@ def _reprocess_plan(
         override_corrections=override_corrections,
     )
     for path, reason in selection.left:
-        _echo(f"  leave   {_short(path, cfg)}  ({reason})")
+        _echo(_leave_row(path, reason, cfg))
     if not selection.targets:
-        _echo("Nothing to reprocess.")
+        _echo(t("term.reprocess.nothing"))
         return None
     if provider is None:
         return reprocess_mod.plan_to_review(selection.targets, cfg)
     estimate = reprocess_mod.estimate(selection.targets, provider, cfg, store)
     cap = cfg.limits.max_cost_usd_per_run
-    limit = f"; the limit per run is US$ {cap:.2f}" if cap is not None else ""
-    _echo(
-        f"{estimate.files} file(s) to reclassify: {estimate.cached} answered by the cache, "
-        f"{estimate.to_ask} to send to {provider.name} "
-        f"(estimated US$ {estimate.cost_usd:.4f}{limit})."
-    )
+    parts = _estimate_parts(estimate, provider.name)
+    if cap is not None:
+        limit = formats.later(formats.usd, cap, 2)
+        _echo(t("term.reprocess.estimate_cap", count=estimate.files, cap=limit, **parts))
+    else:
+        _echo(t("term.reprocess.estimate", count=estimate.files, **parts))
     if (
         estimate.to_ask
         and not yes
-        and not typer.confirm(f"Send {estimate.to_ask} file(s) to {provider.name}?", default=False)
+        and not _confirm(_send_question(estimate.to_ask, provider.name), default=False)
     ):
-        _echo("Nothing sent, nothing changed.")
+        _echo(t("term.reprocess.nothing_sent"))
         return None
     planned = reprocess_mod.plan_reprocess(selection.targets, provider, cfg, store)
     cost = _cost_line(planned.cost_usd, known=planned.cost_known)
     if cost:
         _echo(cost)
     if planned.cached:
-        _echo(f"{planned.cached} classification(s) reused from the cache at no cost.")
+        _echo(t("term.cached", count=planned.cached))
     return planned
+
+
+def _column(name: str) -> str:
+    """An index column (``due_date``, ``amount``) as the user reads it."""
+    return t(f"term.column.{name}") if f"term.column.{name}" in _COLUMNS else name.replace("_", " ")
+
+
+_COLUMNS = frozenset(
+    f"term.column.{name}"
+    for name in ("description", "tags", "kind", "issuer", "amount", "currency", "document_date",
+                 "due_date", "period", "name_choice_reason", "layout_date")
+)  # fmt: skip
+
+
+def _leave_row(path: Path, reason: str, cfg: Config) -> Msg:
+    return t("term.row.leave", path=_short(path, cfg), why=detail(reason))
+
+
+def _estimate_parts(estimate: reprocess_mod.Estimate, provider: str) -> dict[str, object]:
+    """What an estimate says before ``flib reprocess`` asks: the cache, the provider, the cost."""
+    return {
+        "cached": t("term.reprocess.cached", count=estimate.cached),
+        "to_ask": t("term.reprocess.to_ask", count=estimate.to_ask, provider=provider),
+        "cost": formats.later(formats.usd, estimate.cost_usd, 4),
+    }
+
+
+def _send_question(count: int, provider: str) -> Msg:
+    return t("term.reprocess.send_question", count=count, provider=provider)
 
 
 def _print_reprocess_plan(planned: reprocess_mod.ReprocessPlan, cfg: Config) -> None:
@@ -3232,22 +3217,23 @@ def _print_reprocess_plan(planned: reprocess_mod.ReprocessPlan, cfg: Config) -> 
         item = change.relocation
         source = _short(item.context.path, cfg)
         target = _short(item.destination, cfg) if item.destination is not None else "?"
-        _echo(f"  move    {source}  ->  {target}  ({item.reason})")
+        _echo(t("term.row.move", source=source, destination=target, why=detail(item.reason)))
     for path, reason in planned.kept:
-        _echo(f"  keep    {_short(path, cfg)}  ({reason})")
+        _echo(t("term.row.keep", source=_short(path, cfg), why=detail(reason)))
     if planned.rename is not None and planned.same_folder:
         old, new = planned.rename
-        _echo(f"  rename  category {old} -> {new} in the index (the same folder on macOS)")
+        _echo(t("term.row.rename", old=old, new=new))
     unchanged = len(planned.changes) - len(planned.moves())
     _echo(
-        f"Plan: {len(planned.moves())} would move, {unchanged} already in place, "
-        f"{len(planned.kept)} kept as they are."
+        t(
+            "term.reprocess.plan",
+            count=len(planned.moves()),
+            unchanged=t("term.reprocess.in_place", count=unchanged),
+            kept=t("term.reprocess.kept", count=len(planned.kept)),
+        )
     )
     if planned.deferred:
-        _echo(
-            f"{planned.deferred} file(s) were not sent: the cost limit was reached. "
-            "Run `flib reprocess` again to go on."
-        )
+        _echo(t("term.reprocess.deferred", count=planned.deferred))
 
 
 def _print_reprocess_report(
@@ -3262,15 +3248,20 @@ def _print_reprocess_report(
                 lines.append(_warning_row(_short(item.destination, cfg), item.warning))
         elif item.status in {FileStatus.FAILED, FileStatus.SKIPPED}:
             lines.append(_status_row(item.status, _short(item.source, cfg), item.note))
-    summary = (
-        f"Reprocess run {report.run_id}: {report.count(FileStatus.ORGANIZED, moved=True)} "
-        f"filed, {report.count(FileStatus.REVIEW, moved=True)} to review, "
-        f"{report.errors} failed, {report.count(FileStatus.SKIPPED)} skipped"
-    )
-    if applied.index_changes:
-        summary += f", {applied.index_changes} index change(s)"
+    counts = {
+        "run": str(report.run_id),
+        "filed": t("term.reprocess.filed", count=report.count(FileStatus.ORGANIZED, moved=True)),
+        "review": t("activity.to_review", count=report.count(FileStatus.REVIEW, moved=True)),
+        "failed": t("activity.failed", count=report.errors),
+        "skipped": t("undo.skipped_count", count=report.count(FileStatus.SKIPPED)),
+    }
     # Only a run that changed something can be undone; never point at an older one.
-    summary += ". `flib undo` reverts it." if applied.undoable else ". Nothing changed."
+    end = t("term.reprocess.undoable") if applied.undoable else t("term.reprocess.unchanged")
+    if applied.index_changes:
+        changes = t("term.reprocess.index_changes", count=applied.index_changes)
+        summary = t("term.reprocess.summary_changes", changes=changes, end=end, **counts)
+    else:
+        summary = t("term.reprocess.summary", end=end, **counts)
     lines.append(summary)
     cost = _cost_line(planned.cost_usd, known=planned.cost_known)
     if cost:
@@ -3280,15 +3271,13 @@ def _print_reprocess_report(
     if planned.rename is not None and not planned.same_folder:
         folder = reprocess_mod.empty_folder(cfg, planned.rename[0])
         if folder is not None:
-            _echo(
-                f"The folder {_short(folder, cfg)} is empty now. Keep it until you are sure of "
-                "the change; `flib undo` moves the files back into it."
-            )
+            _echo(t("term.reprocess.empty_folder", folder=_short(folder, cfg)))
     if report.run_id is not None:
         try:
-            _echo(f"Log: {write_log(cfg.database, report.run_id, lines)}")
+            log = write_log(cfg.database, report.run_id, lines)  # in English
+            _echo(t("term.log", path=str(log)))
         except OSError as exc:
-            _echo(f"warning: could not write the run log: {exc}", err=True)
+            _warn(t("term.log_failed", error=str(exc)))
 
 
 @app.command()

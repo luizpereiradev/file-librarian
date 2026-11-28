@@ -53,6 +53,7 @@ from file_librarian.config import (
     same_place,
 )
 from file_librarian.globs import matches_any
+from file_librarian.i18n import t
 from file_librarian.locales import DEFAULT_LANGUAGE, LOCALES, Language
 from file_librarian.models import FileStatus
 from file_librarian.providers.base import Provider
@@ -81,13 +82,9 @@ LOCAL_VISION = False
 """Whether the local setup turns vision on. ``gemma4:e4b`` reads images, but on the
 corpus's six images with text it gained one item in twelve at half the speed
 (docs/quality.md, "Local models"), so it stays off, as flib's default."""
-LOCAL_QUALITY = (
-    f"What to expect, measured on flib's test corpus (docs/quality.md): {LOCAL_MODEL} files "
-    "92% (English) and 97% (Portuguese) of items in a right category against 99% and 100% "
-    "for the hosted default, and sends 7 of 9 doubtful items to review against 9 of 9, so "
-    "check the review folder and `flib simulate` more often at first."
-)
-"""One honest sentence about the measured gap, from docs/quality.md."""
+LOCAL_QUALITY = t("term.init.local_quality", model=LOCAL_MODEL)
+"""One honest sentence about the measured gap, from docs/quality.md (a message: said in
+the language of the moment when printed)."""
 PULL_TIMEOUT = 600.0
 """Seconds without a word from Ollama before a download is given up."""
 DEFAULTS = "/usr/bin/defaults"

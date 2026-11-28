@@ -50,6 +50,12 @@ The command line follows these rules:
   shell's locale.
 - `--help` is English. Typer builds it before any configuration is read, and
   it matches the [CLI reference](cli.md).
+- `flib init` runs before there is a configuration. It speaks the language of
+  the configuration it would replace, or, when there is none, the shell's
+  locale: a Portuguese `LANG` gives Portuguese, as it gives Portuguese folders.
+  From its first question on, it speaks the language you choose.
+- A yes/no question in Portuguese shows `[S/n]` and takes `s`, `sim`, `n` or
+  `não`, as well as `y` and `n`.
 
 These stay English by design:
 
@@ -71,9 +77,8 @@ words: a provider's error, a macOS error, the words a file's name matched.
 File names that hold control characters (an escape sequence, a carriage
 return, a right-to-left override) are printed as escapes such as `\x1b`, so
 they cannot act on the terminal; `--json`, the logs and the index keep the real
-name. `flib init`, `flib
-reprocess`, `flib reconcile`, `flib check-config` and the configuration's error
-messages are still in English for now; they follow in the second part of #141.
+name. When the configuration's parser refuses a value for a reason flib does not
+know, that reason stays in English.
 
 Scripts should read `--json`: its keys, values and messages never change with
 the language.

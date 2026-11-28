@@ -102,6 +102,7 @@ from file_librarian.executor import Relocation, RunReport, answer_fields, reloca
 from file_librarian.finder_tags import tag_moved, untag_restored
 from file_librarian.hashing import check_content, unit_manifest
 from file_librarian.i18n import t
+from file_librarian.i18n.core import detail
 from file_librarian.models import (
     Decision,
     FileContext,
@@ -249,13 +250,10 @@ def _arg(name: str) -> str:
 def _orphan(name: str, config: Config, store: Store) -> str:
     """``name`` as an orphan category of the index (any case); refuses anything else."""
     if config.category(name) is not None:
-        raise ReprocessError(
-            f"{name!r} is still a category in the configuration; "
-            "rename or remove it there first, then run this again"
-        )
+        raise ReprocessError(t("term.reprocess.still_configured", name=repr(name)))
     found = [o for o in orphan_categories(config, store) if o.casefold() == name.casefold()]
     if not found:
-        raise ReprocessError(f"no organized file has the category {name!r}; nothing to migrate")
+        raise ReprocessError(t("term.reprocess.no_files_in", name=repr(name)))
     return found[0]
 
 
@@ -298,7 +296,7 @@ def select(
         nested = placed_by_hand(row, moves.get(row.id, []), config)
         keep_name = not rename or nested or "name" in fields
         if keep_category and keep_name:
-            selection.left.append((row.current_path, "your correction is kept"))
+            selection.left.append((row.current_path, t("term.reprocess.correction_kept")))
             continue
         context, problem = _check(row, config)
         if context is None:
@@ -308,7 +306,9 @@ def select(
     return selection
 
 
-RULE_FILED = "filed by its input's fixed category; no AI is asked about it"
+RULE_FILED = t("term.reprocess.rule_filed")
+"""Why a file filed by its input's rule is left out (a message, said in the language
+of the line it is shown in)."""
 
 
 def filed_by_rule(row: FileRow) -> bool:
@@ -397,18 +397,18 @@ def _check(row: FileRow, config: Config, *, read: bool = True) -> tuple[FileCont
     (content checked all the same)."""
     path = row.current_path
     if in_cloud_only(path):
-        return None, "only in iCloud; download it to reprocess it"
+        return None, t("term.reprocess.cloud_only")
     try:
         st = os.lstat(path)
     except OSError:
-        return None, "not at its recorded place; run `flib reconcile`"
+        return None, t("term.reprocess.not_there")
     if row.is_unit and _partly_in_cloud(path):
-        return None, "something inside is only in iCloud; download it to reprocess it"
+        return None, t("term.reprocess.partly_cloud")
     same = check_content(path, row.sha256)
     if same is None:
-        return None, LOCKED_NOW
+        return None, detail(LOCKED_NOW)
     if not same:
-        return None, "changed or moved since it was indexed; run `flib reconcile`"
+        return None, t("term.reprocess.changed")
     candidate = Candidate(
         path=path,
         sha256=row.sha256,
@@ -516,10 +516,10 @@ def plan_reprocess(
         row = target.row
         path = item.context.path
         if item.status is FileStatus.SENSITIVE:
-            result.kept.append((path, f"{item.reason}; left as it is"))
+            result.kept.append((path, t("term.reprocess.left_as_is", why=detail(item.reason))))
             continue
         if item.status is FileStatus.FAILED or item.classification is None:
-            result.kept.append((path, f"{item.reason}; left as it is"))
+            result.kept.append((path, t("term.reprocess.left_as_is", why=detail(item.reason))))
             continue
         if (
             item.status is FileStatus.REVIEW
@@ -527,7 +527,9 @@ def plan_reprocess(
             and row.category is not None
             and config.category(row.category) is not None
         ):
-            result.kept.append((path, f"stays in {row.category} ({item.reason})"))
+            result.kept.append(
+                (path, t("term.reprocess.stays_in", category=row.category, why=detail(item.reason)))
+            )
             continue
         category = item.classification.category if item.status is FileStatus.ORGANIZED else None
         destination = item.destination
@@ -553,7 +555,7 @@ def plan_reprocess(
         if resolved and item.status is FileStatus.ORGANIZED:
             result.learned.setdefault(row.id, {})["layout_date"] = when.isoformat()
     for ctx in classified.deferred:
-        result.kept.append((ctx.path, "cost limit reached; run `flib reprocess` again"))
+        result.kept.append((ctx.path, t("term.reprocess.cost_limit")))
     return result
 
 
@@ -567,7 +569,8 @@ def _respect_correction(decision: Decision, target: Target) -> Decision:
 
 
 def _reason(reason: str, target: Target) -> str:
-    return f"{reason}, your category kept" if target.keep_category else reason
+    said = detail(reason)
+    return t("term.reprocess.category_kept", why=said) if target.keep_category else said
 
 
 def plan_rename(config: Config, store: Store, old: str, new: str) -> ReprocessPlan:
@@ -580,10 +583,7 @@ def plan_rename(config: Config, store: Store, old: str, new: str) -> ReprocessPl
     )
     if target is None:
         known = ", ".join(c.name for c in config.categories)
-        raise ReprocessError(
-            f"{new!r} is not a category in the configuration (configured: {known}); "
-            "add it there first"
-        )
+        raise ReprocessError(t("term.reprocess.not_a_category", name=repr(new), known=known))
     old = _orphan(old, config, store)
     result = ReprocessPlan(rename=(old, target.name))
     if folder_key(old) == folder_key(target.name):
@@ -607,7 +607,7 @@ def plan_rename(config: Config, store: Store, old: str, new: str) -> ReprocessPl
             destination=config.output_root / target.name / inside,
             status=FileStatus.ORGANIZED,
             category=target.name,
-            reason=f"category {old} renamed to {target.name}",
+            reason=t("term.reprocess.renamed", old=old, new=target.name),
             previous=(row.status, row.category),
         )
         result.changes.append(Change(row, relocation))
@@ -625,7 +625,7 @@ def plan_to_review(targets: list[Target], config: Config) -> ReprocessPlan:
             destination=folder / target.context.path.name,
             status=FileStatus.REVIEW,
             category=None,
-            reason="its category was removed",
+            reason=t("term.reprocess.removed"),
             previous=(target.row.status, target.row.category),
             review_reason=ReviewReason.CATEGORY_REMOVED,
         )
@@ -757,7 +757,7 @@ def select_layout(
     unknown = sorted(wanted - {c.name for c in config.categories})
     if unknown:
         known = ", ".join(c.name for c in config.categories)
-        raise ReprocessError(f"unknown category {unknown[0]!r} (configured: {known})")
+        raise ReprocessError(t("term.fix.unknown_category", value=repr(unknown[0]), known=known))
     moves = store.done_moves()
     selection = LayoutSelection()
     for row in store.all_files():
@@ -769,19 +769,18 @@ def select_layout(
         path = row.current_path
         folder = config.output_root / category.name
         if not path.is_relative_to(folder) or not is_within(path, folder):
-            selection.left.append((path, f"not in the {category.name} folder"))
+            selection.left.append((path, t("term.reprocess.not_in_folder", category=category.name)))
             continue
         if placed_by_hand(row, moves.get(row.id, []), config):
-            reason = "you moved or renamed it; it stays (`flib fix` hands it back)"
-            selection.left.append((path, reason))
+            selection.left.append((path, t("term.reprocess.by_hand")))
             continue
         if own_layout(row, config) is not None:
-            selection.left.append((path, "filed under its input's own layout; it stays"))
+            selection.left.append((path, t("term.reprocess.own_layout")))
             continue
         try:
             st = os.lstat(path)
         except OSError:
-            selection.left.append((path, "not at its recorded place; run `flib reconcile`"))
+            selection.left.append((path, t("term.reprocess.not_there")))
             continue
         cached_date, cached_issuer = _cached_values(store, row.sha256)
         stored_date = _iso(row.document_date)
@@ -805,9 +804,7 @@ def select_layout(
         )
         if needs_issuer and issuer is None:
             if not ask:
-                selection.left.append(
-                    (path, "issuer unknown; `--ask-issuer` asks the provider (it may cost)")
-                )
+                selection.left.append((path, t("term.reprocess.issuer_unknown_ask")))
                 continue
             context, problem = _check(row, config)
             if context is None:
@@ -875,10 +872,14 @@ def plan_layout(
             row = by_path[decision.context.path].row
             answer = decision.classification
             if answer is None or answer.issuer is None:
-                why = decision.error or "the provider named no issuer"
+                why: str = (
+                    detail(decision.error[:250])
+                    if decision.error
+                    else t("term.reprocess.no_issuer")
+                )
                 if decision.context.sensitive:
-                    why = "sensitive: never sent"
-                result.kept.append((row.current_path, f"{why}; it stays"[:300]))
+                    why = t("term.reprocess.never_sent")
+                result.kept.append((row.current_path, t("term.reprocess.it_stays", why=why)))
                 continue
             stored = _iso(row.document_date)
             when, resolved = layout_date(
@@ -894,10 +895,10 @@ def plan_layout(
                 values["layout_date"] = when.isoformat()
             placed.append(_Placed(row, when, answer.issuer, values))
         for ctx in classified.deferred:
-            result.kept.append((ctx.path, "cost limit reached; run it again"))
+            result.kept.append((ctx.path, t("term.reprocess.cost_limit_again")))
     else:
         for target in selection.missing:
-            result.kept.append((target.context.path, "issuer unknown; it stays"))
+            result.kept.append((target.context.path, t("term.reprocess.issuer_unknown")))
     placement = Placement(store.flib_folders())
     for item in sorted(placed, key=lambda p: p.row.id):
         _place_in_layout(item, config, placement, result)
@@ -920,7 +921,7 @@ def _place_in_layout(
             config, category, path.name, light, when=item.when, issuer=item.issuer
         )
     except (UnsafeDestinationError, OSError) as exc:
-        result.kept.append((path, f"cannot plan: {exc}"[:300]))
+        result.kept.append((path, detail(f"cannot plan: {exc}"[:300])))
         return
     if _same_place(destination, path):
         result.in_place += 1
@@ -935,7 +936,9 @@ def _place_in_layout(
         result.kept.append((path, problem))
         return
     where = destination.parent.relative_to(config.output_root)
-    reason = f"layout of {category.name}: {where}" + (f"; {note}" if note else "")
+    reason: str = t("term.reprocess.layout_of", category=category.name, where=str(where))
+    if note:
+        reason = t("term.then", first=reason, second=detail(note))
     relocation = Relocation(
         file_id=row.id,
         context=context,
@@ -1030,8 +1033,10 @@ def plan_fields(
         row = by_path[decision.context.path]
         answer = decision.classification
         if answer is None:
-            why = "sensitive: never sent" if decision.context.sensitive else decision.error
-            result.kept.append((row.current_path, f"{why or 'not classified'}; nothing filled"))
+            why: str = detail(decision.error) if decision.error else t("term.reason.not_classified")
+            if decision.context.sensitive:
+                why = t("term.reprocess.never_sent")
+            result.kept.append((row.current_path, t("term.reprocess.nothing_filled", why=why)))
             continue
         given = answer_fields(answer)
         found: dict[str, object] = {
@@ -1053,9 +1058,9 @@ def plan_fields(
         if values:
             result.learned[row.id] = values
         else:
-            result.kept.append((row.current_path, "the document states none of the fields"))
+            result.kept.append((row.current_path, t("term.reprocess.no_fields")))
     for ctx in classified.deferred:
-        result.kept.append((ctx.path, "cost limit reached; run it again"))
+        result.kept.append((ctx.path, t("term.reprocess.cost_limit_again")))
     return result
 
 

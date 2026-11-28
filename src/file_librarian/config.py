@@ -32,6 +32,8 @@ from pydantic import (
     model_validator,
 )
 
+from file_librarian.i18n import Msg, english, t
+from file_librarian.i18n.core import refusal
 from file_librarian.locales import DEFAULT_LANGUAGE, LOCALES, Language
 from file_librarian.models import Kind
 
@@ -53,7 +55,23 @@ PositiveInt = Annotated[int, Field(gt=0)]
 
 
 class ConfigError(Exception):
-    """The configuration file is missing, unreadable or invalid."""
+    """The configuration file is missing, unreadable or invalid.
+
+    ``str(exc)`` is English, as it always was (the Settings page reads its lines);
+    ``text()`` says it in the language in use (#141), for the command line.
+    ``problems`` holds each refused field and why, when the parser refused values."""
+
+    def __init__(self, message: str, problems: list[tuple[str, object]] | None = None) -> None:
+        super().__init__(english(message))
+        self.message = message
+        self.problems = problems or []
+
+    def text(self) -> str:
+        if not self.problems:
+            return self.message.text() if isinstance(self.message, Msg) else self.message
+        lines = [t("term.config.invalid").text()]
+        lines += [t("term.config.problem", where=w, why=why).text() for w, why in self.problems]
+        return "\n".join(lines)
 
 
 def folder_key(name: str) -> str:
@@ -65,13 +83,13 @@ def _safe_folder_name(value: str) -> str:
     """A single path component that cannot escape or hide: no separators, no dot names."""
     value = unicodedata.normalize("NFC", value)
     if value != value.strip():
-        raise ValueError("must not start or end with spaces")
+        raise ValueError(t("term.config.spaces"))
     if any(ch in value for ch in "/:\\"):
-        raise ValueError("must be a plain folder name (no '/', ':' or '\\')")
+        raise ValueError(t("term.config.plain_folder"))
     if any(unicodedata.category(ch).startswith("C") for ch in value):
-        raise ValueError("must not contain control or invisible characters")
+        raise ValueError(t("term.config.control_or_invisible"))
     if value.startswith("."):
-        raise ValueError("must not start with '.'")
+        raise ValueError(t("term.config.leading_dot"))
     return value
 
 
@@ -83,7 +101,7 @@ SafeFolderName = Annotated[
 def _normalize_path(value: Path) -> Path:
     path = Path(os.path.normpath(value.expanduser()))
     if not path.is_absolute():
-        raise ValueError(f"must be an absolute path or start with '~': {value}")
+        raise ValueError(t("term.config.absolute", value=str(value)))
     return path
 
 
@@ -194,16 +212,13 @@ def _check_url(value: str, option: str) -> str:
         parts = urlsplit(value)
         parts.port  # noqa: B018 - raises ValueError on a bad port
     except ValueError as exc:
-        raise ValueError(f"{option} is not a valid URL: {exc}") from exc
+        raise ValueError(t("term.config.url_invalid", option=option, error=str(exc))) from exc
     if parts.scheme not in ("http", "https") or not parts.hostname:
-        raise ValueError(f"{option} must be an http:// or https:// URL with a host")
+        raise ValueError(t("term.config.url_scheme", option=option))
     if parts.username is not None or parts.password is not None:
-        raise ValueError(
-            f"{option} must not contain a user name or password; "
-            "the API key goes in the Keychain or an environment variable"
-        )
+        raise ValueError(t("term.config.url_credentials", option=option))
     if parts.query or parts.fragment:
-        raise ValueError(f"{option} must not have a query (?) or fragment (#)")
+        raise ValueError(t("term.config.url_query", option=option))
     return value.rstrip("/")
 
 
@@ -270,17 +285,14 @@ class ProviderConfig(_Section):
     @model_validator(mode="after")
     def _openai_compat_needs_a_url(self) -> ProviderConfig:
         if self.name == "openai-compat" and self.base_url is None:
-            raise ValueError(
-                "provider.base_url is required for openai-compat "
-                "(for example https://api.openai.com/v1)"
-            )
+            raise ValueError(t("term.config.base_url_required"))
         return self
 
     @field_validator("api_key_env")
     @classmethod
     def _env_name(cls, value: str | None) -> str | None:
         if value is not None and not _ENV_NAME.fullmatch(value):
-            raise ValueError("provider.api_key_env must be an environment variable name")
+            raise ValueError(t("term.config.env_name", option="provider.api_key_env"))
         return value
 
     @field_validator("name")
@@ -288,7 +300,9 @@ class ProviderConfig(_Section):
     def _known_provider(cls, value: str) -> str:
         known = PROVIDER_NAMES
         if value not in known:
-            raise ValueError(f"unknown provider {value!r} (known: {', '.join(sorted(known))})")
+            raise ValueError(
+                t("term.config.unknown_provider", value=repr(value), known=", ".join(sorted(known)))
+            )
         return value
 
 
@@ -342,21 +356,23 @@ class NamingConfig(_Section):
         try:
             parts = list(string.Formatter().parse(value))
         except ValueError as exc:
-            raise ValueError(f"naming.pattern is not a valid pattern: {exc}") from exc
+            raise ValueError(t("term.config.pattern_invalid", error=str(exc))) from exc
         fields = {name for _, name, _, _ in parts if name is not None}
         unknown = fields - NAMING_PLACEHOLDERS
         if unknown:
             allowed = ", ".join(f"{{{p}}}" for p in sorted(NAMING_PLACEHOLDERS))
-            raise ValueError(f"naming.pattern: unknown placeholder(s) {unknown}; use {allowed}")
+            raise ValueError(
+                t("term.config.pattern_unknown", unknown=str(unknown), allowed=allowed)
+            )
         if "subject" not in fields:
-            raise ValueError("naming.pattern must contain {subject}")
+            raise ValueError(t("term.config.pattern_subject", name="{subject}"))
         if any(spec or conv for _, name, spec, conv in parts if name is not None):
-            raise ValueError("naming.pattern placeholders take no format spec or conversion")
+            raise ValueError(t("term.config.pattern_spec"))
         literal = "".join(text for text, _, _, _ in parts)
         if any(ch in literal for ch in "/:\\") or ".." in literal:
-            raise ValueError("naming.pattern must produce a file name, not a path")
+            raise ValueError(t("term.config.pattern_path"))
         if any(unicodedata.category(ch).startswith("C") for ch in literal):
-            raise ValueError("naming.pattern must not contain control characters")
+            raise ValueError(t("term.config.pattern_control"))
         return value
 
 
@@ -384,39 +400,45 @@ def _layout(value: str) -> str:
     value = unicodedata.normalize("NFC", value)
     segments = value.split("/")
     if len(segments) > MAX_LAYOUT_DEPTH:
-        raise ValueError(f"layout may have at most {MAX_LAYOUT_DEPTH} levels of sub-folders")
+        raise ValueError(t("term.config.layout_depth", levels=MAX_LAYOUT_DEPTH))
     used: set[str] = set()
     for segment in segments:
         if not segment:
-            raise ValueError("layout must not start or end with '/' nor contain '//'")
+            raise ValueError(t("term.config.layout_slashes"))
         try:
             parts = list(string.Formatter().parse(segment))
         except ValueError as exc:
-            raise ValueError(f"layout is not a valid pattern: {exc}") from exc
+            raise ValueError(t("term.config.layout_invalid", error=str(exc))) from exc
         fields = {name for _, name, _, _ in parts if name is not None}
         unknown = fields - LAYOUT_PLACEHOLDERS
         if unknown or "" in fields:
             allowed = ", ".join(f"{{{p}}}" for p in sorted(LAYOUT_PLACEHOLDERS))
-            raise ValueError(f"layout: unknown placeholder(s) in {segment!r}; use {allowed}")
+            raise ValueError(
+                t("term.config.layout_unknown", segment=repr(segment), allowed=allowed)
+            )
         if any(spec or conv for _, name, spec, conv in parts if name is not None):
-            raise ValueError("layout placeholders take no format spec or conversion")
+            raise ValueError(t("term.config.layout_spec"))
         if "issuer" in fields and segment != "{issuer}":
-            raise ValueError("layout: {issuer} must be a whole sub-folder, alone between '/'")
+            raise ValueError(t("term.config.layout_issuer", name="{issuer}"))
         literal = "".join(text for text, _, _, _ in parts)
         if any(ch in literal for ch in ":\\"):
-            raise ValueError("layout: sub-folders are separated by '/' only (no ':' or '\\')")
+            raise ValueError(t("term.config.layout_separators"))
         filled = segment.format(**_LAYOUT_SAMPLES)
         if filled in {".", ".."}:
-            raise ValueError(f"layout: {segment!r} is not a folder name")
+            raise ValueError(t("term.config.layout_dots", segment=repr(segment)))
         try:
             _safe_folder_name(filled)
         except ValueError as exc:
-            raise ValueError(f"layout: sub-folder {segment!r} {exc}") from exc
+            raise ValueError(
+                t("term.config.layout_folder", segment=repr(segment), why=exc.args[0])
+            ) from exc
         if len(filled) > 64:
-            raise ValueError(f"layout: sub-folder {segment!r} is longer than 64 characters")
+            raise ValueError(t("term.config.layout_long", segment=repr(segment)))
         used |= fields
     if not used:
-        raise ValueError("layout needs at least one placeholder: {year}, {month} or {issuer}")
+        raise ValueError(
+            t("term.config.layout_none", first="{year}", second="{month}", third="{issuer}")
+        )
     return value
 
 
@@ -435,9 +457,9 @@ MAX_MIN_AGE_DAYS = 3650
 def _glob(value: str) -> str:
     """A name pattern for ``only``/``ignore``: matched against a name, so never a path."""
     if not value.strip():
-        raise ValueError("a pattern must not be empty")
+        raise ValueError(t("term.config.glob_empty"))
     if "/" in value:
-        raise ValueError(f"{value!r}: patterns match a name, not a path (no '/')")
+        raise ValueError(t("term.config.glob_path", value=repr(value)))
     return value
 
 
@@ -475,7 +497,7 @@ class InputConfig(_Section):
             for option, used in (("rename", self.rename), ("layout", self.layout is not None)):
                 if used:
                     raise ValueError(
-                        f"input {self.path}: {option} applies only with a fixed category"
+                        t("term.config.input_option", path=str(self.path), option=option)
                     )
         return self
 
@@ -514,7 +536,7 @@ _OCR_LANGUAGE = re.compile(r"[a-z]{2,3}(-[A-Za-z0-9]{2,8})*")
 
 def _ocr_language(value: str) -> str:
     if not _OCR_LANGUAGE.fullmatch(value):
-        raise ValueError(f"{value!r} is not a language code like en-US or pt-BR")
+        raise ValueError(t("term.config.ocr_language", value=repr(value)))
     return value
 
 
@@ -597,7 +619,7 @@ class SemanticConfig(_Section):
     @classmethod
     def _env_name(cls, value: str | None) -> str | None:
         if value is not None and not _ENV_NAME.fullmatch(value):
-            raise ValueError("search.semantic.api_key_env must be an environment variable name")
+            raise ValueError(t("term.config.env_name", option="search.semantic.api_key_env"))
         return value
 
 
@@ -646,9 +668,9 @@ class ScheduleConfig(_Section):
         # ASCII digits only: str.isdigit also takes Arabic-Indic and full-width digits.
         digits = hour.isascii() and minute.isascii() and hour.isdigit() and minute.isdigit()
         if not (digits and len(minute) == 2):
-            raise ValueError("schedule.time must look like 12:30")
+            raise ValueError(t("term.config.time_form"))
         if not (0 <= int(hour) <= 23 and 0 <= int(minute) <= 59):
-            raise ValueError("schedule.time must be a valid 24-hour time")
+            raise ValueError(t("term.config.time_invalid"))
         return f"{int(hour):02d}:{minute}"
 
 
@@ -692,7 +714,7 @@ class DueConfig(_Section):
             return None
         value = value.strip()
         if not value or "\n" in value:
-            raise ValueError("due.done_tag must be a Finder tag name")
+            raise ValueError(t("term.config.done_tag"))
         return value
 
 
@@ -782,8 +804,7 @@ class Config(_Section):
             if key in seen:
                 what = special.get(name, "category")
                 raise ValueError(
-                    f"{what} {name!r} is the same folder as {seen[key]!r} on macOS "
-                    "(names are compared ignoring case and Unicode form)"
+                    t(f"term.config.same_folder.{what}", name=repr(name), other=repr(seen[key]))
                 )
             seen[key] = name
         return self
@@ -801,8 +822,12 @@ class Config(_Section):
             if entry.category is not None and self.category(entry.category) is None:
                 known = ", ".join(c.name for c in self.categories)
                 raise ValueError(
-                    f"input {entry.path}: category {entry.category!r} is not a configured "
-                    f"category (configured: {known})"
+                    t(
+                        "term.config.input_category",
+                        path=str(entry.path),
+                        category=repr(entry.category),
+                        known=known,
+                    )
                 )
         return self
 
@@ -811,26 +836,29 @@ class Config(_Section):
         home = Path.home()
         for folder in self.input_paths:
             if same_place(folder, Path(folder.anchor)) or same_place(folder, home):
-                raise ValueError(f"input {folder} is too broad; pick specific folders")
+                raise ValueError(t("term.config.input_broad", folder=str(folder)))
             if is_within(folder, self.output_root):
                 raise ValueError(
-                    f"input {folder} must not be inside output_root ({self.output_root}): "
-                    "flib would pick up the files it has just filed"
+                    t(
+                        "term.config.input_in_output",
+                        folder=str(folder),
+                        output=str(self.output_root),
+                    )
                 )
         paths = self.input_paths
         for i, a in enumerate(paths):
             for b in paths[i + 1 :]:
                 if same_place(a, b):
-                    raise ValueError(f"input {a} is listed twice (also as {b})")
+                    raise ValueError(t("term.config.input_twice", path=str(a), other=str(b)))
                 if is_within(a, b) or is_within(b, a):
                     inner, outer = (a, b) if is_within(a, b) else (b, a)
                     raise ValueError(
-                        f"inputs must not overlap: {inner} is inside {outer}; list only one of them"
+                        t("term.config.inputs_overlap", inner=str(inner), outer=str(outer))
                     )
         if is_within(self.database, self.output_root) or any(
             is_within(self.database, folder) for folder in paths
         ):
-            raise ValueError("database must be outside the input folders and output_root")
+            raise ValueError(t("term.config.database_inside"))
         return self
 
     def for_watch(self) -> Config:
@@ -864,37 +892,49 @@ class Config(_Section):
         return next((e for e in self.inputs if same_place(e.path, path.parent)), None)
 
     def input_summary(self, entry: InputConfig, *, patterns: bool = True) -> str:
-        """``entry``'s effective rules in words, for ``flib check-config`` and ``doctor``.
+        """``entry``'s effective rules in words, for ``flib check-config`` and ``doctor``:
+        the Settings page's words (``settings.rules.*``), in the language in use.
 
         ``patterns=False`` gives counts instead of the patterns (they may hold names).
         """
 
         def globs(values: list[str]) -> str:
             if not patterns:
-                return f"{len(values)} pattern(s)"
+                return t("term.input.patterns", count=len(values))
             return ", ".join(values)
 
-        parts = []
+        parts: list[str] = []
         if entry.only is not None:
-            parts.append(f"only {globs(entry.only)}")
+            parts.append(t("settings.rules.only", patterns=globs(entry.only)))
         ignore = [*self.ignore, *entry.ignore]
         if ignore:
-            extra = f" ({len(entry.ignore)} of them its own)" if entry.ignore else ""
-            parts.append(f"ignore {globs(ignore)}{extra}")
+            if entry.ignore:
+                own = len(entry.ignore)
+                parts.append(t("settings.rules.ignore_own", patterns=globs(ignore), own=own))
+            else:
+                parts.append(t("settings.rules.ignore", patterns=globs(ignore)))
         if entry.min_age_days:
-            parts.append(f"min_age_days {entry.min_age_days}")
-        parts.append(f"folders: {self.folders_for(entry)}")
-        parts.append(f"duplicates: {self.duplicates_for(entry)}")
+            parts.append(t("settings.rules.min_age", days=entry.min_age_days))
+        parts.append(t(f"settings.rules.folders.{self.folders_for(entry)}"))
+        parts.append(t(f"settings.rules.duplicates.{self.duplicates_for(entry)}"))
         if entry.category is not None:
             category = self.category(entry.category)
             layout = entry.layout or (category.layout if category else None)
-            rule = f"fixed category {entry.category} (no AI)"
-            rule += f", layout {layout}" if layout else ""
-            rule += ", renamed by naming.pattern" if entry.rename else ", name kept"
-            parts.append(rule)
+            if layout:
+                kept = "renamed" if entry.rename else "kept"
+                msg_id = f"settings.rules.fixed_layout_{kept}"
+                parts.append(t(msg_id, category=entry.category, layout=layout))
+            else:
+                msg_id = (
+                    "settings.rules.fixed_renamed" if entry.rename else "settings.rules.fixed_kept"
+                )
+                parts.append(t(msg_id, category=entry.category))
         else:
-            parts.append("classified by the AI")
-        return "; ".join(parts)
+            parts.append(t("settings.rules.ai"))
+        joined = parts[0]
+        for part in parts[1:]:
+            joined = t("term.then", first=joined, second=part)
+        return joined
 
     def folders_for(self, entry: InputConfig) -> Literal["as_unit", "ignore"]:
         return entry.folders or self.folders
@@ -957,15 +997,18 @@ def _moved_keys(data: dict[str, Any]) -> dict[str, Any]:
 def parse_config(raw: object) -> Config:
     """Validate an already-parsed YAML document."""
     if not isinstance(raw, dict):
-        raise ConfigError("the configuration must be a YAML mapping")
+        raise ConfigError(t("term.config.not_mapping"))
     try:
         return Config.model_validate(raw)
     except ValidationError as exc:
         lines = []
+        problems: list[tuple[str, object]] = []
         for err in exc.errors():
             where = ".".join(str(part) for part in err["loc"]) or "(root)"
-            lines.append(f"  {where}: {err['msg']}")
-        raise ConfigError("invalid configuration:\n" + "\n".join(lines)) from exc
+            said = refusal(err)
+            lines.append(f"  {where}: {said.english}")  # English, whatever the language
+            problems.append((where, said))
+        raise ConfigError("invalid configuration:\n" + "\n".join(lines), problems) from exc
 
 
 def load_config(path: Path | None = None) -> Config:
@@ -974,13 +1017,11 @@ def load_config(path: Path | None = None) -> Config:
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
-        raise ConfigError(
-            f"no configuration at {path}; run `flib init`, or copy config.example.yaml there"
-        ) from exc
+        raise ConfigError(t("term.config.missing", path=str(path))) from exc
     except OSError as exc:
-        raise ConfigError(f"cannot read {path}: {exc}") from exc
+        raise ConfigError(t("term.config.unreadable", path=str(path), error=str(exc))) from exc
     try:
         raw = yaml.safe_load(text)
     except yaml.YAMLError as exc:
-        raise ConfigError(f"{path} is not valid YAML: {exc}") from exc
+        raise ConfigError(t("term.config.not_yaml", path=str(path), error=str(exc))) from exc
     return parse_config(raw)

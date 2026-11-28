@@ -22,7 +22,7 @@ import re
 from collections.abc import Callable
 from datetime import date
 
-from file_librarian.i18n import Msg, english, t
+from file_librarian.i18n import Msg, english, resolve, t
 
 _FIELDS = {
     "--since": "search.label.since",
@@ -294,6 +294,7 @@ _detail(r"could not move back: (?P<why>.*)", "term.reason.not_moved_back")
 _detail(r"(?P<base>category .+); layout not used \((?P<why>.*)\)",
         "term.reason.layout_not_used",
         lambda g: {"base": detail(g["base"]), "why": g["why"]})  # fmt: skip
+_detail(r"layout not used \((?P<why>.*)\)", "term.reason.layout_not_used_alone")
 _detail(r"category (?P<name>.+) \(input rule, no AI\)", "term.reason.category_rule")
 _detail(r"category (?P<name>.+), original name kept", "term.reason.category_kept")
 _detail(r"category (?P<name>.+)", "term.reason.category")
@@ -334,3 +335,94 @@ def detail(text: str) -> str:
         if match is not None:
             return t(msg_id, **params(match.groupdict()))
     return core(text)
+
+
+# --- the configuration parser's reasons (#141) -----------------------------------------
+#
+# pydantic words its refusals in English only. ``refusal`` keeps those words for
+# English, exactly as ``flib`` always printed them, and gives the catalogue's for
+# another language: flib's own validators raise a ``Msg``; the common pydantic
+# types are below, with their context as parameters. Any other type stays English.
+
+_PYDANTIC = {
+    "missing": "term.config.p.missing",
+    "extra_forbidden": "term.config.p.extra",
+    "int_parsing": "term.config.p.int",
+    "int_type": "term.config.p.int",
+    "int_from_float": "term.config.p.int_fraction",
+    "float_parsing": "term.config.p.number",
+    "float_type": "term.config.p.number",
+    "bool_parsing": "term.config.p.bool",
+    "bool_type": "term.config.p.bool",
+    "string_type": "term.config.p.string",
+    "greater_than": "term.config.p.gt",
+    "greater_than_equal": "term.config.p.ge",
+    "less_than": "term.config.p.lt",
+    "less_than_equal": "term.config.p.le",
+    "string_too_short": "term.config.p.string_short",
+    "string_too_long": "term.config.p.string_long",
+    "too_short": "term.config.p.too_short",
+    "too_long": "term.config.p.too_long",
+    "literal_error": "term.config.p.literal",
+    "enum": "term.config.p.literal",
+    "list_type": "term.config.p.list",
+    "dict_type": "term.config.p.dict",
+}
+"""pydantic's error types the catalogue words, by message id."""
+
+
+class Refusal:
+    """Why the parser refused a value: in English, pydantic's (or flib's) own words;
+    in another language, the catalogue's when it has them."""
+
+    def __init__(self, english_text: str, said: Msg | None) -> None:
+        self.english = english_text
+        self.said = said
+
+    def in_language(self, lang: str) -> str:
+        if lang == "en" or self.said is None:
+            return self.english
+        return self.said.text(resolve(lang))
+
+    def __str__(self) -> str:
+        from file_librarian.i18n import current
+
+        return self.in_language(current())
+
+
+def _shown_context(value: object) -> object:
+    """A pydantic context value as a parameter of a pt-BR message."""
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        return str(value)
+    if isinstance(value, float):
+        return f"{value:g}".replace(".", ",")
+    if isinstance(value, str):  # ``'daily', 'watch' or 'both'``; ``List``
+        return {"List": "a lista", "Dictionary": "o mapeamento"}.get(
+            value, value.replace("' or '", "' ou '")
+        )
+    return value
+
+
+def refusal(error: object) -> Refusal:
+    """One of pydantic's ``ValidationError.errors()`` as a ``Refusal``."""
+    found: dict[str, object] = dict(error) if isinstance(error, dict) else {}
+    message = str(found.get("msg", ""))
+    context = found.get("ctx")
+    ctx: dict[str, object] = dict(context) if isinstance(context, dict) else {}
+    kind = found.get("type")
+    if kind == "value_error":
+        raised = ctx.get("error")
+        said = raised.args[0] if isinstance(raised, ValueError) and raised.args else None
+        if isinstance(said, Msg):
+            # pydantic wrote the message in the language of the moment it was raised:
+            # the English comes from the message itself, with pydantic's own prefix.
+            return Refusal("Value error, " + said.text("en"), said)
+        return Refusal(message, None)
+    msg_id = _PYDANTIC.get(str(kind))
+    if msg_id is None:
+        return Refusal(message, None)
+    params = {key: _shown_context(value) for key, value in ctx.items()}
+    try:
+        return Refusal(message, t(msg_id, **params))
+    except (KeyError, TypeError):  # a context this flib's catalogue does not expect
+        return Refusal(message, None)

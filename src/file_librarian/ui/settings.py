@@ -307,13 +307,16 @@ def sentence_of(text: str) -> str:
 
 def invalid(exc: ConfigError) -> Msg | str:
     """The parser's refusal: each field and why, in one paragraph (as text). The field's
-    name is the page's (translated); why is the parser's own words, as the command line
-    prints them (pydantic's messages are English only)."""
-    lines = str(exc).splitlines()[1:] or [str(exc)]
+    name is the page's (translated); why is the parser's, in the page's language when the
+    catalogue words it (``i18n.core.refusal``, #141), else pydantic's English."""
+    if exc.problems:
+        found = [(where, str(why)) for where, why in exc.problems]
+    else:
+        lines = str(exc).splitlines()[1:] or [str(exc)]
+        found = [line.strip().partition(": ")[::2] for line in lines]
     parts: list[Msg | str] = []
-    for line in lines:
-        where, _, why = line.strip().partition(": ")
-        why = shown(why.removeprefix("Value error, "))
+    for where, said in found:
+        why = shown(said.removeprefix("Value error, "))
         if where == "(root)":
             parts.append(why)
             continue

@@ -63,6 +63,12 @@ files go, the provider and, with `anthropic`, whether to turn on
 question has a default, so pressing Enter all the way gives a working setup
 (`flib init --yes` takes them all without asking):
 
+- **Language:** the one suggested, and the one `flib init` speaks until you
+  answer, is the language of the configuration it would replace, when there is
+  one it can read: replacing it never switches your library's folders and
+  categories to another language because this shell's locale differs. With no
+  configuration, it is the shell's locale (`LANG`): Portuguese gives `pt-BR`,
+  anything else `en`.
 - **Provider:** `claude-code` when Claude Code is installed and logged in
   (nothing more to set up), then `ollama` when Ollama is running on this Mac
   with a model pulled (it is offered only then, and the trial checks the model
