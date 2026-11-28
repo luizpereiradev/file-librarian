@@ -20,6 +20,7 @@ from file_librarian import status as st
 from file_librarian.cli import app
 from file_librarian.config import load_config
 from file_librarian.doctor import Options, build_report
+from file_librarian.i18n import t
 from file_librarian.runlog import logs_dir
 from tests._helpers import write_config
 
@@ -246,7 +247,7 @@ def test_schedule_builds_the_app_and_introduces_it_once(
     assert notifier.state() is None
     assert 'Notifications come from "file-librarian"' in result.stdout
     posts = [call for call in calls(fake_notifier_tools) if call[0] == "open"]
-    assert [call[-2:] for call in posts] == [[notifier.INTRO_TEXT, "file-librarian"]]
+    assert [call[-2:] for call in posts] == [[t(notifier.INTRO_TEXT).text("en"), "file-librarian"]]
     logs = logs_dir(load_config(config_file).database)
     assert notifier.introduced(logs)
     # A reinstall recreates the environment, and the app with it: no second introduction.

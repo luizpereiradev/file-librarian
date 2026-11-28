@@ -45,7 +45,7 @@ from file_librarian.config import Config
 from file_librarian.db.store import FileRow, IndexChange, OperationRow, Store, load_migrations
 from file_librarian.executor import recover
 from file_librarian.fix import NOT_WRITTEN, FixError, FixItem, fix_file, fix_files
-from file_librarian.i18n import Msg, t
+from file_librarian.i18n import Msg, english, t
 from file_librarian.i18n.core import core
 from file_librarian.lock import AlreadyRunningError, instance_lock
 from file_librarian.models import FileStatus, OperationStatus, ReviewReason, RunTrigger
@@ -266,7 +266,7 @@ def without_path(text: str, path: Path) -> str:
 def _fix_text(exc: FixError, path: Path) -> str:
     if isinstance(exc.__cause__, (OSError, ValueError)):
         return t("review.fix_failed")
-    text = str(exc)
+    text = english(exc)
     if "is not a plain file name" in text:
         return t("review.bad_name")
     return said(without_path(text, path))
@@ -510,7 +510,7 @@ def plan_run(store: Store, run_id: int, config: Config) -> RunPlan:
         ops, changes = run_undo_plan(store, run_id)
     except NothingToUndoError as exc:
         if not store.operations(run_id=run_id, status=OperationStatus.PLANNED):
-            raise Refused(said(str(exc))) from exc
+            raise Refused(said(english(exc))) from exc
         ops, changes = [], []
     # An entry a failure left "planned" is finished by recovery, which every action runs
     # first: shown, and pinned, as the move it then is.
@@ -543,7 +543,7 @@ def plan_file(store: Store, file_id: int, config: Config) -> FilePlan:
     try:
         op = file_undo_plan(store, row.current_path, file_id=row.id)
     except NothingToUndoError as exc:
-        raise Refused(said(without_path(str(exc), row.current_path))) from exc
+        raise Refused(said(without_path(english(exc), row.current_path))) from exc
     return FilePlan(row, op, undo_file_pin(row, op), blocked(store, op, config))
 
 
@@ -618,7 +618,7 @@ def settle_one(config: Config, file_id: int, pin: str, *, done: bool) -> Outcome
                 store, row.current_path, done=done, trigger=RunTrigger.MANUAL, file_id=row.id
             )
         except due_mod.DueError as exc:
-            raise Refused(said(without_path(str(exc), row.current_path))) from exc
+            raise Refused(said(without_path(english(exc), row.current_path))) from exc
     if done:
         text, label = t("due.marked_done"), t("due.undo_reopen")
     else:

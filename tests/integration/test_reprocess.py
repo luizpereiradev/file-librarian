@@ -620,7 +620,7 @@ def test_undo_after_a_case_only_rename_reverts_the_index_not_the_earlier_run(
 
     result = runner.invoke(app, ["undo", "-c", str(path)])
     assert result.exit_code == 0, result.stderr
-    assert "2 index change(s) reverted" in result.stdout
+    assert "2 index changes reverted" in result.stdout
     # The earlier run that filed the file is not undone; the index is back.
     assert where(cfg, "a.txt") == (FileStatus.ORGANIZED, "docs", lib / "docs" / "a.txt")
     assert read_tags(lib / "docs" / "a.txt") == ["docs"]

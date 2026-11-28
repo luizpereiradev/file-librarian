@@ -28,6 +28,8 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from file_librarian.i18n import t
+
 LOCK_NAME = "flib.lock"
 LOCK_POLL_SECONDS = 2.0
 REPROCESS_LOCK_NAME = "flib-reprocess.lock"
@@ -56,7 +58,7 @@ def instance_lock(
     try:
         with _flock(
             lock_path(database),
-            "another flib process (pid {pid}) is running; try again when it finishes",
+            "term.lock.busy",
             wait=wait,
             clock=clock,
             sleep=sleep,
@@ -127,7 +129,7 @@ def reprocess_lock(database: Path) -> Iterator[None]:
     """
     with _flock(
         database.parent / REPROCESS_LOCK_NAME,
-        "another flib reprocess (pid {pid}) is running; try again when it finishes",
+        "term.lock.reprocess",
     ):
         yield
 
@@ -146,7 +148,7 @@ def ui_lock(database: Path) -> Iterator[Callable[[], None]]:
     serves only the page that says why (#127)."""
     with _flock(
         database.parent / UI_LOCK_NAME,
-        "flib ui is already running (pid {pid})",
+        "term.lock.ui",
     ) as release:
         yield release
 
@@ -154,7 +156,7 @@ def ui_lock(database: Path) -> Iterator[Callable[[], None]]:
 @contextmanager
 def _flock(
     path: Path,
-    busy: str,
+    busy: str,  # a message id: what to say while another process holds it
     *,
     wait: float = 0.0,
     clock: Callable[[], float] = time.monotonic,
@@ -174,7 +176,7 @@ def _flock(
                     sleep(min(LOCK_POLL_SECONDS, remaining))
                     continue
                 holder = os.pread(fd, 32, 0).decode(errors="replace").strip() or "unknown"
-                raise AlreadyRunningError(busy.format(pid=holder)) from exc
+                raise AlreadyRunningError(t(busy, pid=holder)) from exc
         os.ftruncate(fd, 0)
         os.pwrite(fd, str(os.getpid()).encode(), 0)
         guard = threading.Lock()

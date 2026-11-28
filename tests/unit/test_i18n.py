@@ -93,8 +93,10 @@ def _used_ids() -> tuple[set[str], set[str]]:
     script = (UI / "static" / "status.js").read_text()
     literals |= set(re.findall(r'"([a-z]+(?:\.[a-z_]+)+)"', script))
     prefixes = set(re.findall(r'"([a-z]+(?:\.[a-z_]+)*\.)"\s*\+', script))
-    # An id the interface spells as f"settings.section.{key}": its prefix.
-    for path in UI.glob("*.py"):
+    # An id spelled as f"settings.section.{key}" or f"term.skip.{name}": its prefix.
+    for path in SRC.rglob("*.py"):
+        if "messages" in path.parts:
+            continue
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, ast.JoinedStr) and node.values:
                 first = node.values[0]
@@ -124,7 +126,7 @@ _ATTRIBUTES = frozenset(
     {"class_", "type", "name", "method", "action", "href", "id", "value", "autocomplete",
      "inputmode", "spellcheck", "dir", "role", "rel", "src", "formaction", "aria_current",
      "aria_hidden", "aria_labelledby", "data_label", "datetime", "tabindex", "step", "min",
-     "max", "maxlength", "anchor", "contentType"}
+     "max", "maxlength", "anchor", "contentType", "help", "metavar"}
 )  # fmt: skip
 """Keyword arguments that are code (attributes a reader never sees as words)."""
 ALLOWED = frozenset(
@@ -175,6 +177,9 @@ ALLOWED = frozenset(
         "cannot set up (",
         # flib's core English, matched to put the catalogue's words in its place
         "This file",
+        # the command line (#141): a command's name before its link, a launchd key's value
+        "flib ui: ",
+        "Background",
     }
 )
 """Literals that look like words but are not the interface's text."""
@@ -237,15 +242,111 @@ def _skipped(tree: ast.AST) -> set[int]:
     return found
 
 
+CLI_FUNCTIONS = {
+    # the machinery
+    "_echo", "_warn", "_speak", "_speak_from", "_fatal", "_load", "_warn_orphan_categories",
+    # flib status, flib key
+    "status", "_key_spec", "key_set", "_save_key", "key_status", "key_delete",
+    # flib run, flib simulate (and what a run started by launchd says)
+    "run", "simulate", "_pipeline", "_day_cap_notice", "_watch", "_who_picks_up",
+    "_unlock_left_to", "_wait_and_catch_up", "_periodic_summary", "_cost_line", "skip_reason",
+    "_skipped_lines", "_access_hint", "_print_plan", "_dup_line", "_moved_line", "_warning_row",
+    "_status_row", "_print_report",
+    # flib search, flib undo, flib fix, flib due
+    "_search_filters", "search", "_sum", "_reindex", "undo", "fix", "_settle", "due",
+    # flib schedule
+    "schedule", "_install_schedule", "_prepare_notifier", "_print_schedule_status",
+    "_stale_watch_note", "_ensure_key_for_schedule", "_ensure_claude_for_schedule",
+    "_report_access",
+    # flib ui, flib menu
+    "ui", "menu", "_menu_config", "_install_menu", "_refresh_menu", "_print_menu_status",
+    "_organize_from_menu",
+}  # fmt: skip
+"""The command line's functions in the configuration's language (#141). ``init``,
+``reprocess``, ``reconcile`` and ``check-config`` follow; ``inspect``, ``doctor``,
+``eval`` and ``mcp`` stay English by design."""
+
 SCANNED = (
     *sorted(UI.glob("*.py")),
     SRC / "menubar_state.py",
+    SRC / "cli.py",
+    SRC / "status.py",
+    SRC / "due.py",
+    SRC / "search.py",
+    SRC / "fix.py",
+    SRC / "undo.py",
+    SRC / "lock.py",
+    SRC / "notifier.py",
+    SRC / "menubar.py",
+    SRC / "scheduler" / "__init__.py",
+    SRC / "reprocess.py",
 )
 SCANNED_FUNCTIONS = {
     SRC / "menubar_state.py": {"describe", "next_line"},
-    UI / "server.py": {"handoff_text", "_problem", "_ended", "_get", "_handle"},
+    UI / "server.py": {"handoff_text", "_problem", "_ended", "_get", "_handle", "run", "_minutes"},
+    SRC / "cli.py": CLI_FUNCTIONS,
+    SRC / "status.py": {
+        "day_cap_line",
+        "render_sensitive",
+        "duplicates_notice",
+        "render",
+        "notifier_line",
+        "warning",
+        "_watch_lines",
+        "cost_cap_lines",
+        "explained",
+        "_review_lines",
+        "_input_lines",
+        "_failed_lines",
+        "last_run_summary",
+        "_last_run_lines",
+        "listed",
+        "locked_advice",
+        "_schedule_lines",
+        "_files",
+        "_age",
+        "_local",
+        "summary_text",
+        "after_scheduled_run",
+        "_collect",
+    },
+    SRC / "due.py": {
+        "parse_within",
+        "make_query",
+        "check_schema",
+        "find",
+        "status_line",
+        "_documents",
+        "text",
+        "settle",
+        "render",
+        "_joined",
+        "relative_text",
+        "_item_lines",
+    },
+    SRC / "search.py": {
+        "fields_line",
+        "make_filters",
+        "_field_filters",
+        "_amount",
+        "_day",
+        "semantic_search",
+        "sum_amounts",
+    },
+    SRC / "fix.py": {"plan_fix", "_apply", "_folder", "_name"},
+    SRC / "undo.py": {"undo_run", "run_undo_plan", "file_undo_plan"},
+    SRC / "notifier.py": {"state", "choice", "introduce"},
+    SRC / "menubar.py": {"quick_problem", "problem", "refresh", "summary", "status_line"},
+    SRC / "scheduler" / "__init__.py": {
+        "prepare_interpreter",
+        "install_for",
+        "stale_watch_message",
+        "check_access",
+    },
+    SRC / "reprocess.py": {"orphan_message"},
 }
-"""In these files only these functions are the interface's (the rest is the command line's)."""
+"""In these files only these functions say things to people in the configuration's
+language; the rest is the other commands', a log's, the JSON's or English by design."""
 
 
 def _strings(path: Path) -> list[tuple[int, str]]:

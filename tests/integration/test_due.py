@@ -226,7 +226,7 @@ def test_done_leaves_the_list_and_undo_brings_it_back(filed: Path, downloads: Pa
 
     result = flib("undo", "-c", str(filed))
     assert result.exit_code == 0, result.output
-    assert "1 index change(s) reverted" in result.stdout
+    assert "1 index change reverted" in result.stdout
     assert "power.txt" in names(listed(filed))
     assert power.exists()  # undoing a settle moves nothing
 

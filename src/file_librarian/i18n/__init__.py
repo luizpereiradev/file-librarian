@@ -2,8 +2,10 @@
 
 One catalogue (``i18n.messages``): message ids to text, per language. English is
 the source and the fallback; Brazilian Portuguese (``pt-BR``) is the other
-language. It covers the web interface (``ui/``) and the menu bar item's menu
-and state line; the command line, logs, notifications and docs stay English.
+language. It covers the web interface (``ui/``), the menu bar item's menu and
+state line, the command line's output for people and the notifications (#141).
+Logs, ``flib doctor``, ``--json`` and every other machine format, the MCP server,
+exceptions and the docs stay English.
 
 - ``t(id, **params)`` is a message: a ``Msg``, a ``str`` whose value is the text
   in the language in use when it was made, which keeps its id and parameters so
@@ -19,8 +21,13 @@ and state line; the command line, logs, notifications and docs stay English.
   ("nenhum arquivo"). English keeps "0 files", which reads naturally.
 - The language in use is a context variable: the server sets it at the start of
   each request from the running configuration (``use``), so a change on the
-  Settings page applies from the next page; everything else (tests, the command
-  line) gets English unless it asks (``using``). An unknown language is English.
+  Settings page applies from the next page; the command line sets it once it has
+  loaded the configuration (``cli._load``); everything else (tests, the MCP
+  server, ``flib doctor``) gets English unless it asks (``using``). An unknown
+  language is English. ``language_of`` is the one rule that reads a language from
+  a configuration.
+- A text written for a machine or a log is made English with ``english``, whatever
+  the language in use: a run's log, a message matched by its English words.
 
 ``formats`` holds dates, times, numbers and money for display, and the reading
 of an amount typed in a form; nothing here depends on the process's locale.
@@ -78,6 +85,12 @@ def resolve(value: object) -> Lang:
         if value == lang:
             return lang
     return DEFAULT
+
+
+def language_of(config: object) -> Lang:
+    """The language a configuration asks for (its ``language``), resolved; English for
+    ``None`` (no configuration could be read) or anything else."""
+    return resolve(getattr(config, "language", None))
 
 
 def current() -> Lang:
@@ -157,6 +170,9 @@ def value_text(lang: Lang, value: object) -> str:
     """A parameter as plain text: another message in the same language, else ``str``."""
     if isinstance(value, Msg):
         return value.text(lang)
+    in_language = getattr(value, "in_language", None)  # ``formats.later``: a value shown
+    if callable(in_language):  # in the language of the message it is in
+        return str(in_language(lang))
     plain_text = getattr(value, "plain_text", None)  # ``ui.markup.Markup``: its text
     if callable(plain_text):
         return str(plain_text())
@@ -169,6 +185,14 @@ def plain(lang: Lang, msg_id: str, params: Mapping[str, object]) -> str:
     """The message as plain text in ``lang``: `backticks` kept (they mark a command)."""
     text = template(lang, msg_id, params)
     return PLACEHOLDER.sub(lambda m: value_text(lang, params[m.group(1)]), text)
+
+
+def english(value: object) -> str:
+    """``value`` as English plain text: a message rendered again in English, an
+    exception by its message (``str(exc)`` for any other), anything else by ``str``."""
+    if isinstance(value, BaseException) and len(value.args) == 1:
+        value = value.args[0]
+    return value_text(DEFAULT, value) if not isinstance(value, BaseException) else str(value)
 
 
 def placeholders(text: str) -> set[str]:

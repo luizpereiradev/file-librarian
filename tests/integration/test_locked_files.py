@@ -21,10 +21,12 @@ import pytest
 from typer.testing import CliRunner
 
 from file_librarian import activity, catchup, pipeline
-from file_librarian.cli import ACCESS_HINT, app
+from file_librarian.cli import ACCESS_HINT as ACCESS_HINT_ID
+from file_librarian.cli import app
 from file_librarian.config import Config, load_config
 from file_librarian.db.store import Store
 from file_librarian.executor import recover
+from file_librarian.i18n import t
 from file_librarian.lock import instance_lock
 from file_librarian.models import FileStatus
 from file_librarian.protection import LOCKED_NOW
@@ -45,6 +47,8 @@ from tests._helpers import (
 )
 
 pytestmark = pytest.mark.integration
+
+ACCESS_HINT = t(ACCESS_HINT_ID).text("en")
 
 runner = CliRunner()
 LOCKED_LINE = "  skip    photo.jpeg  (protected by macOS while the Mac is locked)"

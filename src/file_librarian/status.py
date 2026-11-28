@@ -12,7 +12,9 @@ most once every ``summary.every_days`` (counted in calendar days), and only
 when some file has waited in review or failed for ``summary.min_age_days`` or
 more, it writes one line to the run log and, with ``summary.notify``, posts
 one macOS notification. The notification holds counts only, never a file
-name: notifications show on the lock screen. Whether it shows at all is up to
+name: notifications show on the lock screen. It is in the configuration's
+``language`` (#141), never the environment's: launchd starts the scheduled run
+with almost none. The run's log line stays English, like every log. Whether it shows at all is up to
 macOS (see docs/troubleshooting.md); the log and ``flib status`` are enough on their own,
 and a notification that fails never fails the run.
 
@@ -39,6 +41,8 @@ from file_librarian import due as due_mod
 from file_librarian import notifier, scheduler
 from file_librarian.config import Config, canonical
 from file_librarian.db.store import RunRow, Store, WaitingRow, load_migrations
+from file_librarian.i18n import Msg, formats, language_of, t
+from file_librarian.i18n.core import detail
 from file_librarian.models import FileStatus, ReviewReason, RunTrigger, explain_review
 from file_librarian.runlog import log_path
 from file_librarian.scanner import SkipReason
@@ -230,11 +234,9 @@ def _collect(
     with Store.open_read_only(config.database) as store:
         version = store.schema_version
         if version > len(load_migrations()):
-            raise StatusError(
-                f"the index (schema {version}) is newer than this flib; upgrade file-librarian"
-            )
+            raise StatusError(t("term.index.newer", schema=str(version)))
         if version < _MIN_SCHEMA:
-            raise StatusError("the index is from an older flib; the next `flib run` updates it")
+            raise StatusError(t("term.index.older"))
         waiting = store.waiting()
         stats = store.stats()
         last_summary = _last_summary(store)
@@ -284,14 +286,12 @@ def _today() -> str:
     return datetime.now().astimezone().date().isoformat()
 
 
-def day_cap_line(config: Config) -> str:
+def day_cap_line(config: Config) -> Msg:
     """Said once a day, in the log of the run that reached the cap, and by ``flib status``."""
     cap = config.limits.cost_cap_per_day
-    amount = "" if cap is None else f" (US$ {cap:.2f}, limits.max_cost_usd_per_day)"
-    return (
-        f"Automatic runs reached today's cost cap{amount}: until midnight they send no "
-        "file to the provider; the rest wait for tomorrow, or run `flib run` now."
-    )
+    if cap is None:
+        return t("term.day_cap")
+    return t("term.day_cap_amount", cap=formats.later(formats.usd, cap, 2))
 
 
 def input_counts(config: Config, store: Store) -> list[InputCount] | None:
@@ -335,15 +335,12 @@ def sensitive_files(config: Config) -> list[tuple[Path, str | None]]:
 
 def render_sensitive(found: list[tuple[Path, str | None]]) -> list[str]:
     if not found:
-        return ["No file is left in place as sensitive."]
-    lines = [f"Left in place as sensitive: {_files(len(found))}"]
+        return [t("term.sensitive.none")]
+    lines: list[str] = [t("term.status.sensitive", files=_files(len(found)))]
     for path, reason in found:
-        why = reason or "reason not recorded (left in place by an earlier version)"
-        lines.append(f"  {path}  ({why})")
-    lines.append(
-        "A file sensitive only because of its name is looked at again once renamed, or "
-        "when `sensitive.allow_names` lets its name through."
-    )
+        why = detail(reason) if reason else t("term.sensitive.no_reason")
+        lines.append(t("term.sensitive.item", path=str(path), why=why))
+    lines.append(t("term.sensitive.renamed"))
     return lines
 
 
@@ -361,14 +358,9 @@ def acknowledge_duplicates_notice(store: Store) -> None:
     store.set_meta(DUPLICATES_NOTICE_SEEN, datetime.now(UTC).isoformat(timespec="seconds"))
 
 
-def duplicates_notice(config: Config) -> str:
+def duplicates_notice(config: Config) -> Msg:
     """The note shown until a run by hand prints it to a terminal (RF-21)."""
-    return (
-        f"Note: files with the same content as one already filed were moved to "
-        f"{config.duplicates_folder} in the organized folder; nothing was deleted. "
-        "`flib undo` puts them back, and `duplicates: leave` in the configuration "
-        "leaves copies where they are."
-    )
+    return t("term.duplicates_notice", folder=config.duplicates_folder)
 
 
 def _last_summary(store: Store) -> datetime | None:
@@ -478,25 +470,28 @@ def _when(text: str) -> datetime:
 def render(
     status: Status, config: Config, *, now: datetime | None = None, private: bool = False
 ) -> list[str]:
-    """``flib status`` as lines. ``private`` hides suggested categories that are not
-    configured (model-written text), for ``flib doctor``."""
+    """``flib status`` as lines, in the language in use. ``private`` hides suggested
+    categories that are not configured (model-written text), for ``flib doctor``."""
     now = now or datetime.now(UTC)
     lines: list[str] = []
     if not status.database_exists:
-        lines.append("No run yet: the index is created by the first `flib run`.")
+        lines.append(t("term.status.no_run"))
     else:
         lines.extend(_review_lines(status, config, now, private=private))
         lines.extend(_failed_lines(status, config, now))
         if status.due is not None:
             lines.append(due_mod.status_line(status.due))
         if status.sensitive:
-            lines.append(f"Left in place as sensitive: {_files(status.sensitive)}")
+            lines.append(t("term.status.sensitive", files=_files(status.sensitive)))
         if status.duplicates_notice:
             lines.append(duplicates_notice(config))
         if status.duplicates:
             lines.append(
-                f"Duplicates set aside in {config.duplicates_folder}: "
-                f"{_files(status.duplicates)} (nothing is deleted; review them when you like)"
+                t(
+                    "term.status.duplicates",
+                    folder=config.duplicates_folder,
+                    files=_files(status.duplicates),
+                )
             )
         lines.extend(_input_lines(status, private=private))
         lines.extend(_last_run_lines(status, config))
@@ -507,52 +502,73 @@ def render(
         lines.append(status.menu_bar)
     if status.database_exists:
         lines.extend(_watch_lines(status, config))
-        month = f"This month: US$ {status.month_cost_usd:.4f}"
+        cost = formats.usd(status.month_cost_usd)
         if status.month_unpriced_runs:
-            month += f" (plus {status.month_unpriced_runs} run(s) without a recorded cost)"
-        lines.append(month)
+            runs = t("term.runs", count=status.month_unpriced_runs)
+            lines.append(t("term.status.month_unpriced", cost=cost, runs=runs))
+        else:
+            lines.append(t("term.status.month", cost=cost))
     return lines
 
 
-def notifier_line(choice: notifier.Choice) -> str:
+def notifier_line(choice: notifier.Choice) -> Msg:
     if choice.kind == "app":
-        return 'Notifications: from the "file-librarian" app, with its own icon.'
-    return f"Notifications: through osascript, shown as Script Editor ({choice.reason})."
+        return t("term.status.notifier_app")
+    return t("term.status.notifier_osascript", reason=choice.reason)
+
+
+def is_warning(line: str) -> bool:
+    """A line of ``render`` or ``cost_cap_lines`` that is a warning (for stderr)."""
+    return isinstance(line, Msg) and line.msg_id == "term.warning"
+
+
+def warning(text: str) -> Msg:
+    """``warning: <text>`` (``aviso: ...``)."""
+    return t("term.warning", text=text)
 
 
 def _watch_lines(status: Status, config: Config) -> list[str]:
     """The last watch run and what automatic runs cost today (#90)."""
-    lines = []
+    lines: list[str] = []
     watching = status.schedule.mode in ("watch", "both")
     run = status.last_watch
     if run is not None:
         lines.append(
-            f"Last watch run: {_local(run.finished_at or run.started_at)}: "
-            f"{run.files_moved or 0} organized, {run.files_review or 0} to review"
+            t(
+                "term.status.last_watch",
+                when=_local(run.finished_at or run.started_at),
+                organized=t("activity.organized", count=run.files_moved or 0),
+                review=t("activity.to_review", count=run.files_review or 0),
+            )
         )
     elif watching:
-        lines.append("Last watch run: none yet.")
+        lines.append(t("term.status.last_watch_none"))
     if watching or status.schedule.installed or status.automatic_cost_today:
         if config.provider.cost_unknown:
             files = config.limits.files_cap_per_day
-            of = "" if files is None else f" of {files}"
-            lines.append(
-                f"Automatic runs today: cost unknown (no prices for {config.provider.name}); "
-                f"{status.automatic_files_today}{of} files seen"
-            )
+            seen = status.automatic_files_today
+            provider = config.provider.name
+            if files is None:
+                lines.append(t("term.status.today_unpriced", provider=provider, seen=seen))
+            else:
+                lines.append(
+                    t("term.status.today_unpriced_cap", provider=provider, seen=seen, cap=files)
+                )
         else:
             cap = config.limits.cost_cap_per_day
-            of = "" if cap is None else f" of US$ {cap:.2f}"
-            lines.append(f"Automatic runs today: US$ {status.automatic_cost_today:.4f}{of}")
+            cost = formats.usd(status.automatic_cost_today)
+            if cap is None:
+                lines.append(t("term.status.today", cost=cost))
+            else:
+                lines.append(t("term.status.today_cap", cost=cost, cap=formats.usd(cap, 2)))
     if status.day_cap_reached:
         lines.append(day_cap_line(config))
     if status.backlog is not None:
         count, reason = status.backlog
-        why = f" ({reason})" if reason else ""
-        lines.append(
-            f"Watch: {_files(count)} wait in the inputs{why}; a new arrival or the daily run "
-            "tries them again, or run `flib run` now."
-        )
+        if reason:
+            lines.append(t("term.status.backlog_why", count=count, why=detail(reason)))
+        else:
+            lines.append(t("term.status.backlog", count=count))
     return lines
 
 
@@ -598,42 +614,61 @@ def _backlog(store: Store) -> tuple[int, str | None] | None:
 
 def cost_cap_lines(config: Config) -> list[str]:
     """The caps on what automatic runs spend, for ``check-config``, ``doctor`` and
-    ``flib schedule``; a line starting with ``warning`` when no cost cap can work."""
+    ``flib schedule``; a warning (``is_warning``) when no cost cap can work."""
     cap = config.limits.cost_cap_per_day
-    lines = [
-        "daily cost cap for automatic runs: "
-        + ("none" if cap is None else f"US$ {cap:.2f} (limits.max_cost_usd_per_day)")
+    lines: list[str] = [
+        t("term.cost_cap_none")
+        if cap is None
+        else t("term.cost_cap", cap=formats.later(formats.usd, cap, 2))
     ]
     if config.provider.cost_unknown:
         files = config.limits.files_cap_per_day
         limit = (
-            "nothing limits them"
+            t("settings.costs.unlimited")
             if files is None
-            else f"automatic runs see at most {files} files a day (limits.max_files_per_day)"
+            else t("settings.costs.files_cap", files=files)
         )
         lines.append(
-            f"warning: {config.provider.name} at a remote server has no prices "
-            "(provider.price_input_per_mtok, price_output_per_mtok), so no cost cap can stop "
-            f"it; {limit}."
+            warning(t("settings.costs.no_prices", provider=config.provider.name, limit=limit))
         )
     return lines
+
+
+def explained(reason: ReviewReason | None, suggested: str | None) -> Msg:
+    """``models.explain_review`` (with no confidence) in the language in use."""
+    if reason is ReviewReason.LOW_CONFIDENCE:
+        if suggested:
+            return t("term.explain.low_confidence_suggested", suggested=suggested)
+        return t("term.explain.low_confidence")
+    if reason is ReviewReason.UNKNOWN_CATEGORY:
+        return t("term.explain.unknown_category", suggested=suggested or "?")
+    if reason is ReviewReason.CATEGORY_REMOVED:
+        return t("term.explain.category_removed")
+    if reason is ReviewReason.MOVED_BY_HAND:
+        return t("term.explain.moved_by_hand")
+    return t("term.explain.unknown")
 
 
 def _review_lines(status: Status, config: Config, now: datetime, *, private: bool) -> list[str]:
     folder = config.review_folder
     oldest = status.oldest_review
     if oldest is None:
-        return [f"Review: nothing waits in {folder}."]
-    lines = [
-        f"Review: {_files(status.review_total)} in {folder}, the oldest for {_age(now - oldest)}"
+        return [t("term.status.review_none", folder=folder)]
+    lines: list[str] = [
+        t(
+            "term.status.review",
+            files=_files(status.review_total),
+            folder=folder,
+            age=_age(now - oldest),
+        )
     ]
     configured = {c.name for c in config.categories}
     for group in status.review:
         suggested = group.suggested
         if private and suggested is not None and suggested not in configured:
             suggested = "<other>"
-        why = explain_review(group.reason, suggested, None)
-        lines.append(f"  {group.count:>3}  {why}")
+        why = explained(group.reason, suggested)
+        lines.append(t("term.status.group", count=f"{group.count:>3}", text=why))
     return lines
 
 
@@ -641,109 +676,126 @@ def _input_lines(status: Status, *, private: bool) -> list[str]:
     """Files per input folder; ``private`` names them ``<input-N>`` (``flib doctor``)."""
     if not status.by_input:
         return []
-    lines = ["By input:"]
+    lines: list[str] = [t("term.status.by_input")]
     for count in status.by_input:
         name = f"<input-{count.index}>" if private else str(count.folder)
-        lines.append(f"  {name}: {_files(count.filed)} filed, {count.left} left in place")
+        left = t("term.left_in_place", count=count.left)
+        lines.append(t("term.status.input", name=name, filed=count.filed, left=left))
     return lines
 
 
 def _failed_lines(status: Status, config: Config, now: datetime) -> list[str]:
     if not status.failed:
         return []
-    lines = [f"Failed: {_files(status.failed_total)}"]
+    lines: list[str] = [t("term.status.failed", files=_files(status.failed_total))]
     limit = config.limits.max_attempts
     for group in status.failed:
         if group.retried:
-            note = f"{group.attempts} of {limit} attempts; the next run tries again"
+            note = t("term.status.retried", attempts=group.attempts, limit=limit)
         else:
-            note = f"gave up after {group.attempts} attempts"
-        lines.append(f"  {group.count:>3}  {group.error} ({note}; for {_age(now - group.oldest)})")
+            note = t("term.status.given_up", attempts=group.attempts)
+        lines.append(
+            t(
+                "term.status.failed_group",
+                count=f"{group.count:>3}",
+                error=detail(group.error),
+                note=note,
+                age=_age(now - group.oldest),
+            )
+        )
     return lines
+
+
+TRIGGERS = {
+    RunTrigger.SCHEDULE: "js.trigger.schedule",
+    RunTrigger.MANUAL: "js.trigger.manual",
+    RunTrigger.MCP: "js.trigger.mcp",
+    RunTrigger.WATCH: "js.trigger.watch",
+    RunTrigger.REPROCESS: "js.trigger.reprocess",
+}
+"""Who started a run, in the Status page's words: one source for the page, the
+menu bar item and ``flib status``."""
+
+
+def last_run_summary(run: RunRow) -> Msg:
+    """The last run in one line, as the Status page writes it (``js.last_run``)."""
+    review: Msg = t("activity.to_review", count=run.files_review or 0)
+    if run.files_duplicates:
+        duplicates = t("activity.duplicates", count=run.files_duplicates)
+        review = t("term.and", first=review, second=duplicates)
+    return t(
+        "js.last_run",
+        when=_local(run.finished_at or run.started_at),
+        trigger=t(TRIGGERS[run.trigger]),
+        organized=t("activity.organized", count=run.files_moved or 0),
+        review=review,
+        failed=t("activity.failed", count=run.errors or 0),
+        cost=t("common.no_cost_recorded") if run.cost_usd is None else formats.usd(run.cost_usd),
+    )
 
 
 def _last_run_lines(status: Status, config: Config) -> list[str]:
     run = status.last_run
     if run is None:
-        return ["Last run: none yet."]
-    when = _local(run.finished_at or run.started_at)
-    names = {
-        "schedule": "scheduled",
-        "manual": "by hand",
-        "mcp": "from an assistant",
-        "watch": "on arrival (watch mode)",
-    }
-    trigger = names.get(run.trigger.value, run.trigger.value)
-    cost = "no cost recorded" if run.cost_usd is None else f"US$ {run.cost_usd:.4f}"
-    line = (
-        f"Last run: {when}, {trigger}: {run.files_moved or 0} organized, "
-        f"{run.files_review or 0} to review, "
-        + (f"{run.files_duplicates} duplicate(s) set aside, " if run.files_duplicates else "")
-        + f"{run.errors or 0} failed; {cost}"
-    )
-    lines = [line]
+        return [t("term.status.last_run_none")]
+    lines: list[str] = [t("term.status.last_run", summary=last_run_summary(run))]
     skipped = status.skipped or {}
-    parts = []
-    if skipped.get("unreadable"):
-        parts.append(f"{skipped['unreadable']} unreadable")
-    if skipped.get("cloud_only"):
-        parts.append(f"{skipped['cloud_only']} only in iCloud")
-    if skipped.get("not_where_left"):
-        parts.append(
-            f"{skipped['not_where_left']} waiting for `flib reconcile` "
-            "(copies of filed files that are not where flib left them)"
-        )
-    if skipped.get("locked"):
-        parts.append(f"{skipped['locked']} protected while the Mac was locked")
-    if skipped.get("input_unreadable"):
-        parts.append(f"{skipped['input_unreadable']} input folder(s) that could not be read")
-    if skipped.get("too_recent"):
-        parts.append(f"{skipped['too_recent']} too recent for their input's min_age_days")
+    parts: list[Msg] = []
+    for key in _LOGGED_SKIPS_SHOWN:
+        if skipped.get(key):
+            parts.append(t(f"term.skipped.{key}", count=skipped[key]))
     if parts:
-        lines.append(f"  skipped: {', '.join(parts)} (see its log)")
+        lines.append(t("term.status.skipped", parts=listed(parts)))
     if skipped.get("locked"):
-        lines.append(f"  {locked_advice(skipped['locked'], config)}")
+        lines.append(t("term.indented", text=locked_advice(skipped["locked"], config)))
     return lines
 
 
-def locked_advice(count: int, config: Config) -> str:
+_LOGGED_SKIPS_SHOWN = (
+    "unreadable", "cloud_only", "not_where_left", "locked", "input_unreadable", "too_recent",
+)  # fmt: skip
+
+
+def listed(parts: list[Msg]) -> Msg:
+    """Messages joined with commas, in the language of the message they go in."""
+    joined = parts[0]
+    for part in parts[1:]:
+        joined = t("term.and", first=joined, second=part)
+    return joined
+
+
+def locked_advice(count: int, config: Config) -> Msg:
     """What to do about files skipped because the Mac was locked (no names)."""
-    what = f"{_files(count)} could only be read while the Mac is unlocked (macOS Data Protection)"
     if config.schedule.wait_for_unlock_hours > 0:
-        return f"{what}; the scheduled run waits for the next unlock, or run `flib run` now."
-    return f"{what}; run `flib run` now."
+        return t("term.locked_advice_wait", count=count)
+    return t("term.locked_advice", count=count)
 
 
 def _schedule_lines(schedule: NextRun) -> list[str]:
     if schedule.error is not None:
-        return [f"Next run: unknown ({schedule.error})"]
+        return [t("term.schedule.unknown", error=schedule.error)]
     if not schedule.installed:
-        return ["Next run: none scheduled (`flib schedule` sets up a daily run)."]
-    lines = []
+        return [t("term.schedule.none")]
+    lines: list[str] = []
     if schedule.mode in ("watch", "both"):
-        state = "on" if schedule.loaded else "installed but not loaded (run `flib schedule` again)"
+        state = t("term.schedule.on") if schedule.loaded else t("term.schedule.not_loaded")
         lines.append(
-            f"Watch mode: {state}; flib runs when something arrives in "
-            f"{_folders(schedule.watched)}, at most once every "
-            f"{schedule.watch_interval_minutes} min"
+            t(
+                "term.schedule.watch",
+                state=state,
+                folders=t("term.schedule.folders", count=schedule.watched),
+                minutes=schedule.watch_interval_minutes,
+            )
         )
         if schedule.stale_watch:
-            lines.append(f"warning: {schedule.stale_watch}")
+            lines.append(warning(schedule.stale_watch))
     if schedule.mode == "watch":
         return lines
     if schedule.at is None:
-        lines.append(
-            "Next run: the daily run is installed but not loaded (run `flib schedule` again)."
-        )
+        lines.append(t("term.schedule.daily_not_loaded"))
     else:
-        lines.append(
-            f"Next run: {schedule.at.strftime('%Y-%m-%d %H:%M')} (daily at {schedule.time})"
-        )
+        lines.append(t("term.schedule.next", when=formats.moment(schedule.at), time=schedule.time))
     return lines
-
-
-def _folders(count: int) -> str:
-    return "the input folder" if count == 1 else f"the {count} input folders"
 
 
 def to_json(status: Status, config: Config, *, now: datetime | None = None) -> str:
@@ -854,41 +906,41 @@ def to_json(status: Status, config: Config, *, now: datetime | None = None) -> s
     return json.dumps(data, indent=2, ensure_ascii=False)
 
 
-def _files(count: int) -> str:
-    return f"{count} file" if count == 1 else f"{count} files"
+def _files(count: int) -> Msg:
+    return t("term.files", count=count)
 
 
-def _age(delta: timedelta) -> str:
+def _age(delta: timedelta) -> Msg:
     days = delta.days
     if days < 1:
-        return "less than a day"
-    return "1 day" if days == 1 else f"{days} days"
+        return t("term.less_than_a_day")
+    return t("js.days", count=days)
 
 
 def _local(text: str) -> str:
-    return _when(text).astimezone().strftime("%Y-%m-%d %H:%M")
+    return formats.moment(_when(text).astimezone())
 
 
 # --- the periodic summary --------------------------------------------------------------
 
 
 def summary_text(
-    review: int, failed: int, not_where_left: int = 0, locked: int = 0, due: str | None = None
-) -> str:
+    review: int, failed: int, not_where_left: int = 0, locked: int = 0, due: Msg | None = None
+) -> Msg:
     """The notification's body: counts only, nothing that names a file. ``due``: what is
     due, in counts (``due.Reminder.text``)."""
-    parts = []
+    parts: list[Msg] = []
     if due:
         parts.append(due)
     if review:
-        parts.append(f"{_files(review)} {'waits' if review == 1 else 'wait'} for review")
+        parts.append(t("notify.review", count=review))
     if failed:
-        parts.append(f"{failed} failed")
+        parts.append(t("menu.failed", count=failed))
     if not_where_left:
-        parts.append(f"{not_where_left} wait for `flib reconcile`")
+        parts.append(t("notify.reconcile", count=not_where_left))
     if locked:
-        parts.append(f"{locked} could only be read while the Mac is unlocked")
-    return f"{', '.join(parts)}. Run `flib status` for details."
+        parts.append(t("notify.locked", count=locked))
+    return t("notify.summary", parts=listed(parts))
 
 
 def after_scheduled_run(
@@ -939,16 +991,14 @@ def after_scheduled_run(
         waiting, not_where_left, locked = [], 0, 0
     review = sum(1 for row in waiting if row.status is FileStatus.REVIEW)
     text = summary_text(review, len(waiting) - review, not_where_left, locked, due_text)
-    lines = [f"Summary: {text}"]
+    lines: list[str] = [t("term.summary", text=text)]
     if locked:
         lines.append(locked_advice(locked, config))
     if settings.notify:
-        problem = notify(text)
+        # The configuration's language, never the environment's (launchd gives none).
+        problem = notify(text.text(language_of(config)))
         if problem is not None:
-            lines.append(
-                f"warning: the notification could not be shown ({problem}); "
-                "this log and `flib status` have the summary"
-            )
+            lines.append(warning(t("term.summary_not_shown", problem=problem)))
     return lines
 
 

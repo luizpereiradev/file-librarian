@@ -466,10 +466,51 @@ language rebuilds it (`menubar.refresh`, as `--refresh` does), after the server
 already uses the saved configuration, and a failed rebuild is said on the page,
 never a failed save; its two
 lines are written in `state.json` in the language of the moment, still
-ASCII with `\uXXXX` escapes. The command line, logs and notifications stay
-English. Tests check every id is in both languages with the same
+ASCII with `\uXXXX` escapes. Tests check every id is in both languages with the same
 placeholders, every id is used, and no word of the interface is left
 outside the catalogue (`tests/unit/test_i18n.py`).
+
+**The command line and the notifications** (#141, `i18n/messages/terminal.py`)
+follow the same catalogue. `cli._load` reads the configuration and sets the
+language with `i18n.language_of`, the one rule: the configuration's `language`,
+else English. Before that, and when the configuration is broken, the output is
+English, and the root callback resets the language at every invocation.
+`--help` stays English, because typer builds it at import. These stay English
+whatever the language:
+
+- `--json`, the MCP server (`serve` resets the language) and `flib doctor`
+  (`build_report` runs under `i18n.using("en")`);
+- a run that launchd started (`_load(speak=False)`), whose output goes to a log;
+- every log file: `runlog` writes each line with `i18n.english`, so a pt-BR
+  terminal and an English log come from the same `Msg`.
+
+Formatted values that a log may need are passed as `formats.later(...)`, so the
+English rendering formats them again as English (`US$ 0.0123`).
+
+The core modules (`status`, `due`, `search`, `fix`, `undo`, `lock`,
+`scheduler`, `notifier`, `menubar`) build their messages and refusals with `t()`:
+
+- In the terminal, the message is in the configuration's language.
+- In the MCP server, it is in English.
+- On a page, `i18n.core.core` matches a `term.*` message by its English and
+  puts it in the page's own words, so the pages show what they did before.
+  The pages call `english(exc)` where they read an exception's text.
+
+What the core records in English (a planner's reason, an undo's skip reason, a
+failure's kind, a skip reason in a log) is shown by `i18n.core.detail`. The
+English of each message is the recorded text, and a test checks that, so
+`status.count_skips` and `activity` still read the logs.
+
+The periodic summary is posted in `language_of(config)` even though its log
+line is English. The Status page, the menu bar and `flib status` build the last
+run's summary from the same ids (`js.last_run`, `js.trigger.*`, `activity.*`).
+
+The rows of a run's table pad their first word to one width per language, and
+`formats.width` and `ljust` measure terminal columns, not code points.
+
+Tests (`tests/unit/test_i18n.py`) scan the command line's functions for words
+outside the catalogue. `tests/unit/test_i18n_terminal.py` and
+`tests/integration/test_cli_language.py` check each command in pt-BR.
 
 **Review and undo** (#115, `ui/review.py` for the pages, `ui/actions.py` for
 the actions) are the first routes that move files. They never move a file

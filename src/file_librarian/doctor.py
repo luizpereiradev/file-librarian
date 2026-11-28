@@ -46,6 +46,7 @@ import yaml
 from file_librarian import (
     __version__,
     credentials,
+    i18n,
     locality,
     menubar,
     notifier,
@@ -362,8 +363,10 @@ def render(sections: list[Section], redactor: Redactor, fmt: Format) -> str:
 
 
 def build_report(options: Options, fmt: Format = "text") -> str:
-    sections, redactor = collect(options)
-    return render(sections, redactor, fmt)
+    """The report, always in English (#141): maintainers read it in bug reports."""
+    with i18n.using(i18n.DEFAULT):
+        sections, redactor = collect(options)
+        return render(sections, redactor, fmt)
 
 
 def default_report_path(config_path: Path | None, fmt: Format) -> Path:

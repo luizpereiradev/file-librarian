@@ -49,7 +49,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import ToolAnnotations
 from pydantic import BaseModel, Field
 
-from file_librarian import __version__
+from file_librarian import __version__, i18n
 from file_librarian import due as due_mod
 from file_librarian.config import Config, is_loopback_url
 from file_librarian.db.store import FileRow, HistoryRow, RunRow, Store
@@ -879,7 +879,9 @@ def build_server(config: Config) -> MCPServer:
 
 
 def serve(config: Config) -> None:
-    """Serve over stdin/stdout until the client disconnects."""
+    """Serve over stdin/stdout until the client disconnects. Its tool results and
+    errors are English, whatever the configuration's language (#141)."""
+    i18n.use(i18n.DEFAULT)
     build_server(config).run("stdio")
 
 

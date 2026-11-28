@@ -28,6 +28,22 @@ All notable changes to this project are documented here. The format follows
   `HOME`; `--clean` removes it. The site's screenshots
   (`scripts/screenshots.py`, headless Chrome) and terminal samples
   (`scripts/docs_samples.py`) are taken from it.
+- **The command line and the notifications speak the configured language** (#141,
+  first part). With `language: pt-BR`, these are in Brazilian Portuguese:
+  - the periodic summary and due reminders a scheduled run posts, in the
+    configuration's language rather than the environment's;
+  - the first notification `flib schedule` posts;
+  - `flib status`, `run` and `simulate`, `due`, `search` (`--sum` included),
+    `fix`, `undo`, `schedule`, `menu`, `ui` and `key`, and their refusals.
+
+  Dates read `25/11/2026`, amounts `R$ 1.234,56`, and table columns line up by
+  display width. English is unchanged, except that the last run's line in
+  `flib status` now uses the Status page's words ("daily run", "on arrival"),
+  and "duplicates set aside" and "index changes reverted" have real plurals.
+
+  These stay English: `--help`, `--json`, logs, `flib doctor`, the MCP server,
+  and what a launchd run prints. `init`, `reprocess`, `reconcile`,
+  `check-config` and the configuration's errors follow in the second part.
 
 - **The interface speaks the configured language** (#126): with `language:
   pt-BR`, every page of `flib ui` (including confirmations, outcomes, error
@@ -39,7 +55,7 @@ All notable changes to this project are documented here. The format follows
   next page and rebuilds the menu bar item. A cost cap or a search amount may
   be typed as `3,00` or `3.00`; `1.234` (in pt-BR) is refused as ambiguous
   rather than guessed. One catalogue (`i18n/messages/`), checked
-  by tests. The command line, logs, notifications and docs stay English.
+  by tests. Logs and docs stay English.
 
 - **flib in the menu bar** (#116): `flib menu` builds a small AppleScriptObjC
   stay-open applet with `osacompile` (no Xcode, nothing downloaded), signs it

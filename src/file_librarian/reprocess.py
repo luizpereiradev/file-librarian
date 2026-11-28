@@ -101,6 +101,7 @@ from file_librarian.db.store import FIELD_COLUMNS, FileRow, Store
 from file_librarian.executor import Relocation, RunReport, answer_fields, relocate
 from file_librarian.finder_tags import tag_moved, untag_restored
 from file_librarian.hashing import check_content, unit_manifest
+from file_librarian.i18n import t
 from file_librarian.models import (
     Decision,
     FileContext,
@@ -238,12 +239,7 @@ def orphan_categories(config: Config, store: Store) -> list[str]:
 def orphan_message(orphans: list[str]) -> str:
     """What to tell the user about categories files still use but the configuration lost."""
     names = ", ".join(repr(name) for name in orphans)
-    first = orphans[0]
-    return (
-        f"organized files still use categories missing from the configuration: {names}. "
-        f"If you renamed one, run `flib reprocess --rename-category {_arg(first)} NEW`; "
-        f"if you removed it, run `flib reprocess --remove-category {_arg(first)}`"
-    )
+    return t("term.orphans", names=names, first=_arg(orphans[0]))
 
 
 def _arg(name: str) -> str:

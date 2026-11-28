@@ -6,6 +6,10 @@ log files written by flib are the one thing it removes, and only inside its
 own logs folder. Watch-mode runs (#90) write ``watch-run-*.log`` and keep
 their own ``KEEP_WATCH`` newest, so many small watch runs never push the
 daily runs' logs out. ``trim`` caps the size of the launchd output logs.
+
+A log is English whatever the configuration's language (#141): each line is written
+with ``i18n.english``, so a run printed in pt-BR logs the same lines in English, as
+maintainers and ``status.count_skips`` read them.
 """
 
 from __future__ import annotations
@@ -13,6 +17,8 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+
+from file_librarian.i18n import english
 
 KEEP = 100
 KEEP_WATCH = 100
@@ -42,7 +48,7 @@ def write_log(database: Path, run_id: int, lines: list[str], *, watch: bool = Fa
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(f"# flib run {run_id} finished {stamp}\n")
-        fh.writelines(line + "\n" for line in lines)
+        fh.writelines(english(line) + "\n" for line in lines)  # a log is English (#141)
     _prune(folder, prefix, KEEP_WATCH if watch else KEEP)
     return path
 
@@ -52,7 +58,7 @@ def append_log(database: Path, run_id: int, lines: list[str]) -> None:
     path = log_path(database, run_id)
     fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
     with os.fdopen(fd, "a", encoding="utf-8") as fh:
-        fh.writelines(line + "\n" for line in lines)
+        fh.writelines(english(line) + "\n" for line in lines)  # a log is English (#141)
 
 
 def trim(path: Path, max_bytes: int = OUTPUT_LOG_MAX_BYTES) -> bool:

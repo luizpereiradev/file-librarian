@@ -40,6 +40,7 @@ from file_librarian.fsops import (
     volume_of,
 )
 from file_librarian.hashing import check_content, unit_manifest
+from file_librarian.i18n import t
 from file_librarian.models import CopyPhase, FileStatus, OperationStatus
 from file_librarian.protection import LOCKED_NOW
 from file_librarian.reconcile import place
@@ -63,7 +64,7 @@ def undo_run(
     store: Store, run_id: int | None = None, *, config: Config | None = None
 ) -> UndoReport:
     explicit = run_id is not None
-    hint = "" if explicit else "; to go further back, name a run with --run ID"
+    hint: str = "" if explicit else t("term.undo.hint")
     if run_id is None:
         run_id = store.last_run_with_operations()
         # A `flib reprocess` that changed nothing (every move skipped or failed)
@@ -72,11 +73,10 @@ def undo_run(
         reprocess = store.newest_reprocess_after(run_id)
         if reprocess is not None:
             raise NothingToUndoError(
-                f"the newest reprocess (run {reprocess}) changed nothing, so there is "
-                f"nothing of it to undo{hint}"
+                t("term.undo.reprocess_nothing", run=str(reprocess), hint=hint)
             )
         if run_id is None:
-            raise NothingToUndoError("no run has moved anything yet")
+            raise NothingToUndoError(t("term.undo.no_run"))
     ops, changes = run_undo_plan(store, run_id, hint=hint)
     report = UndoReport()
     for op in reversed(ops):
@@ -114,7 +114,7 @@ def run_undo_plan(
     ops = store.operations(run_id=run_id, status=OperationStatus.DONE)
     changes = store.index_changes(run_id)
     if not ops and not changes:
-        raise NothingToUndoError(f"run {run_id} has nothing left to undo{hint}")
+        raise NothingToUndoError(t("term.undo.nothing_left", run=str(run_id), hint=hint))
     return ops, changes
 
 
@@ -129,10 +129,10 @@ def file_undo_plan(store: Store, path: Path, *, file_id: int | None = None) -> O
         except LookupError:
             row = None
     if row is None:
-        raise NothingToUndoError(f"{path} is not a file flib moved")
+        raise NothingToUndoError(t("term.undo.not_moved", path=str(path)))
     op = store.last_done_operation(row.id)
     if op is None:
-        raise NothingToUndoError(f"{path} has no move to undo")
+        raise NothingToUndoError(t("term.undo.no_move", path=str(path)))
     return op
 
 

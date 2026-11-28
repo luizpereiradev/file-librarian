@@ -152,7 +152,7 @@ def test_scrub_descriptions_cleans_the_index_and_undo_restores_it(
 
     undone = runner.invoke(app, ["undo", "-c", str(config_file)])
     assert undone.exit_code == 0, undone.output
-    assert "3 index change(s) reverted" in undone.output
+    assert "3 index changes reverted" in undone.output
     row = row_for(cfg, "flyer.txt")
     assert (row.description, row.tags) == (RAW.description, RAW.tags)
     assert _found(cfg, "90000") == ["flyer.txt"]

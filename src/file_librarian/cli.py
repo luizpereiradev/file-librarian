@@ -5,6 +5,17 @@ Each command loads and validates the configuration, then calls one module:
 Every command but ``reprocess`` (which handles it) and ``status`` (which only
 reads) warns when organized files still use a category the configuration no
 longer has (RF-37).
+
+**Language** (#141). What a command prints for a person is in the
+configuration's ``language`` from the moment ``_load`` read it (``i18n.use``,
+the one rule ``i18n.language_of``); before that, and when the configuration
+cannot be read, it is English. Stays English, by design: ``--help`` (typer
+builds it at import, before any configuration is read, and it must match the
+README), ``--json`` and every machine format, ``flib mcp``, ``flib doctor``,
+``flib inspect`` and ``flib eval`` (diagnostics), the log files (a run's log, and
+whatever a run started by launchd prints, which goes to a log), and an
+unexpected error's report. ``_echo`` prints a message in the language of the
+moment, even one made at import.
 """
 
 from __future__ import annotations
@@ -29,6 +40,7 @@ from file_librarian import (
     catchup,
     credentials,
     embeddings,
+    i18n,
     keychain,
     locality,
     menubar,
@@ -57,9 +69,11 @@ from file_librarian.db.store import GROUPS, FileRow, MigrationError, Store
 from file_librarian.executor import ItemResult, RunReport, recover
 from file_librarian.extractors import ocr
 from file_librarian.extractors.origin import download_origin
-from file_librarian.fields import KINDS, format_amount, format_decimal
+from file_librarian.fields import KINDS, format_decimal
 from file_librarian.fix import FixError, fix_file
 from file_librarian.hashing import file_sha256, unit_manifest
+from file_librarian.i18n import Msg, english, formats, t
+from file_librarian.i18n.core import detail
 from file_librarian.locales import LOCALES, Language
 from file_librarian.lock import AlreadyRunningError, holder, instance_lock, reprocess_lock
 from file_librarian.models import FileStatus, RunTrigger, explain_review
@@ -125,7 +139,32 @@ def _root(
         ),
     ] = False,
 ) -> None:
-    pass
+    i18n.use(i18n.DEFAULT)  # until a command has read its configuration (``_load``)
+
+
+def _echo(text: str, *, err: bool = False) -> None:
+    """Print a line in the language of the moment: a message made earlier (a module
+    constant, made at import) is rendered again."""
+    typer.echo(text.text() if isinstance(text, Msg) else text, err=err)
+
+
+def _warn(text: str) -> None:
+    """``warning: <text>`` on stderr, in the language of the moment."""
+    _echo(t("term.warning", text=text), err=True)
+
+
+def _speak(cfg: Config | None) -> None:
+    """From now on, say things in ``cfg``'s language (English without one)."""
+    i18n.use(i18n.language_of(cfg))
+
+
+def _speak_from(config: Path | None) -> None:
+    """``_speak`` for a command that works without a configuration (``flib key``): the
+    language of the configuration at ``config`` if it can be read, else English."""
+    try:
+        _speak(load_config(config))
+    except ConfigError:
+        _speak(None)
 
 
 # --- Inspection ------------------------------------------------------------------
@@ -461,24 +500,24 @@ def status(
     ``--sensitive`` lists those files by path, here only: never in `flib doctor`,
     a notification or the MCP server.
     """
-    cfg = _load(config, warn_orphans=False)
+    cfg = _load(config, warn_orphans=False, speak=not as_json)
     if sensitive:
         try:
             found = status_mod.sensitive_files(cfg)
         except (status_mod.StatusError, sqlite3.Error) as exc:
-            _fatal(f"cannot read the index: {exc}")
+            _fatal(t("term.index.unreadable", error=str(exc)))
         for line in status_mod.render_sensitive(found):
             typer.echo(line)
         return
     try:
         state = status_mod.collect(cfg)
     except (status_mod.StatusError, sqlite3.Error) as exc:
-        _fatal(f"cannot read the index: {exc}")
+        _fatal(t("term.index.unreadable", error=str(exc)))
     if as_json:
         typer.echo(status_mod.to_json(state, cfg))
         return
     for line in status_mod.render(state, cfg):
-        typer.echo(line)
+        _echo(line)
 
 
 def _inspect_config(config: Path | None) -> Config | None:
@@ -600,18 +639,17 @@ KeyProviderOption = Annotated[
 
 def _key_spec(provider: str | None, config: Path | None) -> credentials.KeySpec:
     """The key to act on: ``--provider``, else the configured provider's, else Anthropic's."""
+    try:
+        cfg = load_config(config)
+    except ConfigError:
+        cfg = None
+    _speak(cfg)
     if provider is None:
-        try:
-            cfg = load_config(config)
-        except ConfigError:
-            cfg = None
         found = credentials.key_spec(cfg.provider) if cfg is not None else None
         return found or cast(credentials.KeySpec, credentials.spec_for("anthropic"))
     spec = credentials.spec_for(provider)
     if spec is None:
-        _fatal(
-            f"--provider must be anthropic, openai-compat or embeddings; {provider} takes no key"
-        )
+        _fatal(t("term.key.bad_provider", provider=provider))
     return spec
 
 
@@ -625,17 +663,14 @@ def key_set(provider: KeyProviderOption = None, config: ConfigOption = None) -> 
 
 def _save_key(spec: credentials.KeySpec) -> str | None:
     """Ask for the API key without echoing it and store it; the error, if any."""
-    value = typer.prompt(spec.label, hide_input=True).strip()
+    value = typer.prompt(t(f"term.key.label.{spec.provider}"), hide_input=True).strip()
     if spec.provider == "anthropic" and not value.startswith("sk-ant-"):
-        typer.echo("warning: Anthropic keys usually start with sk-ant-", err=True)
+        _warn(t("term.key.prefix"))
     try:
         keychain.write(value, spec.account)
     except (keychain.KeychainError, ValueError) as exc:
         return str(exc)
-    typer.echo(
-        f"Saved in the Keychain (service {keychain.SERVICE!r}, account {spec.account!r}). "
-        "Scheduled runs will use it."
-    )
+    typer.echo(t("term.key.saved", service=repr(keychain.SERVICE), account=repr(spec.account)))
     return None
 
 
@@ -645,16 +680,16 @@ def key_status(config: ConfigOption = None) -> None:
     cfg = _load(config)
     spec = credentials.key_spec(cfg.provider)
     if spec is None:
-        typer.echo(f"Provider {cfg.provider.name} takes no API key.")
+        typer.echo(t("term.key.none_needed", provider=cfg.provider.name))
         return
     found = credentials.resolve(cfg.provider)
     if found.value is None:
-        typer.echo(
-            f"No API key found ({spec.env_var}, Keychain, env_file). Run `flib key set"
-            + ("`." if spec.provider == "anthropic" else f" --provider {spec.provider}`.")
-        )
+        if spec.provider == "anthropic":
+            typer.echo(t("term.key.not_found", env=spec.env_var))
+        else:
+            typer.echo(t("term.key.not_found_for", env=spec.env_var, provider=spec.provider))
         raise typer.Exit(EXIT_ERROR)
-    typer.echo(f"Using the key from: {found.source} ({found.hint})")
+    typer.echo(t("term.key.using", source=found.source, hint=found.hint))
 
 
 @key_app.command("delete")
@@ -665,7 +700,7 @@ def key_delete(provider: KeyProviderOption = None, config: ConfigOption = None) 
         removed = keychain.delete(spec.account)
     except keychain.KeychainError as exc:
         _fatal(str(exc))
-    typer.echo("Removed from the Keychain." if removed else "There was no key in the Keychain.")
+    typer.echo(t("term.key.removed") if removed else t("term.key.none_there"))
 
 
 # --- Organizing, searching and undoing ----------------------------------------------
@@ -692,15 +727,19 @@ def simulate(config: ConfigOption = None) -> None:
 
 
 def _fatal(message: str) -> NoReturn:
-    typer.echo(f"error: {message}", err=True)
+    _echo(t("term.error", text=message), err=True)
     raise typer.Exit(EXIT_ERROR)
 
 
-def _load(config: Path | None, *, warn_orphans: bool = True) -> Config:
+def _load(config: Path | None, *, warn_orphans: bool = True, speak: bool = True) -> Config:
+    """The configuration, or the error and exit. ``speak``: what the command prints
+    from now on is in its language; ``False`` for output that stays English (``--json``,
+    the MCP server, a run started by launchd, whose output goes to a log)."""
     try:
         cfg = load_config(config)
     except ConfigError as exc:
         _fatal(str(exc))
+    _speak(cfg if speak else None)
     if warn_orphans:
         _warn_orphan_categories(cfg)
     return cfg
@@ -716,7 +755,7 @@ def _warn_orphan_categories(cfg: Config) -> None:
     except (sqlite3.Error, MigrationError, OSError):
         return  # the command itself reports a database it cannot use
     if orphans:
-        typer.echo(f"warning: {reprocess_mod.orphan_message(orphans)}", err=True)
+        _warn(reprocess_mod.orphan_message(orphans))
 
 
 def _pipeline(
@@ -735,7 +774,8 @@ def _pipeline(
     An automatic run first waits up to ``LOCK_WAIT_SECONDS`` for another run to end.
     ``None`` when another run still held the instance lock and this one gave way
     quietly (a catch-up, or a watch run); otherwise that is an error."""
-    cfg = _load(config_path)
+    # A run launchd started prints to a log (schedule.out.log, watch.out.log): English.
+    cfg = _load(config_path, speak=not (trigger.automatic and not simulate))
     scheduled = trigger.automatic and not simulate
     lock_wait = LOCK_WAIT_SECONDS if scheduled and not catch_up else 0.0
     try:
@@ -745,10 +785,10 @@ def _pipeline(
         )
     except AlreadyRunningError as exc:
         if catch_up:
-            _say(f"Not running again after the unlock: {exc}. That run takes care of them.")
+            _say(t("term.run.not_again", error=exc.args[0]))
             return None
         if trigger is RunTrigger.WATCH:
-            _say(f"Not running: {exc}. That run or the next change takes care of the new files.")
+            _say(t("term.run.not_running", error=exc.args[0]))
             return None
         _fatal(str(exc))
     except (ProviderError, ScanError) as exc:
@@ -756,7 +796,7 @@ def _pipeline(
             menubar_state.note_problem(cfg.database, "run_failed")
         _fatal(str(exc))
     if outcome.recovered:
-        typer.echo(f"Recovered {outcome.recovered} move(s) interrupted by an earlier crash.")
+        typer.echo(t("term.recovered", count=outcome.recovered))
     skipped = _skipped_lines(outcome.scan, cfg)
     cost = _cost_line(outcome.cost_usd, known=outcome.cost_known)
     hint = _access_hint(outcome.scan) if trigger.automatic else None
@@ -780,33 +820,24 @@ def _pipeline(
         if catch_up:
             summary.insert(0, catchup.CATCH_UP_LINE)
         if trigger is RunTrigger.WATCH and not catch_up:
-            summary.insert(0, "Watch run: something arrived in an input folder.")
+            summary.insert(0, t("term.run.watch_run"))
         if outcome.day_cap_reached:
             summary.extend(_day_cap_notice(cfg))
         if outcome.scan.future:
             summary.append(
-                f"note: {len(outcome.scan.future)} item(s) have a modification time in the "
-                "future (a wrong clock, an archive, a share); they were taken once they "
-                "stayed the same for the quiet time."
+                t("term.note", text=t("term.run.future", count=len(outcome.scan.future)))
             )
         if left_to is not None:
-            summary.append(
-                f"{len(locked)} file(s) protected while the Mac is locked were left for "
-                f"{left_to} (this watch run does not wait for the unlock)."
-            )
+            summary.append(t("term.run.left_to", count=len(locked), who=left_to))
         if will_wait:
             summary.append(catchup.WAITING_LINE.format(hours=hours, count=len(locked)))
         _print_report(
             outcome.report, cfg, skipped, cost, hint, summary, watch=trigger is RunTrigger.WATCH
         )
     if outcome.cached:
-        typer.echo(f"{outcome.cached} classification(s) reused from the cache at no cost.")
+        typer.echo(t("term.cached", count=outcome.cached))
     if outcome.embedding is not None and outcome.embedding.error:
-        typer.echo(
-            f"warning: semantic search: {outcome.embedding.error}; the files not embedded "
-            "are retried on the next run (or `flib search --reindex`).",
-            err=True,
-        )
+        _warn(t("term.run.embedding_failed", error=outcome.embedding.error))
     if will_wait and wait and outcome.report is not None:
         _wait_and_catch_up(config_path, cfg, outcome.report.run_id, locked, trigger)
     return outcome
@@ -834,7 +865,7 @@ def _watch(config_path: Path | None) -> None:
 
     Exits at once, with no run, when nothing new is ready (see ``scheduler.watch``).
     """
-    cfg = _load(config_path, warn_orphans=False)
+    cfg = _load(config_path, warn_orphans=False, speak=False)  # to watch.out.log
     logs = logs_dir(cfg.database)
     for name in ("watch.out.log", "watch.err.log"):  # names of files: never let them pile up
         trim(logs / name)
@@ -857,11 +888,15 @@ def _watch(config_path: Path | None) -> None:
     minutes = cfg.schedule.watch_settle_minutes
     if watched.pending:
         _say(
-            f"{watched.pending} item(s) are still downloading or changing (no change for "
-            f"{minutes} min, or 6 h passed); {_who_picks_up(cfg)} picks them up."
+            t(
+                "term.watch.pending",
+                count=watched.pending,
+                minutes=minutes,
+                who=_who_picks_up(cfg),
+            )
         )
     if watched.ended is watch_mod.Ended.STOPPED:
-        _say("Stopped while waiting for downloads to finish (SIGTERM).")
+        _say(t("term.watch.stopped"))
     last = outcomes[-1] if outcomes else None
     if last is None or last.report is None:
         return
@@ -872,14 +907,14 @@ def _watch(config_path: Path | None) -> None:
         _wait_and_catch_up(config_path, cfg, last.report.run_id, locked, RunTrigger.WATCH)
 
 
-def _who_picks_up(cfg: Config) -> str:
+def _who_picks_up(cfg: Config) -> Msg:
     fallback = cfg.schedule.watch_fallback_minutes
     if fallback:
-        return f"the watch agent's next start (at most {fallback} min later)"
-    return "the next change in the folder (or the daily run)"
+        return t("term.watch.next_start", minutes=fallback)
+    return t("term.watch.next_change")
 
 
-def _unlock_left_to(cfg: Config) -> str | None:
+def _unlock_left_to(cfg: Config) -> Msg | None:
     """Who files what a watch run skipped while the Mac was locked, when not the watch
     run itself (which would hold the watch agent while it waits): ``None`` if nobody."""
     try:
@@ -888,11 +923,9 @@ def _unlock_left_to(cfg: Config) -> str | None:
         return None
     fallback = state.watch_fallback_minutes
     if state.watch_paths and fallback:
-        return (
-            f"the watch agent's next start once the Mac is unlocked (at most {fallback} min later)"
-        )
+        return t("term.watch.next_start_unlocked", minutes=fallback)
     if state.time is not None and scheduler.daily_agent_loaded():
-        return "the daily run, which waits for the unlock"
+        return t("term.watch.daily_waits")
     return None
 
 
@@ -910,7 +943,7 @@ def _note_backlog(cfg: Config, watched: watch_mod.Watched, last: pipeline.Outcom
 
 def _say(line: str) -> None:
     """A line about the scheduled run's waiting, with the time: it goes to schedule.out.log."""
-    typer.echo(f"[{datetime.now().astimezone():%Y-%m-%d %H:%M}] {line}")
+    typer.echo(f"[{datetime.now().astimezone():%Y-%m-%d %H:%M}] {english(line)}")
 
 
 def _wait_and_catch_up(
@@ -935,7 +968,7 @@ def _wait_and_catch_up(
         if not held:
             note(catchup.NOT_WAITING_LINE)
             return
-        _say(f"Waiting up to {hours} h for the Mac to be unlocked (checking every minute).")
+        _say(t("term.watch.waiting_unlock", hours=hours))
         waited = catchup.wait_for_unlock(hours, partial(catchup.unlocked, locked))
     if waited is catchup.Waited.TIMED_OUT:
         note(catchup.TIMED_OUT_LINE.format(hours=hours))
@@ -953,7 +986,9 @@ def _periodic_summary(cfg: Config, scan: ScanResult) -> list[str]:
     try:
         return status_mod.after_scheduled_run(cfg, not_where_left=stuck, locked=locked)
     except Exception as exc:  # the run itself succeeded; the summary is a courtesy
-        return [f"warning: the periodic summary failed: {type(exc).__name__}: {exc}"]
+        return [
+            status_mod.warning(t("term.run.summary_failed", error=f"{type(exc).__name__}: {exc}"))
+        ]
 
 
 def _interactive() -> bool:
@@ -978,14 +1013,11 @@ def _duplicates_notice(cfg: Config, trigger: RunTrigger) -> str | None:
     return status_mod.duplicates_notice(cfg)
 
 
-def _cost_line(cost_usd: float, *, known: bool) -> str | None:
+def _cost_line(cost_usd: float, *, known: bool) -> Msg | None:
     """The provider cost for the summary and the run log; ``None`` when nothing was paid."""
     if not known:
-        return (
-            "Provider cost: unknown (no prices configured for this provider; "
-            "set provider.price_input_per_mtok and price_output_per_mtok)"
-        )
-    return f"Estimated provider cost: US$ {cost_usd:.4f}" if cost_usd else None
+        return t("term.cost_unknown")
+    return t("term.cost", cost=formats.later(formats.usd, cost_usd, 4)) if cost_usd else None
 
 
 def _short(path: Path, cfg: Config) -> str:
@@ -999,93 +1031,113 @@ def _short(path: Path, cfg: Config) -> str:
 _QUIET_SKIPS = {SkipReason.HIDDEN, SkipReason.MANAGED}
 
 
+def skip_reason(reason: SkipReason) -> Msg:
+    """A scanner's reason to skip an item, in the language in use (its English is the
+    value the run's log records, which ``status.count_skips`` reads)."""
+    return t(f"term.skip.{reason.name.lower()}")
+
+
 def _skipped_lines(scan: ScanResult, cfg: Config) -> list[str]:
     """Why items were left alone. Already-processed ones are only counted."""
     skipped = scan.skipped
-    lines = []
+    lines: list[str] = []
     for path, reason in skipped:
         if reason in _QUIET_SKIPS or reason in (SkipReason.KNOWN, SkipReason.NOT_ONLY):
             continue
-        detail = scan.details.get(path) if reason in _DETAILED else None
-        why = f"{reason.value}: {detail}" if detail else reason.value
+        found = scan.details.get(path) if reason in _DETAILED else None
+        why = skip_reason(reason)
+        if found:
+            why = t("term.skip.with_detail", reason=why, detail=str(found))
         if reason is SkipReason.TOO_RECENT:
-            left = scan.days_left.get(path, 1)
-            why = f"{reason.value} ({left} day{'s' if left != 1 else ''} left)"
+            left = t("term.skip.days_left", count=scan.days_left.get(path, 1))
+            why = t("term.skip.too_recent_left", reason=why, left=left)
         where = str(path) if reason is SkipReason.INPUT_UNREADABLE else _short(path, cfg)
-        lines.append(f"  skip    {where}  ({why})")
+        lines.append(t("term.row.skip", where=where, why=why))
     known = sum(1 for _, reason in skipped if reason is SkipReason.KNOWN)
     if known:
-        lines.append(f"  ({known} item(s) already processed earlier were left alone)")
+        lines.append(t("term.run.known", count=known))
     outside = sum(1 for _, reason in skipped if reason is SkipReason.NOT_ONLY)
     if outside:
-        lines.append(f"  ({outside} item(s) matching none of their input's `only` were left alone)")
+        lines.append(t("term.run.outside_only", count=outside))
     unreadable = sum(1 for _, reason in skipped if reason is SkipReason.INPUT_UNREADABLE)
     if unreadable:
-        lines.append(
-            f"warning: {unreadable} input folder(s) could not be read and were skipped; the "
-            "others were organized. `flib schedule` checks folder access."
-        )
+        lines.append(status_mod.warning(t("term.run.inputs_unreadable", count=unreadable)))
     return lines
 
 
 _DETAILED = {SkipReason.UNREADABLE, SkipReason.INPUT_UNREADABLE}
 
 
-ACCESS_HINT = (
-    "hint: macOS denied the scheduled run access to some files. Give flib-python Full Disk "
-    "Access (System Settings > Privacy & Security > Full Disk Access) and run `flib schedule` "
-    "to check (documentation: Getting started, Run it every day)."
-)
+ACCESS_HINT = "term.run.access_hint"
+"""The id of the hint after a scheduled run was denied a file."""
 
 
-def _access_hint(scan: ScanResult) -> str | None:
+def _access_hint(scan: ScanResult) -> Msg | None:
     """One line when a scheduled run was denied a file, however many were."""
-    return ACCESS_HINT if any(d.denied for d in scan.details.values()) else None
+    return t(ACCESS_HINT) if any(d.denied for d in scan.details.values()) else None
 
 
 def _print_plan(plan: Plan, deferred: int, cfg: Config, skipped: list[str]) -> None:
     if not plan.items:
-        typer.echo("Nothing to do: no new files.")
+        typer.echo(t("term.simulate.nothing"))
     for item in plan.items:
         source = _short(item.context.path, cfg)
         if item.destination is None:
-            typer.echo(f"  keep    {source}  ({item.reason})")
+            typer.echo(t("term.row.keep", source=source, why=detail(item.reason)))
         elif item.status is FileStatus.DUPLICATE and item.original is not None:
             typer.echo(_dup_line(source, item.destination, item.original, cfg))
         else:
-            typer.echo(f"  move    {source}  ->  {_short(item.destination, cfg)}  ({item.reason})")
+            destination = _short(item.destination, cfg)
+            typer.echo(
+                t("term.row.move", source=source, destination=destination, why=detail(item.reason))
+            )
     for line in skipped:
-        typer.echo(line)
+        _echo(line)
     moves = len(plan.moves())
     duplicates = sum(1 for i in plan.moves() if i.status is FileStatus.DUPLICATE)
-    among = f" ({duplicates} duplicate(s) to {cfg.duplicates_folder})" if duplicates else ""
-    typer.echo(
-        f"Simulation: {moves} would move{among}, {len(plan.items) - moves} would stay. "
-        "Nothing changed."
-    )
+    stay = t("term.simulate.stay", count=len(plan.items) - moves)
+    if duplicates:
+        among = t("term.simulate.duplicates", count=duplicates, folder=cfg.duplicates_folder)
+        typer.echo(t("term.simulate.summary_duplicates", count=moves, duplicates=among, stay=stay))
+    else:
+        typer.echo(t("term.simulate.summary", count=moves, stay=stay))
     if deferred:
-        typer.echo(f"{deferred} more file(s) wait for a later run (file or cost limit).")
+        typer.echo(t("term.simulate.deferred", count=deferred))
 
 
-def _dup_line(source: str, destination: Path, original: Path, cfg: Config) -> str:
+def _dup_line(source: str, destination: Path, original: Path, cfg: Config) -> Msg:
     """A duplicate moved (or to be moved) to the duplicates folder (RF-21)."""
-    return (
-        f"  dup     {source}  ->  {_short(destination, cfg)}  "
-        f"(same content as {_short(original, cfg)})"
+    return t(
+        "term.row.dup",
+        source=source,
+        destination=_short(destination, cfg),
+        original=_short(original, cfg),
     )
 
 
-def _moved_line(source: str, item: ItemResult, cfg: Config) -> str:
+def _moved_line(source: str, item: ItemResult, cfg: Config) -> Msg:
     """A moved item; one sent to review says why."""
     if item.destination is not None and item.original is not None:
         return _dup_line(source, item.destination, item.original, cfg)
-    line = f"  moved   {source}  ->  {_short(item.destination, cfg) if item.destination else '?'}"
-    return line + (f"  (review: {item.note})" if item.status is FileStatus.REVIEW else "")
+    destination = _short(item.destination, cfg) if item.destination else "?"
+    if item.status is FileStatus.REVIEW:
+        why = detail(item.note or "")
+        return t("term.row.moved_review", source=source, destination=destination, why=why)
+    return t("term.row.moved", source=source, destination=destination)
 
 
-def _label(status: FileStatus) -> str:
-    """A status as a column eight wide, with a space after a longer one (``sensitive``)."""
-    return f"{status.value:<8}" if len(status.value) < 8 else f"{status.value} "
+def _warning_row(destination: str, warning: str) -> Msg:
+    """A moved item's warnings (a Finder tag not set...), each in the words it knows."""
+    said = [detail(part) for part in warning.split("; ")]
+    joined: Msg = t("term.text", text=said[0])
+    for part in said[1:]:
+        joined = t("term.then", first=joined, second=part)
+    return t("term.row.warning", destination=destination, warning=joined)
+
+
+def _status_row(status: FileStatus, source: str, note: str | None) -> Msg:
+    """An item left where it was, under its status (``sensitive``, ``failed``...)."""
+    return t(f"term.row.{status.value}", source=source, why=detail(note or ""))
 
 
 def _print_report(
@@ -1098,38 +1150,45 @@ def _print_report(
     *,
     watch: bool = False,
 ) -> None:
-    lines = []
+    lines: list[str] = []
     for item in report.items:
         source = _short(item.source, cfg)
         if item.destination is not None:
             lines.append(_moved_line(source, item, cfg))
             if item.warning:
-                lines.append(f"  warning {_short(item.destination, cfg)}  ({item.warning})")
+                lines.append(_warning_row(_short(item.destination, cfg), item.warning))
         else:
-            lines.append(f"  {_label(item.status)}{source}  ({item.note})")
+            lines.append(_status_row(item.status, source, item.note))
     lines.extend(skipped)
     lines.append(
-        f"Run {report.run_id}: {report.count(FileStatus.ORGANIZED, moved=True)} organized, "
-        f"{report.count(FileStatus.REVIEW, moved=True)} to review, "
-        f"{report.count(FileStatus.DUPLICATE, moved=True)} duplicate(s) set aside, "
-        f"{report.count(FileStatus.SENSITIVE)} sensitive left in place, "
-        f"{report.errors} failed, {report.count(FileStatus.SKIPPED)} skipped."
+        t(
+            "term.run.summary",
+            run=str(report.run_id),
+            organized=t("activity.organized", count=report.count(FileStatus.ORGANIZED, moved=True)),
+            review=t("activity.to_review", count=report.count(FileStatus.REVIEW, moved=True)),
+            duplicates=t(
+                "activity.duplicates", count=report.count(FileStatus.DUPLICATE, moved=True)
+            ),
+            sensitive=t("term.run.sensitive", count=report.count(FileStatus.SENSITIVE)),
+            failed=t("activity.failed", count=report.errors),
+            skipped=t("undo.skipped_count", count=report.count(FileStatus.SKIPPED)),
+        )
     )
     if report.deferred:
-        lines.append(f"{report.deferred} more file(s) wait for the next run.")
+        lines.append(t("term.run.deferred", count=report.deferred))
     if cost:
         lines.append(cost)
     if hint:
         lines.append(hint)
     lines.extend(summary or ())
     for line in lines:
-        typer.echo(line)
+        _echo(line)
     if report.run_id is not None:
         try:
-            log = write_log(cfg.database, report.run_id, lines, watch=watch)
-            typer.echo(f"Log: {log}")
+            log = write_log(cfg.database, report.run_id, lines, watch=watch)  # in English
+            typer.echo(t("term.log", path=str(log)))
         except OSError as exc:
-            typer.echo(f"warning: could not write the run log: {exc}", err=True)
+            _warn(t("term.log_failed", error=str(exc)))
 
 
 def _search_filters(
@@ -1154,11 +1213,8 @@ def _search_filters(
         _fatal(str(exc))
 
 
-NOTHING_TO_SEARCH = (
-    "give words to search for, a filter, or both. Filters: --category, --ext, --since, "
-    "--until (when flib processed it), --issuer, --kind, --min-amount, --max-amount, "
-    "--currency, --due-before, --due-after, --period. --sum alone adds up everything."
-)
+NOTHING_TO_SEARCH = "term.search.nothing"
+"""The id of the refusal of a search with no words and no filter."""
 
 
 @app.command()
@@ -1272,7 +1328,7 @@ def search(
     amounts of every match instead (never mixing currencies), --by groups them;
     --sum with no words or filter adds up every filed document.
     """
-    cfg = _load(config)
+    cfg = _load(config, speak=not as_json)
     fields: dict[str, Any] = {
         "issuer": issuer,
         "kinds": kind,
@@ -1292,15 +1348,15 @@ def search(
         or any(v is not None for k, v in fields.items() if k != "kinds")
     )
     if by is not None and not total:
-        _fatal("--by goes with --sum")
+        _fatal(t("term.search.by_alone"))
     if total and duplicates:
-        _fatal("--sum never counts duplicates; leave out --duplicates")
+        _fatal(t("term.search.sum_duplicates"))
     if reindex:
         _reindex(cfg)
         if not query.strip() and not has_filters:
             return
     if not query.strip() and not has_filters and not total:
-        _fatal(NOTHING_TO_SEARCH)
+        _fatal(t(NOTHING_TO_SEARCH))
     use_semantic = cfg.search.semantic.default if semantic is None else semantic
     configured = [c.name for c in cfg.categories]
     hits: list[SearchHit] = []
@@ -1330,25 +1386,26 @@ def search(
                     store, query, filters=filters, limit=limit, include_duplicates=duplicates
                 )
     if notice:
-        typer.echo(f"note: {notice}", err=True)
+        typer.echo(t("term.note", text=notice), err=True)
     # Results the relevance floor left out are only mentioned when none is left.
     if as_json:
         if weak and not hits:
-            typer.echo("note: no close matches; try other words or --no-semantic", err=True)
+            typer.echo(t("term.note", text=t("term.search.no_close")), err=True)
         typer.echo(search_json(hits))
         return
     if not hits:
         if weak:
-            typer.echo("No close matches; try other words or --no-semantic.")
+            typer.echo(t("term.search.no_close_matches"))
         else:
-            typer.echo("No matches.")
+            typer.echo(t("term.search.no_matches"))
         return
     for hit in hits:
-        where = hit.path if hit.exists else f"{hit.path}  (missing: moved by hand?)"
+        where = str(hit.path) if hit.exists else t("term.search.missing", path=str(hit.path))
         label = hit.category or hit.status
-        typer.echo(f"{where}\n  [{label}] was {hit.original_name}")
+        typer.echo(where)
+        typer.echo(t("term.search.was", label=label, name=hit.original_name))
         if hit.duplicate_of is not None:
-            typer.echo(f"  duplicate of {hit.duplicate_of}")
+            typer.echo(t("term.search.duplicate_of", path=str(hit.duplicate_of)))
         line = hit.fields_line()
         if line:
             typer.echo(f"  {line}")
@@ -1368,9 +1425,9 @@ def _sum(
 ) -> None:
     """``flib search --sum``: totals of the matches' amounts, per currency (and group)."""
     if by is not None and by not in GROUPS:
-        _fatal(f"--by must be one of {', '.join(GROUPS)}, not {by!r}")
+        _fatal(t("term.search.bad_by", groups=", ".join(GROUPS), value=repr(by)))
     if semantic:
-        typer.echo("note: --sum matches the words only, not by meaning", err=True)
+        typer.echo(t("term.note", text=t("term.search.sum_words")), err=True)
     configured = [c.name for c in cfg.categories]
     sums = Sums(by, [], [], 0)
     if not cfg.database.exists():
@@ -1383,38 +1440,54 @@ def _sum(
         typer.echo(json.dumps(sums.to_dict(), ensure_ascii=False, indent=2))
         return
     if not sums.totals:
-        typer.echo("No amounts among the matches.")
+        typer.echo(t("term.sum.none"))
     if sums.groups:
-        typer.echo(f"Totals by {by}:")
-        width = max(len(t.group or "") for t in sums.groups)
-        width = min(max(width, len("(none)")), 40)
-        for item in sums.groups:
-            label = (item.group or "(none)")[:40]
-            amount = format_amount(item.total_minor, item.currency)
-            typer.echo(f"  {label:<{width}}  {amount:>18}  ({item.files} file(s))")
+        typer.echo(t("term.sum.by", by=t(f"term.sum.group.{by}")))
+        none = t("term.sum.no_group")
+        labels = [formats.clip(item.group or none, 40) for item in sums.groups]
+        width = min(max(max(formats.width(label) for label in labels), formats.width(none)), 40)
+        for label, item in zip(labels, sums.groups, strict=True):
+            amount = formats.amount(item.total_minor, item.currency)
+            files = t("term.sum.files", count=item.files)
+            typer.echo(
+                t(
+                    "term.sum.row",
+                    label=formats.ljust(label, width),
+                    amount=formats.rjust(amount, 18),
+                    files=files,
+                )
+            )
     if sums.totals:
-        overall = "; ".join(
-            f"{format_amount(t.total_minor, t.currency)} ({t.files} file(s))" for t in sums.totals
-        )
-        typer.echo(f"Total: {overall}")
+        overall = [
+            t(
+                "term.amount_files",
+                amount=formats.amount(total.total_minor, total.currency),
+                files=t("term.sum.files", count=total.files),
+            )
+            for total in sums.totals
+        ]
+        joined = overall[0]
+        for part in overall[1:]:
+            joined = t("term.then", first=joined, second=part)
+        typer.echo(t("term.sum.total", overall=joined))
     if sums.without_amount:
-        typer.echo(f"{sums.without_amount} matching file(s) state no amount; not counted.")
+        typer.echo(t("term.sum.without_amount", count=sums.without_amount))
 
 
 def _reindex(cfg: Config) -> None:
     """``flib search --reindex``: embed what is missing or stale, under the instance lock."""
     semantic = cfg.search.semantic
     if not semantic.enabled:
-        _fatal("semantic search is off; set search.semantic.enabled: true first")
+        _fatal(t("term.reindex.off"))
     try:
         with instance_lock(cfg.database), Store.open(cfg.database) as store:
             report = embeddings.refresh(store, cfg)
     except AlreadyRunningError as exc:
         _fatal(str(exc))
-    where = "this Mac" if is_loopback_url(semantic.base_url) else semantic.base_url
-    typer.echo(f"Embedded {report.embedded} file(s) with {semantic.model} ({where}).")
+    where = t("term.this_mac") if is_loopback_url(semantic.base_url) else semantic.base_url
+    typer.echo(t("term.reindex.done", count=report.embedded, model=semantic.model, where=where))
     if report.error:
-        _fatal(f"{report.error}; {report.pending} file(s) still without an embedding")
+        _fatal(t("term.reindex.failed", error=report.error, count=report.pending))
 
 
 @app.command()
@@ -1427,7 +1500,8 @@ def undo(
 ) -> None:
     """Revert the last run, a given run, or a single file."""
     if file is not None and run_id is not None:
-        _fatal("use either --file or --run, not both")
+        _speak_from(config)
+        _fatal(t("term.undo.both"))
     cfg = _load(config)
     try:
         with instance_lock(cfg.database), Store.open(cfg.database) as store:
@@ -1440,15 +1514,21 @@ def undo(
     except (NothingToUndoError, AlreadyRunningError) as exc:
         _fatal(str(exc))
     if recovered:
-        typer.echo(f"Recovered {recovered} move(s) interrupted by an earlier crash.")
+        typer.echo(t("term.recovered", count=recovered))
     for dst, src in report.restored:
-        typer.echo(f"  restored  {_short(dst, cfg)}  ->  {src}")
+        typer.echo(t("term.undo.row.restored", source=_short(dst, cfg), destination=str(src)))
     for path, reason in report.skipped:
-        typer.echo(f"  skipped   {_short(path, cfg)}  ({reason})")
+        typer.echo(t("term.undo.row.skipped", path=_short(path, cfg), why=detail(reason)))
     for path, warning in report.warnings:
-        typer.echo(f"  warning   {_short(path, cfg)}  ({warning})")
-    reverted = f", {report.reverted} index change(s) reverted" if report.reverted else ""
-    typer.echo(f"Undo: {len(report.restored)} restored, {len(report.skipped)} skipped{reverted}.")
+        typer.echo(t("term.undo.row.warning", path=_short(path, cfg), why=detail(warning)))
+    restored = t("undo.restored", count=len(report.restored))
+    skipped = t("undo.skipped_count", count=len(report.skipped))
+    if report.reverted:
+        reverted = t("undo.reverted", count=report.reverted)
+        typer.echo(t("term.undo.summary_reverted", restored=restored, skipped=skipped,
+                     reverted=reverted))  # fmt: skip
+    else:
+        typer.echo(t("term.undo.summary", restored=restored, skipped=skipped))
 
 
 @app.command()
@@ -1480,7 +1560,8 @@ def fix(
     """
     if done is not None:
         if category is not None or name is not None:
-            _fatal("--done and --not-done go alone, without --category or --name")
+            _speak_from(config)
+            _fatal(t("term.fix.done_alone"))
         _settle(config, file, done=done)
         return
     cfg = _load(config)
@@ -1490,15 +1571,16 @@ def fix(
             report = fix_file(cfg, store, file, category=category, name=name)
     except (FixError, AlreadyRunningError) as exc:
         _fatal(str(exc))
-    typer.echo(f"  moved   {_short(report.source, cfg)}  ->  {_short(report.destination, cfg)}")
+    source, destination = _short(report.source, cfg), _short(report.destination, cfg)
+    typer.echo(t("term.row.moved", source=source, destination=destination))
     if report.category is not None:
         old, new = report.category
-        typer.echo(f"  learned category: {old or '-'} -> {new}")
+        typer.echo(t("term.fix.learned_category", old=old or "-", new=new))
     if report.name is not None:
-        typer.echo(f"  learned name: {report.name[0]} -> {report.name[1]}")
+        typer.echo(t("term.fix.learned_name", old=report.name[0], new=report.name[1]))
     for warning in report.warnings:
-        typer.echo(f"  warning {warning}")
-    typer.echo(f"Fixed in run {report.run_id}; `flib undo` reverts it.")
+        typer.echo(t("term.fix.warning", warning=detail(warning)))
+    typer.echo(t("term.fix.done", run=str(report.run_id)))
 
 
 def _settle(config: Path | None, file: Path, *, done: bool) -> None:
@@ -1510,9 +1592,10 @@ def _settle(config: Path | None, file: Path, *, done: bool) -> None:
             report = due_mod.settle(store, file, done=done)
     except (due_mod.DueError, AlreadyRunningError) as exc:
         _fatal(str(exc))
-    what = "done" if report.done else "not done (open again)"
-    typer.echo(f"  marked {what}  {_short(report.path, cfg)}  (due {report.due_date})")
-    typer.echo(f"Recorded in run {report.run_id}; `flib undo` reverts it.")
+    marked = "term.fix.marked_done" if report.done else "term.fix.marked_open"
+    due_date = formats.day_text(report.due_date)
+    typer.echo(t(marked, path=_short(report.path, cfg), due=due_date))
+    typer.echo(t("term.fix.recorded", run=str(report.run_id)))
 
 
 @app.command()
@@ -1559,7 +1642,7 @@ def due(
     ahead that are not marked done (`flib fix PATH --done`), soonest first, with
     totals per currency. It only reads: no lock, and it works before the first run.
     """
-    cfg = _load(config, warn_orphans=False)
+    cfg = _load(config, warn_orphans=False, speak=not as_json)
     try:
         query = due_mod.make_query(
             within=within, overdue=overdue, include_all=show_all, issuer=issuer, kinds=kind
@@ -1610,12 +1693,13 @@ def schedule(
 ) -> None:
     """Run flib every day at a fixed time, or as files arrive (launchd agents), and check
     it can work."""
+    _speak_from(config or scheduler.scheduled_config())
     if mode is not None and mode not in scheduler.MODES:
-        _fatal("--mode must be daily, watch or both")
+        _fatal(t("term.schedule.bad_mode"))
     if remove:
         removed = scheduler.remove()
         notifier.remove()
-        typer.echo("Schedule removed." if removed else "Nothing was scheduled.")
+        typer.echo(t("term.schedule.removed") if removed else t("term.schedule.nothing_removed"))
         return
     if show:
         _print_schedule_status()
@@ -1627,7 +1711,7 @@ def schedule(
     if refresh:
         _refresh_menu(quiet=True)
         if not current.installed:
-            typer.echo("Nothing is scheduled; nothing to refresh.")
+            typer.echo(t("term.schedule.nothing_to_refresh"))
             return
         config = config or scheduler.scheduled_config()
         at = at or current.time
@@ -1643,7 +1727,7 @@ def schedule(
     try:
         when = ScheduleConfig(time=at).time if at else cfg.schedule.time
     except ValueError:
-        _fatal("--at must be a 24-hour time like 12:30")
+        _fatal(t("term.schedule.bad_at"))
     try:
         _install_schedule(path, cfg, when, save_key, mode or "daily")
     except scheduler.ScheduleError as exc:
@@ -1658,61 +1742,52 @@ def _install_schedule(
     """Install the agents of ``mode`` for the configuration at ``path``; raises
     ``ScheduleError``."""
     if not scheduler.is_installed_tool():
-        typer.echo(
-            "warning: flib is running from a development environment; the schedule will "
-            "depend on this folder. Install it with ./scripts/install.sh and run "
-            "`flib schedule` again from the installed command.",
-            err=True,
-        )
+        _warn(t("term.schedule.development"))
     _ensure_key_for_schedule(cfg, save_key)
     _ensure_claude_for_schedule(cfg)
     installed = scheduler.install_for(path, cfg, when, mode)
     if mode in ("daily", "both"):
-        typer.echo(f"Daily run scheduled at {when} ({installed[0]}).")
-        typer.echo("If the Mac is asleep then, it runs on wake.")
+        typer.echo(t("term.schedule.daily", time=when, plist=str(installed[0])))
+        typer.echo(t("term.schedule.on_wake"))
     if mode in ("watch", "both"):
         typer.echo(
-            f"Watch mode on ({installed[-1]}): flib runs when something arrives in "
-            f"{len(cfg.input_paths)} input folder(s), at most once every "
-            f"{cfg.schedule.watch_min_interval_minutes} min, once downloads finish."
+            t(
+                "term.schedule.watch_on",
+                plist=str(installed[-1]),
+                count=len(cfg.input_paths),
+                minutes=cfg.schedule.watch_min_interval_minutes,
+            )
         )
-        typer.echo(
-            "macOS watches the top level of each input folder only, which is all flib "
-            "organizes anyway."
-        )
+        typer.echo(t("term.schedule.top_level"))
         fallback = cfg.schedule.watch_fallback_minutes
         if fallback:
-            typer.echo(f"It also looks every {fallback} min, for anything a change did not show.")
+            typer.echo(t("term.schedule.fallback", minutes=fallback))
         if mode == "watch":
-            typer.echo(WATCH_ONLY_NOTE)
+            _echo(WATCH_ONLY_NOTE)
         for line in status_mod.cost_cap_lines(cfg):
-            typer.echo(line, err=line.startswith("warning"))
+            _echo(line, err=status_mod.is_warning(line))
     _prepare_notifier(cfg)
-    typer.echo("`flib schedule --remove` stops it.")
+    typer.echo(t("term.schedule.remove_hint"))
 
 
 def _prepare_notifier(cfg: Config) -> None:
     """Build or refresh flib's notifier app; never fails the schedule (``notifier``)."""
     problem = notifier.ensure()
     if problem is not None:
-        typer.echo(
-            f"note: notifications will show as Script Editor ({problem}); "
-            "`flib schedule --refresh` tries again.",
-            err=True,
-        )
+        typer.echo(t("term.note", text=t("term.schedule.script_editor", problem=problem)),
+                   err=True)  # fmt: skip
         return
     logs = logs_dir(cfg.database)
-    if cfg.summary.notify and not notifier.introduced(logs) and notifier.introduce(logs) is None:
-        typer.echo(
-            'Notifications come from "file-librarian": if macOS asks, allow them '
-            "(System Settings > Notifications)."
-        )
+    if (
+        cfg.summary.notify
+        and not notifier.introduced(logs)
+        and notifier.introduce(logs, language=i18n.language_of(cfg)) is None
+    ):
+        typer.echo(t("term.schedule.allow_notifications"))
 
 
-WATCH_ONLY_NOTE = (
-    "Note: the periodic summary and the due reminders come only after the daily run; "
-    "`flib schedule --mode both` keeps both."
-)
+WATCH_ONLY_NOTE = t("term.schedule.watch_only")
+"""Said when watch mode replaces the daily run (rendered again when printed)."""
 
 
 def _print_schedule_status() -> None:
@@ -1721,34 +1796,34 @@ def _print_schedule_status() -> None:
     except scheduler.ScheduleError as exc:
         _fatal(str(exc))
     if not state.installed:
-        typer.echo("No daily run is scheduled. Run `flib schedule` to set one up.")
+        typer.echo(t("term.schedule.status_none"))
         return
     stale = _stale_watch_note(state)
-    loaded = "active" if state.loaded else "installed but not loaded (run `flib schedule` again)"
-    typer.echo(f"Mode: {state.mode}")
+    loaded = t("term.schedule.active") if state.loaded else t("term.schedule.not_loaded")
+    typer.echo(t("term.schedule.mode", mode=state.mode))
     if state.time is not None:
-        typer.echo(f"Daily run at {state.time}: {loaded}")
+        typer.echo(t("term.schedule.daily_at", time=state.time, state=loaded))
     if state.watch_paths:
-        fallback = (
-            f", and every {state.watch_fallback_minutes} min"
-            if state.watch_fallback_minutes
-            else ""
-        )
-        typer.echo(
-            f"Watch: {loaded}; at most once every {state.watch_interval_minutes} min, "
-            f"when one of these changes (top level only){fallback}:"
-        )
+        if state.watch_fallback_minutes:
+            typer.echo(
+                t(
+                    "term.schedule.watching_fallback",
+                    state=loaded,
+                    minutes=state.watch_interval_minutes,
+                    fallback=state.watch_fallback_minutes,
+                )
+            )
+        else:
+            typer.echo(
+                t("term.schedule.watching", state=loaded, minutes=state.watch_interval_minutes)
+            )
         for folder in state.watch_paths:
             typer.echo(f"  {folder}")
-    typer.echo(f"  runs: {' '.join(state.program)}")
+    typer.echo(t("term.schedule.runs", program=" ".join(state.program)))
     if stale:
-        typer.echo(f"warning: {stale}", err=True)
+        _warn(stale)
     if not state.interpreter_current:
-        typer.echo(
-            "warning: flib's interpreter copy is missing or out of date (Python or flib was "
-            "updated). Run `flib schedule --refresh`; macOS may ask for access again.",
-            err=True,
-        )
+        _warn(t("term.schedule.interpreter_stale"))
 
 
 def _stale_watch_note(state: scheduler.Status) -> str | None:
@@ -1770,10 +1845,7 @@ def _ensure_key_for_schedule(cfg: Config, save_key: bool | None) -> None:
     found = credentials.resolve(cfg.provider)
     if found.value is None:
         if spec.provider == "anthropic":
-            typer.echo(
-                "warning: no API key found; the daily run will fail until you run `flib key set`.",
-                err=True,
-            )
+            _warn(t("term.schedule.no_key"))
         return  # openai-compat: a server that needs no key is fine
     if found.source != "environment":
         return  # Keychain or env_file: launchd can read those
@@ -1784,21 +1856,15 @@ def _ensure_key_for_schedule(cfg: Config, save_key: bool | None) -> None:
     if in_keychain:
         return
     if save_key is None:
-        save_key = typer.confirm(
-            "The API key is only in this shell's environment, which the daily run cannot "
-            "see. Save it to the macOS Keychain?",
-            default=True,
-        )
+        save_key = typer.confirm(t("term.schedule.save_key"), default=True)
     if save_key:
         try:
             keychain.write(found.value, spec.account)
-            typer.echo("API key saved to the Keychain.")
+            typer.echo(t("term.schedule.key_saved"))
         except (keychain.KeychainError, ValueError) as exc:
-            typer.echo(f"warning: could not save the key: {exc}", err=True)
+            _warn(t("term.schedule.key_not_saved", error=str(exc)))
     else:
-        typer.echo(
-            "warning: the daily run will not find the API key; see `flib key set`.", err=True
-        )
+        _warn(t("term.schedule.key_not_found"))
 
 
 def _ensure_claude_for_schedule(cfg: Config) -> None:
@@ -1811,44 +1877,29 @@ def _ensure_claude_for_schedule(cfg: Config) -> None:
         return
     here = claude_code.find_claude(cfg.provider)
     if here is None:
-        typer.echo(
-            "warning: Claude Code was not found; the daily run will fail until you install "
-            "it or set provider.command.",
-            err=True,
-        )
+        _warn(t("term.schedule.no_claude"))
         return
-    typer.echo(
-        f"warning: the daily run cannot see this shell's PATH and will not find {here}. "
-        f"Add `command: {here}` under `provider:` in the configuration.",
-        err=True,
-    )
+    _warn(t("term.schedule.claude_path", path=str(here)))
 
 
 def _report_access(config_path: Path) -> bool:
     """Run the access check and explain any denial; ``False`` when macOS blocks a folder."""
-    typer.echo("Checking folder access as the scheduled run will see it...")
+    typer.echo(t("term.access.checking"))
     try:
         report = scheduler.check_access(config_path)
     except scheduler.ScheduleError as exc:
-        typer.echo(f"warning: {exc}", err=True)
+        _warn(str(exc))
         return True
+    # The check's report is data from the child process (JSON): "ok", or English words.
     denied = {folder: state for folder, state in report.items() if state != "ok"}
     for folder, state in report.items():
-        typer.echo(f"  {folder}: {state}")
+        shown = t("term.access.ok") if state == "ok" else detail(state)
+        typer.echo(f"  {folder}: {shown}")
     if denied:
         binary = scheduler.dedicated_interpreter()
-        typer.echo(
-            "\nmacOS blocks the scheduled run from these folders. Open System Settings > "
-            "Privacy & Security > Full Disk Access, click +, press Cmd+Shift+G and add:\n"
-            f"  {binary}\n"
-            "This is flib's own copy of Python, so the access covers flib only, not your other "
-            "Python projects. macOS guards the Desktop, Documents and Downloads one by one; "
-            "Full Disk Access covers them all at once. Then run `flib schedule` again to "
-            "re-check (docs/troubleshooting.md).",
-            err=True,
-        )
+        typer.echo("\n" + t("term.access.denied", binary=str(binary)), err=True)
         return False
-    typer.echo("Access OK: the scheduled runs can read every input folder.")
+    typer.echo(t("term.access.all_ok"))
     return True
 
 
@@ -1870,7 +1921,7 @@ def check_access(
 @app.command()
 def reconcile(config: ConfigOption = None) -> None:
     """Update the index for files moved, renamed or deleted by hand. Moves nothing."""
-    cfg = _load(config)
+    cfg = _load(config, speak=False)  # English until it is translated (#141)
     try:
         with instance_lock(cfg.database), Store.open(cfg.database) as store:
             # flib's own interrupted moves are finished first, never taken for the user's.
@@ -2000,7 +2051,7 @@ def init(
         answers = _ask_answers(ask, local=local)
         onboarding.write_config(path, onboarding.render_config(answers))
         typer.echo(f"\nWrote {path} (only you can read it). `flib check-config` validates it.")
-    cfg = _load(path)
+    cfg = _load(path, speak=False)  # English until it is translated (#141)
     typer.echo("")
     if _provider_ready(cfg, ask) and sample:
         _trial(cfg, sample, ask)
@@ -2443,7 +2494,7 @@ def _offer_menu(path: Path, cfg: Config, ask: _Asker) -> None:
 @app.command()
 def mcp(config: ConfigOption = None) -> None:
     """Serve the library to AI assistants: a local MCP server over stdio."""
-    cfg = _load(config)
+    cfg = _load(config, speak=False)  # its tool results and errors stay English
     try:
         # The SDK is an optional extra, and loads only for this command.
         from file_librarian.mcp_server import serve
@@ -2487,8 +2538,8 @@ def ui(
             page=str(open_page),
             port=port,
             browser=not no_browser,
-            echo=typer.echo,
-            warn=lambda line: typer.echo(line, err=True),
+            echo=_echo,
+            warn=lambda line: _echo(line, err=True),
             config_path=config or default_config_path(),
         )
     except ui_server.UiError as exc:
@@ -2524,16 +2575,15 @@ def menu(
     downloaded. The menu shows counts only, never a file name. `--remove` takes
     it away again.
     """
+    _speak_from(config or _menu_config())
     if sum((install, remove, show, refresh, organize)) > 1:
-        _fatal("choose one of --install, --remove, --status and --refresh")
+        _fatal(t("term.menu.choose_one"))
     if remove:
         try:
             found = menubar.remove()
         except menubar.MenuError as exc:
-            _fatal(f"{exc}; remove it by hand or run `flib menu --remove` again")
-        typer.echo(
-            "Removed from the menu bar." if found else "The menu bar item was not installed."
-        )
+            _fatal(t("term.menu.not_removed", error=str(exc)))
+        typer.echo(t("term.menu.removed") if found else t("term.menu.was_not_installed"))
         return
     if show:
         _print_menu_status()
@@ -2549,36 +2599,34 @@ def menu(
         raise typer.Exit(EXIT_ERROR)
 
 
-MENU_NEEDS_TOOLS = (
-    "the menu bar item cannot be built on this Mac ({missing}); `flib status` and the "
-    "notifications keep working without it"
-)
+def _menu_config() -> Path | None:
+    """The configuration the menu bar item was installed for, if it is."""
+    with contextlib.suppress(Exception):
+        target = menubar.read_target()
+        return None if target is None else target.config
+    return None
+
+
+MENU_NEEDS_TOOLS = "term.menu.needs_tools"
+"""The id of what is said when this Mac lacks a tool the menu bar item is built with."""
 
 
 def _install_menu(path: Path, cfg: Config) -> bool:
     """Build, install and start the menu bar item for the configuration at ``path``."""
     missing = menubar.missing_tools()
     if missing:
-        problem = MENU_NEEDS_TOOLS.format(missing=", ".join(missing) + " missing")
-        typer.echo(f"error: {problem}.", err=True)
+        problem = t(MENU_NEEDS_TOOLS, missing=", ".join(missing))
+        _echo(t("term.error", text=problem), err=True)
         return False
     if not scheduler.is_installed_tool():
-        typer.echo(
-            "warning: flib is running from a development environment; the menu bar item "
-            "will depend on this folder. Install it with ./scripts/install.sh and run "
-            "`flib menu` again from the installed command.",
-            err=True,
-        )
+        _warn(t("term.menu.development"))
     try:
         plist = menubar.install(path, cfg.database)
     except menubar.MenuError as exc:
-        typer.echo(f"error: could not set up the menu bar item: {exc}", err=True)
+        _echo(t("term.error", text=t("term.menu.not_set_up_error", error=str(exc))), err=True)
         return False
-    typer.echo(
-        "The cat is in the menu bar now (it can take a few seconds to show). Its pose says "
-        "what needs you; its menu opens flib on the right page."
-    )
-    typer.echo(f"It starts at login ({plist}). `flib menu --remove` takes it away.")
+    typer.echo(t("term.menu.installed"))
+    typer.echo(t("term.menu.at_login", plist=str(plist)))
     return True
 
 
@@ -2587,15 +2635,13 @@ def _refresh_menu(*, quiet: bool) -> None:
     try:
         done = menubar.refresh()
     except menubar.MenuError as exc:
-        typer.echo(f"warning: could not rebuild the menu bar item: {exc}", err=True)
+        _warn(t("term.menu.not_rebuilt", error=str(exc)))
         return
     if done is not None:
-        typer.echo(f"Menu bar item {done}.")
+        typer.echo(t("term.menu.done", what=done))
     elif not quiet:
         typer.echo(
-            "The menu bar item is up to date."
-            if menubar.installed()
-            else "The menu bar item is not installed; nothing to refresh."
+            t("term.menu.up_to_date") if menubar.installed() else t("term.menu.nothing_to_refresh")
         )
 
 
@@ -2603,13 +2649,14 @@ def _print_menu_status() -> None:
     found = menubar.summary(full=True)
     line = menubar.status_line(found)
     if line is None:
-        typer.echo("The menu bar item is not installed. `flib menu` puts flib in the menu bar.")
+        typer.echo(t("term.menu.status_none"))
         return
     typer.echo(line)
     if found.config is not None:
-        typer.echo(f"  for: {found.config}")
+        typer.echo(t("term.menu.for", path=str(found.config)))
     if found.seen is not None:
-        typer.echo(f"  it shows: {found.seen['pose']}, {found.seen['line']!r}")
+        seen = found.seen
+        typer.echo(t("term.menu.shows", pose=str(seen["pose"]), line=repr(seen["line"])))
 
 
 def _organize_from_menu(config: Path | None) -> None:
@@ -2619,7 +2666,7 @@ def _organize_from_menu(config: Path | None) -> None:
     cfg = _load(config, warn_orphans=False)
     if holder(cfg.database) is not None:
         menubar_state.changed(cfg.database)
-        typer.echo("A run is in progress; it organizes what is there.")
+        typer.echo(t("term.menu.running"))
         return
     scheduled = scheduler.scheduled_config()
     path = config or default_config_path()
@@ -2632,7 +2679,7 @@ def _organize_from_menu(config: Path | None) -> None:
             scheduler.kickstart(scheduler.LABEL)
         except scheduler.ScheduleError as exc:
             _fatal(str(exc))
-        typer.echo("Started the daily run now, as launchd starts it.")
+        typer.echo(t("term.menu.kickstarted"))
         return
     _pipeline(config, simulate=False, trigger=RunTrigger.MANUAL)
 
@@ -2760,7 +2807,7 @@ def reprocess(
                 "--since, --until, --simulate and --yes"
             )
         _fill_fields(
-            _load(config, warn_orphans=False),
+            _load(config, warn_orphans=False, speak=False),
             (category, ext, since, until),
             simulate=simulate,
             yes=yes,
@@ -2777,7 +2824,7 @@ def reprocess(
                 "--ask-issuer, --simulate and --yes, and no category migration"
             )
         _apply_layout(
-            _load(config, warn_orphans=False),
+            _load(config, warn_orphans=False, speak=False),
             split_values(category),
             ask=ask_issuer,
             simulate=simulate,
@@ -2791,7 +2838,9 @@ def reprocess(
         )  # fmt: skip
         if others:
             _fatal("--scrub-descriptions takes the whole index; leave out the other options")
-        _scrub_descriptions(_load(config, warn_orphans=False), simulate=simulate, yes=yes)
+        _scrub_descriptions(
+            _load(config, warn_orphans=False, speak=False), simulate=simulate, yes=yes
+        )
         return
     if rename_category is not None and remove_category is not None:
         _fatal("use either --rename-category or --remove-category, not both")
@@ -2803,7 +2852,7 @@ def reprocess(
         _fatal("a category migration keeps file names; leave out --rename")
     if to_review and remove_category is None:
         _fatal("--to-review goes with --remove-category")
-    cfg = _load(config, warn_orphans=False)
+    cfg = _load(config, warn_orphans=False, speak=False)  # English until it is translated (#141)
     provider: Provider | None = None
     if rename_category is None and not to_review:
         try:
@@ -3167,14 +3216,14 @@ def _print_reprocess_report(
     applied: reprocess_mod.Applied, cfg: Config, planned: reprocess_mod.ReprocessPlan
 ) -> None:
     report = applied.report
-    lines = []
+    lines: list[str] = []
     for item in report.items:
         if item.destination is not None:
             lines.append(_moved_line(_short(item.source, cfg), item, cfg))
             if item.warning:
-                lines.append(f"  warning {_short(item.destination, cfg)}  ({item.warning})")
+                lines.append(_warning_row(_short(item.destination, cfg), item.warning))
         elif item.status in {FileStatus.FAILED, FileStatus.SKIPPED}:
-            lines.append(f"  {_label(item.status)}{_short(item.source, cfg)}  ({item.note})")
+            lines.append(_status_row(item.status, _short(item.source, cfg), item.note))
     summary = (
         f"Reprocess run {report.run_id}: {report.count(FileStatus.ORGANIZED, moved=True)} "
         f"filed, {report.count(FileStatus.REVIEW, moved=True)} to review, "

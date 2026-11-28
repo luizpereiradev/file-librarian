@@ -34,6 +34,10 @@ only: no names, amounts or issuers.
 
 Everything here only reads the index, except ``settle`` (``flib fix --done``)
 and ``Store.set_reminded`` (the summary).
+
+What it says is in the language in use (#141): ``render`` for ``flib due``, the
+line of ``flib status``, the reminder in the configuration's language, and the
+refusals. ``DueList.to_dict`` (``--json``, the MCP server) stays English.
 """
 
 from __future__ import annotations
@@ -47,8 +51,9 @@ from pathlib import Path
 
 from file_librarian.config import Config
 from file_librarian.db.store import FileRow, Store, load_migrations
-from file_librarian.fields import KINDS, format_amount, format_decimal
+from file_librarian.fields import KINDS, format_decimal
 from file_librarian.finder_tags import read_tags, tag_name
+from file_librarian.i18n import Msg, formats, t
 from file_librarian.models import FileStatus, RunMode, RunTrigger
 from file_librarian.naming import issuer_key
 
@@ -119,12 +124,12 @@ def parse_within(text: str) -> Span:
     """``7d``, ``2w``, ``1m`` (or a bare number of days); raises ``DueError``."""
     match = _SPAN.fullmatch(text.strip().casefold())
     if match is None or int(match.group(1)) == 0:
-        raise DueError(f"--within {text!r} is not a span like 7d, 2w or 1m")
+        raise DueError(t("term.due.bad_within", value=repr(text)))
     count = int(match.group(1))
     unit = match.group(2) or "d"
     limit = {"d": 366, "w": 53, "m": 12}[unit]
     if count > limit:
-        raise DueError(f"--within {text!r} reaches more than a year ahead")
+        raise DueError(t("term.due.too_far", value=repr(text)))
     return Span(count, unit)
 
 
@@ -157,13 +162,13 @@ def make_query(
 ) -> Query:
     """Validate raw options; raises ``DueError`` on a bad one."""
     if overdue and within is not None:
-        raise DueError("--overdue lists what is past due; leave out --within")
+        raise DueError(t("term.due.overdue_within"))
     span = parse_within(within) if within is not None else Span(DEFAULT_DAYS, "d")
     key = None
     if issuer is not None:
         key = issuer_key(issuer)
         if not key:
-            raise DueError(f"--issuer {issuer!r} names no organisation")
+            raise DueError(t("term.issuer_none", value=repr(issuer)))
     chosen: list[str] = []
     for raw in kinds or ():
         for part in raw.split(","):
@@ -171,7 +176,9 @@ def make_query(
             if not kind:
                 continue
             if kind not in KINDS:
-                raise DueError(f"unknown kind {part.strip()!r} (kinds: {', '.join(KINDS)})")
+                raise DueError(
+                    t("term.unknown_kind", value=repr(part.strip()), kinds=", ".join(KINDS))
+                )
             if kind not in chosen:
                 chosen.append(kind)
     return Query(span, overdue, include_all, key, tuple(chosen))
@@ -363,11 +370,9 @@ def check_schema(store: Store) -> None:
     """Raise ``DueError`` for an index this flib cannot read for ``flib due``."""
     version = store.schema_version
     if version > len(load_migrations()):
-        raise DueError(
-            f"the index (schema {version}) is newer than this flib; upgrade file-librarian"
-        )
+        raise DueError(t("term.index.newer", schema=str(version)))
     if version < MIN_SCHEMA:
-        raise DueError("the index is from an older flib; the next `flib run` updates it")
+        raise DueError(t("term.index.older"))
 
 
 def find(config: Config, query: Query, *, today: date | None = None) -> DueList:
@@ -381,7 +386,7 @@ def find(config: Config, query: Query, *, today: date | None = None) -> DueList:
             check_schema(store)
             rows = store.due_files()
     except sqlite3.Error as exc:
-        raise DueError(f"cannot read the index: {exc}") from exc
+        raise DueError(t("term.index.unreadable", error=str(exc))) from exc
     return select(rows, config, query, today)
 
 
@@ -402,18 +407,23 @@ def counts(store: Store, config: Config, today: date) -> DueCounts:
     return DueCounts(DEFAULT_DAYS, len(found.items) - overdue, overdue)
 
 
-def status_line(found: DueCounts) -> str:
+def status_line(found: DueCounts) -> Msg:
     """``Due: 3 documents within 7 days, 1 overdue (`flib due`)``."""
+    days = found.within_days
     if not found.upcoming and not found.overdue:
-        return f"Due: nothing within {found.within_days} days."
-    parts = [f"{_documents(found.upcoming)} within {found.within_days} days"]
+        return t("term.due.status_nothing", days=days)
     if found.overdue:
-        parts.append(f"{found.overdue} overdue")
-    return f"Due: {', '.join(parts)} (`flib due`)."
+        return t(
+            "term.due.status_overdue",
+            documents=_documents(found.upcoming),
+            days=days,
+            overdue=t("menu.overdue", count=found.overdue),
+        )
+    return t("term.due.status", documents=_documents(found.upcoming), days=days)
 
 
-def _documents(count: int) -> str:
-    return f"{count} document" if count == 1 else f"{count} documents"
+def _documents(count: int) -> Msg:
+    return t("term.documents", count=count)
 
 
 # --- the reminder ----------------------------------------------------------------------
@@ -430,18 +440,20 @@ class Reminder:
     """``(file id, due date)`` of those no earlier summary counted: they make the
     summary due on their own, and are recorded once it is written."""
 
-    def text(self, days_before: int) -> str | None:
+    def text(self, days_before: int) -> Msg | None:
         """Counts only, for a notification: no names, amounts or issuers."""
         if not self.soon and not self.overdue:
             return None
-        when = "today" if days_before == 0 else f"within {days_before} days"
-        parts = []
+        soon = None
         if self.soon:
-            verb = "is" if self.soon == 1 else "are"
-            parts.append(f"{_documents(self.soon)} {verb} due {when}")
-        if self.overdue:
-            parts.append(f"{_documents(self.overdue)} overdue")
-        return ", ".join(parts)
+            if days_before == 0:
+                soon = t("notify.due_today", count=self.soon)
+            else:
+                soon = t("notify.due_within", count=self.soon, days=t("js.days", count=days_before))
+        overdue = t("notify.overdue", count=self.overdue) if self.overdue else None
+        if soon is not None and overdue is not None:
+            return t("term.and", first=soon, second=overdue)
+        return soon or overdue
 
 
 def reminder(store: Store, config: Config, today: date) -> Reminder:
@@ -492,15 +504,17 @@ def settle(
         except LookupError:
             row = None
     if row is None:
-        raise DueError(f"{path} is not a file flib organized (see `flib search`)")
+        raise DueError(t("term.not_organized", path=str(path)))
     if row.status not in _SETTLEABLE:
-        raise DueError(f"{path} is {row.status.value}; only organized or review files have a due")
+        raise DueError(
+            t("term.due.status_refused", path=str(path), status=t(f"term.state.{row.status.value}"))
+        )
     if row.due_date is None:
-        raise DueError(f"{path} states no due date, so it is never listed as due")
+        raise DueError(t("term.due.no_due_date", path=str(path)))
     if done and row.settled_at is not None:
-        raise DueError(f"{path} is already marked as done")
+        raise DueError(t("term.due.already_done", path=str(path)))
     if not done and row.settled_at is None:
-        raise DueError(f"{path} is not marked as done")
+        raise DueError(t("term.due.not_done", path=str(path)))
     new = clock().astimezone(UTC).isoformat(timespec="seconds") if done else None
     run_id = store.start_run(RunMode.RUN, trigger)
     with store.transaction():
@@ -513,47 +527,80 @@ def settle(
 
 
 def render(found: DueList, *, show: Callable[[Path], str] = str) -> list[str]:
-    """``flib due`` as lines; ``show`` shortens a path for the terminal."""
-    since = "any time" if found.start is None else found.start.isoformat()
-    span = f"from {since} to {found.end.isoformat()} (today is {found.today.isoformat()})"
+    """``flib due`` as lines, in the language in use; ``show`` shortens a path for the
+    terminal."""
+    span = t(
+        "term.due.span_any" if found.start is None else "term.due.span",
+        since="" if found.start is None else formats.day(found.start),
+        end=formats.day(found.end),
+        today=formats.day(found.today),
+    )
     lines: list[str] = []
     if not found.items:
-        lines.append(f"Nothing due {span}.")
+        lines.append(t("term.due.nothing", span=span))
     else:
-        lines.append(f"Due {span}:")
+        lines.append(t("term.due.heading", span=span))
         for item in found.items:
             lines.extend(_item_lines(item, show))
         totals = found.totals
         if totals:
-            overall = "; ".join(
-                f"{format_amount(t.total_minor, t.currency)} ({_documents(t.files)})"
-                for t in totals
-            )
-            lines.append(f"Total open: {overall}")
+            overall = [
+                t(
+                    "term.amount_files",
+                    amount=formats.amount(total.total_minor, total.currency),
+                    files=_documents(total.files),
+                )
+                for total in totals
+            ]
+            lines.append(t("term.due.total", overall=_joined(overall)))
         if found.without_amount:
-            verb = "states" if found.without_amount == 1 else "state"
-            lines.append(f"{_documents(found.without_amount)} {verb} no amount; not counted.")
+            lines.append(t("term.due.without_amount", count=found.without_amount))
     if found.hidden:
-        lines.append(
-            f"{_documents(found.hidden)} marked done or of another kind not shown "
-            "(--all shows them)."
-        )
+        lines.append(t("term.due.hidden", count=found.hidden))
     return lines
 
 
+def _joined(parts: list[Msg]) -> Msg:
+    """Totals joined with semicolons, in the language of the line."""
+    joined = parts[0]
+    for part in parts[1:]:
+        joined = t("term.then", first=joined, second=part)
+    return joined
+
+
+def relative_text(days: int) -> Msg:
+    """``relative`` in the language in use (the Due page's words)."""
+    if days == 0:
+        return t("due.today")
+    if days == 1:
+        return t("due.tomorrow")
+    if days == -1:
+        return t("due.yesterday")
+    return t("due.in_days", count=days) if days > 0 else t("due.days_ago", count=-days)
+
+
 def _item_lines(item: DueItem, show: Callable[[Path], str]) -> list[str]:
-    when = relative(item.days)
+    when: Msg = relative_text(item.days)
     if item.done:
-        when += ", done" if item.done_by == "fix" else ", done (Finder tag)"
+        state = "term.due.done" if item.done_by == "fix" else "term.due.done_tag"
+        when = t(state, when=when)
     elif item.overdue:
-        when += ", overdue"
+        when = t("term.due.overdue", when=when)
     amount = "-"
     if item.amount_minor is not None and item.currency is not None:
-        amount = format_amount(item.amount_minor, item.currency)
-    parts = [item.due_date.isoformat(), f"({when})", amount, item.issuer or "-", item.kind or "-"]
+        amount = formats.amount(item.amount_minor, item.currency)
+    kind = t(f"kind.{item.kind}") if item.kind in KINDS else (item.kind or "-")
+    first = t(
+        "term.due.item",
+        date=formats.day(item.due_date),
+        when=when,
+        amount=amount,
+        issuer=item.issuer or "-",
+        kind=kind,
+    )
     where = show(item.path)
     if not item.exists:
-        where += "  (missing: moved by hand?)"
-    elif item.status == FileStatus.REVIEW.value:
-        where += "  (in review)"
-    return ["  " + "  ".join(parts), f"    {where}"]
+        return [first, t("term.due.item_missing", where=where)]
+    if item.status == FileStatus.REVIEW.value:
+        return [first, t("term.due.item_review", where=where)]
+    return [first, t("term.due.item_where", where=where)]

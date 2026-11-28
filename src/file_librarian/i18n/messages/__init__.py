@@ -4,7 +4,8 @@ One catalogue, kept in one module per part of the interface so each reads on its
 own: ``common`` (the page frame, refusals, words shared by several pages),
 ``pages`` (the packaged pages: Status, session ended, the handoff), ``status``
 (what ``status.js`` writes), ``views`` (Activity, Search, Due), ``review``
-(Review and undo), ``settings`` and ``menu`` (the menu bar item). Each defines
+(Review and undo), ``settings``, ``menu`` (the menu bar item) and ``terminal``
+(the command line and the notifications, #141). Each defines
 ``EN`` and ``PT_BR``, message id to text (``str``) or ``Plural``. An id is used in
 one module only (checked here, at import); the tests check that every id is in
 both languages with the same placeholders, and that every id is used.
@@ -29,9 +30,10 @@ from file_librarian.i18n.messages import pages as pages
 from file_librarian.i18n.messages import review as review
 from file_librarian.i18n.messages import settings as settings
 from file_librarian.i18n.messages import status as status
+from file_librarian.i18n.messages import terminal as terminal
 from file_librarian.i18n.messages import views as views
 
-MODULES: tuple[ModuleType, ...] = (common, pages, status, views, review, settings, menu)
+MODULES: tuple[ModuleType, ...] = (common, pages, status, views, review, settings, menu, terminal)
 
 
 def _merge(name: str) -> dict[str, Entry]:

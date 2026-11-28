@@ -54,7 +54,7 @@ from file_librarian.db.store import GROUPS, AmountTotal, Store
 from file_librarian.embeddings import Embedder, EmbeddingError
 from file_librarian.extractors.origin import read_xattr
 from file_librarian.fields import KINDS
-from file_librarian.i18n import Msg, formats, t
+from file_librarian.i18n import Msg, english, formats, t
 from file_librarian.i18n.core import core
 from file_librarian.models import FileStatus, OperationStatus
 from file_librarian.search import (
@@ -126,7 +126,7 @@ def read_index(config: Config) -> Iterator[Store]:
             activity_mod.check_schema(store)
             yield store
     except activity_mod.ActivityError as exc:
-        raise Unreadable(core(str(exc))) from exc
+        raise Unreadable(core(english(exc))) from exc
     except sqlite3.Error as exc:
         raise Unreadable(t("common.unreadable")) from exc
 
@@ -362,7 +362,7 @@ def activity_page(config: Config, csrf: str, query: str) -> Page:
     try:
         found = activity_mod.collect(config, days)
     except activity_mod.ActivityError as exc:
-        parts.append(message(core(str(exc)), error=True))
+        parts.append(message(core(english(exc)), error=True))
         return HTTPStatus.SERVICE_UNAVAILABLE, layout(title, "activity", join(parts), csrf)
     if not config.database.exists():
         parts.append(message(t("common.no_index")))
@@ -668,7 +668,7 @@ def _for_the_page(error: SearchError) -> str:
     knows each of them; one it does not is shown as it is, capitalised)."""
     if isinstance(error, AmountRefused):
         return error.msg
-    text = core(str(error))
+    text = core(english(error))
     return text if isinstance(text, Msg) else text[:1].upper() + text[1:]
 
 
@@ -1397,7 +1397,7 @@ def due_page(config: Config, csrf: str, query: str, *, notice: Markup | None = N
         found = due_mod.find(config, query_)
     except due_mod.DueError as exc:
         unreadable_now = isinstance(exc.__cause__, sqlite3.Error)
-        text = t("common.unreadable") if unreadable_now else core(str(exc))
+        text = t("common.unreadable") if unreadable_now else core(english(exc))
         parts.append(message(text, error=True))
         return HTTPStatus.SERVICE_UNAVAILABLE, layout(title, "due", join(parts), csrf)
     today = formats.day(found.today)

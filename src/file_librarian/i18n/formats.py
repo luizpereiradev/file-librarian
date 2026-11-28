@@ -19,11 +19,20 @@ is the language's thousands separator (``1.234`` in pt-BR, ``1,234`` in English)
 it could mean a thousand and some or a little over one, and guessing could save
 the wrong number. No thousands separators otherwise, no sign (``+`` or ``-``), no
 exponent, no spaces inside.
+
+**The terminal** (#141): ``later`` keeps a formatted value as a parameter that is
+shown in the language of the message it is in, so a line printed in pt-BR is
+written to a run's log in English. ``width``, ``ljust`` and ``rjust`` pad columns
+by the width a terminal gives the text (an accented letter written as two code
+points is one column, a wide character two), never by ``len``.
 """
 
 from __future__ import annotations
 
 import re
+import unicodedata
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -124,6 +133,15 @@ def day(value: date, lang: Lang | None = None) -> str:
     return f"{value.day:02d}/{value.month:02d}/{value.year:04d}"
 
 
+def day_text(text: str, lang: Lang | None = None) -> str:
+    """A date as the index stores it (``2026-11-25``) shown as ``day`` shows dates; any
+    other text as it is."""
+    try:
+        return day(date.fromisoformat(text), lang)
+    except ValueError:
+        return text
+
+
 def clock(value: datetime) -> str:
     """A time of day, 24-hour: ``22:48`` in both languages."""
     return f"{value.hour:02d}:{value.minute:02d}"
@@ -193,3 +211,53 @@ def for_scripts(lang: Lang | None = None) -> dict[str, object]:
         "decimal": DECIMAL[lang],
         "dateOrder": "ymd" if lang == "en" else "dmy",
     }
+
+
+@dataclass(frozen=True, slots=True)
+class Later:
+    """A value to format in the language of the message it is a parameter of."""
+
+    show: Callable[..., str]
+    args: tuple[object, ...]
+
+    def in_language(self, lang: Lang) -> str:
+        return self.show(*self.args, lang=lang)
+
+    def __str__(self) -> str:
+        return self.show(*self.args)
+
+
+def later(show: Callable[..., str], *args: object) -> Later:
+    """``show(*args, lang=...)`` once the language is known: ``later(usd, 0.5)``."""
+    return Later(show, args)
+
+
+def width(text: str) -> int:
+    """How many terminal columns ``text`` takes: combining marks none, wide and
+    full-width characters two, everything else one."""
+    total = 0
+    for char in unicodedata.normalize("NFC", text):
+        if unicodedata.combining(char) or unicodedata.category(char) in ("Mn", "Me", "Cf"):
+            continue
+        total += 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+    return total
+
+
+def ljust(text: str, columns: int) -> str:
+    """``text`` padded with spaces on the right to ``columns`` terminal columns."""
+    return text + " " * max(columns - width(text), 0)
+
+
+def rjust(text: str, columns: int) -> str:
+    """``text`` padded with spaces on the left to ``columns`` terminal columns."""
+    return " " * max(columns - width(text), 0) + text
+
+
+def clip(text: str, columns: int) -> str:
+    """``text`` cut to at most ``columns`` terminal columns."""
+    kept = ""
+    for char in unicodedata.normalize("NFC", text):
+        if width(kept + char) > columns:
+            break
+        kept += char
+    return kept
