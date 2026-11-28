@@ -414,9 +414,9 @@ def quick_problem() -> str | None:
     ``flib status`` and the interface); ``problem`` checks it is current too."""
     app = app_path()
     if not app.exists():
-        return "the menu bar app is not built"
+        return t("term.menu.not_built")
     if not executable().is_file():
-        return "the menu bar app is incomplete"
+        return t("term.menu.incomplete")
     return None
 
 
@@ -424,7 +424,7 @@ def problem(config: Path) -> str | None:
     """Why the app cannot be used as it is for ``config``; ``None`` when it is ready."""
     trouble = quick_problem()
     if trouble is None and _read_stamp(app_path()) != expected_stamp(source_for(config)):
-        return "the menu bar app is out of date"
+        return t("term.menu.out_of_date")
     return trouble
 
 
@@ -613,7 +613,7 @@ def refresh() -> str | None:
         scheduler.install_agent(LABEL, build_plist(target.config))
     except scheduler.ScheduleError as exc:
         raise MenuError(str(exc)) from exc
-    return "rebuilt and restarted"
+    return t("term.menu.rebuilt")
 
 
 def _delete(path: Path) -> bool:
@@ -681,7 +681,7 @@ def summary(*, full: bool = False) -> Summary:
         except scheduler.ScheduleError:
             loaded = running = False
         if target is None:
-            trouble: str | None = "flib menu was not set up completely"
+            trouble: str | None = t("term.menu.not_set_up")
         else:
             trouble = problem(target.config) if full else quick_problem()
         return Summary(
@@ -693,7 +693,7 @@ def summary(*, full: bool = False) -> Summary:
             read_seen(),
         )
     except Exception as exc:
-        return Summary(True, problem=f"its state cannot be read ({type(exc).__name__})")
+        return Summary(True, problem=t("term.menu.unreadable", error=type(exc).__name__))
 
 
 def read_seen() -> dict[str, Any] | None:
@@ -720,12 +720,12 @@ def status_line(found: Summary) -> str | None:
     if not found.installed:
         return None
     if found.problem is not None:
-        return f"Menu bar: {found.problem}; `flib menu` fixes it."
+        return t("term.menu.line_problem", problem=found.problem)
     if found.running:
-        return "Menu bar: shown (`flib menu --remove` takes it away)."
+        return t("term.menu.line_shown")
     if found.loaded:
-        return "Menu bar: installed, not running (Quit from its menu); `flib menu` shows it."
-    return "Menu bar: installed but not loaded; `flib menu` shows it."
+        return t("term.menu.line_not_running", quit=t("menu.quit"))
+    return t("term.menu.line_not_loaded")
 
 
 def defaults() -> dict[str, Any]:

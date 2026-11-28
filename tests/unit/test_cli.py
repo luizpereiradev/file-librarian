@@ -11,9 +11,13 @@ from typer.testing import CliRunner
 
 from file_librarian import config as config_module
 from file_librarian import hashing, scanner
-from file_librarian.cli import ACCESS_HINT, app
+from file_librarian.cli import ACCESS_HINT as ACCESS_HINT_ID
+from file_librarian.cli import app
 from file_librarian.extractors.origin import WHERE_FROMS
+from file_librarian.i18n import t
 from tests._helpers import REPO_ROOT, mark_cloud_only, planned, put, write_config, write_xattr
+
+ACCESS_HINT = t(ACCESS_HINT_ID).text("en")
 
 runner = CliRunner()
 

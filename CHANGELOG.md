@@ -28,6 +28,22 @@ All notable changes to this project are documented here. The format follows
   `HOME`; `--clean` removes it. The site's screenshots
   (`scripts/screenshots.py`, headless Chrome) and terminal samples
   (`scripts/docs_samples.py`) are taken from it.
+- **The command line and the notifications speak the configured language** (#141,
+  first part). With `language: pt-BR`, these are in Brazilian Portuguese:
+  - the periodic summary and due reminders a scheduled run posts, in the
+    configuration's language rather than the environment's;
+  - the first notification `flib schedule` posts;
+  - `flib status`, `run` and `simulate`, `due`, `search` (`--sum` included),
+    `fix`, `undo`, `schedule`, `menu`, `ui` and `key`, and their refusals.
+
+  Dates read `25/11/2026`, amounts `R$ 1.234,56`, and table columns line up by
+  display width. English is unchanged except for the few words listed under
+  Changed.
+
+  A sensitive file's reason is shown in Portuguese too; the index keeps it in
+  English. These stay English: `--help`, `--json`, logs, `flib doctor`, the MCP
+  server, and what a launchd run prints. `init`, `reprocess`, `reconcile`,
+  `check-config` and the configuration's errors follow in the second part.
 
 - **The interface speaks the configured language** (#126): with `language:
   pt-BR`, every page of `flib ui` (including confirmations, outcomes, error
@@ -39,7 +55,7 @@ All notable changes to this project are documented here. The format follows
   next page and rebuilds the menu bar item. A cost cap or a search amount may
   be typed as `3,00` or `3.00`; `1.234` (in pt-BR) is refused as ambiguous
   rather than guessed. One catalogue (`i18n/messages/`), checked
-  by tests. The command line, logs, notifications and docs stay English.
+  by tests. Logs and docs stay English.
 
 - **flib in the menu bar** (#116): `flib menu` builds a small AppleScriptObjC
   stay-open applet with `osacompile` (no Xcode, nothing downloaded), signs it
@@ -580,6 +596,23 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- **English output of the command line, for anyone who greps it** (#141). The
+  words below changed. `--json`, the logs' row format and every machine format
+  are unchanged.
+  - The last run's line in `flib status` names the trigger as the Status page
+    does: "daily run" (was "scheduled") and "on arrival" (was "on arrival
+    (watch mode)").
+  - Real plurals replace "(s)" in a few places:
+    - "1 duplicate set aside" (was "1 duplicate(s) set aside"), in `flib run`'s
+      summary and in `flib status`;
+    - "1 index change reverted" / "2 index changes reverted" (was "index
+      change(s) reverted"), in `flib undo`;
+    - "gave up after 1 attempt" (was "1 attempts");
+    - "Watch: 1 file waits" (was "wait");
+    - "within 1 day" in a due reminder (was "within 1 days").
+  - File names that hold control characters are printed as escapes (`\x1b`,
+    `\x0d`, `\u202e`) rather than raw.
+
 - The test suite runs in parallel (#139): `uv run pytest` starts one
   pytest-xdist worker per core (`-n 0` runs in one process). On a 12-core
   Mac it takes about 50 s instead of 5 min 37 s, and 3 min 39 s in one
@@ -593,6 +626,13 @@ All notable changes to this project are documented here. The format follows
   run at the same time. `flib doctor` reads each key from the Keychain once.
 
 ### Fixed
+
+- A downloaded file whose name holds an escape sequence, a carriage return, a
+  bell or a right-to-left override no longer reaches the terminal raw (#141).
+  The name is printed with escapes in every listing: `run`, `simulate`,
+  `search`, `due`, `status --sensitive`, `fix`, `undo` and `init`'s trial. A
+  joined emoji (ZWJ) stays one character, two columns wide. `--json`, the logs
+  and the index keep the real name.
 
 - `flib search --sum` with no words and no filter (for example `--sum --by
   kind`) adds up every filed document instead of refusing, and the message

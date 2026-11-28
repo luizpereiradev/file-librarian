@@ -19,11 +19,20 @@ is the language's thousands separator (``1.234`` in pt-BR, ``1,234`` in English)
 it could mean a thousand and some or a little over one, and guessing could save
 the wrong number. No thousands separators otherwise, no sign (``+`` or ``-``), no
 exponent, no spaces inside.
+
+**The terminal** (#141): ``later`` keeps a formatted value as a parameter that is
+shown in the language of the message it is in, so a line printed in pt-BR is
+written to a run's log in English. ``width``, ``ljust`` and ``rjust`` pad columns
+by the width a terminal gives the text (an accented letter written as two code
+points is one column, a wide character two), never by ``len``.
 """
 
 from __future__ import annotations
 
 import re
+import unicodedata
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -88,8 +97,15 @@ def _lang(lang: Lang | None) -> Lang:
 
 
 def decimal(value: Decimal | float | int, places: int, lang: Lang | None = None) -> str:
-    """``value`` with ``places`` decimals and no thousands separator: ``0.0123``, ``0,0123``."""
-    text = f"{Decimal(str(value)):.{places}f}"
+    """``value`` with ``places`` decimals and no thousands separator: ``0.0123``, ``0,0123``.
+
+    A float is rounded as ``f"{value:.4f}"`` rounds its binary value, which is what
+    the command line and its logs always printed (``0.00285`` gives ``0.0029``,
+    ``5e-05`` gives ``0.0001``); both languages round alike (#141)."""
+    if isinstance(value, float):
+        text = f"{value:.{places}f}"
+    else:
+        text = f"{Decimal(str(value)):.{places}f}"
     return text.replace(".", DECIMAL[_lang(lang)])
 
 
@@ -122,6 +138,15 @@ def day(value: date, lang: Lang | None = None) -> str:
     if _lang(lang) == "en":
         return value.isoformat()
     return f"{value.day:02d}/{value.month:02d}/{value.year:04d}"
+
+
+def day_text(text: str, lang: Lang | None = None) -> str:
+    """A date as the index stores it (``2026-11-25``) shown as ``day`` shows dates; any
+    other text as it is."""
+    try:
+        return day(date.fromisoformat(text), lang)
+    except ValueError:
+        return text
 
 
 def clock(value: datetime) -> str:
@@ -193,3 +218,90 @@ def for_scripts(lang: Lang | None = None) -> dict[str, object]:
         "decimal": DECIMAL[lang],
         "dateOrder": "ymd" if lang == "en" else "dmy",
     }
+
+
+@dataclass(frozen=True, slots=True)
+class Later:
+    """A value to format in the language of the message it is a parameter of."""
+
+    show: Callable[..., str]
+    args: tuple[object, ...]
+
+    def in_language(self, lang: Lang) -> str:
+        return self.show(*self.args, lang=lang)
+
+    def __str__(self) -> str:
+        return self.show(*self.args)
+
+
+def later(show: Callable[..., str], *args: object) -> Later:
+    """``show(*args, lang=...)`` once the language is known: ``later(usd, 0.5)``."""
+    return Later(show, args)
+
+
+def width(text: str) -> int:
+    """How many terminal columns ``text`` takes: combining marks none, wide and
+    full-width characters two, everything else one."""
+    total = 0
+    joined = False
+    for char in unicodedata.normalize("NFC", text):
+        if char == ZWJ:
+            joined = True
+            continue
+        if unicodedata.combining(char) or unicodedata.category(char) in ("Mn", "Me", "Cf"):
+            continue
+        if not joined:  # a character a ZWJ joins to the one before shares its cells
+            total += 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+        joined = False
+    return total
+
+
+ZWJ = "\u200d"
+BIDI = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
+"""Characters that reorder text on screen (``invoice\u202efdp.command``)."""
+_KEPT_FORMAT = frozenset({ZWJ, "\u200c"})
+"""Format characters an emoji or a script needs (joiners)."""
+
+
+def printable(text: str, *, lines: bool = False) -> str:
+    """``text`` (a file name, a path, words from the index) safe to print on a terminal:
+    control characters (C0, DEL, C1: ESC, CR, BEL...) and bidirectional controls shown
+    as escapes (``\\x1b``, ``\\u202e``), other invisible format characters dropped,
+    joiners kept, so an emoji made of several (``👩\u200d💻``) stays one. ``lines``:
+    newlines and tabs pass (a whole message); otherwise they are shown as escapes too.
+    ``--json``, the logs and the index keep the real text."""
+    out: list[str] = []
+    for char in text:
+        if lines and char in "\n\t":
+            out.append(char)
+            continue
+        category = unicodedata.category(char)
+        if category == "Cc":
+            out.append(f"\\x{ord(char):02x}")
+        elif char in BIDI:
+            out.append(f"\\u{ord(char):04x}")
+        elif category == "Cf" and char not in _KEPT_FORMAT and not 0xE0020 <= ord(char) <= 0xE007F:
+            continue
+        else:
+            out.append(char)
+    return "".join(out)
+
+
+def ljust(text: str, columns: int) -> str:
+    """``text`` padded with spaces on the right to ``columns`` terminal columns."""
+    return text + " " * max(columns - width(text), 0)
+
+
+def rjust(text: str, columns: int) -> str:
+    """``text`` padded with spaces on the left to ``columns`` terminal columns."""
+    return " " * max(columns - width(text), 0) + text
+
+
+def clip(text: str, columns: int) -> str:
+    """``text`` cut to at most ``columns`` terminal columns."""
+    kept = ""
+    for char in unicodedata.normalize("NFC", text):
+        if width(kept + char) > columns:
+            break
+        kept += char
+    return kept

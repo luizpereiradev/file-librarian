@@ -418,7 +418,7 @@ def test_status_shows_the_mode_and_the_last_watch_run(
     triggered(config)
     shown = runner.invoke(app, ["status", "-c", str(config)]).stdout
     assert "Last watch run: " in shown and "1 organized" in shown
-    assert "on arrival (watch mode)" in shown
+    assert ", on arrival: " in shown
     data = runner.invoke(app, ["status", "-c", str(config), "--json"]).stdout
     assert '"mode": "both"' in data and '"automatic_cost_usd": 0.0' in data
     doctor = runner.invoke(app, ["doctor", "-c", str(config), "--stdout"]).stdout

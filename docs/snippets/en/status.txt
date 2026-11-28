@@ -7,6 +7,6 @@ Due: 2 documents within 7 days, 1 overdue (`flib due`).
 Left in place as sensitive: 1 file
 Note: files with the same content as one already filed were moved to _Duplicates in the organized folder; nothing was deleted. `flib undo` puts them back, and `duplicates: leave` in the configuration leaves copies where they are.
 Duplicates set aside in _Duplicates: 1 file (nothing is deleted; review them when you like)
-Last run: 2026-11-27 12:30, scheduled: 3 organized, 0 to review, 1 failed; US$ 0.0067
+Last run: 2026-11-27 12:30, daily run: 3 organized, 0 to review, 1 failed; US$ 0.0067
 Next run: none scheduled (`flib schedule` sets up a daily run).
 This month: US$ 0.0591

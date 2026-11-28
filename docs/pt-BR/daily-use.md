@@ -24,7 +24,7 @@ dúvida esperam na pasta de revisão, e você só os vê se for olhar. O
 --8<-- "pt-BR/status.txt"
 ```
 
-(A linha de comando ainda fala inglês; a interface já fala português.)
+(Com `language: pt-BR`, a linha de comando e a interface falam português; o `--json`, os logs e o `--help` continuam em inglês.)
 
 Ele só lê (sem lock, então funciona enquanto uma execução está em andamento, e
 antes da primeira); `--json` dá o mesmo para scripts.

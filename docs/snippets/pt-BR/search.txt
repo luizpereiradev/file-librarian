@@ -1,8 +1,8 @@
 /Users/you/Downloads/Organizado/Financeiro/2026/2026-11-23_fatura-pixelforge.pdf
-  [Financeiro] was invoice-8812.pdf
-  invoice · Pixelforge Studio · BRL 1,850.00 · due 2026-12-18 · for 2026-11
+  [Financeiro] antes: invoice-8812.pdf
+  fatura · Pixelforge Studio · R$ 1.850,00 · vence em 18/12/2026 · referente a 2026-11
   Fatura de serviços de design da Pixelforge Studio.
 /Users/you/Downloads/Organizado/Financeiro/2026/2026-11-20_fatura-lumen-cloud.pdf
-  [Financeiro] was invoice-INV-2041.pdf
-  invoice · Lumen Cloud Hosting · USD 48.00 · due 2026-12-03 · for 2026-11
+  [Financeiro] antes: invoice-INV-2041.pdf
+  fatura · Lumen Cloud Hosting · US$ 48,00 · vence em 03/12/2026 · referente a 2026-11
   Fatura mensal de hospedagem em nuvem da Lumen Cloud Hosting.

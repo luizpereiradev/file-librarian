@@ -26,6 +26,7 @@ from typing import Any
 
 import pytest
 
+from file_librarian import i18n
 from file_librarian.config import Config
 from file_librarian.extractors import ocr
 from file_librarian.fsops import CrossVolumeError
@@ -130,6 +131,15 @@ def loopback_network(_no_network: None, monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
     monkeypatch.setattr(socket.socket, "connect", connect)
     monkeypatch.setattr(socket, "create_connection", _REAL_CREATE_CONNECTION)
+
+
+@pytest.fixture(autouse=True)
+def _english_by_default() -> Iterator[None]:
+    """Every test starts in English, and a command that switched the language
+    (``flib`` with ``language: pt-BR``, in-process) never leaks it into the next test
+    of the worker (#141)."""
+    with i18n.using(i18n.DEFAULT):
+        yield
 
 
 @pytest.fixture(autouse=True)

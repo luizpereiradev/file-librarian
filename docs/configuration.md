@@ -14,7 +14,7 @@ for you, with the same checks.
 
 | Option | Default | What it does |
 | --- | --- | --- |
-| `language` | `en` | `en` or `pt-BR`: the language of generated names and descriptions, of the default folders (`Organized`/`_Review` or `Organizado`/`_Revisar`) and categories, and of the web interface (`flib ui`) and the menu bar item; the command line stays English |
+| `language` | `en` | `en` or `pt-BR`: the language of generated names and descriptions, of the default folders (`Organized`/`_Review` or `Organizado`/`_Revisar`) and categories, of the web interface (`flib ui`), the menu bar item, the notifications and what the command line prints for you ([Language](#language)) |
 | `inputs` | `[~/Downloads]` | The folders to keep organized; each can have its own rules ([More than one inbox](#more-than-one-inbox)) |
 | `output_root` | `~/Downloads/Organized` | Where category folders are created |
 | `categories` | 5 in `en`, 15 in `pt-BR` | The closed list the AI chooses from; each `hint` steers it, `rename: false` keeps original names, `layout` files into sub-folders ([Sub-folders](#sub-folders-by-year-or-issuer)) |
@@ -32,6 +32,51 @@ for you, with the same checks.
 | `search.semantic.enabled` | `false` | [Search by meaning](daily-use.md#search-by-meaning-optional) |
 | `mcp.read_only` | `false` | Offer only the read tools in `flib mcp` ([MCP](mcp.md)) |
 | `privacy.descriptions` | `redact` | `verbatim` stores descriptions and tags exactly as the AI wrote them ([What the index stores](privacy.md#what-the-index-stores)) |
+
+## Language
+
+`language: pt-BR` puts flib in Brazilian Portuguese: the web interface, the
+menu bar item, the notifications and what the commands print for you, with
+dates as `25/11/2026 22:48` and amounts as `R$ 1.234,56`. English is the
+default, and the fallback for any value flib does not know.
+
+The command line follows these rules:
+
+- A command speaks the language of the configuration it reads (`-c`,
+  `$FLIB_CONFIG` or the default file), from the moment it has read it. If the
+  configuration cannot be read, the error is in English.
+- Notifications come from scheduled runs, which launchd starts with almost no
+  environment. Their language comes from the configuration, never from the
+  shell's locale.
+- `--help` is English. Typer builds it before any configuration is read, and
+  it matches the [CLI reference](cli.md).
+
+These stay English by design:
+
+- `--json` and every other machine format: the MCP server's tools and their
+  results, exit codes;
+- the log files, the `flib doctor` report (maintainers read it in bug reports)
+  and what a run started by launchd prints (it goes to a log);
+- `flib inspect` and `flib eval`, which are diagnostics;
+- unexpected errors, configuration keys, command and option names.
+
+The Search page's CSV export is a machine format with one exception: its
+column names and values stay as they are (English column names, ISO dates,
+decimal amounts, kind codes), but the last row, which says the list was cut, is
+in the page's language.
+
+The index and the logs keep a sensitive file's reason in English; the terminal
+shows it in your language. Notes that come from outside flib keep their own
+words: a provider's error, a macOS error, the words a file's name matched.
+File names that hold control characters (an escape sequence, a carriage
+return, a right-to-left override) are printed as escapes such as `\x1b`, so
+they cannot act on the terminal; `--json`, the logs and the index keep the real
+name. `flib init`, `flib
+reprocess`, `flib reconcile`, `flib check-config` and the configuration's error
+messages are still in English for now; they follow in the second part of #141.
+
+Scripts should read `--json`: its keys, values and messages never change with
+the language.
 
 ## Finder tags
 

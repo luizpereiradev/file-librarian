@@ -61,7 +61,8 @@ from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 
-from file_librarian import scheduler
+from file_librarian import i18n, scheduler
+from file_librarian.i18n import t
 
 OSACOMPILE = "/usr/bin/osacompile"
 CODESIGN = "/usr/bin/codesign"
@@ -161,11 +162,11 @@ def state() -> str | None:
     """Why the app cannot be used as it is; ``None`` when it is ready."""
     app = app_path()
     if not app.exists():
-        return "the notifier app is not built; `flib schedule --refresh` builds it"
+        return t("notify.app.not_built")
     if not executable().is_file():
-        return "the notifier app is incomplete; `flib schedule --refresh` rebuilds it"
+        return t("notify.app.incomplete")
     if _read_stamp(app) != expected_stamp():
-        return "the notifier app is out of date; `flib schedule --refresh` rebuilds it"
+        return t("notify.app.out_of_date")
     return None
 
 
@@ -173,7 +174,7 @@ def choice() -> Choice:
     """Which notifier ``status.notify`` uses, and why."""
     problem = state()
     if problem is None:
-        return Choice("app", "built and current")
+        return Choice("app", t("notify.app.current"))
     return Choice("osascript", problem)
 
 
@@ -275,7 +276,8 @@ def ensure() -> str | None:
     return None
 
 
-INTRO_TEXT = "Summaries will show here: counts only, never file names."
+INTRO_TEXT = "notify.intro"
+"""The id of the first notification's text, posted in the configuration's language."""
 INTRO_MARKER = ".notifier-introduced"
 
 
@@ -287,12 +289,13 @@ def introduced(folder: Path) -> bool:
         return False
 
 
-def introduce(folder: Path, title: str = APP_NAME) -> str | None:
-    """Post ``INTRO_TEXT`` and leave a marker in ``folder`` (flib's log folder, which
-    outlives reinstalls) for ``introduced``; returns why it failed, or ``None``."""
+def introduce(folder: Path, title: str = APP_NAME, *, language: str = "en") -> str | None:
+    """Post ``INTRO_TEXT`` in ``language`` (the configuration's) and leave a marker in
+    ``folder`` (flib's log folder, which outlives reinstalls) for ``introduced``;
+    returns why it failed, or ``None``."""
     if state() is not None:
-        return "the notifier app is not ready"
-    problem = post(INTRO_TEXT, title)
+        return t("notify.app.not_ready")
+    problem = post(t(INTRO_TEXT).text(i18n.resolve(language)), title)
     if problem is None:
         folder.mkdir(parents=True, exist_ok=True)
         (folder / INTRO_MARKER).write_text(BUNDLE_ID + "\n", encoding="utf-8")

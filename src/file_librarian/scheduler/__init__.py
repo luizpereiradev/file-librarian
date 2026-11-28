@@ -55,6 +55,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from file_librarian.i18n import t
+
 if TYPE_CHECKING:
     from file_librarian.config import Config
 
@@ -120,9 +122,7 @@ def interpreter_is_current() -> bool:
 def prepare_interpreter() -> Path:
     """Create or refresh flib's own copy of the interpreter; returns its path."""
     if ENV_ROOT is None and sys.prefix == sys.base_prefix:
-        raise ScheduleError(
-            "flib is not running from its own environment; install it with ./scripts/install.sh"
-        )
+        raise ScheduleError(t("term.schedule.no_environment"))
     target = dedicated_interpreter()
     if not interpreter_is_current():
         tmp = target.with_name(f".{INTERPRETER_NAME}.tmp")
@@ -225,7 +225,7 @@ def install(
     if mode not in MODES:
         raise ScheduleError(f"unknown schedule mode {mode!r}; use daily, watch or both")
     if mode != "daily" and not inputs:
-        raise ScheduleError("watch mode needs at least one input folder")
+        raise ScheduleError(t("term.schedule.watch_needs_input"))
     logs.mkdir(parents=True, exist_ok=True, mode=0o700)
     prepare_interpreter()
     installed = []
@@ -392,10 +392,7 @@ def stale_watch_message(state: Status, inputs: list[Path]) -> str | None:
     change, it watches the old ones until ``flib schedule --refresh``."""
     if not state.watch_paths or set(state.watch_paths) == {str(p) for p in inputs}:
         return None
-    return (
-        "the watch agent watches other folders than the configuration's inputs; "
-        "run `flib schedule --refresh`"
-    )
+    return t("term.schedule.stale_watch")
 
 
 def scheduled_config() -> Path | None:
@@ -426,7 +423,7 @@ def check_access(config_path: Path, *, timeout: float = 20.0) -> dict[str, str]:
         deadline = time.monotonic() + timeout
         while not result_file.exists():
             if time.monotonic() > deadline:
-                raise ScheduleError("the access check did not report back in time")
+                raise ScheduleError(t("term.schedule.check_timed_out"))
             time.sleep(0.2)
         report: dict[str, str] = json.loads(result_file.read_text(encoding="utf-8"))
         return report

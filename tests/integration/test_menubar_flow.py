@@ -25,6 +25,7 @@ from file_librarian.cli import app
 from file_librarian.config import Config, load_config
 from file_librarian.doctor import Options, build_report
 from file_librarian.due import DueCounts
+from file_librarian.i18n import t
 from file_librarian.lock import instance_lock, ui_lock
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.ui import server as ui_server
@@ -853,7 +854,7 @@ def test_a_host_next_to_the_database_is_never_taken(cfg: Config, fake_browser: P
         assert ui_server.running(cfg.database) is None  # but no address
         lines: list[str] = []
         assert ui_server.run(cfg, page="review", echo=lines.append) == "running"
-        assert lines[0] == ui_server.UNCONFIRMED
+        assert lines[0] == t(ui_server.UNCONFIRMED)
         assert "Use the browser tab it opened" in lines[-1]
     assert calls(fake_browser) == []
 

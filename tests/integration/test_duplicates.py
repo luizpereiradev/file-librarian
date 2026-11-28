@@ -133,7 +133,7 @@ def test_a_copy_of_a_library_file_costs_nothing(
         "  dup     bill third.pdf  ->  _Duplicates/bill third.pdf  "
         "(same content as Finance/bill.pdf)" in result.stdout
     )
-    assert "1 duplicate(s) set aside" in result.stdout
+    assert "1 duplicate set aside" in result.stdout
 
 
 def test_a_copy_in_review_is_a_duplicate_too(downloads: Path, cfg: Config) -> None:
@@ -855,7 +855,7 @@ def test_runs_count_the_duplicates_they_set_aside(downloads: Path, cfg: Config) 
     assert (moved, duplicates) == (1, 1)
     found = collect(cfg)
     assert found.last_run is not None and found.last_run.files_duplicates == 1
-    assert "1 organized, 0 to review, 1 duplicate(s) set aside" in "\n".join(render(found, cfg))
+    assert "1 organized, 0 to review, 1 duplicate set aside" in "\n".join(render(found, cfg))
     assert json.loads(to_json(found, cfg))["last_run"]["files_duplicates"] == 1
 
 

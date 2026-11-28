@@ -109,7 +109,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from file_librarian import i18n
 from file_librarian import status as status_mod
 from file_librarian.config import Config
-from file_librarian.i18n import t
+from file_librarian.i18n import Msg, t
 from file_librarian.i18n.messages import status as status_messages
 from file_librarian.lock import AlreadyRunningError, ui_holder, ui_lock
 from file_librarian.ui import actions, api, markup, review, settings, views
@@ -219,34 +219,19 @@ _TYPES = {
     ".svg": "image/svg+xml",
 }
 ENDED = {
-    "idle": "idle for {minutes}",
-    "ended": "the session was ended in the browser",
-    "signal": "interrupted",
-    "closed": "closed",
-    "stolen": "the launch link was used again by a client without the session",
+    "idle": "term.ui.ended.idle",
+    "ended": "term.ui.ended.ended",
+    "signal": "term.ui.ended.signal",
+    "closed": "term.ui.ended.closed",
+    "stolen": "term.ui.ended.stolen",
 }
-STOLEN_WARNING = (
-    "warning: the launch link was used a second time, by a client without the "
-    "session. Another program or account on this Mac may have seen it, so the "
-    "session was dropped and this flib ui is ending (its pages say why for a minute; "
-    "Ctrl-C ends it now). Run `flib ui` again for a new link: it starts at once."
-)
-
-UNNAMED_WARNING = (
-    "warning: this Mac does not resolve .localhost names to itself, so flib ui is served "
-    "at 127.0.0.1. There, browsers send its session cookie to every server on 127.0.0.1, "
-    "whatever the port: another program or account listening there could use the "
-    "session while it lasts. Current macOS resolves them; see the threat model."
-)
-PRIVATE_ADDRESS = (
-    "This address is private until the session ends: the token in it works once, but "
-    "the name before the port lasts the session, and anyone who has it and runs a "
-    "server on this Mac could take the session. Clear the terminal once you opened it."
-)
-UNCONFIRMED = (
-    "flib ui is already running, but nothing was opened: its address could not be "
-    "confirmed as this account's own (its private record is missing or not yours)."
-)
+"""Why ``flib ui`` ended, as message ids (the terminal's words)."""
+STOLEN_WARNING = "term.ui.stolen"
+UNNAMED_WARNING = "term.ui.unnamed"
+PRIVATE_ADDRESS = "term.ui.private_address"
+UNCONFIRMED = "term.ui.unconfirmed"
+"""What ``flib ui`` says in the terminal, as message ids: said in the language of
+the moment (the command line's, set from the configuration)."""
 HANDOFF_NAME = "open-file-librarian.html"
 HANDOFF = """<!doctype html>
 <html lang="{lang}">
@@ -2015,7 +2000,7 @@ def run(
 
     def on_event(event: str) -> None:
         if event == "started":
-            echo("flib ui: session started in the browser.")
+            echo(t("term.ui.started"))
         elif event == "stolen":
             # The stolen page says "run `flib ui` again": make that true at once (#127).
             # This server keeps no session and serves only that page now, so it gives
@@ -2025,12 +2010,12 @@ def run(
                 remove_running(config.database, server.port, server.host_name)
             for release in releases:
                 release()
-            warn(STOLEN_WARNING)
+            warn(t("term.warning", text=t(STOLEN_WARNING)))
 
     if page not in PAGES:
         raise UiError(f"no page {page!r}; one of: {', '.join(PAGES)}")
     minutes = _minutes(config.ui.idle_minutes)
-    ending = f"It ends after {minutes} without use, with End session, or with Ctrl-C."
+    ending = t("term.ui.ending", minutes=minutes, end=t("frame.end_session"))
     try:
         with ui_lock(config.database) as release_lock:
             releases.append(release_lock)
@@ -2038,7 +2023,7 @@ def run(
             sweep_names(handoff_root())
             named = names_resolve()
             if not named:
-                warn(UNNAMED_WARNING)
+                warn(t("term.warning", text=t(UNNAMED_WARNING)))
             ui = Ui(
                 config,
                 page=page,
@@ -2056,18 +2041,23 @@ def run(
                         handoff = ui.write_handoff()
                         # Not the address: under a name, it is what keeps the cookie
                         # from other servers, and a terminal is often on screen.
-                        echo(f"flib ui: opening it in your browser (port {ui.port}). {ending}")
+                        echo(t("term.ui.opening", port=str(ui.port), ending=ending))
                         if (problem := open_file(handoff)) is not None:
                             warn(
-                                f"warning: could not open the browser ({problem}). Open "
-                                f"{handoff} in your browser, or end this and run "
-                                "`flib ui --no-browser` for a link."
+                                t(
+                                    "term.warning",
+                                    text=t(
+                                        "term.ui.no_browser",
+                                        problem=problem,
+                                        handoff=str(handoff),
+                                    ),
+                                )
                             )
                     else:
                         echo(f"flib ui: {ui.launch_url}")
-                        echo(f"The link works once; keep it to yourself. {ending}")
+                        echo(t("term.ui.link_once", ending=ending))
                         if ui.named:
-                            echo(PRIVATE_ADDRESS)
+                            echo(t(PRIVATE_ADDRESS))
                     while ui.wait(0.5) is None:
                         pass
             finally:
@@ -2076,32 +2066,32 @@ def run(
                 ui.close()
                 sweep_handoffs(handoff_root(), mine=True)  # the opener files of its pages
             reason = ui.reason or "closed"
-            echo("flib ui ended: " + ENDED[reason].format(minutes=minutes) + ".")
+            echo(t("term.ui.ended", why=t(ENDED[reason], minutes=minutes)))
             return reason
     except AlreadyRunningError as exc:
         where = running(config.database) if browser else None
         if where is not None and open_running(where, page) is None:
             # The page of the session already open (the menu bar's "Review", say), in
             # the browser that holds the cookie; no token involved.
-            echo(
-                f"flib ui is already running: opened its {page} page in the browser where "
-                'it runs. (Another browser gets the "session ended" page.)'
-            )
+            echo(t("term.ui.opened_running", page=page))
             return "running"
         if where is None and browser and running_port(config.database) is not None:
             # Its port is known, but not that its name is this account's own: nothing
             # is opened rather than an address someone else may have chosen.
-            echo(UNCONFIRMED)
+            echo(t(UNCONFIRMED))
         echo(
-            f"{exc}. Use the browser tab it opened, or end it there (End session) or "
-            "with Ctrl-C in its terminal, then run `flib ui` again; it also ends on its "
-            f"own after {minutes} without use."
+            t(
+                "term.ui.already_running",
+                error=exc.args[0],
+                end=t("frame.end_session"),
+                minutes=minutes,
+            )
         )
         return "running"
 
 
-def _minutes(count: int) -> str:
-    return "1 minute" if count == 1 else f"{count} minutes"
+def _minutes(count: int) -> Msg:
+    return t("term.minutes", count=count)
 
 
 @contextmanager

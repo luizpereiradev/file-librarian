@@ -45,9 +45,9 @@ from file_librarian.db.store import FileRow, OperationRow, Store
 from file_librarian.finder_tags import tag_moved, untag_restored
 from file_librarian.fsops import DestinationExistsError, ensure_folder, move_no_replace
 from file_librarian.hashing import check_content
+from file_librarian.i18n import english, t
 from file_librarian.models import FileStatus, OperationStatus, RunMode, RunTrigger
 from file_librarian.naming import candidate_names, safe_component, split_name
-from file_librarian.protection import LOCKED_NOW
 
 _FIXABLE = {FileStatus.ORGANIZED, FileStatus.REVIEW}
 _MAX_NAME_BYTES = 255
@@ -114,18 +114,20 @@ def plan_fix(
 
     ``file_id`` names the row by id instead of looking ``path`` up."""
     if category is None and name is None:
-        raise FixError("say what to change: a category, a name, or both")
+        raise FixError(t("term.fix.nothing"))
     row = _lookup(store, path, file_id)
     if row is None:
-        raise FixError(f"{path} is not a file flib organized (see `flib search`)")
+        raise FixError(t("term.not_organized", path=str(path)))
     if row.status not in _FIXABLE:
-        raise FixError(f"{path} is {row.status.value}; only organized or review files can be fixed")
+        raise FixError(
+            t("term.fix.status", path=str(path), status=t(f"term.state.{row.status.value}"))
+        )
     source = row.current_path
     same = check_content(source, row.sha256)
     if same is None:
-        raise FixError(f"{path} is {LOCKED_NOW}")
+        raise FixError(t("term.fix.locked", path=str(path)))
     if not same:
-        raise FixError(f"{path} changed or moved since it was indexed; run `flib reconcile` first")
+        raise FixError(t("term.fix.changed", path=str(path)))
 
     folder, new_category = _folder(config, row, category)
     new_name = _name(row, name) if name is not None else row.current_name
@@ -134,7 +136,7 @@ def plan_fix(
         # Same category: it stays in its sub-folder (a layout's, or one the user made).
         destination = source.parent / new_name
     if destination == source:
-        raise FixError(f"{path} is already there with that name")
+        raise FixError(t("term.fix.same_name", path=str(path)))
     status = FileStatus.REVIEW if new_category is None else FileStatus.ORGANIZED
     return PlannedFix(row, destination, status, new_category)
 
@@ -196,7 +198,7 @@ def fix_files(
                 file_id=item.file_id,
             )  # fmt: skip
         except FixError as exc:
-            report.skipped.append((item.path, str(exc)))
+            report.skipped.append((item.path, english(exc)))
             unplanned += 1
             continue
         except sqlite3.Error:
@@ -206,7 +208,7 @@ def fix_files(
             try:
                 report.fixed.append(_apply(config, store, planned, run_id, finish=False))
             except FixError as exc:
-                report.skipped.append((item.path, str(exc)))
+                report.skipped.append((item.path, english(exc)))
             except sqlite3.Error:
                 report.broken = True
         if report.broken:
@@ -245,7 +247,7 @@ def _apply(
             store.set_operation(op_id, OperationStatus.FAILED)
             if finish:
                 _finish(store, run_id)
-        raise FixError(f"could not move {source}: {exc}") from exc
+        raise FixError(t("term.fix.not_moved", source=str(source), error=str(exc))) from exc
 
     category_change, name_change, warnings = _complete(
         config, store, row, run_id, op_id, destination, planned.status, planned.category,
@@ -374,7 +376,7 @@ def _folder(config: Config, row: FileRow, category: str | None) -> tuple[str, st
     )
     if match is None:
         known = ", ".join(c.name for c in config.categories)
-        raise FixError(f"unknown category {category!r} (configured: {known})")
+        raise FixError(t("term.fix.unknown_category", value=repr(category), known=known))
     return match.name, match.name
 
 
@@ -382,12 +384,12 @@ def _name(row: FileRow, name: str) -> str:
     """The user's new name as a single file name; the old extension is kept if left out."""
     wanted = unicodedata.normalize("NFC", name.strip())
     if not wanted or safe_component(wanted) != wanted:
-        raise FixError(f"{name!r} is not a plain file name (no '/', ':' or leading '.')")
+        raise FixError(t("term.fix.bad_name", value=repr(name)))
     _, extension = split_name(row.current_name)
     if not row.is_unit and extension and not split_name(wanted)[1]:
         wanted += extension
     if len(wanted.encode("utf-8")) > _MAX_NAME_BYTES:
-        raise FixError("the new name is longer than macOS allows (255 bytes)")
+        raise FixError(t("term.fix.too_long"))
     return wanted
 
 

@@ -62,10 +62,10 @@ from file_librarian.fields import (
     KINDS,
     clean_currency,
     clean_period,
-    format_amount,
     format_decimal,
     parse_threshold,
 )
+from file_librarian.i18n import formats, t
 from file_librarian.naming import issuer_key
 
 
@@ -98,16 +98,21 @@ class SearchHit:
     """``amount`` in the currency's minor units (cents)."""
 
     def fields_line(self) -> str | None:
-        """The structured fields in one short line, or ``None`` when there are none."""
-        parts = [p for p in (self.kind, self.issuer) if p]
+        """The structured fields in one short line, in the language in use, or ``None``
+        when there are none."""
+        parts: list[str] = []
+        if self.kind:
+            parts.append(t(f"kind.{self.kind}") if self.kind in KINDS else self.kind)
+        if self.issuer:
+            parts.append(self.issuer)
         if self.amount_minor is not None and self.currency is not None:
-            parts.append(format_amount(self.amount_minor, self.currency))
+            parts.append(formats.amount(self.amount_minor, self.currency))
         if self.due_date:
-            parts.append(f"due {self.due_date}")
+            parts.append(t("term.search.due", date=formats.day_text(self.due_date)))
         if self.period:
-            parts.append(f"for {self.period}")
+            parts.append(t("term.search.period", period=self.period))
         elif self.document_date:
-            parts.append(f"dated {self.document_date}")
+            parts.append(t("term.search.dated", date=formats.day_text(self.document_date)))
         return " · ".join(parts) or None
 
 
@@ -162,21 +167,23 @@ def make_filters(
     for raw in split_values(categories):
         name = known.get(normalize_category(raw))
         if name is None:
-            options = ", ".join(sorted(known.values(), key=str.casefold)) or "none yet"
-            raise SearchError(f"unknown category {raw!r} (known: {options})")
+            options: str = ", ".join(sorted(known.values(), key=str.casefold)) or t(
+                "term.search.none_yet"
+            )
+            raise SearchError(t("term.search.unknown_category", value=repr(raw), known=options))
         if name not in chosen:
             chosen.append(name)
     exts: list[str] = []
     for raw in split_values(extensions):
         ext = raw.lower().removeprefix(".")
         if not re.fullmatch(r"[^\W_]+", ext):
-            raise SearchError(f"bad extension {raw!r}: give it like pdf or .pdf")
+            raise SearchError(t("term.search.bad_extension", value=repr(raw)))
         if "." + ext not in exts:
             exts.append("." + ext)
     start = _day(since, "--since") if since is not None else None
     end = _day(until, "--until") if until is not None else None
     if start is not None and end is not None and start > end:
-        raise SearchError(f"--since {since} is after --until {until}")
+        raise SearchError(t("term.search.since_after_until", since=since, until=until))
     return SearchFilters(
         categories=tuple(chosen),
         extensions=tuple(exts),
@@ -210,23 +217,23 @@ def _field_filters(
     if issuer is not None:
         key = issuer_key(issuer)
         if not key:
-            raise SearchError(f"--issuer {issuer!r} names no organisation")
+            raise SearchError(t("term.issuer_none", value=repr(issuer)))
     chosen: list[str] = []
     for raw in split_values(kinds):
         kind = raw.casefold()
         if kind not in KINDS:
-            raise SearchError(f"unknown kind {raw!r} (kinds: {', '.join(KINDS)})")
+            raise SearchError(t("term.unknown_kind", value=repr(raw), kinds=", ".join(KINDS)))
         if kind not in chosen:
             chosen.append(kind)
     low = _amount(min_amount, "--min-amount")
     high = _amount(max_amount, "--max-amount")
     if low is not None and high is not None and low > high:
-        raise SearchError(f"--min-amount {min_amount} is more than --max-amount {max_amount}")
+        raise SearchError(t("term.search.min_over_max", low=min_amount, high=max_amount))
     code = None
     if currency is not None:
         code = clean_currency(currency)
         if code is None:
-            raise SearchError(f"--currency {currency!r} is not a currency code like USD or BRL")
+            raise SearchError(t("term.search.currency", value=repr(currency)))
     before = _day(due_before, "--due-before").isoformat() if due_before is not None else None
     after = _day(due_after, "--due-after").isoformat() if due_after is not None else None
     wanted = None
@@ -234,7 +241,7 @@ def _field_filters(
         text = period.strip()
         wanted = clean_period(text) if re.fullmatch(r"\d{4}(-\d{2})?", text) else None
         if wanted is None:
-            raise SearchError(f"--period {period!r} is not a year or month like 2026 or 2026-09")
+            raise SearchError(t("term.search.bad_period", value=repr(period)))
     return FieldFilters(
         issuer_key=key,
         kinds=tuple(chosen),
@@ -252,7 +259,7 @@ def _amount(text: str | None, flag: str) -> Decimal | None:
         return None
     value = parse_threshold(text)
     if value is None:
-        raise SearchError(f"{flag} {text!r} is not an amount like 100 or 99.90")
+        raise SearchError(t("term.search.amount", flag=flag, value=repr(text)))
     return value
 
 
@@ -262,11 +269,11 @@ def normalize_category(name: str) -> str:
 
 def _day(text: str, flag: str) -> date:
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text.strip()):
-        raise SearchError(f"{flag} {text!r} is not a date like 2026-01-31")
+        raise SearchError(t("term.search.date_form", flag=flag, value=repr(text)))
     try:
         return date.fromisoformat(text.strip())
     except ValueError:
-        raise SearchError(f"{flag} {text!r} is not a valid date") from None
+        raise SearchError(t("term.search.date_invalid", flag=flag, value=repr(text))) from None
 
 
 def _utc_start(day: date) -> str:
@@ -404,22 +411,17 @@ def semantic_search(
         return SearchOutcome(hits, False, notice)
 
     if not settings.enabled:
-        return words_only(
-            "semantic search is off (search.semantic.enabled: false); searched by words only"
-        )
+        return words_only(t("term.search.semantic_off"))
     query = fts_query(text)
     if query is None:
         return words_only(None)
     if store.embedding_count(settings.model) == 0:
-        return words_only(
-            f"no file has an embedding from {settings.model} yet; run `flib search --reindex`. "
-            "Searched by words only"
-        )
+        return words_only(t("term.search.no_embeddings", model=settings.model))
     embedder = embedder or Embedder(settings)
     try:
         [vector] = embedder.embed([query_text(text, settings)])
     except EmbeddingError as exc:
-        return words_only(f"semantic search unavailable ({exc}); searched by words only")
+        return words_only(t("term.search.semantic_unavailable", why=str(exc)))
     pool = max(limit * 2, 50)
     by_words = [row.id for row in _word_rows(store, query, filters, pool, include_duplicates)]
     similarity = similarities(
@@ -447,10 +449,7 @@ def semantic_search(
     notice = None
     outdated = outdated_count(store, config)
     if outdated:
-        notice = (
-            f"{outdated} file(s) have no up-to-date embedding yet and may be found by words "
-            "only; the next run or `flib search --reindex` embeds them"
-        )
+        notice = t("term.search.outdated", count=outdated)
     hits = [
         _hit(store, rows[i], _source(i in in_words, i in close), similarity.get(i))
         for i in best
@@ -513,7 +512,7 @@ def sum_amounts(
     filters match nothing. ``by`` is one of ``GROUPS``.
     """
     if by is not None and by not in GROUPS:
-        raise SearchError(f"cannot group by {by!r} (one of: {', '.join(GROUPS)})")
+        raise SearchError(t("term.search.group_by", value=repr(by), groups=", ".join(GROUPS)))
     filters = filters or SearchFilters()
     query = fts_query(text)
     if query is None and text.strip() and not filters:

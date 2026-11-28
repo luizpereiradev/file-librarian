@@ -1,12 +1,12 @@
-Review: 5 files in _Revisar, the oldest for 2 days
-    4  the AI was not sure enough; it suggested Trabalho
-    1  the AI chose a category that is not configured: Receitas
-Failed: 1 file
-    1  classification failed (1 of 3 attempts; the next run tries again; for 1 day)
-Due: 2 documents within 7 days, 1 overdue (`flib due`).
-Left in place as sensitive: 1 file
-Note: files with the same content as one already filed were moved to _Duplicados in the organized folder; nothing was deleted. `flib undo` puts them back, and `duplicates: leave` in the configuration leaves copies where they are.
-Duplicates set aside in _Duplicados: 1 file (nothing is deleted; review them when you like)
-Last run: 2026-11-27 12:30, scheduled: 3 organized, 0 to review, 1 failed; US$ 0.0067
-Next run: none scheduled (`flib schedule` sets up a daily run).
-This month: US$ 0.0592
+Revisão: 5 arquivos em _Revisar, o mais antigo há 2 dias
+    4  a IA não teve certeza suficiente; ela sugeriu Trabalho
+    1  a IA escolheu uma categoria que não está configurada: Receitas
+Com falha: 1 arquivo
+    1  a classificação falhou (1 de 3 tentativas; a próxima execução tenta de novo; há 1 dia)
+Vencimentos: 2 documentos nos próximos 7 dias, 1 vencido (`flib due`).
+Sensíveis, deixados onde estavam: 1 arquivo
+Observação: arquivos com o mesmo conteúdo de um já organizado foram movidos para _Duplicados na pasta organizada; nada foi apagado. `flib undo` os devolve, e `duplicates: leave` na configuração deixa as cópias onde estão.
+Duplicados separados em _Duplicados: 1 arquivo (nada é apagado; revise quando quiser)
+Última execução: 27/11/2026 12:30, execução diária: 3 organizados, nenhum para revisar, 1 com falha; US$ 0,0067
+Próxima execução: nenhuma agendada (`flib schedule` agenda uma execução diária).
+Este mês: US$ 0,0592

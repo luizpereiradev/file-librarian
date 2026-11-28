@@ -1,7 +1,7 @@
-Totals by issuer:
-  Pixelforge Studio                BRL 1,850.00  (1 file(s))
-  Companhia Elétrica Aurora          BRL 287.43  (1 file(s))
-  Fibra Rápida Telecom               BRL 119.90  (1 file(s))
-  Águas do Vale                       BRL 96.20  (1 file(s))
-  Lumen Cloud Hosting                 USD 48.00  (1 file(s))
-Total: BRL 2,353.53 (4 file(s)); USD 48.00 (1 file(s))
+Totais por emissor:
+  Pixelforge Studio                 R$ 1.850,00  (1 arquivo)
+  Companhia Elétrica Aurora           R$ 287,43  (1 arquivo)
+  Fibra Rápida Telecom                R$ 119,90  (1 arquivo)
+  Águas do Vale                        R$ 96,20  (1 arquivo)
+  Lumen Cloud Hosting                 US$ 48,00  (1 arquivo)
+Total: R$ 2.353,53 (4 arquivos); US$ 48,00 (1 arquivo)

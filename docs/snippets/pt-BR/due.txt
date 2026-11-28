@@ -1,8 +1,8 @@
-Due from 2026-10-29 to 2026-12-05 (today is 2026-11-28):
-  2026-11-25  (3 days ago, overdue)  BRL 287.43  Companhia Elétrica Aurora  bill
+Vencimentos de 29/10/2026 até 05/12/2026 (hoje é 28/11/2026):
+  25/11/2026  (há 3 dias, vencido)  R$ 287,43  Companhia Elétrica Aurora  conta
     /Users/you/Downloads/Organizado/Financeiro/2026/2026-11-16_conta-de-energia-aurora.pdf
-  2026-11-30  (in 2 days)  BRL 96.20  Águas do Vale  bill
+  30/11/2026  (em 2 dias)  R$ 96,20  Águas do Vale  conta
     /Users/you/Downloads/Organizado/Financeiro/2026/2026-11-18_conta-de-agua.pdf
-  2026-12-03  (in 5 days)  USD 48.00  Lumen Cloud Hosting  invoice
+  03/12/2026  (em 5 dias)  US$ 48,00  Lumen Cloud Hosting  fatura
     /Users/you/Downloads/Organizado/Financeiro/2026/2026-11-20_fatura-lumen-cloud.pdf
-Total open: BRL 383.63 (2 documents); USD 48.00 (1 document)
+Total em aberto: R$ 383,63 (2 documentos); US$ 48,00 (1 documento)

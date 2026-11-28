@@ -32,6 +32,7 @@ from typer.testing import CliRunner
 from file_librarian import pipeline
 from file_librarian.cli import app
 from file_librarian.config import Config, ConfigError, parse_config
+from file_librarian.i18n import t
 from file_librarian.lock import ui_lock
 from file_librarian.providers.fake import FakeProvider
 from file_librarian.status import StatusError
@@ -1777,7 +1778,7 @@ def test_a_stolen_link_ends_flib_ui_with_a_warning(
     thief = Background(steal_then_use)
     assert ui_server.run(cfg, browser=False, echo=lines.append, warn=warnings.append) == "stolen"
     thief.join()
-    assert warnings == [ui_server.STOLEN_WARNING]
+    assert warnings == [t("term.warning", text=t(ui_server.STOLEN_WARNING))]
     assert "Another program or account on this Mac may have seen it" in warnings[0]
     assert lines[-1].startswith("flib ui ended: the launch link was used again")
 
@@ -1949,8 +1950,8 @@ def test_flib_ui_no_browser_prints_the_link(
     )
     assert "The link works once" in result.stdout
     # The token works once, but the name lasts the session: said, right after the link.
-    assert ui_server.PRIVATE_ADDRESS in result.stdout
-    assert "the name before the port lasts the session" in ui_server.PRIVATE_ADDRESS
+    assert t(ui_server.PRIVATE_ADDRESS) in result.stdout
+    assert "the name before the port lasts the session" in t(ui_server.PRIVATE_ADDRESS)
     assert opened(fake_browser) == []
 
 
@@ -1962,7 +1963,7 @@ def test_without_a_name_the_link_needs_no_such_line(
     sender = interrupt_when_listening(signal.SIGTERM)
     ui_server.run(cfg, browser=False, echo=lines.append, warn=lambda line: None)
     sender.join()
-    assert ui_server.PRIVATE_ADDRESS not in lines
+    assert t(ui_server.PRIVATE_ADDRESS) not in lines
 
 
 # --- the handoff file ------------------------------------------------------------------
@@ -2287,7 +2288,7 @@ def test_without_names_flib_ui_serves_at_127_0_0_1_and_says_what_that_leaves(
     sender = interrupt_when_listening(signal.SIGTERM)
     assert ui_server.run(cfg, browser=False, echo=lines.append, warn=warnings.append) == "signal"
     sender.join()
-    assert warnings == [ui_server.UNNAMED_WARNING]
+    assert warnings == [t("term.warning", text=t(ui_server.UNNAMED_WARNING))]
     assert "browsers send its session cookie to every server on 127.0.0.1" in warnings[0]
     assert any(re.search(r"http://127\.0\.0\.1:\d+/launch\?token=", line) for line in lines)
 
