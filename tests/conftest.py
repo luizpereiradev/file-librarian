@@ -31,6 +31,47 @@ from file_librarian.fsops import CrossVolumeError
 from tests._helpers import FakeClaude, FakeProtection, fake_config
 from tests.fake_openai import FakeOpenAI
 
+# --- parallel runs (pytest-xdist) ----------------------------------------------------------
+#
+# ``-n auto`` (the default, see pyproject.toml) runs the tests in worker processes, each
+# with its own temporary folders (tmp_path_factory is per worker) and its own copy of
+# every guard below. The tests that use real macOS tools run one at a time, on one worker.
+
+COVERAGE_CONFIG = "COVERAGE_PROCESS_CONFIG"
+"""Set for the workers when ``coverage run`` runs pytest with workers: coverage's own
+start-up hook (its ``.pth`` file) then measures each worker from its first line."""
+REAL_TOOLS = ("volumes", "ocr", "notifier", "menu", "browser")
+"""The markers of the opt-in tests that use real system tools and resources."""
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    if hasattr(config, "workerinput"):
+        # A worker, measured since it started. Not the processes its tests start
+        # (flib's own subprocesses, as in a run without workers).
+        os.environ.pop(COVERAGE_CONFIG, None)
+        return
+    if config.getoption("dist", "no") == "no":
+        return
+    try:
+        from coverage import Coverage
+    except ImportError:
+        return
+    cov = Coverage.current()
+    if cov is not None:
+        # The configuration ``coverage run`` started with (parallel: each worker
+        # writes its own data file; ``coverage combine`` joins them).
+        os.environ[COVERAGE_CONFIG] = cov.config.serialize()
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """The tests that use real system tools (opt-in) run in one group, one at a time
+    (``--dist loadgroup``)."""
+    if not config.pluginmanager.hasplugin("xdist"):
+        return
+    for item in items:
+        if any(item.get_closest_marker(name) for name in REAL_TOOLS):
+            item.add_marker(pytest.mark.xdist_group("real-tools"))
+
 
 class NetworkBlockedError(RuntimeError):
     pass
@@ -92,11 +133,38 @@ def no_lock_wait(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("file_librarian.cli.LOCK_WAIT_SECONDS", 0.0)
 
 
-def _shim(folder: Path, name: str, script: str) -> Path:
-    """An executable ``name`` in ``folder`` that runs ``tests/<script>`` with this Python."""
-    target = Path(__file__).with_name(script)
+TESTS_DIR = Path(__file__).parent
+SHEBANG = f"#!{sys.executable} -IS"
+"""The fakes' interpreter line. The kernel starts this Python straight away (no
+``/bin/sh`` in between), isolated from ``PYTHON*`` variables and the user's site
+(``-I``) and without ``site`` (``-S``): the fakes need only the standard library, and
+every call of every fake pays for the start-up. macOS splits the line's arguments."""
+if any(c.isspace() for c in sys.executable) or len(SHEBANG) > 500:
+    raise RuntimeError(f"the fakes cannot be started by {sys.executable!r} (a space, or too long)")
+
+
+def _shim(
+    folder: Path,
+    name: str,
+    script: str,
+    *,
+    call: str = "main(sys.argv[1:])",
+    env: dict[str, str] | None = None,
+) -> Path:
+    """An executable ``name`` in ``folder`` that runs ``tests/<script>``'s ``call`` with
+    this Python, after setting ``env``. The fake is imported, so its compiled bytecode
+    is reused from one call to the next."""
+    lines = [SHEBANG, "import sys"]
+    if env:
+        lines += ["import os", *(f"os.environ[{k!r}] = {v!r}" for k, v in env.items())]
+    module = Path(script).stem
+    lines += [
+        f"sys.path.insert(0, {str(TESTS_DIR)!r})",
+        f"from {module} import main",
+        f"sys.exit({call})",
+    ]
     shim = folder / name
-    shim.write_text(f'#!/bin/sh\nexec {sys.executable} {target} "$@"\n', encoding="utf-8")
+    shim.write_text("\n".join(lines) + "\n", encoding="utf-8")
     shim.chmod(0o755)
     return shim
 
@@ -190,11 +258,8 @@ def fake_notifier_tools(
     returns the log of their calls. It goes into the throwaway environment of
     ``fake_launchd``, never into the developer's."""
     folder = tmp_path_factory.mktemp("notifier")
-    target = Path(__file__).with_name("fake_notifier_tools.py")
     for tool, constant in NOTIFIER_TOOLS.items():
-        shim = folder / tool
-        shim.write_text(f'#!/bin/sh\nexec {sys.executable} {target} {tool} "$@"\n', "utf-8")
-        shim.chmod(0o755)
+        shim = _shim(folder, tool, "fake_notifier_tools.py", call=f"main({tool!r}, sys.argv[1:])")
         monkeypatch.setattr(f"file_librarian.notifier.{constant}", str(shim))
     monkeypatch.setenv("FAKE_NOTIFIER_LOG", str(folder / "calls.jsonl"))
     monkeypatch.delenv("FAKE_NOTIFIER_FAIL", raising=False)
@@ -270,14 +335,8 @@ def fake_claude(
 ) -> FakeClaude:
     """Every test finds a fake ``claude`` first on PATH; the real one never runs."""
     folder = tmp_path_factory.mktemp("claude")
-    target = Path(__file__).with_name("fake_claude.py")
-    shim = folder / "claude"
     # The provider passes only an allow-list of variables, so the shim names its state itself.
-    shim.write_text(
-        f'#!/bin/sh\nFAKE_CLAUDE_DIR={folder} exec {sys.executable} {target} "$@"\n',
-        encoding="utf-8",
-    )
-    shim.chmod(0o755)
+    _shim(folder, "claude", "fake_claude.py", env={"FAKE_CLAUDE_DIR": str(folder)})
     monkeypatch.setenv("PATH", f"{folder}{os.pathsep}{os.environ.get('PATH', '')}")
     monkeypatch.setattr("file_librarian.providers.claude_code.INSTALL_LOCATIONS", ())
     return FakeClaude(folder)

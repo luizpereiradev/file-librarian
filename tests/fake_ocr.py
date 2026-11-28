@@ -23,13 +23,12 @@ FAKE_OCR_MODE changes what it does:
 
 from __future__ import annotations
 
-import base64
+import binascii
 import json
 import os
 import re
 import sys
 import time
-from pathlib import Path
 
 LANGUAGES = ("en-US", "fr-FR", "de-DE", "pt-BR")
 _MARKER = re.compile(rb"FAKEOCR:([A-Za-z0-9+/=]+)")
@@ -51,7 +50,7 @@ def answer(text: str, data: bytes) -> str:
 
 
 def main(argv: list[str]) -> int:
-    with Path(os.environ["FAKE_OCR_LOG"]).open("a", encoding="utf-8") as log:
+    with open(os.environ["FAKE_OCR_LOG"], "a", encoding="utf-8") as log:
         log.write(json.dumps(argv, ensure_ascii=False) + "\n")
     mode = os.environ.get("FAKE_OCR_MODE", "")
     if argv[:2] != ["-l", "JavaScript"] or len(argv) < 4:
@@ -71,12 +70,13 @@ def main(argv: list[str]) -> int:
         print("text recognition failed", file=sys.stderr)
         return 3
     try:
-        data = Path(args[0]).read_bytes()
+        with open(args[0], "rb") as image:
+            data = image.read()
     except OSError:
         print("not a readable image", file=sys.stderr)
         return 2
     found = _MARKER.search(data)
-    text = base64.b64decode(found.group(1)).decode("utf-8") if found else ""
+    text = binascii.a2b_base64(found.group(1)).decode("utf-8") if found else ""
     if mode == "broken":
         sys.stdout.write('{"v": 2, "pages": "not a list"}')
         return 0

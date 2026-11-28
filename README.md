@@ -1267,7 +1267,9 @@ Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md),
 [docs/architecture.md](docs/architecture.md) and the
 [requirements](docs/requirements.md). Adding a file format or an AI provider
 has its own guide: [docs/adding-an-extractor.md](docs/adding-an-extractor.md)
-and [docs/adding-a-provider.md](docs/adding-a-provider.md). Questions go to
+and [docs/adding-a-provider.md](docs/adding-a-provider.md). `uv run pytest`
+runs the whole suite offline, in parallel on every core (`-n 0` for one
+process). Questions go to
 [Discussions](https://github.com/luizpereiradev/file-librarian/discussions).
 Report vulnerabilities privately, as [SECURITY.md](SECURITY.md) describes.
 

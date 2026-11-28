@@ -10,12 +10,19 @@ from __future__ import annotations
 import json
 import os
 import sys
-from pathlib import Path
+
+
+def _save(store: str, items: dict[str, str]) -> None:
+    with open(store, "w", encoding="utf-8") as fh:
+        json.dump(items, fh)
 
 
 def main(argv: list[str]) -> int:
-    store = Path(os.environ["FAKE_KEYCHAIN"])
-    items: dict[str, str] = json.loads(store.read_text()) if store.exists() else {}
+    store = os.environ["FAKE_KEYCHAIN"]
+    items: dict[str, str] = {}
+    if os.path.exists(store):
+        with open(store, encoding="utf-8") as fh:
+            items = json.load(fh)
     command, args = argv[0], argv[1:]
     opts = {args[i]: args[i + 1] for i in range(len(args) - 1) if args[i] in ("-s", "-a")}
     key = f"{opts.get('-s')}/{opts.get('-a')}"
@@ -32,13 +39,13 @@ def main(argv: list[str]) -> int:
         if first != second:
             return 1
         items[key] = first
-        store.write_text(json.dumps(items))
+        _save(store, items)
         return 0
     if command == "delete-generic-password":
         if key not in items:
             return 44
         del items[key]
-        store.write_text(json.dumps(items))
+        _save(store, items)
         return 0
     return 2
 

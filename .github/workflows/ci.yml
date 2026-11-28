@@ -19,8 +19,9 @@ jobs:
     # Pinned image: macos-latest jobs were cancelled after waiting 15 minutes
     # for a runner. Dependabot does not bump this; review it with the matrix.
     runs-on: macos-15
-    # The suite takes about 7 minutes; the newest Python also runs the disk-image, OCR,
-    # notifier, menu bar and browser steps.
+    # The suite runs on every core of the runner (pytest-xdist, `-n auto` in
+    # pyproject.toml); the newest Python also runs the disk-image, OCR, notifier,
+    # menu bar and browser steps, one test at a time.
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -48,35 +49,38 @@ jobs:
       - name: Types
         run: uv run mypy
       - name: Tests with branch coverage
+        # One coverage data file per worker (tests/conftest.py), joined below.
         run: uv run coverage run -m pytest
       - name: Coverage (fails under 93%)
-        run: uv run coverage report
+        run: |
+          uv run coverage combine
+          uv run coverage report
       - name: Cross-volume moves on disk images (APFS, HFS+, exFAT)
         # One version is enough: it exercises the file systems, not Python.
         if: matrix.python == '3.15'
         env:
           FLIB_TEST_VOLUMES: "1"
-        run: uv run pytest -m volumes -p no:cacheprovider
+        run: uv run pytest -m volumes -p no:cacheprovider -n 0
       - name: Text recognition with macOS's Vision framework (real OCR)
         if: matrix.python == '3.15'
         env:
           FLIB_TEST_OCR: "1"
-        run: uv run pytest -m ocr -p no:cacheprovider
+        run: uv run pytest -m ocr -p no:cacheprovider -n 0
       - name: Notifier app built with the real macOS tools (no notification posted)
         if: matrix.python == '3.15'
         env:
           FLIB_TEST_NOTIFIER: "1"
-        run: uv run pytest -m notifier -p no:cacheprovider
+        run: uv run pytest -m notifier -p no:cacheprovider -n 0
       - name: Menu bar applet compiled with the real tools, its parser run by osascript (never shown)
         if: matrix.python == '3.15'
         env:
           FLIB_TEST_MENU: "1"
-        run: uv run pytest -m menu -p no:cacheprovider
+        run: uv run pytest -m menu -p no:cacheprovider -n 0
       - name: flib ui in a real browser (headless Chrome from the runner image)
         if: matrix.python == '3.15'
         env:
           FLIB_TEST_BROWSER: "1"
-        run: uv run pytest -m browser -p no:cacheprovider
+        run: uv run pytest -m browser -p no:cacheprovider -n 0
 
   # The one required check: it passes only when every matrix entry passed, so
   # the branch rules do not depend on which versions ran.

@@ -557,6 +557,17 @@ All notable changes to this project are documented here. The format follows
   tests with `FLIB_TEST_VOLUMES=1 uv run pytest -m volumes`; guides for adding
   an extractor or a provider, CONTRIBUTING.md and ADRs.
 
+### Changed
+
+- The test suite runs in parallel (#139): `uv run pytest` starts one
+  pytest-xdist worker per core (`-n 0` runs in one process). On a 12-core
+  Mac it takes about 45 s instead of 5 min 40 s. `coverage run` measures
+  every worker: run `coverage combine` before `coverage report`. Each call
+  of a fake system tool costs 30–40% less: the shims start Python directly
+  with `-I -S`, without `/bin/sh`, and the fakes import less. The tests that
+  waited out End session's 1.5 s linger or a 0.3–0.5 s timeout set it short.
+  The opt-in tests of real tools still run one at a time.
+
 ### Fixed
 
 - `flib search --sum` with no words and no filter (for example `--sum --by

@@ -12,11 +12,10 @@ from __future__ import annotations
 import json
 import os
 import sys
-from pathlib import Path
 
 
 def main(argv: list[str]) -> int:
-    with Path(os.environ["FAKE_DEFAULTS_LOG"]).open("a", encoding="utf-8") as log:
+    with open(os.environ["FAKE_DEFAULTS_LOG"], "a", encoding="utf-8") as log:
         log.write(json.dumps(argv, ensure_ascii=False) + "\n")
     location = os.environ.get("FAKE_SCREENSHOT_LOCATION")
     if argv != ["read", "com.apple.screencapture", "location"] or location is None:
