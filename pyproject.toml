@@ -98,7 +98,7 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PTH", "S"]
 python_version = "3.11"
 strict = true
 mypy_path = "src"
-files = ["src", "tests"]
+files = ["src", "tests", "scripts"]
 plugins = ["pydantic.mypy"]
 
 [tool.coverage.run]
